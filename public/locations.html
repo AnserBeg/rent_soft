@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Locations</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="vendor/leaflet.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link active" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <main class="grid">
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Locations</h2>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost small" id="open-add-location" type="button">Add location</button>
+              </div>
+            </div>
+
+            <div class="table-shell">
+              <div class="table-head">
+                <p class="hint" id="page-meta"></p>
+                <div class="inline-actions" style="gap:12px;">
+                  <div class="view-toggle" role="tablist" aria-label="Locations view">
+                    <button class="view-toggle-btn active" id="view-table" type="button" role="tab" aria-selected="true">Table</button>
+                    <button class="view-toggle-btn" id="view-map" type="button" role="tab" aria-selected="false">Map</button>
+                  </div>
+                  <input id="search" class="search-input" placeholder="Search locations..." />
+                </div>
+              </div>
+              <div class="table" id="locations-table"></div>
+              <div id="locations-map-shell" style="display:none;">
+                <div class="map-toolbar">
+                  <div class="map-legend" aria-label="Map legend">
+                    <span class="legend-item"><span class="legend-swatch rented"></span>Rented out</span>
+                    <span class="legend-item"><span class="legend-swatch overdue"></span>Overdue</span>
+                    <span class="legend-item"><span class="legend-swatch not-rented"></span>Not rented</span>
+                  </div>
+                  <label>Show
+                    <select id="locations-map-mode">
+                      <option value="units" selected>Units</option>
+                      <option value="locations">Locations</option>
+                    </select>
+                  </label>
+                </div>
+                <div id="locations-map" class="locations-map"></div>
+                <p class="hint" id="map-meta" style="margin:10px 0 0;"></p>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="add-location-modal" style="display:none;">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>Add location</h3>
+        <button class="ghost small" id="close-add-location" type="button">Close</button>
+      </div>
+      <form class="stack" id="add-location-form">
+        <div class="two-col">
+          <label>Search address
+            <input id="add-location-address-search" placeholder="Start typing an address..." autocomplete="off" />
+            <div id="add-location-address-suggestions" class="rs-autocomplete" hidden></div>
+          </label>
+          <label>Name <input name="name" required /></label>
+        </div>
+        <label>Street <input name="streetAddress" /></label>
+        <div class="two-col">
+          <label>City <input name="city" /></label>
+          <label>Region <input name="region" /></label>
+        </div>
+        <label>Country <input name="country" /></label>
+        <div class="map-picker" id="add-location-map" aria-label="Location preview map"></div>
+        <div class="inline-actions" style="justify-content:flex-end;">
+          <button class="primary" type="submit" id="add-location-submit">Save</button>
+        </div>
+        <p class="hint" id="add-location-meta"></p>
+      </form>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="vendor/leaflet.js"></script>
+  <script src="locations.js"></script>
+</body>
+</html>
+
+
+

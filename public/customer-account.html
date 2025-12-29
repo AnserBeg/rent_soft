@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Customer account</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="landing-shell">
+    <header class="hero" style="margin-bottom: 18px;">
+      <div>
+        <p class="eyebrow">Customers</p>
+        <h1>Your account</h1>
+        <p class="lede">View and update your info, documents, and payment details.</p>
+      </div>
+    </header>
+
+    <main class="grid" style="grid-template-columns: 1fr; max-width: 980px; margin: 0 auto;">
+      <section class="card">
+        <div class="stack">
+          <div class="info" id="customer-account-info"></div>
+          <div class="stack" style="gap: 8px;">
+            <div style="font-weight: 700;">Documents</div>
+            <div class="hint" id="customer-account-docs">Loading...</div>
+          </div>
+
+          <div class="stack" style="gap: 10px;">
+            <div style="font-weight: 700;">Edit profile</div>
+            <div class="hint" id="customer-account-required" style="margin:0;"></div>
+
+            <div class="two-col">
+              <label>Business name
+                <input id="businessName" autocomplete="organization" />
+              </label>
+              <label>Phone
+                <input id="phone" type="tel" autocomplete="tel" />
+              </label>
+            </div>
+            <div class="two-col">
+              <label>Street address
+                <input id="streetAddress" autocomplete="street-address" />
+              </label>
+              <label>City
+                <input id="city" autocomplete="address-level2" />
+              </label>
+            </div>
+            <div class="two-col">
+              <label>Province / State
+                <input id="region" autocomplete="address-level1" />
+              </label>
+              <label>Postal code
+                <input id="postalCode" autocomplete="postal-code" />
+              </label>
+            </div>
+            <label>Country
+              <input id="country" autocomplete="country-name" />
+            </label>
+            <label>Credit card number
+              <input id="creditCardNumber" autocomplete="cc-number" inputmode="numeric" />
+            </label>
+
+            <div class="two-col">
+              <label>Reference #1 (upload)
+                <input id="reference1" type="file" />
+              </label>
+              <label>Reference #2 (upload)
+                <input id="reference2" type="file" />
+              </label>
+            </div>
+            <div class="two-col">
+              <label>Proof of insurance (upload)
+                <input id="proofOfInsurance" type="file" />
+              </label>
+              <label>Driver's license (upload)
+                <input id="driversLicense" type="file" />
+              </label>
+            </div>
+          </div>
+
+          <div class="inline-actions" style="justify-content: space-between;">
+            <a class="ghost" id="customer-account-back" href="index.html">Back</a>
+            <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end;">
+              <a class="ghost" id="customer-account-invoices" href="customer-invoices.html">View invoices</a>
+              <a class="ghost" id="create-company-link" href="signup.html">Create rental company</a>
+              <button class="primary" id="customer-account-save" type="button">Save changes</button>
+              <button class="ghost danger" id="customer-account-logout" type="button">Log out</button>
+            </div>
+          </div>
+
+          <p class="hint" id="customer-account-meta" style="margin:0;"></p>
+
+          <div class="stack" style="gap: 8px; margin-top: 16px;">
+            <div style="font-weight: 700;">Rental history</div>
+            <div id="customer-account-history">Loading...</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="customer-session.js"></script>
+  <script src="customer-account-page.js"></script>
+</body>
+</html>
+
+
+
+

@@ -1,0 +1,5 @@
+{
+  "name": "Damage Detective AI",
+  "description": "An intelligent damage assessment tool that compares 'Before' and 'After' photos to generate detailed reports on new vs. pre-existing damage for rentals and insurance.",
+  "requestFramePermissions": []
+}

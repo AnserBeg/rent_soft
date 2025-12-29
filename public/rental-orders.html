@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental — Rental Orders</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="no-top-headers">
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link active" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <header class="hero">
+          <div>
+            <p class="eyebrow">Operations</p>
+            <h1>Rental Orders</h1>
+            <p class="lede">Create, edit, and manage rental orders with grouped inventory line items, fees, notes, and attachments.</p>
+          </div>
+          <div class="hero-badge">
+            <span>Line items</span>
+            <span>Grouped inventory</span>
+            <span>Docs</span>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card company-context-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Context</p>
+                <h2>Company</h2>
+              </div>
+            </div>
+            <p class="hint" id="company-meta">Loading your company…</p>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>All rental orders</h2>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost" id="refresh">Refresh</button>
+                <button class="ghost" id="download-pdf">Download PDF</button>
+                <button class="ghost" id="open-legacy-import">Import</button>
+                <button class="primary" id="new-ro">New RO</button>
+              </div>
+            </div>
+
+            <div class="table-shell">
+              <div class="table-head">
+                <div class="inline-actions" style="flex-wrap:wrap;">
+                  <label class="filter-pill"><input type="checkbox" id="filter-requested" checked /> Requested</label>
+                  <label class="filter-pill"><input type="checkbox" id="filter-reservation" checked /> Reservation</label>
+                  <label class="filter-pill"><input type="checkbox" id="filter-ordered" checked /> Ordered</label>
+                  <label class="filter-pill"><input type="checkbox" id="filter-received" checked /> Received</label>
+                  <label class="filter-pill"><input type="checkbox" id="filter-closed" /> Closed</label>
+                </div>
+                <div class="inline">
+                  <input id="search" class="search-input" placeholder="Search rental orders..." />
+                </div>
+              </div>
+              <div class="table" id="rental-orders-table"></div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="legacy-import-modal">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <div>
+          <h3 style="margin:0;">Import legacy exports</h3>
+          <p class="hint" style="margin: 6px 0 0;">Upload both legacy exports to recreate rental orders/reservations. Upload Transaction List and Transaction List with Item ID reports.</p>
+        </div>
+        <button class="ghost small" id="close-legacy-import" type="button">Close</button>
+      </div>
+
+      <div class="stack">
+        <div class="inline-actions" style="flex-wrap:wrap;">
+          <label>Transaction List <input type="file" id="import-transactions" accept=".csv,.tsv,.txt" /></label>
+          <label>Transaction List with Item ID <input type="file" id="import-instances" accept=".csv,.tsv,.txt" /></label>
+          <button class="primary" id="run-import" type="button">Import</button>
+          <button class="ghost" id="backfill-legacy-rates" type="button">Backfill rates</button>
+        </div>
+        <p class="hint" id="import-result" style="margin: 0;"></p>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="rental-orders.js"></script>
+</body>
+</html>
+
+
+

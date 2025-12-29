@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Customer invoices</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="landing-shell">
+    <header class="hero" style="margin-bottom: 18px;">
+      <div>
+        <p class="eyebrow">Customers</p>
+        <h1>Your invoices</h1>
+        <p class="lede">Review balances, overdue invoices, and download PDFs.</p>
+      </div>
+      <div class="inline-actions">
+        <a class="ghost" id="customer-invoices-back" href="customer-account.html">Back to account</a>
+      </div>
+    </header>
+
+    <main class="grid" style="grid-template-columns: 1fr; max-width: 1080px; margin: 0 auto;">
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2>Summary</h2>
+            <p class="hint">Totals update per rental company.</p>
+          </div>
+          <div class="inline-actions">
+            <label class="inline">Rental company
+              <select id="customer-invoices-company"></select>
+            </label>
+            <button class="ghost" id="customer-invoices-refresh" type="button">Refresh</button>
+          </div>
+        </div>
+        <div class="ar-summary" id="customer-invoices-summary">
+          <div class="ar-summary-head">
+            <div class="ar-summary-title">Your invoices</div>
+            <div class="ar-summary-sub" id="customer-invoices-summary-sub">Select a rental company.</div>
+          </div>
+          <div class="ar-summary-kpis">
+            <div class="ar-kpi">
+              <div class="ar-kpi-label">Total payables</div>
+              <div class="ar-kpi-value" id="customer-invoices-total">--</div>
+            </div>
+            <div class="ar-kpi" id="customer-invoices-overdue-kpi">
+              <div class="ar-kpi-label">Overdue</div>
+              <div class="ar-kpi-value" id="customer-invoices-overdue">--</div>
+            </div>
+          </div>
+        </div>
+        <p class="hint" id="customer-invoices-summary-meta"></p>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2>Invoices</h2>
+            <p class="hint">Download PDFs for your records.</p>
+          </div>
+          <div class="inline-actions">
+            <label class="inline">Search
+              <input id="customer-invoices-search" class="search-input" placeholder="Search invoices..." />
+            </label>
+            <label class="inline" style="gap: 6px;">
+              <input id="customer-invoices-overdue-only" type="checkbox" />
+              Overdue only
+            </label>
+          </div>
+        </div>
+        <div class="table-shell" style="margin-top: 12px;">
+          <div class="table" id="customer-invoices-table"></div>
+        </div>
+        <p class="hint" id="customer-invoices-meta"></p>
+      </section>
+    </main>
+  </div>
+
+  <script src="customer-session.js"></script>
+  <script src="customer-invoices.js"></script>
+</body>
+</html>

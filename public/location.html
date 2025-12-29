@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Location</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="vendor/leaflet.css" />
+  <script src="vendor/chart.umd.js"></script>
+</head>
+<body class="no-top-headers">
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link active" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <header class="hero">
+          <div>
+            <p class="eyebrow">Location</p>
+            <h1 id="loc-title">Loading…</h1>
+            <p class="lede">Closed transactions over time.</p>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card wide">
+            <div class="card-header">
+              <div class="inline-actions" style="justify-content: space-between; width: 100%; flex-wrap: wrap;">
+                <p class="hint" id="company-meta">Loading…</p>
+                <div class="inline-actions header-actions">
+                  <label>Start <input type="date" id="range-start" /></label>
+                  <label>Days
+                    <select id="range-days">
+                      <option value="30">30</option>
+                      <option value="60">60</option>
+                      <option value="180">180</option>
+                      <option value="365" selected>365</option>
+                    </select>
+                  </label>
+                  <label>Bucket
+                    <select id="bucket">
+                      <option value="day">Day</option>
+                      <option value="week">Week</option>
+                      <option value="month" selected>Month</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="chart-card" style="margin-top: 0; min-height: 320px;">
+              <div class="chart-head">
+                <div class="chart-title">Equipment by type (available vs not available)</div>
+                <div class="hint">Click a bar to open matching equipment.</div>
+              </div>
+              <div class="chart-canvas" style="height: 260px;">
+                <canvas id="type-stock-chart"></canvas>
+              </div>
+            </div>
+
+            <div class="chart-card" style="min-height: 320px;">
+              <div class="chart-head">
+                <div class="chart-title">Transactions closed</div>
+              </div>
+              <div class="chart-canvas">
+                <canvas id="tx-chart"></canvas>
+              </div>
+            </div>
+
+            <div class="card" style="margin-top: 14px;">
+              <div class="card-header">
+                <div>
+                  <h3 style="margin:0;">Details</h3>
+                </div>
+                <div class="inline-actions">
+                  <button class="ghost danger" id="delete-location" type="button">Delete</button>
+                  <button class="primary" id="save-location" type="button">Save</button>
+                </div>
+              </div>
+              <div class="stack">
+                <label>Search address <input id="loc-address-search" placeholder="Start typing an address..." autocomplete="off" /></label>
+                <div id="loc-address-suggestions" class="rs-autocomplete" hidden></div>
+                <div class="map-picker" id="loc-map" aria-label="Location map"></div>
+                <div class="two-col">
+                  <label>Name <input id="loc-name" /></label>
+                  <label>Street <input id="loc-street" /></label>
+                </div>
+                <div class="two-col">
+                  <label>City <input id="loc-city" /></label>
+                  <label>Region <input id="loc-region" /></label>
+                </div>
+                <label>Country <input id="loc-country" /></label>
+                <label style="display:flex; align-items:center; gap:10px;">
+                  <input type="checkbox" id="loc-is-base" />
+                  <span>Base location (show on Locations list/map)</span>
+                </label>
+                <p class="hint" id="loc-meta"></p>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="vendor/leaflet.js"></script>
+  <script src="location.js"></script>
+</body>
+</html>
+
+
+

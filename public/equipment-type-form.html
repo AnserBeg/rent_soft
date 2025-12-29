@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental — Equipment type</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="vendor/chart.umd.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link active" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <header class="hero" style="display:none;">
+          <div>
+            <p class="eyebrow" id="mode-label">New type</p>
+            <h1 id="form-title">Equipment type</h1>
+            <p class="lede">Create and manage an equipment type, rates, category, and optional photo.</p>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card" style="display:none;">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Context</p>
+                <h2>Company</h2>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="inline-actions">
+                <a href="types.html" class="ghost small" id="back-to-list">Back to list</a>
+              </div>
+              <p class="hint" id="company-meta">Loading your company…</p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Details</h2>
+              </div>
+              <button class="ghost danger" id="delete-type" style="display:none;">Delete</button>
+            </div>
+
+            <div class="chart-card" id="type-stock-chart-card" style="display:none;">
+              <div class="chart-head">
+                <div class="chart-title">Available stock by location</div>
+                <div class="chart-actions">
+                  <label>Days
+                    <select id="type-stock-days">
+                      <option value="14">14</option>
+                      <option value="30" selected>30</option>
+                      <option value="60">60</option>
+                      <option value="90">90</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div class="chart-body">
+                <div class="chart-canvas">
+                  <canvas id="type-stock-chart"></canvas>
+                </div>
+                <div class="chart-side-media" id="type-stock-image-wrap" hidden>
+                  <img id="type-stock-image" alt="" loading="lazy" referrerpolicy="no-referrer" />
+                </div>
+              </div>
+            </div>
+
+            <div class="form-body">
+              <form id="type-form" class="stack">
+                <label>Equipment name <input name="name" required /></label>
+                <label>Images (optional)</label>
+                <div class="inline-actions" style="justify-content:flex-start;">
+                  <button type="button" class="ghost small" id="open-type-image-modal">Add or edit images</button>
+                </div>
+                <input name="imageUrls" type="hidden" />
+                <input name="imageUrl" type="hidden" />
+                <label>Category
+                  <select name="categoryId" id="category-select">
+                    <option value="">Select a category</option>
+                    <option value="__new_category__">+ Add new category...</option>
+                  </select>
+                </label>
+                <label>Description <textarea name="description"></textarea></label>
+                <label>Terms <textarea name="terms"></textarea></label>
+                <div class="rate-grid">
+                  <label>Daily rate <input name="dailyRate" type="number" min="0" step="0.01" /></label>
+                  <label>Weekly rate <input name="weeklyRate" type="number" min="0" step="0.01" /></label>
+                  <label>Monthly rate <input name="monthlyRate" type="number" min="0" step="0.01" /></label>
+                </div>
+                <div class="inline-actions">
+                  <button type="submit" class="primary">Save type</button>
+                </div>
+                <div class="modal" id="type-image-modal">
+                  <div class="modal-content simple">
+                    <div class="modal-header">
+                      <h3>Images</h3>
+                      <button class="ghost small" id="close-type-image-modal" type="button">Close</button>
+                    </div>
+                    <div class="stack">
+                      <label>Upload images
+                        <input name="imageFiles" type="file" accept="image/*" multiple />
+                      </label>
+                      <div class="image-tools">
+                        <div class="thumb-row" id="type-images"></div>
+                        <button type="button" class="ghost small danger" id="remove-type-image" style="display:none;">Clear images</button>
+                      </div>
+                      <div class="ai-image-tools" id="type-ai-tools" hidden>
+                        <div class="ai-image-tools-row">
+                          <label>AI preset
+                            <select id="type-ai-preset">
+                              <option value="clean-white" selected>Clean white background</option>
+                              <option value="thumbnail-26-27">Smart Thumbnail (26:27)</option>
+                              <option value="enhance">Enhance (lighting + sharpness)</option>
+                              <option value="remove-bg">Remove background (transparent)</option>
+                              <option value="custom">Custom...</option>
+                            </select>
+                          </label>
+                          <label>Prompt
+                            <textarea id="type-ai-prompt" class="compact-textarea" placeholder="Describe how to clean up this image..."></textarea>
+                          </label>
+                          <button type="button" class="ghost small" id="type-ai-apply">Apply AI to selected</button>
+                        </div>
+                        <p class="hint" id="type-ai-status"></p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="category-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Add category</h3>
+        <button class="ghost small" id="close-category-modal">Close</button>
+      </div>
+      <form id="category-modal-form" class="stack">
+        <label>Category name <input name="name" required /></label>
+        <button type="submit" class="primary">Save category</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="equipment-type-form.js"></script>
+</body>
+</html>
+
+
+

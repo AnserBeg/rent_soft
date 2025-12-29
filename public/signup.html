@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Sign up</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="landing-shell">
+    <header class="hero" style="margin-bottom: 18px;">
+      <div>
+        <p class="eyebrow">Get started</p>
+        <h1>Create your company</h1>
+        <p class="lede">Set up your rental company and create the first owner account.</p>
+        <p class="hint">Company accounts can list equipment and rent from the marketplace. Individuals should use a customer account.</p>
+      </div>
+    </header>
+
+    <main class="grid" style="grid-template-columns: 1fr; max-width: 760px; margin: 0 auto;">
+      <section class="card">
+        <form id="signup-form" class="stack">
+          <div class="storefront-two">
+            <label>
+              Company name
+              <input name="companyName" type="text" autocomplete="organization" required />
+            </label>
+            <label>
+              Company contact email
+              <input name="contactEmail" type="email" autocomplete="email" required />
+            </label>
+          </div>
+
+          <div class="storefront-two">
+            <label>
+              Owner name
+              <input name="ownerName" type="text" autocomplete="name" required />
+            </label>
+            <label>
+              Owner email (login)
+              <input name="ownerEmail" type="email" autocomplete="email" required />
+            </label>
+          </div>
+
+          <label>
+            Password
+            <input name="password" type="password" autocomplete="new-password" minlength="6" required />
+          </label>
+
+          <div class="info">
+            Renting as an individual? <a class="ghost" href="customer-signup.html">Create a customer account</a>
+          </div>
+          <div class="inline-actions" style="justify-content: space-between;">
+            <a class="ghost" href="index.html">Back</a>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;">
+              <a class="ghost" href="login.html">Log in</a>
+              <button type="submit" class="primary" id="signup-submit">Sign up</button>
+            </div>
+          </div>
+          <p class="hint" id="signup-meta"></p>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="customer-session.js"></script>
+  <script src="signup.js"></script>
+</body>
+</html>
+
+
+
+

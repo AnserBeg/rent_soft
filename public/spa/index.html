@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aiven Rental - B2B Equipment Marketplace</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              display: ['Rajdhani', 'sans-serif'],
+            },
+            colors: {
+              brand: {
+                dark: '#0f172a', // Keep for specific dark elements if needed
+                accent: '#f59e0b', // Amber/Orange
+                secondary: '#3b82f6',
+                surface: '#ffffff',
+                background: '#f8fafc', // Slate 50
+              }
+            },
+            animation: {
+              'spin-slow': 'spin 20s linear infinite',
+            }
+          },
+        },
+      }
+    </script>
+    <style>
+      body {
+        background-color: #f8fafc; /* Light Slate Background */
+        color: #0f172a; /* Slate 900 Text */
+        overflow-x: hidden;
+      }
+      .perspective-1000 {
+        perspective: 1000px;
+      }
+      /* Custom Scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #f1f5f9;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+      }
+      
+      /* Hide scrollbar for image galleries */
+      .scrollbar-hide::-webkit-scrollbar {
+          display: none;
+      }
+      .scrollbar-hide {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+      }
+    </style>
+
+  <script type="importmap">
+{
+  "imports": {
+    "three": "https://esm.sh/three@^0.182.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@react-three/drei": "https://esm.sh/@react-three/drei@^10.7.7",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "@react-three/fiber": "https://esm.sh/@react-three/fiber@^9.4.2",
+    "framer-motion": "https://esm.sh/framer-motion@^12.23.26",
+    "@google/genai": "https://esm.sh/@google/genai@^1.33.0",
+    "lucide-react": "https://esm.sh/lucide-react@^0.561.0"
+  }
+}
+</script>
+  <script type="module" crossorigin src="/assets/index-CCS3xkwd.js"></script>
+  <script src="rental-info-augment.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-tn0RQdqM.css">
+</head>
+  <body>
+    <div id="root"></div>
+</body>
+</html>

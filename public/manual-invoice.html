@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Manual Invoice</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="no-top-headers">
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link active" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Manual invoice</h2>
+                <p class="hint">Creates a standalone invoice not tied to a rental order.</p>
+              </div>
+              <div class="inline-actions">
+                <a class="ghost" href="accounts-receivable.html">Back to accounts receivable</a>
+                <button class="primary" id="manual-create" type="button">Create</button>
+              </div>
+            </div>
+            <div class="two-col">
+              <label>Customer
+                <select id="manual-customer"></select>
+              </label>
+              <label>Invoice date (optional)
+                <input id="manual-invoice-date" type="date" />
+              </label>
+            </div>
+            <div class="two-col">
+              <label>Due date (optional)
+                <input id="manual-due-date" type="date" />
+              </label>
+              <label>Service period start (optional)
+                <input id="manual-service-start" type="date" />
+              </label>
+            </div>
+            <div class="two-col">
+              <label>Service period end (optional)
+                <input id="manual-service-end" type="date" />
+              </label>
+              <label>Notes (optional)
+                <input id="manual-notes" />
+              </label>
+            </div>
+            <label>General notes (optional)
+              <textarea id="manual-general-notes" rows="3" placeholder="Visible on the invoice."></textarea>
+            </label>
+            <div class="table-shell" style="margin-top: 12px;">
+              <div class="table-head">
+                <div class="inline">
+                  <strong>Line items</strong>
+                </div>
+                <div class="inline-actions">
+                  <button class="ghost" id="manual-add-line" type="button">Add line</button>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Description</th>
+                      <th>Qty</th>
+                      <th>Unit</th>
+                      <th>Amount</th>
+                      <th>Taxable</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="manual-lines-body"></tbody>
+                </table>
+              </div>
+            </div>
+            <p class="hint" id="manual-meta"></p>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="manual-invoice.js"></script>
+</body>
+</html>

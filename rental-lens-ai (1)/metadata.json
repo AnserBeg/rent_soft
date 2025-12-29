@@ -1,0 +1,5 @@
+{
+  "name": "Rental Lens AI",
+  "description": "Professional image enhancement and background removal tool for rental property listings using Gemini 2.5 Flash Image.",
+  "requestFramePermissions": []
+}

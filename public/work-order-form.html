@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Work Order</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link active" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Service ticket</p>
+                <div class="title-row">
+                  <h1 id="work-order-title" style="margin:0;">Work Order</h1>
+                  <span class="pill" id="work-order-number" style="display:none;"></span>
+                </div>
+                <p class="hint" id="company-meta">Loading your company...</p>
+              </div>
+              <div class="inline-actions header-actions">
+                <button class="ghost small" id="mark-closed" type="button">Close</button>
+                <button class="ghost small" id="mark-open" type="button" style="display:none;">Reopen</button>
+                <button class="ghost danger" id="delete-work-order" type="button" style="display:none;">Delete</button>
+                <button class="primary" id="save-work-order" type="button">Save work order</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Details</p>
+                <h2>Unit and date</h2>
+              </div>
+            </div>
+            <div class="three-col">
+              <label>Date
+                <input id="work-date" type="date" />
+              </label>
+              <label>Unit (stock)
+                <select id="unit-select">
+                  <option value="">Select a unit</option>
+                </select>
+              </label>
+              <label>Service status
+                <select id="service-status">
+                  <option value="in_service">In service</option>
+                  <option value="out_of_service">Out of service</option>
+                </select>
+              </label>
+            </div>
+            <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff; margin-top:12px;">
+              <input id="return-inspection" type="checkbox" />
+              <span>Return inspection work order</span>
+            </label>
+            <input type="hidden" id="order-status" value="open" />
+            <p class="hint" id="service-hint" style="margin: 10px 0 0;"></p>
+            <p class="hint" id="unit-meta" style="margin: 10px 0 0;"></p>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Summary</p>
+                <h2>Work performed</h2>
+              </div>
+            </div>
+            <div class="stack workorder-summary">
+              <label>Describe the work done
+                <textarea id="work-summary" class="notes-area" placeholder="Add a detailed description of the work performed..."></textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Parts</p>
+                <h2>Parts used</h2>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost" id="add-part-line" type="button">Add part line</button>
+              </div>
+            </div>
+            <datalist id="parts-catalog"></datalist>
+            <div class="workorder-line-grid workorder-line-header">
+              <span>Part #</span>
+              <span>Description</span>
+              <span>UOM</span>
+              <span>Unit cost</span>
+              <span>Qty</span>
+              <span>Line amount</span>
+              <span></span>
+            </div>
+            <div class="stack" id="parts-lines"></div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Labor</p>
+                <h2>Labor lines</h2>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost" id="add-labor-line" type="button">Add labor line</button>
+              </div>
+            </div>
+            <div class="workorder-labor-grid workorder-line-header">
+              <span>Hours</span>
+              <span>Work done</span>
+              <span></span>
+            </div>
+            <div class="stack" id="labor-lines"></div>
+          </section>
+
+          <section class="card wide">
+            <div class="stack">
+              <div class="totals-row">
+                <span class="hint">Parts total</span>
+                <strong id="parts-total">$0.00</strong>
+              </div>
+              <div class="totals-row">
+                <span class="hint">Labor hours</span>
+                <strong id="labor-total">0</strong>
+              </div>
+              <div class="totals-row">
+                <span class="hint">Total</span>
+                <strong id="grand-total">$0.00</strong>
+              </div>
+              <p class="hint" id="save-status" style="margin:0;"></p>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="work-order-form.js"></script>
+</body>
+</html>
+
+
+
+

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Reports</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="vendor/chart.umd.js"></script>
+</head>
+<body class="no-top-headers">
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link active" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <header class="hero">
+          <div>
+            <h1>Reports</h1>
+            <p class="lede">Build exports and charts from your live data.</p>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card company-context-card">
+            <div class="card-header">
+              <div>
+                <h2>Company</h2>
+              </div>
+            </div>
+            <p class="hint" id="company-meta">Loading…</p>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Report builder</h2>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost" id="reports-run" type="button">Run</button>
+                <button class="ghost" id="reports-export" type="button" disabled>Export CSV</button>
+              </div>
+            </div>
+
+            <div class="report-grid">
+              <div class="stack">
+                <div class="two-col">
+                  <label>Dataset
+                    <select id="reports-dataset">
+                      <option value="rentalOrders">Rental Orders</option>
+                      <option value="quotes">Quotes</option>
+                      <option value="customers">Customers</option>
+                      <option value="equipment">Stock</option>
+                      <option value="types">Equipments</option>
+                      <option value="locations">Locations</option>
+                      <option value="salesPeople">Sales People</option>
+                      <option value="revenueTimeseries">Revenue (time series)</option>
+                    </select>
+                  </label>
+                  <label>Search
+                    <input id="reports-search" class="search-input" placeholder="Filter the results…" />
+                  </label>
+                </div>
+
+                <div class="two-col" id="reports-range-row">
+                  <label>From
+                    <input type="date" id="reports-from" />
+                  </label>
+                  <label>To
+                    <input type="date" id="reports-to" />
+                  </label>
+                </div>
+
+                <div class="stack" id="reports-statuses" style="display:none;">
+                  <div class="hint">Statuses</div>
+                  <div class="inline-actions" style="justify-content:flex-start; flex-wrap:wrap;">
+                    <label class="filter-pill"><input type="checkbox" value="reservation" checked /> Reservation</label>
+                    <label class="filter-pill"><input type="checkbox" value="ordered" checked /> Ordered</label>
+                    <label class="filter-pill"><input type="checkbox" value="received" /> Received</label>
+                    <label class="filter-pill"><input type="checkbox" value="closed" /> Closed</label>
+                    <label class="filter-pill"><input type="checkbox" value="quote" /> Quote</label>
+                  </div>
+                </div>
+
+                <div class="stack">
+                  <div class="hint">Columns</div>
+                  <div class="report-fields" id="reports-fields"></div>
+                </div>
+
+                <div class="table-shell">
+                  <div class="table-head">
+                    <p id="reports-preview-title">Preview</p>
+                    <div class="inline">
+                      <span class="pill" id="reports-count">0 rows</span>
+                    </div>
+                  </div>
+                  <div class="table" id="reports-table"></div>
+                </div>
+              </div>
+
+              <div class="stack">
+                <div class="chart-card" style="min-height: 420px;">
+                  <div class="chart-head">
+                    <div class="chart-title">Chart</div>
+                    <div class="chart-actions">
+                      <label>Type
+                        <select id="reports-chart-type">
+                          <option value="bar" selected>Bar</option>
+                          <option value="line">Line</option>
+                          <option value="pie">Pie</option>
+                          <option value="doughnut">Doughnut</option>
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+                  <div class="stack" style="padding: 0 12px 12px;">
+                    <div class="two-col">
+                      <label>X (group by)
+                        <select id="reports-x"></select>
+                      </label>
+                      <label>Y
+                        <select id="reports-y-agg">
+                          <option value="count" selected>Count rows</option>
+                          <option value="sum">Sum field</option>
+                          <option value="avg">Average field</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div class="two-col" id="reports-y-field-row">
+                      <label>Field
+                        <select id="reports-y-field"></select>
+                      </label>
+                      <label>Top N
+                        <input id="reports-topn" type="number" min="1" max="50" value="12" />
+                      </label>
+                    </div>
+                    <p class="hint" id="reports-meta" style="margin: 0;"></p>
+                  </div>
+                  <div class="chart-canvas">
+                    <canvas id="reports-chart"></canvas>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="reports.js"></script>
+</body>
+</html>
+
+
+

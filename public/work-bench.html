@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Work Bench</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="no-top-headers">
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link active" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <header class="hero">
+          <div>
+            <h1>Work Bench</h1>
+            <p class="lede">Equipment timeline across time.</p>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card company-context-card">
+            <div class="card-header">
+              <div>
+                <h2>Company</h2>
+              </div>
+            </div>
+            <p class="hint" id="company-meta">Loading your company…</p>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div class="stack" style="gap:10px; width:100%;">
+                <div class="inline-actions bench-controls-wrap">
+                  <div class="inline-actions bench-controls-row">
+                    <label>Start <input type="date" id="range-start" /></label>
+                    <label>Days
+                      <select id="range-days">
+                        <option value="14">14</option>
+                        <option value="21">21</option>
+                        <option value="30" selected>30</option>
+                        <option value="60">60</option>
+                      </select>
+                    </label>
+                    <label>Group by
+                      <select id="group-by">
+                        <option value="unit" selected>Equipment unit</option>
+                        <option value="type">Equipment type</option>
+                        <option value="customer">Customer</option>
+                        <option value="location">Pickup location</option>
+                      </select>
+                    </label>
+                    <button class="ghost small" id="today" type="button">Today</button>
+                  </div>
+                  <div class="inline-actions bench-controls-row bench-status-row">
+                    <label class="filter-pill"><input type="checkbox" id="status-requested" checked /> Requested</label>
+                    <label class="filter-pill"><input type="checkbox" id="status-reservation" checked /> Reservation</label>
+                    <label class="filter-pill"><input type="checkbox" id="status-ordered" checked /> Ordered</label>
+                    <label class="filter-pill"><input type="checkbox" id="status-received" /> Received</label>
+                    <label class="filter-pill"><input type="checkbox" id="status-closed" /> Closed</label>
+                    <label class="filter-pill"><input type="checkbox" id="status-quote" /> Quote</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bench-toolbar">
+              <div class="bench-summary">
+                <div class="bench-kpis">
+                  <div class="bench-kpi">
+                    <div class="bench-kpi-label">Assignments</div>
+                    <div class="bench-kpi-value" id="bench-kpi-assignments">--</div>
+                  </div>
+                  <div class="bench-kpi">
+                    <div class="bench-kpi-label">Active now</div>
+                    <div class="bench-kpi-value" id="bench-kpi-active">--</div>
+                  </div>
+                  <div class="bench-kpi">
+                    <div class="bench-kpi-label">Starting soon</div>
+                    <div class="bench-kpi-value" id="bench-kpi-starting">--</div>
+                  </div>
+                  <div class="bench-kpi">
+                    <div class="bench-kpi-label">Ending soon</div>
+                    <div class="bench-kpi-value" id="bench-kpi-ending">--</div>
+                  </div>
+                  <div class="bench-kpi">
+                    <div class="bench-kpi-label">Overdue</div>
+                    <div class="bench-kpi-value" id="bench-kpi-overdue">--</div>
+                  </div>
+                  <div class="bench-kpi">
+                    <div class="bench-kpi-label">Reservations</div>
+                    <div class="bench-kpi-value" id="bench-kpi-reservations">--</div>
+                  </div>
+                </div>
+
+                <div class="bench-legend" aria-label="Timeline legend">
+                  <span class="bench-legend-item"><span class="bench-dot requested"></span>Requested</span>
+                  <span class="bench-legend-item"><span class="bench-dot reservation"></span>Reservation</span>
+                  <span class="bench-legend-item"><span class="bench-dot ordered"></span>Ordered</span>
+                  <span class="bench-legend-item"><span class="bench-dot received"></span>Received</span>
+                  <span class="bench-legend-item"><span class="bench-dot closed"></span>Closed</span>
+                  <span class="bench-legend-item"><span class="bench-dot quote"></span>Quote / Other</span>
+                  <span class="bench-legend-item"><span class="bench-dot ending"></span>Ending soon</span>
+                  <span class="bench-legend-item"><span class="bench-dot overdue"></span>Overdue</span>
+                </div>
+              </div>
+
+              <div class="bench-actions">
+                <label class="bench-search">
+                  Search
+                  <input id="bench-search" type="search" placeholder="Customer, equipment, location, RO/Quote…" />
+                </label>
+                <div class="view-toggle" id="bench-view-toggle" role="group" aria-label="Workbench view">
+                  <button class="view-toggle-btn active" id="bench-view-timeline-btn" type="button" data-view="timeline">Timeline</button>
+                  <button class="view-toggle-btn" id="bench-view-stages-btn" type="button" data-view="stages">Stages</button>
+                </div>
+                <button class="ghost small bench-hot-filter" id="bench-ending-72h" type="button" title="Show items ending in the next 72 hours">Ending &lt;72h</button>
+                <button class="primary" id="bench-new-ro" type="button">New RO</button>
+              </div>
+            </div>
+
+            <div id="bench-view-timeline">
+              <div class="timeline-shell">
+                <div class="timeline-top">
+                  <div class="timeline-left-head">Row</div>
+                  <div class="timeline-right-head">
+                    <div class="timeline-scrollx" id="timeline-scroll-head">
+                      <div class="timeline-days" id="timeline-days"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="timeline-main">
+                  <div class="timeline-left" id="timeline-left"></div>
+                  <div class="timeline-right">
+                    <div class="timeline-scrollx" id="timeline-scroll-body">
+                      <div class="timeline-rows" id="timeline-rows"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div id="bench-view-stages" style="display:none;">
+              <div class="bench-stage-grid">
+                <div class="table-shell bench-stage-shell">
+                  <div class="table-head">
+                    <div><strong>Request</strong> <span class="hint" id="bench-stage-requested-count"></span></div>
+                  </div>
+                  <div class="table bench-stage-table" id="bench-stage-requested-table"></div>
+                </div>
+
+                <div class="table-shell bench-stage-shell">
+                  <div class="table-head">
+                    <div><strong>Quote</strong> <span class="hint" id="bench-stage-quote-count"></span></div>
+                  </div>
+                  <div class="table bench-stage-table" id="bench-stage-quote-table"></div>
+                </div>
+
+                <div class="table-shell bench-stage-shell">
+                  <div class="table-head">
+                    <div><strong>Reservation</strong> <span class="hint" id="bench-stage-reservation-count"></span></div>
+                  </div>
+                  <div class="table bench-stage-table" id="bench-stage-reservation-table"></div>
+                </div>
+
+                <div class="table-shell bench-stage-shell">
+                  <div class="table-head">
+                    <div><strong>Order</strong> <span class="hint" id="bench-stage-ordered-count"></span></div>
+                  </div>
+                  <div class="table bench-stage-table" id="bench-stage-ordered-table"></div>
+                </div>
+
+                <div class="table-shell bench-stage-shell">
+                  <div class="table-head">
+                    <div><strong>Received</strong> <span class="hint" id="bench-stage-received-count"></span></div>
+                  </div>
+                  <div class="table bench-stage-table" id="bench-stage-received-table"></div>
+                </div>
+
+                <div class="table-shell bench-stage-shell">
+                  <div class="table-head">
+                    <div><strong>Closed</strong> <span class="hint" id="bench-stage-closed-count"></span></div>
+                  </div>
+                  <div class="table bench-stage-table" id="bench-stage-closed-table"></div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="timeline-tooltip" id="timeline-tooltip" style="display:none;"></div>
+
+  <div class="modal" id="conflict-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Conflict</h3>
+        <button class="ghost small" id="close-conflict-modal" type="button">Close</button>
+      </div>
+      <div class="stack" id="conflict-body"></div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>
+
+
+

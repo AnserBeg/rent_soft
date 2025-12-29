@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Storefront</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="landing-shell storefront-shell">
+    <header class="storefront-topbar">
+      <a href="index.html" class="storefront-brand">
+        <span class="storefront-badge">Aiven Rental</span>
+      </a>
+      <div class="storefront-topbar-actions">
+        <span id="storefront-account-actions">
+          <a class="ghost" href="customer-login.html">Customer log in</a>
+          <a class="primary" href="customer-signup.html">Customer sign up</a>
+        </span>
+      </div>
+    </header>
+
+    <header class="landing-hero storefront-hero">
+      <div class="landing-hero-content">
+        <p class="landing-kicker">Marketplace</p>
+        <h1 class="landing-title">Find rental equipment near you.</h1>
+        <p class="landing-subtitle">Search by equipment, company, or location — then reserve instantly.</p>
+
+        <form id="storefront-search" class="storefront-search">
+          <label>
+            Equipment
+            <input name="equipment" type="text" placeholder="e.g. Scissor lift, Concrete saw" />
+          </label>
+          <label>
+            Company
+            <input name="company" type="text" placeholder="e.g. Acme Rentals" />
+          </label>
+          <label>
+            Location
+            <input name="location" type="text" placeholder="e.g. Austin, TX" />
+          </label>
+          <label>
+            From
+            <input name="from" type="date" />
+          </label>
+          <label>
+            To
+            <input name="to" type="date" />
+          </label>
+          <div class="storefront-search-actions">
+            <button type="submit" class="primary" id="storefront-submit">Search</button>
+            <button type="button" class="ghost" id="storefront-clear">Clear</button>
+          </div>
+        </form>
+
+        <p class="hint" id="storefront-meta"></p>
+      </div>
+    </header>
+
+    <section class="storefront-results">
+      <div class="extras-strip">
+        <div class="extras-strip-left">
+          <span class="extras-label">Listings</span>
+          <span class="mini-badge" id="storefront-count">0</span>
+          <span class="hint" id="storefront-range-hint"></span>
+        </div>
+      </div>
+      <div class="storefront-grid" id="storefront-grid"></div>
+    </section>
+  </div>
+
+  <div class="modal" id="reserve-modal" aria-hidden="true">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h2 style="margin: 0;">Reserve</h2>
+        <button class="ghost" type="button" id="reserve-close">Close</button>
+      </div>
+      <div class="hint" id="reserve-selected"></div>
+      <form id="reserve-form" class="stack" style="margin-top: 10px;">
+        <input type="hidden" name="companyId" />
+        <input type="hidden" name="typeId" />
+        <input type="hidden" name="customerToken" />
+
+        <div class="card" style="background: #f8fafc; border: 1px solid #e5e7eb; padding: 12px;">
+          <div style="font-weight: 700; margin-bottom: 6px;">Customer account</div>
+          <div class="hint" id="reserve-auth-box">Checking login…</div>
+          <div class="inline-actions" id="reserve-auth-actions" style="justify-content: flex-start; margin-top: 8px;"></div>
+        </div>
+
+        <label>
+          Pickup location (optional)
+          <select name="locationId" id="reserve-location">
+            <option value="">Any</option>
+          </select>
+        </label>
+        <div class="storefront-two">
+          <label>
+            From
+            <input name="startAt" type="datetime-local" required />
+          </label>
+          <label>
+            To
+            <input name="endAt" type="datetime-local" required />
+          </label>
+        </div>
+        <div class="card" style="background: #f8fafc; border: 1px solid #e5e7eb; padding: 12px;">
+          <div style="font-weight: 700; margin-bottom: 6px;">Rental information</div>
+            <div class="stack">
+              <div data-rental-info-field="siteAddress">
+                <label>
+                  Site address
+                  <input id="reserve-site-address" name="siteAddress" type="text" />
+                </label>
+              </div>
+              <div data-rental-info-field="criticalAreas">
+                <label>
+                  Critical Areas on Site
+                  <textarea id="reserve-critical-areas" required></textarea>
+                </label>
+              </div>
+              <div data-rental-info-field="generalNotes">
+                <label>
+                  General notes
+                  <textarea id="reserve-general-notes" required></textarea>
+                </label>
+              </div>
+              <div class="contact-block" data-rental-info-field="emergencyContacts">
+                <div class="contact-header">
+                  <strong>Emergency contacts</strong>
+                  <button type="button" class="ghost small" id="reserve-add-emergency-contact">+ Add contact</button>
+                </div>
+                <div class="contacts-list stack" id="reserve-emergency-contacts-list"></div>
+              </div>
+              <div class="contact-block" data-rental-info-field="siteContacts">
+                <div class="contact-header">
+                  <strong>Site contacts</strong>
+                  <button type="button" class="ghost small" id="reserve-add-site-contact">+ Add contact</button>
+                </div>
+                <div class="contacts-list stack" id="reserve-site-contacts-list"></div>
+              </div>
+              <div class="coverage-block" data-rental-info-field="coverageHours">
+                <div class="coverage-header">
+                  <strong>Hours of coverage required</strong>
+                  <span class="hint">Use 24-hour time</span>
+                </div>
+                <table class="coverage-table">
+                <thead>
+                  <tr>
+                    <th>Mon</th>
+                    <th>Tue</th>
+                    <th>Wed</th>
+                    <th>Thu</th>
+                    <th>Fri</th>
+                    <th>Sat</th>
+                    <th>Sun</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>
+                      <div class="coverage-inputs">
+                        <input id="reserve-coverage-mon-start" type="time" aria-label="Monday start time" />
+                        <span>to</span>
+                        <input id="reserve-coverage-mon-end" type="time" aria-label="Monday end time" />
+                      </div>
+                    </td>
+                    <td>
+                      <div class="coverage-inputs">
+                        <input id="reserve-coverage-tue-start" type="time" aria-label="Tuesday start time" />
+                        <span>to</span>
+                        <input id="reserve-coverage-tue-end" type="time" aria-label="Tuesday end time" />
+                      </div>
+                    </td>
+                    <td>
+                      <div class="coverage-inputs">
+                        <input id="reserve-coverage-wed-start" type="time" aria-label="Wednesday start time" />
+                        <span>to</span>
+                        <input id="reserve-coverage-wed-end" type="time" aria-label="Wednesday end time" />
+                      </div>
+                    </td>
+                    <td>
+                      <div class="coverage-inputs">
+                        <input id="reserve-coverage-thu-start" type="time" aria-label="Thursday start time" />
+                        <span>to</span>
+                        <input id="reserve-coverage-thu-end" type="time" aria-label="Thursday end time" />
+                      </div>
+                    </td>
+                    <td>
+                      <div class="coverage-inputs">
+                        <input id="reserve-coverage-fri-start" type="time" aria-label="Friday start time" />
+                        <span>to</span>
+                        <input id="reserve-coverage-fri-end" type="time" aria-label="Friday end time" />
+                      </div>
+                    </td>
+                    <td>
+                      <div class="coverage-inputs">
+                        <input id="reserve-coverage-sat-start" type="time" aria-label="Saturday start time" />
+                        <span>to</span>
+                        <input id="reserve-coverage-sat-end" type="time" aria-label="Saturday end time" />
+                      </div>
+                    </td>
+                    <td>
+                      <div class="coverage-inputs">
+                        <input id="reserve-coverage-sun-start" type="time" aria-label="Sunday start time" />
+                        <span>to</span>
+                        <input id="reserve-coverage-sun-end" type="time" aria-label="Sunday end time" />
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <label>
+          Additional notes (optional)
+          <textarea name="customerNotes" placeholder="Anything the rental company should know..."></textarea>
+        </label>
+
+        <div class="inline-actions" style="justify-content: flex-end;">
+          <button type="submit" class="primary" id="reserve-submit">Place reservation</button>
+        </div>
+        <p class="hint" id="reserve-meta"></p>
+      </form>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="customer-session.js"></script>
+  <script src="storefront.js"></script>
+</body>
+</html>
+
+
+
+

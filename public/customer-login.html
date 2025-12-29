@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aiven Rental - Customer log in</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="landing-shell">
+      <header class="hero" style="margin-bottom: 18px;">
+        <div>
+          <p class="eyebrow">Customers</p>
+          <h1>Log in to your customer account</h1>
+          <p class="lede">Use your customer account to reserve equipment and manage your documents.</p>
+        </div>
+      </header>
+
+      <main class="grid" style="grid-template-columns: 1fr; max-width: 980px; margin: 0 auto;">
+        <section class="card">
+          <form id="customer-login-form" class="stack" autocomplete="on">
+            <div class="info">
+              Customer profiles are separate from company profiles, but the same login can be used for both.
+            </div>
+
+            <div class="two-col">
+              <label>Email
+                <input name="email" type="email" autocomplete="email" required />
+              </label>
+              <label>Password
+                <input name="password" type="password" autocomplete="current-password" required />
+              </label>
+            </div>
+
+            <div class="inline-actions" style="justify-content: space-between;">
+              <a class="ghost" href="index.html">Back</a>
+              <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;">
+                <a class="ghost" id="signup-link" href="customer-signup.html">Create account</a>
+                <button type="submit" class="primary" id="customer-login-submit">Log in</button>
+              </div>
+            </div>
+            <p class="hint" id="customer-login-meta"></p>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script src="customer-session.js"></script>
+    <script src="customer-login.js"></script>
+  </body>
+</html>
+
+
+
+

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Customer sign up</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="landing-shell">
+    <header class="hero" style="margin-bottom: 18px;">
+      <div>
+        <p class="eyebrow">Customers</p>
+        <h1>Create your customer account</h1>
+        <p class="lede">Provide the same details rental companies collect for new customers.</p>
+      </div>
+    </header>
+
+    <main class="grid" style="grid-template-columns: 1fr; max-width: 980px; margin: 0 auto;">
+      <section class="card">
+        <form id="customer-signup-form" class="stack" enctype="multipart/form-data">
+          <div class="info">
+            Create a customer account so you can reserve equipment. You can upload documents now or later in your profile.
+          </div>
+
+          <div id="account-section" class="stack" style="gap: 10px;">
+            <div style="font-weight: 700;">Account login</div>
+            <div class="two-col">
+              <label>Name
+                <input name="name" autocomplete="name" required />
+              </label>
+              <label>Email
+                <input name="email" type="email" autocomplete="email" required />
+              </label>
+            </div>
+
+            <label>Password
+              <input name="password" type="password" minlength="6" autocomplete="new-password" required />
+            </label>
+
+            <div class="inline-actions" style="justify-content: space-between;">
+              <a class="ghost" href="index.html">Back</a>
+              <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;">
+                <a class="ghost" id="login-link" href="customer-login.html">Log in</a>
+                <button type="button" class="primary" id="customer-signup-continue">Continue</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="business-section" class="stack" style="gap: 10px; display: none;">
+            <div style="font-weight: 700;">Core customer details</div>
+            <label>Company name
+              <input name="companyName" autocomplete="organization" />
+            </label>
+            <div class="contact-block">
+              <div class="contact-header">
+                <strong>Contacts</strong>
+                <button type="button" class="ghost small" id="add-contact-row">+ Add contact</button>
+              </div>
+              <div class="contacts-list stack" id="contacts-list"></div>
+            </div>
+            <div class="contact-block">
+              <div class="contact-header">
+                <strong>Accounting contacts</strong>
+                <button type="button" class="ghost small" id="add-accounting-contact-row">+ Add contact</button>
+              </div>
+              <div class="contacts-list stack" id="accounting-contacts-list"></div>
+            </div>
+
+            <div class="two-col">
+              <label>Phone
+                <input name="phone" type="tel" autocomplete="tel" />
+              </label>
+              <label>Follow up date
+                <input name="followUpDate" type="date" />
+              </label>
+            </div>
+            <div class="two-col">
+              <label>Street address
+                <input name="streetAddress" autocomplete="street-address" />
+              </label>
+              <label>City
+                <input name="city" autocomplete="address-level2" />
+              </label>
+            </div>
+            <div class="two-col">
+              <label>Province / State
+                <input name="region" autocomplete="address-level1" />
+              </label>
+              <label>Postal code
+                <input name="postalCode" autocomplete="postal-code" />
+              </label>
+            </div>
+            <label>Country
+              <input name="country" autocomplete="country-name" />
+            </label>
+            <label>General notes
+              <textarea name="notes" class="notes-area"></textarea>
+            </label>
+
+            <div style="font-weight: 700; margin-top: 6px;">Billing preferences</div>
+            <div class="deposit-field">
+              <label for="canChargeDeposit">Charge Deposit</label>
+              <input id="canChargeDeposit" type="checkbox" name="canChargeDeposit" />
+            </div>
+            <label>Invoice terms
+              <select name="paymentTermsDays">
+                <option value="">Use company default</option>
+                <option value="30">Net 30</option>
+                <option value="60">Net 60</option>
+              </select>
+            </label>
+
+            <label>Credit card number
+              <input name="creditCardNumber" autocomplete="cc-number" inputmode="numeric" />
+            </label>
+
+            <div style="font-weight: 700; margin-top: 6px;">Optional documents</div>
+            <div class="two-col">
+              <label>Reference #1 (upload)
+                <input name="reference1" type="file" />
+              </label>
+              <label>Reference #2 (upload)
+                <input name="reference2" type="file" />
+              </label>
+            </div>
+            <div class="two-col">
+              <label>Proof of insurance (upload)
+                <input name="proofOfInsurance" type="file" />
+              </label>
+              <label>Driver's license (upload)
+                <input name="driversLicense" type="file" />
+              </label>
+            </div>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end;">
+              <button type="button" class="ghost" id="customer-signup-back">Back to account</button>
+              <button type="submit" class="primary" id="customer-signup-submit">Create account</button>
+            </div>
+          </div>
+          <p class="hint" id="customer-signup-meta"></p>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <script src="customer-session.js"></script>
+  <script src="customer-signup.js"></script>
+</body>
+</html>
+
+
+
+

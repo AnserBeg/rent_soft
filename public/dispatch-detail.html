@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Dispatch Detail</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="vendor/leaflet.css" />
+</head>
+<body class="no-top-headers">
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link active" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <header class="hero">
+          <div>
+            <p class="eyebrow">Operations</p>
+            <h1>Dispatch detail</h1>
+            <p class="lede">Review the full unit assignment, rental order info, and guard notes.</p>
+          </div>
+          <div class="hero-badge">
+            <span>Unit profile</span>
+            <span>Rental detail</span>
+            <span>Guard notes</span>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card company-context-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Context</p>
+                <h2>Company</h2>
+              </div>
+            </div>
+            <p class="hint" id="company-meta">Loading your company...</p>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Unit dispatch detail</h2>
+                <p class="hint" id="dispatch-detail-summary">Loading unit detail...</p>
+              </div>
+              <div class="inline-actions">
+                <a class="ghost" href="dispatch.html">Back to Dispatch</a>
+                <button class="ghost" id="refresh-detail">Refresh</button>
+              </div>
+            </div>
+
+            <div class="details-panel dispatch-detail-panel">
+              <div class="dispatch-detail-empty" id="dispatch-detail-empty">
+                Select a unit from the dispatch table to see its detail view.
+              </div>
+              <div class="dispatch-detail" id="dispatch-detail" hidden>
+                <div class="dispatch-detail-section">
+                  <div class="dispatch-detail-title">Unit</div>
+                  <div class="details-grid" id="unit-details"></div>
+                </div>
+                <div class="dispatch-detail-section">
+                  <div class="dispatch-detail-title">Rental information</div>
+                  <div class="details-grid" id="order-details"></div>
+                  <div class="details-grid" id="line-item-details"></div>
+                  <div class="inline-actions" style="justify-content:flex-start; margin-top:8px;">
+                    <button class="ghost small" id="open-site-address-picker" type="button">Pick site address</button>
+                    <span class="hint" id="site-address-status"></span>
+                  </div>
+                </div>
+                <div class="dispatch-detail-section">
+                  <div class="dispatch-detail-title">Guard Notes</div>
+                  <textarea id="guard-notes" class="guard-notes" placeholder="Add guard notes for this unit..."></textarea>
+                  <div class="inline-actions">
+                    <button class="ghost small" id="guard-notes-clear" type="button">Clear</button>
+                    <button class="primary" id="guard-notes-save" type="button">Save Notes</button>
+                    <span class="hint" id="guard-notes-status"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="site-address-picker-modal">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>Pick site address</h3>
+        <button class="ghost small" id="close-site-address-picker" type="button">Close</button>
+      </div>
+      <div class="stack">
+        <div class="two-col">
+          <label>Search address
+            <input id="site-address-picker-search" placeholder="Start typing an address..." autocomplete="off" />
+            <div id="site-address-picker-suggestions" class="rs-autocomplete" hidden></div>
+          </label>
+          <label>Site address
+            <input id="site-address-picker-input" placeholder="Site address or label..." />
+          </label>
+        </div>
+        <div id="site-address-picker-map" class="map-picker"></div>
+        <p class="hint" id="site-address-picker-meta">Tip: click the map to drop a pin. We'll start centered on your current device location (if permitted).</p>
+        <div class="inline-actions" style="justify-content:flex-end;">
+          <button class="primary" id="save-site-address-picker" type="button">Use this address</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="vendor/leaflet.js"></script>
+  <script src="dispatch-detail.js"></script>
+</body>
+</html>

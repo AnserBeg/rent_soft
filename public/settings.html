@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental — Settings</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="no-top-headers">
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link active" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <header class="hero">
+          <div>
+            <h1>Settings</h1>
+            <p class="lede">Company-wide settings for rental billing calculations.</p>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card company-context-card">
+            <div class="card-header">
+              <div>
+                <h2>Account</h2>
+              </div>
+            </div>
+            <div class="stack">
+              <p class="hint" id="company-meta">Loading your company…</p>
+              <p class="hint" id="user-meta"></p>
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="can-act-as-customer" type="checkbox" />
+                <span>Enable customer mode (rent from other companies)</span>
+              </label>
+              <div class="inline-actions" style="justify-content:flex-start;">
+                <button class="primary" id="save-customer-mode" type="button" disabled>Save</button>
+                <a class="ghost" id="open-storefront" href="index.html" target="_blank" rel="noreferrer">Open storefront</a>
+              </div>
+              <p class="hint" id="customer-mode-hint" style="margin:0;"></p>
+              <button class="ghost danger" id="logout-button" type="button">Log out</button>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Billing</h2>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="save-settings" disabled>Save</button>
+              </div>
+            </div>
+
+            <div class="stack">
+              <label>Rounding mode
+                <select id="billing-rounding-mode" disabled>
+                  <option value="ceil">Round up</option>
+                  <option value="floor">Round down</option>
+                  <option value="nearest">Round to nearest</option>
+                  <option value="none">Exact (no rounding)</option>
+                </select>
+              </label>
+              <label>Rounding granularity
+                <select id="billing-rounding-granularity" disabled>
+                  <option value="unit">Billing unit</option>
+                  <option value="day">Day</option>
+                  <option value="hour">Hour</option>
+                </select>
+              </label>
+              <label>Monthly proration method
+                <select id="monthly-proration-method" disabled>
+                  <option value="hours">Hours (exact)</option>
+                  <option value="days">Days (count partial days)</option>
+                </select>
+              </label>
+              <p class="hint">Granularity controls whether rounding happens by billing unit, day, or hour.</p>
+              <p class="hint">Monthly proration can use exact hours or count partial days as full days.</p>
+              <label>Auto-create invoices
+                <select id="invoice-auto-run" disabled>
+                  <option value="off">Off</option>
+                  <option value="on_received">When order is received</option>
+                  <option value="on_closed">When order is closed</option>
+                  <option value="monthly">Monthly (create due invoices)</option>
+                </select>
+              </label>
+              <label>Invoice cadence
+                <select id="invoice-auto-mode" disabled>
+                  <option value="auto">Auto (monthly for long contracts)</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="single">Single invoice at end</option>
+                </select>
+              </label>
+              <label>Billing timezone
+                <input id="billing-timezone" placeholder="America/Edmonton" disabled />
+              </label>
+              <p class="hint">Use an IANA timezone like America/Edmonton.</p>
+              <label>Invoice date basis
+                <select id="invoice-date-mode" disabled>
+                  <option value="generation">Date generated</option>
+                  <option value="period_start">Service period start</option>
+                </select>
+              </label>
+              <p class="hint">Defaults to the generation date; change to service period start if you prefer backdating.</p>
+              <label>Default invoice terms
+                <select id="default-payment-terms" disabled>
+                  <option value="30">Net 30</option>
+                  <option value="60">Net 60</option>
+                </select>
+              </label>
+              <p class="hint">Customers can override this in their special pricing settings.</p>
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="tax-enabled" type="checkbox" disabled />
+                <span>Enable tax on invoices</span>
+              </label>
+              <div class="two-col">
+                <label>Default tax rate (%)
+                  <input id="default-tax-rate" type="number" min="0" step="0.01" disabled />
+                </label>
+                <label>Tax registration number
+                  <input id="tax-registration-number" disabled />
+                </label>
+              </div>
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="tax-inclusive-pricing" type="checkbox" disabled />
+                <span>Prices include tax</span>
+              </label>
+              <p class="hint">Tax rate uses percent values (e.g., 5 for 5%).</p>
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="auto-work-order-on-return" type="checkbox" disabled />
+                <span>Auto-create return inspection work orders when items are returned</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Storefront customer requirements</h2>
+                <p class="hint" style="margin:6px 0 0;">Require these fields before a customer can submit a booking request.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="save-storefront-requirements" disabled>Save</button>
+              </div>
+            </div>
+
+            <div class="stack">
+              <div class="two-col" id="storefront-requirements"></div>
+              <p class="hint" id="storefront-requirements-hint" style="margin:0;"></p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Rental information fields</h2>
+                <p class="hint" style="margin:6px 0 0;">Control which rental information fields appear on rental orders and in the marketplace.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="save-rental-info-fields" disabled>Save</button>
+              </div>
+            </div>
+
+            <div class="stack">
+              <div class="stack" id="rental-info-fields"></div>
+              <p class="hint" id="rental-info-fields-hint" style="margin:0;"></p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Company information</h2>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="save-company" disabled>Save</button>
+              </div>
+            </div>
+
+            <div class="stack">
+              <div class="two-col">
+                <label>Company name
+                  <input id="company-name" />
+                </label>
+                <label>Email
+                  <input id="company-email" type="email" />
+                </label>
+              </div>
+              <div class="two-col">
+                <label>Phone
+                  <input id="company-phone" />
+                </label>
+                <label>Street address
+                  <input id="company-street" />
+                </label>
+              </div>
+              <div class="three-col">
+                <label>City
+                  <input id="company-city" />
+                </label>
+                <label>Province / State
+                  <input id="company-region" />
+                </label>
+                <label>Postal code
+                  <input id="company-postal" />
+                </label>
+              </div>
+              <label>Country
+                <input id="company-country" />
+              </label>
+              <p class="hint" id="company-info-hint" style="margin:0;"></p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Email (SMTP)</h2>
+                <p class="hint" style="margin:6px 0 0;">Send request confirmations and status updates to customers.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="save-email-settings" disabled>Save</button>
+                <button class="ghost" id="test-email-settings" disabled type="button">Send test</button>
+              </div>
+            </div>
+
+            <div class="stack">
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="email-enabled" type="checkbox" />
+                <span>Enable customer emails</span>
+              </label>
+
+              <div class="three-col">
+                <label>Provider
+                  <select id="email-provider" disabled>
+                    <option value="gmail">Google (Gmail app password)</option>
+                    <option value="outlook">Outlook / Office 365</option>
+                    <option value="titan">Titan</option>
+                    <option value="custom" selected>Custom SMTP</option>
+                  </select>
+                </label>
+                <label>Host
+                  <input id="email-host" placeholder="smtp.example.com" disabled />
+                </label>
+                <label>Port
+                  <input id="email-port" inputmode="numeric" placeholder="465" disabled />
+                </label>
+              </div>
+
+              <div class="three-col">
+                <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff; margin:0;">
+                  <input id="email-secure" type="checkbox" disabled />
+                  <span>Secure (SSL)</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff; margin:0;">
+                  <input id="email-require-tls" type="checkbox" disabled />
+                  <span>Require TLS (STARTTLS)</span>
+                </label>
+                <label>From email
+                  <input id="email-from-address" type="email" placeholder="rentals@yourcompany.com" disabled />
+                </label>
+              </div>
+
+              <div class="two-col">
+                <label>Username
+                  <input id="email-user" placeholder="rentals@yourcompany.com" disabled />
+                </label>
+                <label>App password / SMTP password
+                  <input id="email-pass" type="password" placeholder="Leave blank to keep existing" disabled />
+                </label>
+              </div>
+
+              <div class="two-col">
+                <label>From name
+                  <input id="email-from-name" placeholder="Your Company Rentals" disabled />
+                </label>
+                <label>Test recipient
+                  <input id="email-test-to" type="email" placeholder="you@yourcompany.com" disabled />
+                </label>
+              </div>
+
+              <div class="two-col">
+                <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                  <input id="email-notify-request" type="checkbox" disabled />
+                  <span>Email customer when request is submitted</span>
+                </label>
+                <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                  <input id="email-notify-status" type="checkbox" disabled />
+                  <span>Email customer on status changes (reject/reservation/order/received)</span>
+                </label>
+              </div>
+
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="email-notify-invoices" type="checkbox" disabled />
+                <span>Email customer when an invoice is created</span>
+              </label>
+
+              <p class="hint" id="email-settings-hint" style="margin:0;"></p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Branding</h2>
+                <p class="hint" style="margin:6px 0 0;">Logo is used on quote/RO PDFs.</p>
+              </div>
+            </div>
+
+            <div class="stack">
+              <div class="two-col">
+                <label>Logo
+                  <input id="logo-file" type="file" accept="image/*" />
+                </label>
+                <div class="stack">
+                  <div class="inline-actions" style="justify-content:flex-start;">
+                    <button class="ghost danger" id="remove-logo" type="button" disabled>Remove logo</button>
+                  </div>
+                  <img id="logo-preview" alt="Company logo" style="display:none; max-height:72px; max-width:240px; object-fit:contain; border:1px solid var(--border); border-radius:12px; padding:8px; background:#fff;" />
+                  <p class="hint" id="logo-hint" style="margin:0;"></p>
+                </div>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="settings.js"></script>
+</body>
+</html>
+
+
+

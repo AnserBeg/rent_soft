@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental — Rental Order</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="vendor/leaflet.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link active" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <main class="grid">
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow" id="mode-label" style="display:none;"></p>
+                <div class="title-row">
+                  <h1 id="form-title" style="margin:0;">Rental Order</h1>
+                  <span class="pill" id="order-number-pill" style="display:none;"></span>
+                </div>
+                <p class="eyebrow" style="display:none;">Header</p>
+                <h2>Customer & sales</h2>
+              </div>
+              <div class="inline-actions header-actions">
+                <span class="pill" id="status-pill" style="display:none;"></span>
+                <label id="ro-status-label">Status
+                  <select id="status-select">
+                    <option value="requested">Requested</option>
+                    <option value="reservation">Reservation</option>
+                    <option value="ordered">Ordered</option>
+                    <option value="received">Received</option>
+                  </select>
+                </label>
+                <div class="inline-actions" id="quote-actions" style="display:none; gap:8px; justify-content:flex-end;">
+                  <button class="primary small" id="quote-reserve" type="button">Reserve</button>
+                  <button class="ghost danger small" id="quote-reject" type="button">Reject</button>
+                  <button class="ghost small" id="quote-undo" type="button">Undo</button>
+                </div>
+                <div class="inline-actions" id="request-actions" style="display:none; gap:8px; justify-content:flex-end;">
+                  <button class="primary small" id="request-approve" type="button">Approve</button>
+                  <button class="ghost danger small" id="request-reject" type="button">Reject</button>
+                  <button class="ghost small" id="request-undo" type="button">Undo</button>
+                </div>
+                <button class="ghost danger" id="close-open" type="button" style="display:none;"></button>
+                <button class="ghost" id="open-history" type="button" style="display:none;">History</button>
+                <button class="ghost" id="download-order-pdf" type="button">PDF</button>
+                <button class="primary" id="save-order">Save RO</button>
+              </div>
+            </div>
+
+            <div class="stack">
+              <p class="hint" id="company-meta">Loading your company…</p>
+              <div class="two-col">
+                <label>Customer
+                  <select id="customer-select">
+                    <option value="">Select customer</option>
+                    <option value="__new__">+ Add new customer...</option>
+                  </select>
+                </label>
+                <label>Customer PO # (optional)
+                  <input id="customer-po" />
+                </label>
+              </div>
+
+              <div class="details-panel" id="customer-details" style="display:none;"></div>
+
+              <label>Salesperson
+                <select id="sales-select">
+                  <option value="">Select salesperson</option>
+                  <option value="__new_sales__">+ Add salesperson...</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow" style="display:none;">Logistics</p>
+                <h2>Pickup & drop-off</h2>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="two-col">
+                <label>Pickup / Drop-off
+                  <select id="fulfillment-select-2">
+                    <option value="pickup">Pick up</option>
+                    <option value="dropoff">Drop off</option>
+                  </select>
+                </label>
+                <label>Pickup location
+                  <select id="pickup-location-select-2">
+                    <option value="">Select pickup location</option>
+                  </select>
+                </label>
+              </div>
+              <div class="two-col">
+                <label>Address
+                  <textarea id="fulfillment-address-2" class="compact-textarea" rows="1"></textarea>
+                </label>
+                <label>Pickup / Drop-off instructions
+                  <textarea id="logistics-instructions" class="compact-textarea" rows="1"></textarea>
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow" style="display:none;">Core</p>
+                <h2>Rental line items</h2>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost" id="open-fees">Additional fees</button>
+                <span class="pill" id="fee-total-inline">$0.00</span>
+                <button class="ghost" id="add-line-item">Add line item</button>
+              </div>
+            </div>
+
+            <div class="stack" id="line-items"></div>
+            <div class="stack" style="gap: 0;">
+              <div class="totals-row">
+                <span class="hint">Subtotal</span>
+                <strong id="order-subtotal">$0.00</strong>
+              </div>
+              <div class="totals-row">
+                <span class="hint">GST (5%)</span>
+                <strong id="order-gst">$0.00</strong>
+              </div>
+              <div class="totals-row">
+                <span class="hint">Total</span>
+                <strong id="order-total">$0.00</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow" style="display:none;">Details</p>
+                <h2>Rental information</h2>
+              </div>
+            </div>
+              <div class="stack">
+                <div data-rental-info-field="siteAddress">
+                  <label>Site address
+                    <input id="site-address" type="text" />
+                  </label>
+                  <div class="inline-actions" style="justify-content:flex-start;">
+                    <button type="button" class="ghost small" id="open-side-address-picker">Pick site address on map</button>
+                  </div>
+                </div>
+                <div data-rental-info-field="criticalAreas">
+                  <label>Critical Areas on Site
+                    <textarea id="critical-areas"></textarea>
+                  </label>
+                </div>
+                <div data-rental-info-field="generalNotes">
+                  <label>General notes
+                    <textarea id="general-notes"></textarea>
+                  </label>
+                </div>
+                <div class="contact-block" data-rental-info-field="emergencyContacts">
+                  <div class="contact-header">
+                    <strong>Emergency contacts</strong>
+                    <button type="button" class="ghost small" id="add-emergency-contact-row">+ Add contact</button>
+                  </div>
+                  <div class="contacts-list stack" id="emergency-contacts-list"></div>
+                </div>
+                <div class="contact-block" data-rental-info-field="siteContacts">
+                  <div class="contact-header">
+                    <strong>Site contacts</strong>
+                    <button type="button" class="ghost small" id="add-site-contact-row">+ Add contact</button>
+                  </div>
+                  <div class="contacts-list stack" id="site-contacts-list"></div>
+                </div>
+                <div class="coverage-block" data-rental-info-field="coverageHours">
+                  <div class="coverage-header">
+                    <strong>Hours of coverage required</strong>
+                    <span class="hint">Use 24-hour time</span>
+                  </div>
+                  <table class="coverage-table">
+                  <thead>
+                    <tr>
+                      <th>Mon</th>
+                      <th>Tue</th>
+                      <th>Wed</th>
+                      <th>Thu</th>
+                      <th>Fri</th>
+                      <th>Sat</th>
+                      <th>Sun</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>
+                        <div class="coverage-inputs">
+                          <input id="coverage-mon-start" type="time" aria-label="Monday start time" />
+                          <span>to</span>
+                          <input id="coverage-mon-end" type="time" aria-label="Monday end time" />
+                        </div>
+                      </td>
+                      <td>
+                        <div class="coverage-inputs">
+                          <input id="coverage-tue-start" type="time" aria-label="Tuesday start time" />
+                          <span>to</span>
+                          <input id="coverage-tue-end" type="time" aria-label="Tuesday end time" />
+                        </div>
+                      </td>
+                      <td>
+                        <div class="coverage-inputs">
+                          <input id="coverage-wed-start" type="time" aria-label="Wednesday start time" />
+                          <span>to</span>
+                          <input id="coverage-wed-end" type="time" aria-label="Wednesday end time" />
+                        </div>
+                      </td>
+                      <td>
+                        <div class="coverage-inputs">
+                          <input id="coverage-thu-start" type="time" aria-label="Thursday start time" />
+                          <span>to</span>
+                          <input id="coverage-thu-end" type="time" aria-label="Thursday end time" />
+                        </div>
+                      </td>
+                      <td>
+                        <div class="coverage-inputs">
+                          <input id="coverage-fri-start" type="time" aria-label="Friday start time" />
+                          <span>to</span>
+                          <input id="coverage-fri-end" type="time" aria-label="Friday end time" />
+                        </div>
+                      </td>
+                      <td>
+                        <div class="coverage-inputs">
+                          <input id="coverage-sat-start" type="time" aria-label="Saturday start time" />
+                          <span>to</span>
+                          <input id="coverage-sat-end" type="time" aria-label="Saturday end time" />
+                        </div>
+                      </td>
+                      <td>
+                        <div class="coverage-inputs">
+                          <input id="coverage-sun-start" type="time" aria-label="Sunday start time" />
+                          <span>to</span>
+                          <input id="coverage-sun-end" type="time" aria-label="Sunday end time" />
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <div class="extras-strip wide" id="extras-strip">
+            <div class="extras-strip-left">
+              <span class="extras-label">Extras</span>
+              <span class="extras-dot">·</span>
+            </div>
+            <div class="extras-actions">
+              <button class="ghost small" id="open-invoices" type="button">Invoices</button>
+              <button class="ghost small" id="open-note-modal" type="button">
+                + Note <span class="mini-badge" id="extras-notes-badge" style="display:none;"></span>
+              </button>
+              <button class="ghost small" id="open-attachment-modal" type="button">
+                Upload <span class="mini-badge" id="extras-files-badge" style="display:none;"></span>
+              </button>
+              <button class="ghost small" id="toggle-terms" type="button">
+                Terms <span class="mini-badge" id="extras-terms-badge" style="display:none;"></span>
+              </button>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="drawer-overlay" id="extras-drawer-overlay" style="display:none;"></div>
+  <aside class="drawer" id="extras-drawer" aria-hidden="true">
+    <div class="drawer-header">
+      <div>
+        <h3 style="margin:0;">Extras</h3>
+        <p class="hint" id="extras-drawer-subtitle" style="margin:6px 0 0;"></p>
+      </div>
+      <button class="ghost small" id="close-extras-drawer" type="button">Close</button>
+    </div>
+    <div class="drawer-tabs">
+      <button class="drawer-tab" type="button" data-tab="terms">Terms</button>
+      <button class="drawer-tab" type="button" data-tab="notes">Notes</button>
+      <button class="drawer-tab" type="button" data-tab="attachments">Attachments</button>
+      <button class="drawer-tab" type="button" data-tab="invoices">Invoices</button>
+    </div>
+    <div class="drawer-body">
+      <div class="drawer-panel" data-panel="terms">
+        <div class="stack" id="terms-panel">
+          <label>Terms
+            <textarea id="terms"></textarea>
+          </label>
+          <label>Special instructions
+            <textarea id="special-instructions"></textarea>
+          </label>
+        </div>
+      </div>
+      <div class="drawer-panel" data-panel="notes" style="display:none;">
+        <div class="stack">
+          <div class="two-col">
+            <label>Your name
+              <input id="note-user" />
+            </label>
+            <span></span>
+          </div>
+          <label>Note
+            <textarea id="note-text"></textarea>
+          </label>
+          <div class="inline-actions">
+            <button class="primary" id="save-note" type="button">Add note</button>
+          </div>
+          <span class="hint" id="note-hint"></span>
+          <div class="stack" id="notes-list"></div>
+        </div>
+      </div>
+      <div class="drawer-panel" data-panel="attachments" style="display:none;">
+        <div class="stack">
+          <div class="inline">
+            <input id="attachment-file" type="file" />
+            <button class="primary" id="upload-attachment" type="button">Upload</button>
+          </div>
+          <span class="hint" id="attachment-hint"></span>
+          <div class="stack" id="attachments-list"></div>
+        </div>
+      </div>
+      <div class="drawer-panel" data-panel="invoices" style="display:none;">
+        <div class="stack">
+          <span class="hint" id="rental-order-invoices-meta"></span>
+          <div class="table" id="rental-order-invoices-table">
+            <div class="table-row table-header">
+              <span>Invoice #</span>
+              <span>Amount</span>
+              <span>Billing</span>
+              <span>Overdue</span>
+              <span>Email sent</span>
+            </div>
+            <div class="table-row">
+              <span class="hint" style="grid-column: 1 / -1;">No invoices yet.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="modal" id="sales-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Add salesperson</h3>
+        <button class="ghost small" id="close-sales-modal">Close</button>
+      </div>
+      <form id="sales-form" class="stack">
+        <label>Name <input name="name" required /></label>
+        <label>Email <input name="email" type="email" /></label>
+        <label>Phone number <input name="phone" /></label>
+        <button type="submit" class="primary">Save</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal" id="fees-modal">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>Additional fees</h3>
+        <button class="ghost small" id="close-fees-modal">Close</button>
+      </div>
+      <div class="stack">
+        <div class="inline-actions" style="justify-content: space-between;">
+          <span class="hint">Fees apply to the entire Rental Order.</span>
+        </div>
+        <div class="stack" id="fees"></div>
+        <div class="totals-row">
+          <span class="hint">Fee total</span>
+          <strong id="fee-total-modal">$0.00</strong>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="lineitem-docs-modal">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <div>
+          <h3 style="margin:0;">Line item condition & docs</h3>
+          <p class="hint" id="lineitem-docs-subtitle" style="margin:6px 0 0;"></p>
+        </div>
+        <button class="ghost small" id="close-lineitem-docs-modal">Close</button>
+      </div>
+      <div class="two-col">
+        <div class="stack">
+          <p class="eyebrow" style="display:none;">Before rental</p>
+          <label>
+            <textarea id="lineitem-before-notes"></textarea>
+          </label>
+          <div class="inline">
+            <input id="lineitem-before-upload" type="file" accept="image/*" multiple capture="environment" />
+          </div>
+          <div class="thumb-row" id="lineitem-before-thumbs"></div>
+        </div>
+        <div class="stack">
+          <p class="eyebrow" style="display:none;">After rental</p>
+          <label>
+            <textarea id="lineitem-after-notes"></textarea>
+          </label>
+          <div class="inline">
+            <input id="lineitem-after-upload" type="file" accept="image/*" multiple capture="environment" />
+          </div>
+          <div class="thumb-row" id="lineitem-after-thumbs"></div>
+        </div>
+      </div>
+      <div class="stack" style="margin-top:18px;">
+        <div class="inline-actions" style="justify-content: space-between;">
+          <div>
+            <h4 style="margin:0;">AI damage report</h4>
+            <p class="hint" id="lineitem-ai-report-hint" style="margin:6px 0 0;"></p>
+          </div>
+          <div class="inline-actions" style="gap:8px;">
+            <button class="primary small" id="lineitem-ai-generate" type="button">Generate</button>
+            <button class="ghost small" id="lineitem-ai-copy" type="button">Copy</button>
+            <button class="ghost small danger" id="lineitem-ai-clear" type="button">Clear</button>
+          </div>
+        </div>
+        <label>
+          <textarea id="lineitem-ai-report" placeholder="Generate an AI report to compare Before vs After images." style="min-height:180px;"></textarea>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="lineitem-time-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Booked Dates</h3>
+        <button class="ghost small" id="close-lineitem-time-modal">Close</button>
+      </div>
+      <div class="stack">
+        <label>Start
+          <input id="lineitem-start" type="datetime-local" />
+        </label>
+        <label>End
+          <input id="lineitem-end" type="datetime-local" />
+        </label>
+        <div class="inline-actions" style="gap:8px; justify-content:flex-end;">
+          <button class="ghost small" id="save-lineitem-time" type="button">Save</button>
+          <button class="primary small" id="save-lineitem-time-all" type="button">Save &amp; apply to all</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="lineitem-actual-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Actual dates</h3>
+        <button class="ghost small" id="close-lineitem-actual-modal" type="button">Close</button>
+      </div>
+      <div class="stack">
+        <label>Pick up / delivery
+          <input id="lineitem-actual-pickup" type="datetime-local" />
+        </label>
+        <label>Returned
+          <input id="lineitem-actual-return" type="datetime-local" />
+        </label>
+        <div class="pause-periods">
+          <button class="ghost small" id="toggle-lineitem-pause" type="button">Add pause period</button>
+          <details id="lineitem-pause-details">
+            <summary>Pause periods</summary>
+            <div class="stack">
+              <div class="inline">
+                <label>Pause start
+                  <input id="lineitem-pause-start" type="datetime-local" />
+                </label>
+                <label>Pause end
+                  <input id="lineitem-pause-end" type="datetime-local" />
+                </label>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost small" id="add-lineitem-pause" type="button">Add pause</button>
+              </div>
+              <div class="stack" id="lineitem-pause-list"></div>
+            </div>
+          </details>
+        </div>
+        <p class="hint" id="lineitem-actual-hint" style="margin:0;">Pick up date is required before recording returns.</p>
+        <div class="inline-actions" style="gap:8px;">
+          <button class="ghost small" id="save-lineitem-actual" type="button">Save</button>
+          <button class="primary small" id="save-lineitem-actual-all" type="button">Save &amp; apply to all</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="request-reject-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h3 style="margin:0;">Reject request</h3>
+          <p class="hint" style="margin:6px 0 0;">Optionally add a reason. The customer will receive an email and a PDF copy of their request.</p>
+        </div>
+        <button class="ghost small" id="close-request-reject-modal" type="button">Close</button>
+      </div>
+      <div class="stack">
+        <label>Reason (optional)
+          <textarea id="request-reject-note" placeholder="Add a note for the customer..." style="min-height:120px;"></textarea>
+        </label>
+        <div class="inline-actions" style="justify-content:flex-end;">
+          <button class="ghost" id="cancel-request-reject" type="button">Cancel</button>
+          <button class="primary danger" id="confirm-request-reject" type="button">Reject</button>
+        </div>
+        <p class="hint" id="request-reject-hint" style="margin:0;"></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="side-address-picker-modal">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <h3>Pick site address</h3>
+        <button class="ghost small" id="close-side-address-picker" type="button">Close</button>
+      </div>
+      <div class="stack">
+        <div class="two-col">
+          <label>Search address
+            <input id="side-address-picker-search" placeholder="Start typing an address..." autocomplete="off" />
+            <div id="side-address-picker-suggestions" class="rs-autocomplete" hidden></div>
+          </label>
+          <label>Site address
+            <input id="side-address-picker-input" placeholder="Site address or label..." />
+          </label>
+        </div>
+        <div id="side-address-picker-map" class="map-picker"></div>
+        <p class="hint" id="side-address-picker-meta">Tip: click the map to drop a pin. We'll start centered on your current device location (if permitted).</p>
+        <div class="inline-actions" style="justify-content:flex-end;">
+          <button class="primary" id="save-side-address-picker" type="button">Use this address</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="vendor/leaflet.js"></script>
+  <script src="rental-order-form.js"></script>
+</body>
+</html>
+
+
+
