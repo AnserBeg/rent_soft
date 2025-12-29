@@ -4155,12 +4155,6 @@ async function createEquipment({
     ]
   );
   const updated = result.rows[0];
-  if (updated && !isBranch) {
-    await pool.query(
-      `UPDATE customers SET company_name = $1 WHERE company_id = $2 AND parent_customer_id = $3`,
-      [finalCompanyName, companyId, id]
-    );
-  }
   return updated;
 }
 
