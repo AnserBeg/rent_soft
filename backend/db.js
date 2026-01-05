@@ -118,6 +118,11 @@ function isQuoteStatus(status) {
   return normalized === "quote" || normalized === "quote_rejected";
 }
 
+function isDemandOnlyStatus(status) {
+  const normalized = normalizeRentalOrderStatus(status);
+  return normalized === "quote" || normalized === "quote_rejected" || normalized === "reservation" || normalized === "requested";
+}
+
 function formatDocNumber(prefix, year, seq) {
   const yy = String(year).slice(-2);
   const nnnn = String(seq).padStart(4, "0");
@@ -8723,7 +8728,9 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     SELECT e.id, e.location_id, l.name AS location_name
       FROM equipment e
  LEFT JOIN locations l ON l.id = e.location_id
-     WHERE e.company_id = $1 AND e.type_id = $2
+     WHERE e.company_id = $1
+       AND e.type_id = $2
+       AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
     `,
     [companyId, typeId]
   );
@@ -8733,25 +8740,26 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     locationName: r.location_name || "No location",
   }));
 
-  const unitsById = new Map();
-  units.forEach((u) => unitsById.set(String(u.id), u));
-
-  const assignmentsRes = await pool.query(
+  const demandRes = await pool.query(
     `
-    SELECT liv.equipment_id,
-           ro.status,
+    SELECT li.id,
+           ro.pickup_location_id,
+           COALESCE(l.name, 'No location') AS location_name,
            COALESCE(li.fulfilled_at, li.start_at) AS start_at,
-           COALESCE(li.returned_at, li.end_at) AS end_at
-      FROM rental_order_line_inventory liv
-      JOIN rental_order_line_items li ON li.id = liv.line_item_id
+           COALESCE(li.returned_at, li.end_at) AS end_at,
+           CASE WHEN COUNT(liv.equipment_id) > 0 THEN COUNT(liv.equipment_id) ELSE 1 END AS qty
+      FROM rental_order_line_items li
       JOIN rental_orders ro ON ro.id = li.rental_order_id
+ LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
+ LEFT JOIN locations l ON l.id = ro.pickup_location_id
      WHERE ro.company_id = $1
        AND li.type_id = $2
-       AND ro.status IN ('requested', 'reservation', 'ordered')
+       AND ro.status IN ('quote','requested','reservation','ordered')
        AND (
          COALESCE(li.fulfilled_at, li.start_at) < $4::timestamptz
          AND COALESCE(li.returned_at, li.end_at) > $3::timestamptz
        )
+     GROUP BY li.id, ro.pickup_location_id, l.name, li.fulfilled_at, li.start_at, li.returned_at, li.end_at
     `,
     [companyId, typeId, start.toISOString(), end.toISOString()]
   );
@@ -8771,19 +8779,27 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
   });
 
   const startMs = start.getTime();
-  assignmentsRes.rows.forEach((r) => {
-    const unit = unitsById.get(String(r.equipment_id));
-    if (!unit) return;
-    const locKey = String(unit.locationId ?? "none");
+  demandRes.rows.forEach((r) => {
+    const locKey = String(r.pickup_location_id ?? "none");
+    if (!byLocation.has(locKey)) {
+      byLocation.set(locKey, {
+        locationId: r.pickup_location_id === null || r.pickup_location_id === undefined ? null : Number(r.pickup_location_id),
+        locationName: r.location_name || "No location",
+        total: 0,
+        reservedByDay: new Array(dayCount).fill(0),
+      });
+    }
     const bucket = byLocation.get(locKey);
     if (!bucket) return;
 
+    const qty = Number(r.qty || 0);
+    if (!Number.isFinite(qty) || qty <= 0) return;
     const s = Date.parse(r.start_at);
     const e = Date.parse(r.end_at);
     if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return;
     const first = Math.max(0, Math.floor((startOfDayMs(s) - startMs) / (24 * 60 * 60 * 1000)));
     const last = Math.min(dayCount - 1, Math.floor((startOfDayMs(e - 1) - startMs) / (24 * 60 * 60 * 1000)));
-    for (let i = first; i <= last; i++) bucket.reservedByDay[i] += 1;
+    for (let i = first; i <= last; i++) bucket.reservedByDay[i] += qty;
   });
 
   const dates = [];
@@ -8797,7 +8813,7 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     .map((loc) => ({
       locationId: loc.locationId,
       locationName: loc.locationName,
-      values: loc.reservedByDay.map((reserved) => Math.max(0, loc.total - reserved)),
+      values: loc.reservedByDay.map((reserved) => loc.total - reserved),
       total: loc.total,
     }));
 
@@ -9087,52 +9103,82 @@ async function getLocationTypeStockSummary({ companyId, locationId, at = null } 
   const atIso = at ? normalizeTimestamptz(at) : new Date().toISOString();
   if (!atIso) return [];
 
-  const res = await pool.query(
+  const stockRes = await pool.query(
     `
-    WITH active_assignments AS (
-      SELECT DISTINCT liv.equipment_id
-        FROM rental_order_line_inventory liv
-        JOIN rental_order_line_items li ON li.id = liv.line_item_id
-        JOIN rental_orders ro ON ro.id = li.rental_order_id
-       WHERE ro.company_id = $1
-         AND ro.status IN ('requested','reservation','ordered')
-         AND (
-           COALESCE(li.fulfilled_at, li.start_at) <= $3::timestamptz
-           AND COALESCE(li.returned_at, li.end_at) > $3::timestamptz
-         )
-    )
     SELECT e.type_id,
            COALESCE(et.name, e.type) AS type_name,
            COUNT(*)::int AS total,
-           SUM(
-             CASE
-               WHEN e.condition IN ('New','Normal Wear & Tear') AND aa.equipment_id IS NULL THEN 1
-               ELSE 0
-             END
-           )::int AS available,
-           SUM(
-             CASE
-               WHEN e.condition IN ('New','Normal Wear & Tear') AND aa.equipment_id IS NULL THEN 0
-               ELSE 1
-             END
-           )::int AS unavailable
+           SUM(CASE WHEN e.condition IN ('New','Normal Wear & Tear') THEN 1 ELSE 0 END)::int AS usable
       FROM equipment e
  LEFT JOIN equipment_types et ON et.id = e.type_id
- LEFT JOIN active_assignments aa ON aa.equipment_id = e.id
-     WHERE e.company_id = $1 AND e.location_id = $2
+     WHERE e.company_id = $1
+       AND e.location_id = $2
+       AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
      GROUP BY e.type_id, type_name
      ORDER BY type_name ASC
+    `,
+    [companyId, locId]
+  );
+
+  const demandRes = await pool.query(
+    `
+    SELECT li.id,
+           li.type_id,
+           COALESCE(et.name, 'Unknown type') AS type_name,
+           CASE WHEN COUNT(liv.equipment_id) > 0 THEN COUNT(liv.equipment_id) ELSE 1 END AS qty
+      FROM rental_order_line_items li
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+ LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
+ LEFT JOIN equipment_types et ON et.id = li.type_id
+     WHERE ro.company_id = $1
+       AND ro.pickup_location_id = $2
+       AND ro.status IN ('quote','requested','reservation','ordered')
+       AND COALESCE(li.fulfilled_at, li.start_at) <= $3::timestamptz
+       AND COALESCE(li.returned_at, li.end_at) > $3::timestamptz
+     GROUP BY li.id, li.type_id, et.name
     `,
     [companyId, locId, atIso]
   );
 
-  return res.rows.map((r) => ({
-    typeId: r.type_id === null || r.type_id === undefined ? null : Number(r.type_id),
-    typeName: r.type_name,
-    total: Number(r.total || 0),
-    available: Number(r.available || 0),
-    unavailable: Number(r.unavailable || 0),
-  }));
+  const byType = new Map();
+  stockRes.rows.forEach((row) => {
+    const key = String(row.type_id ?? "none");
+    byType.set(key, {
+      typeId: row.type_id === null || row.type_id === undefined ? null : Number(row.type_id),
+      typeName: row.type_name,
+      total: Number(row.total || 0),
+      usable: Number(row.usable || 0),
+      demand: 0,
+    });
+  });
+
+  demandRes.rows.forEach((row) => {
+    const key = String(row.type_id ?? "none");
+    if (!byType.has(key)) {
+      byType.set(key, {
+        typeId: row.type_id === null || row.type_id === undefined ? null : Number(row.type_id),
+        typeName: row.type_name || "Unknown type",
+        total: 0,
+        usable: 0,
+        demand: 0,
+      });
+    }
+    const entry = byType.get(key);
+    entry.demand += Number(row.qty || 0);
+  });
+
+  return Array.from(byType.values())
+    .sort((a, b) => String(a.typeName).localeCompare(String(b.typeName)))
+    .map((row) => {
+      const available = row.usable - row.demand;
+      return {
+        typeId: row.typeId,
+        typeName: row.typeName,
+        total: row.total,
+        available,
+        unavailable: row.total - available,
+      };
+    });
 }
 
 async function getRentalOrder({ companyId, id }) {
@@ -9314,6 +9360,8 @@ async function createRentalOrder({
     await client.query("BEGIN");
     const settings = await getCompanySettings(companyId);
     const normalizedStatus = normalizeRentalOrderStatus(status);
+    const demandOnly = isDemandOnlyStatus(normalizedStatus);
+    const demandOnly = isDemandOnlyStatus(normalizedStatus);
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
@@ -9365,7 +9413,10 @@ async function createRentalOrder({
       const fulfilledAt = normalizeTimestamptz(item.fulfilledAt) || null;
       const returnedAt = fulfilledAt ? normalizeTimestamptz(item.returnedAt) || null : null;
       const pausePeriods = normalizePausePeriods(item.pausePeriods);
-      const qty = Array.isArray(item.inventoryIds) ? item.inventoryIds.length : 0;
+      const rawInventoryIds = Array.isArray(item.inventoryIds) ? item.inventoryIds : [];
+      const inventoryIds = demandOnly ? [] : rawInventoryIds;
+      const qty = inventoryIds.length;
+      const effectiveQty = qty || (demandOnly ? 1 : 0);
       const billableUnits = computeBillableUnits({
         startAt,
         endAt,
@@ -9376,7 +9427,7 @@ async function createRentalOrder({
       });
       const lineAmount =
         rateAmount !== null && Number.isFinite(rateAmount) && billableUnits !== null && Number.isFinite(billableUnits)
-          ? Number((rateAmount * billableUnits * qty).toFixed(2))
+          ? Number((rateAmount * billableUnits * effectiveQty).toFixed(2))
           : null;
       const liRes = await client.query(
         `INSERT INTO rental_order_line_items (rental_order_id, type_id, start_at, end_at, fulfilled_at, returned_at, rate_basis, rate_amount, billable_units, line_amount)
@@ -9395,7 +9446,6 @@ async function createRentalOrder({
         ]
       );
       const lineItemId = liRes.rows[0].id;
-      const inventoryIds = Array.isArray(item.inventoryIds) ? item.inventoryIds : [];
       for (const equipmentId of inventoryIds) {
         await client.query(
           `INSERT INTO rental_order_line_inventory (line_item_id, equipment_id) VALUES ($1,$2)`,
@@ -9593,14 +9643,17 @@ function addLegacyDurationToStart(startIso, parts) {
 
 function mapLegacyStatus({ contractNumber, statusCode, cancelled, completed }) {
   const contract = String(contractNumber || "").trim().toUpperCase();
+  if (contract.startsWith("Q-")) return "quote";
   if (contract.startsWith("R-")) return "reservation";
   if (cancelled) return "quote_rejected";
   const raw = String(statusCode || "").trim().toLowerCase();
+  if (raw.includes("quote")) return "quote";
   if (raw.includes("reserved")) return "reservation";
   if (raw.includes("returned")) return "closed";
+  if (raw.includes("order")) return "ordered";
   if (raw.includes("out")) return "ordered";
   if (completed) return "closed";
-  return "ordered";
+  return "quote";
 }
 
 function parseLegacyExport(text) {
@@ -9797,6 +9850,7 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
       cancelled: !!first.cancelled,
       completed: !!first.completed,
     });
+    const demandOnly = isDemandOnlyStatus(status);
 
     const customerKey = normalizeCustomerMatchKey(first.companyName);
     const emailKey = normalizeCustomerMatchKey(first.email);
@@ -9853,50 +9907,53 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
       stats.typesUpserted += 1;
 
       const targetQty = Number.isFinite(line.quantity) && line.quantity > 0 ? line.quantity : Math.max(1, line.serials.length);
-      const serials = [...(line.serials || [])];
-      while (serials.length < targetQty) {
-        serials.push(`UNALLOCATED-${contractNumber}-${typeId}-${serials.length + 1}`);
-      }
       if (line.endInferred) stats.endDatesInferred += 1;
 
       const inventoryIds = [];
-      for (let i = 0; i < serials.length; i += 1) {
-        const serial = serials[i];
-        const serialKey = normalizeSerialKey(serial);
-        let equipmentId = !serialKey.startsWith("unallocated-") ? (equipmentIdBySerial.get(serialKey) || null) : null;
-        if (!equipmentId) {
-          const modelName = (line.models && line.models[i]) || (line.models && line.models[0]) || line.itemName;
-          const modelKey = normalizeModelKey(modelName);
-          if (modelKey) {
-            const byType = equipmentIdsByTypeAndModel.get(`${String(typeId)}|${modelKey}`) || [];
-            const byModel = equipmentIdsByModel.get(modelKey) || [];
-            const poolIds = byType.length ? byType : byModel;
-            const candidate = poolIds.find((id) => !usedEquipmentIdsForContract.has(id) && !inventoryIds.includes(id));
-            if (candidate) equipmentId = candidate;
-          }
-
-          if (!equipmentId) {
-          const createdEq = await createEquipment({
-            companyId,
-            typeId,
-            modelName: modelName || line.itemName,
-            serialNumber: serial,
-            condition: "Normal Wear & Tear",
-            manufacturer: line.manufacturer || null,
-            purchasePrice: null,
-            notes: `Imported from legacy exports. Contract: ${contractNumber}`,
-          });
-          equipmentId = createdEq?.id || null;
-          if (equipmentId) {
-            equipmentIdBySerial.set(serialKey, equipmentId);
-            if (serialKey.startsWith("unallocated-")) stats.placeholderSerialsCreated += 1;
-            stats.equipmentCreated += 1;
-          }
-          }
+      if (!demandOnly) {
+        const serials = [...(line.serials || [])];
+        while (serials.length < targetQty) {
+          serials.push(`UNALLOCATED-${contractNumber}-${typeId}-${serials.length + 1}`);
         }
-        if (equipmentId) {
-          inventoryIds.push(equipmentId);
-          usedEquipmentIdsForContract.add(equipmentId);
+
+        for (let i = 0; i < serials.length; i += 1) {
+          const serial = serials[i];
+          const serialKey = normalizeSerialKey(serial);
+          let equipmentId = !serialKey.startsWith("unallocated-") ? (equipmentIdBySerial.get(serialKey) || null) : null;
+          if (!equipmentId) {
+            const modelName = (line.models && line.models[i]) || (line.models && line.models[0]) || line.itemName;
+            const modelKey = normalizeModelKey(modelName);
+            if (modelKey) {
+              const byType = equipmentIdsByTypeAndModel.get(`${String(typeId)}|${modelKey}`) || [];
+              const byModel = equipmentIdsByModel.get(modelKey) || [];
+              const poolIds = byType.length ? byType : byModel;
+              const candidate = poolIds.find((id) => !usedEquipmentIdsForContract.has(id) && !inventoryIds.includes(id));
+              if (candidate) equipmentId = candidate;
+            }
+
+            if (!equipmentId) {
+              const createdEq = await createEquipment({
+                companyId,
+                typeId,
+                modelName: modelName || line.itemName,
+                serialNumber: serial,
+                condition: "Normal Wear & Tear",
+                manufacturer: line.manufacturer || null,
+                purchasePrice: null,
+                notes: `Imported from legacy exports. Contract: ${contractNumber}`,
+              });
+              equipmentId = createdEq?.id || null;
+              if (equipmentId) {
+                equipmentIdBySerial.set(serialKey, equipmentId);
+                if (serialKey.startsWith("unallocated-")) stats.placeholderSerialsCreated += 1;
+                stats.equipmentCreated += 1;
+              }
+            }
+          }
+          if (equipmentId) {
+            inventoryIds.push(equipmentId);
+            usedEquipmentIdsForContract.add(equipmentId);
+          }
         }
       }
 
@@ -9904,7 +9961,8 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
       let rateAmount = null;
       const totalNoTax = line.totals?.totalNoTax ?? null;
       const basisForPricing = rateBasis || inferRateBasisFromDates(line.startIso, line.endIso);
-      if (totalNoTax !== null && Number.isFinite(totalNoTax) && basisForPricing && inventoryIds.length) {
+      const quantityForPricing = demandOnly ? targetQty : inventoryIds.length;
+      if (totalNoTax !== null && Number.isFinite(totalNoTax) && basisForPricing && quantityForPricing) {
         const units = computeBillableUnits({
           startAt: line.startIso,
           endAt: line.endIso,
@@ -9914,23 +9972,30 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
           monthlyProrationMethod: settings.monthly_proration_method,
         });
         if (units !== null && Number.isFinite(units) && units > 0) {
-          const candidate = totalNoTax / (units * inventoryIds.length);
+          const candidate = totalNoTax / (units * quantityForPricing);
           if (Number.isFinite(candidate) && candidate >= 0) rateAmount = Number(candidate.toFixed(2));
         }
       }
 
-      lineItems.push({
+      const baseLineItem = {
         typeId,
         startAt: line.startIso,
         endAt: line.endIso,
         rateBasis: basisForPricing,
         rateAmount,
-        inventoryIds,
         beforeNotes: null,
         afterNotes: null,
         beforeImages: [],
         afterImages: [],
-      });
+      };
+
+      if (demandOnly) {
+        for (let i = 0; i < targetQty; i += 1) {
+          lineItems.push({ ...baseLineItem, inventoryIds: [] });
+        }
+      } else {
+        lineItems.push({ ...baseLineItem, inventoryIds });
+      }
     }
 
     if (!lineItems.length) {
@@ -10302,7 +10367,10 @@ async function updateRentalOrder({
       const fulfilledAt = normalizeTimestamptz(item.fulfilledAt) || null;
       const returnedAt = fulfilledAt ? normalizeTimestamptz(item.returnedAt) || null : null;
       const pausePeriods = normalizePausePeriods(item.pausePeriods);
-      const qty = Array.isArray(item.inventoryIds) ? item.inventoryIds.length : 0;
+      const rawInventoryIds = Array.isArray(item.inventoryIds) ? item.inventoryIds : [];
+      const inventoryIds = demandOnly ? [] : rawInventoryIds;
+      const qty = inventoryIds.length;
+      const effectiveQty = qty || (demandOnly ? 1 : 0);
       const billableUnits = computeBillableUnits({
         startAt,
         endAt,
@@ -10313,7 +10381,7 @@ async function updateRentalOrder({
       });
       const lineAmount =
         rateAmount !== null && Number.isFinite(rateAmount) && billableUnits !== null && Number.isFinite(billableUnits)
-          ? Number((rateAmount * billableUnits * qty).toFixed(2))
+          ? Number((rateAmount * billableUnits * effectiveQty).toFixed(2))
           : null;
       const liRes = await client.query(
         `INSERT INTO rental_order_line_items (rental_order_id, type_id, start_at, end_at, fulfilled_at, returned_at, rate_basis, rate_amount, billable_units, line_amount)
@@ -10332,7 +10400,6 @@ async function updateRentalOrder({
         ]
       );
       const lineItemId = liRes.rows[0].id;
-      const inventoryIds = Array.isArray(item.inventoryIds) ? item.inventoryIds : [];
       for (const equipmentId of inventoryIds) {
         await client.query(
           `INSERT INTO rental_order_line_inventory (line_item_id, equipment_id) VALUES ($1,$2)`,
@@ -10454,6 +10521,7 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
   try {
     await client.query("BEGIN");
     const normalizedStatus = normalizeRentalOrderStatus(status);
+    const demandOnly = isDemandOnlyStatus(normalizedStatus);
     const existingRes = await client.query(
       `SELECT quote_number, ro_number, status
          FROM rental_orders
@@ -10500,6 +10568,18 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
     quoteNumberOut = row.quote_number || null;
     roNumberOut = row.ro_number || null;
     statusOut = row.status || null;
+
+    if (demandOnly) {
+      await client.query(
+        `
+        DELETE FROM rental_order_line_inventory
+         WHERE line_item_id IN (
+           SELECT id FROM rental_order_line_items WHERE rental_order_id = $1
+         )
+        `,
+        [id]
+      );
+    }
 
     const settings = await getCompanySettingsForClient(client, companyId);
     const autoRun = normalizeInvoiceAutoRun(settings?.invoice_auto_run);
@@ -10812,11 +10892,12 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
            e.condition,
            e.location_id,
            l.name AS location
-      FROM equipment e
+     FROM equipment e
  LEFT JOIN locations l ON l.id = e.location_id
  LEFT JOIN equipment_types et ON et.id = e.type_id
      WHERE e.company_id = $1
        AND e.type_id = $2
+       AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
        AND NOT EXISTS (
          SELECT 1
            FROM rental_order_line_inventory liv
@@ -10837,6 +10918,60 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
     params
   );
   return result.rows;
+}
+
+async function getTypeDemandAvailability({ companyId, typeId, startAt, endAt, excludeOrderId }) {
+  const start = normalizeTimestamptz(startAt);
+  const end = normalizeTimestamptz(endAt);
+  if (!start || !end) return { totalUnits: 0, demandUnits: 0, capacityUnits: 0 };
+
+  const params = [companyId, typeId, start, end];
+  let excludeSql = "";
+  if (excludeOrderId) {
+    params.push(excludeOrderId);
+    excludeSql = "AND ro.id <> $5";
+  }
+
+  const demandRes = await pool.query(
+    `
+    SELECT li.id,
+           CASE WHEN COUNT(liv.equipment_id) > 0 THEN COUNT(liv.equipment_id) ELSE 1 END AS qty
+      FROM rental_order_line_items li
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+ LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
+     WHERE ro.company_id = $1
+       AND li.type_id = $2
+       AND ro.status IN ('quote','requested','reservation','ordered')
+       ${excludeSql}
+       AND tstzrange(
+         COALESCE(li.fulfilled_at, li.start_at),
+         COALESCE(li.returned_at, li.end_at),
+         '[)'
+       ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
+     GROUP BY li.id
+    `,
+    params
+  );
+  const demandUnits = demandRes.rows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+
+  const totalRes = await pool.query(
+    `
+    SELECT COUNT(*)::int AS total_units
+      FROM equipment
+     WHERE company_id = $1
+       AND type_id = $2
+       AND condition NOT IN ('Lost','Unusable')
+       AND (serial_number IS NULL OR serial_number NOT ILIKE 'UNALLOCATED-%')
+    `,
+    [companyId, typeId]
+  );
+  const totalUnits = Number(totalRes.rows?.[0]?.total_units || 0);
+
+  return {
+    totalUnits,
+    demandUnits,
+    capacityUnits: totalUnits - demandUnits,
+  };
 }
 
 function normalizeSearchTerm(value) {
@@ -10931,6 +11066,7 @@ async function listStorefrontListings({
            AND li.type_id = et.id
            AND ro.status IN ('requested','reservation','ordered')
            AND e3.condition NOT IN ('Lost','Unusable')
+           AND (e3.serial_number IS NULL OR e3.serial_number NOT ILIKE 'UNALLOCATED-%')
            AND tstzrange(
              COALESCE(li.fulfilled_at, li.start_at),
              COALESCE(li.returned_at, li.end_at),
@@ -10949,6 +11085,7 @@ async function listStorefrontListings({
            AND li.type_id = et.id
            AND ro.status IN ('requested','reservation','ordered')
            AND e3.condition NOT IN ('Lost','Unusable')
+           AND (e3.serial_number IS NULL OR e3.serial_number NOT ILIKE 'UNALLOCATED-%')
            AND (
              COALESCE(li.fulfilled_at, li.start_at) <= NOW()
              AND COALESCE(li.returned_at, li.end_at) > NOW()
@@ -11004,6 +11141,7 @@ async function listStorefrontListings({
         LEFT JOIN locations l ON l.id = e.location_id
         WHERE e.company_id = et.company_id
           AND e.type_id = et.id
+          AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
       ) stock ON TRUE
       ${rangeJoin}
       WHERE ${where.join(" AND ")}
@@ -12090,18 +12228,14 @@ async function createStorefrontReservation({
 
   const coverageDays = Object.keys(coverageHoursValue || {});
 
-  const available = await listAvailableInventory({
-    companyId: cid,
+  const lineItems = Array.from({ length: qty }, () => ({
     typeId: tid,
     startAt: startIso,
     endAt: endIso,
-  });
-  const viable = (available || []).filter((r) => !["Lost", "Unusable"].includes(String(r.condition || "").trim()));
-  const filtered = lid ? viable.filter((r) => Number(r.location_id) === lid) : viable;
-  if (filtered.length < qty) {
-    return { ok: false, error: "Not enough availability for that date range.", availableUnits: filtered.length };
-  }
-  const inventoryIds = filtered.slice(0, qty).map((r) => Number(r.id));
+    rateBasis: null,
+    rateAmount: null,
+    inventoryIds: [],
+  }));
 
   let internalCustomerId = allowStorefrontWriteback ? customer.internalCustomerId : null;
   if (!internalCustomerId) {
@@ -12155,16 +12289,11 @@ async function createStorefrontReservation({
     pickupLocationId: fulfillmentMethod === "pickup" ? lid : null,
     dropoffAddress,
     logisticsInstructions,
-    lineItems: [
-      {
-        typeId: tid,
-        startAt: startIso,
-        endAt: endIso,
-        rateBasis: rateAmount !== null && Number.isFinite(rateAmount) ? "daily" : null,
-        rateAmount: rateAmount !== null && Number.isFinite(rateAmount) ? rateAmount : null,
-        inventoryIds,
-      },
-    ],
+    lineItems: lineItems.map((li) => ({
+      ...li,
+      rateBasis: rateAmount !== null && Number.isFinite(rateAmount) ? "daily" : null,
+      rateAmount: rateAmount !== null && Number.isFinite(rateAmount) ? rateAmount : null,
+    })),
   });
 
   const docs = customer?.documents && typeof customer.documents === "object" ? customer.documents : {};
@@ -12186,7 +12315,7 @@ async function createStorefrontReservation({
     orderId: order.id,
     roNumber: order.roNumber || null,
     quoteNumber: order.quoteNumber || null,
-    inventoryIds,
+    inventoryIds: [],
   };
 }
 
@@ -12373,6 +12502,7 @@ module.exports = {
   getCustomerStorefrontExtras,
   listRentalOrderAudits,
   listAvailableInventory,
+  getTypeDemandAvailability,
   listStorefrontListings,
   createStorefrontCustomer,
   authenticateStorefrontCustomer,

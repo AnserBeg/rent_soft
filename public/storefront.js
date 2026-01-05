@@ -96,10 +96,7 @@ function renderRates(listing) {
 }
 
 function renderAvailability(listing) {
-  const stock = listing?.stock || {};
-  const a = Number(stock.availableUnits || 0);
-  const t = Number(stock.totalUnits || 0);
-  return `${a} available (of ${t})`;
+  return "Availability on request";
 }
 
 function listingCardHtml(listing) {
@@ -111,7 +108,6 @@ function listingCardHtml(listing) {
   const companyName = escapeHtml(listing?.company?.name || "Unknown company");
   const category = listing?.categoryName ? escapeHtml(listing.categoryName) : null;
   const locations = summarizeLocations(listing?.stock?.locations);
-  const available = Number(listing?.stock?.availableUnits || 0);
 
   return `
     <div class="storefront-card-inner">
@@ -119,7 +115,6 @@ function listingCardHtml(listing) {
       <div class="storefront-card-body">
         <div class="storefront-title-row">
           <div class="storefront-title">${typeName}</div>
-          <span class="mini-badge" title="Availability">${available}</span>
         </div>
         <div class="storefront-sub">${companyName}${category ? ` • ${category}` : ""}</div>
         <div class="storefront-sub">${escapeHtml(locations)}</div>
@@ -127,7 +122,7 @@ function listingCardHtml(listing) {
         <div class="storefront-sub">${escapeHtml(renderAvailability(listing))}</div>
       </div>
       <div class="storefront-card-actions">
-        <button class="primary" data-action="reserve" ${available > 0 ? "" : "disabled"}>Reserve</button>
+        <button class="primary" data-action="reserve">Reserve</button>
       </div>
     </div>
   `;

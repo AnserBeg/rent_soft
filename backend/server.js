@@ -85,6 +85,7 @@ const {
   deleteCustomerDocument,
   getCustomerStorefrontExtras,
   listAvailableInventory,
+  getTypeDemandAvailability,
   listStorefrontListings,
   createStorefrontCustomer,
   authenticateStorefrontCustomer,
@@ -3423,7 +3424,14 @@ app.get(
       endAt,
       excludeOrderId: excludeOrderId ? Number(excludeOrderId) : null,
     });
-    res.json({ available });
+    const demand = await getTypeDemandAvailability({
+      companyId,
+      typeId: Number(typeId),
+      startAt,
+      endAt,
+      excludeOrderId: excludeOrderId ? Number(excludeOrderId) : null,
+    });
+    res.json({ available, ...demand });
   })
 );
 

@@ -79,8 +79,6 @@ function listingToEquipment(listing: StorefrontListing): Equipment {
     pricePerDay: listing.dailyRate ?? 0,
     description: listing.description || listing.terms || 'No description provided.',
     specs: {
-      'Available Units': String(listing.stock.availableUnits),
-      'Total Units': String(listing.stock.totalUnits),
       ...(listing.dailyRate ? { 'Daily Rate': `$${listing.dailyRate.toFixed(2)}` } : {}),
       ...(listing.weeklyRate ? { 'Weekly Rate': `$${listing.weeklyRate.toFixed(2)}` } : {}),
       ...(listing.monthlyRate ? { 'Monthly Rate': `$${listing.monthlyRate.toFixed(2)}` } : {}),

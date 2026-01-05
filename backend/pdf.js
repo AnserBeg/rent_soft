@@ -241,6 +241,11 @@ function isQuote(status) {
   return s === "quote" || s === "quote_rejected";
 }
 
+function isDemandOnlyStatus(status) {
+  const s = String(status || "").toLowerCase();
+  return s === "quote" || s === "quote_rejected" || s === "reservation" || s === "requested";
+}
+
 function sanitizeFileName(name) {
   const safe = String(name || "document")
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "")
@@ -540,7 +545,11 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
     doc.fillColor("#111").font("Helvetica-Bold").fontSize(9).text(li.typeName || "Item", tableX + 8, y + 6, { width: outW - 16 });
 
     const rate = li.rateAmount === null || li.rateAmount === undefined ? "--" : fmtMoney(li.rateAmount);
-    const qty = Array.isArray(li.inventoryIds) ? li.inventoryIds.length : 0;
+    const qty = Array.isArray(li.inventoryIds) && li.inventoryIds.length
+      ? li.inventoryIds.length
+      : isDemandOnlyStatus(order?.status)
+        ? 1
+        : 0;
     const lineTotal = li.lineAmount === null || li.lineAmount === undefined ? "--" : fmtMoney(li.lineAmount);
     doc.fillColor("#111").font("Helvetica").fontSize(9);
     doc.text(rate, tableX + outW, y + 6, { width: rateW, align: "right" });

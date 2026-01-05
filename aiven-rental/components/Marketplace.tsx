@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Equipment, Company } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MapPin, DollarSign, Activity, Search, Calendar, User as UserIcon } from 'lucide-react';
+import { MapPin, DollarSign, Search, Calendar, User as UserIcon } from 'lucide-react';
 
 interface MarketplaceProps {
   items: Equipment[];
@@ -64,12 +64,6 @@ export const Card3D: React.FC<Card3DProps> = ({ item, onClick, ownerName, onOwne
             {item.category}
           </div>
           
-          {item.available && (
-             <div className="absolute top-4 left-4 flex items-center gap-1 text-xs text-green-600 font-bold bg-white/90 px-2 py-1 rounded shadow-sm z-10">
-               <Activity size={12} /> AVAILABLE
-             </div>
-          )}
-
           {/* Scroll Indicators */}
           {item.images.length > 1 && (
             <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 p-1.5 rounded-full bg-black/20 backdrop-blur-sm z-10">

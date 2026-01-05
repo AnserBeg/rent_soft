@@ -509,23 +509,6 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
                           </div>
                        </div>
 
-                       <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-gray-100">
-                          <div className="flex items-center gap-2">
-                             {item.available ? (
-                               <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                             ) : (
-                               <div className="w-2 h-2 rounded-full bg-red-500" />
-                             )}
-                             <span className={`text-sm font-bold ${item.available ? 'text-green-700' : 'text-red-700'}`}>
-                                {item.available ? 'Available Now' : 'Currently Unavailable'}
-                             </span>
-                          </div>
-                          {item.available && (
-                             <span className="text-xs text-slate-500 flex items-center gap-1">
-                               <Truck size={12} /> Delivery available
-                             </span>
-                          )}
-                       </div>
                     </div>
 
                     {/* Right Column: Details */}

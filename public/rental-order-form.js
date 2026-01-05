@@ -950,6 +950,11 @@ function isQuoteStatus(status) {
   return s === "quote" || s === "quote_rejected";
 }
 
+function isDemandOnlyStatus(status) {
+  const s = normalizeOrderStatus(status);
+  return s === "quote" || s === "quote_rejected" || s === "reservation" || s === "requested";
+}
+
 function statusLabel(status) {
   const s = normalizeOrderStatus(status);
   switch (s) {
@@ -1460,6 +1465,7 @@ function computeLineAmount({ startLocal, endLocal, rateBasis, rateAmount, qty })
 }
 
 function lineItemQty(li) {
+  if (isDemandOnlyStatus(draft.status)) return 1;
   return (li.inventoryIds || []).length ? 1 : 0;
 }
 
@@ -1733,6 +1739,11 @@ async function persistStatus(nextStatus, { note = null } = {}) {
   if (previous === desired) return;
 
   draft.status = desired;
+  if (isDemandOnlyStatus(desired)) {
+    (draft.lineItems || []).forEach((li) => {
+      li.inventoryIds = [];
+    });
+  }
   renderStatusControls();
   updateModeLabels();
   updatePdfButtonState();
@@ -2372,6 +2383,7 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn }) {
 
 function renderLineItems() {
   lineItemsEl.innerHTML = "";
+  const demandOnly = isDemandOnlyStatus(draft.status);
   (draft.lineItems || []).forEach((li) => {
     const card = document.createElement("div");
     card.className = "line-item-card";
@@ -2403,6 +2415,29 @@ function renderLineItems() {
         : "";
     const emptyHint = availableUnits.length ? "" : `<option value="" disabled>No available units for dates</option>`;
     const unitOptionsHtml = `${selectedUnavailable}<option value="">Select unit</option>${emptyHint}${unitOptions}`;
+    const capacityLabel = Number.isFinite(li.capacityUnits) ? String(li.capacityUnits) : "--";
+    const totalLabel = Number.isFinite(li.totalUnits) ? String(li.totalUnits) : "--";
+    const unitFieldHtml = demandOnly
+      ? `
+        <label>
+          <div class="label-head">
+            <span>Units</span>
+            <span class="hint">Capacity: ${capacityLabel} (of ${totalLabel})</span>
+          </div>
+          <input value="No unit assigned until ordered." disabled />
+        </label>
+      `
+      : `
+        <label>
+          <div class="label-head">
+            <span>Unit</span>
+            <span class="hint">Available: ${availableUnits.length}</span>
+          </div>
+          <select data-unit>
+            ${unitOptionsHtml}
+          </select>
+        </label>
+      `;
 
 
     card.innerHTML = `
@@ -2424,15 +2459,7 @@ function renderLineItems() {
               ${typeOptions}
             </select>
           </label>
-          <label>
-            <div class="label-head">
-              <span>Unit</span>
-              <span class="hint">Available: ${availableUnits.length}</span>
-            </div>
-            <select data-unit>
-              ${unitOptionsHtml}
-            </select>
-          </label>
+          ${unitFieldHtml}
           <label>Duration (days/hours)
             <input data-duration value="${formatDurationForDisplay(startLocal, endLocal)}" />
           </label>
@@ -2528,8 +2555,12 @@ async function refreshAvailabilityForLineItem(li) {
   const endAt = li.returnedAt || fromLocalInputValue(li.endLocal);
   if (!li.typeId || !startAt || !endAt) {
     li.inventoryOptions = [];
+    li.totalUnits = null;
+    li.demandUnits = null;
+    li.capacityUnits = null;
     return;
   }
+  const demandOnly = isDemandOnlyStatus(draft.status);
   const qs = new URLSearchParams({
     companyId: String(activeCompanyId),
     typeId: String(li.typeId),
@@ -2541,6 +2572,13 @@ async function refreshAvailabilityForLineItem(li) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to check availability");
   li.inventoryOptions = data.available || [];
+  li.totalUnits = Number.isFinite(Number(data.totalUnits)) ? Number(data.totalUnits) : null;
+  li.demandUnits = Number.isFinite(Number(data.demandUnits)) ? Number(data.demandUnits) : null;
+  li.capacityUnits = Number.isFinite(Number(data.capacityUnits)) ? Number(data.capacityUnits) : null;
+  if (demandOnly) {
+    li.inventoryIds = [];
+    return;
+  }
   const availableIds = new Set(li.inventoryOptions.map((e) => Number(e.id)));
   li.inventoryIds = (li.inventoryIds || []).map((x) => Number(x)).filter((id) => availableIds.has(id));
   ensureSingleUnitSelection(li);
@@ -3462,6 +3500,7 @@ saveOrderBtn.addEventListener("click", async (e) => {
     setCompanyMeta("Add at least one line item with type and dates.");
     return;
   }
+  const demandOnly = isDemandOnlyStatus(draft.status);
   for (const li of validLines) {
     const s = new Date(li.startLocal);
     const en = new Date(li.endLocal);
@@ -3469,14 +3508,16 @@ saveOrderBtn.addEventListener("click", async (e) => {
       setCompanyMeta("Line item end time must be after start time.");
       return;
     }
-    const availableQty = (li.inventoryOptions || []).length;
-    if (availableQty === 0) {
-      setCompanyMeta("One or more line items have no available units for the selected dates.");
-      return;
-    }
-    if ((li.inventoryIds || []).length !== 1) {
-      setCompanyMeta("Select a unit for each line item.");
-      return;
+    if (!demandOnly) {
+      const availableQty = (li.inventoryOptions || []).length;
+      if (availableQty === 0) {
+        setCompanyMeta("One or more line items have no available units for the selected dates.");
+        return;
+      }
+      if ((li.inventoryIds || []).length !== 1) {
+        setCompanyMeta("Select a unit for each line item.");
+        return;
+      }
     }
   }
 
@@ -3515,7 +3556,7 @@ saveOrderBtn.addEventListener("click", async (e) => {
       returnedAt: li.returnedAt || null,
       rateBasis: normalizeRateBasis(li.rateBasis),
       rateAmount: numberOrNull(li.rateAmount),
-      inventoryIds: li.inventoryIds || [],
+      inventoryIds: demandOnly ? [] : (li.inventoryIds || []),
       beforeNotes: li.beforeNotes || "",
       afterNotes: li.afterNotes || "",
       beforeImages: li.beforeImages || [],
