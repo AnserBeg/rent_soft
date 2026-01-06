@@ -58,6 +58,7 @@ const {
   importInventoryFromText,
   importCustomerPricingFromInventoryText,
   importRentalOrdersFromLegacyExports,
+  importRentalOrdersFromFutureInventoryReport,
   backfillLegacyRates,
   listCustomerPricing,
   upsertCustomerPricing,
@@ -2797,6 +2798,8 @@ app.post(
   "/api/rental-orders/import-legacy",
   (req, res, next) => {
     importUpload.fields([
+      { name: "futureReport", maxCount: 1 },
+      { name: "salesReport", maxCount: 1 },
       { name: "transactions", maxCount: 1 },
       { name: "instances", maxCount: 1 },
     ])(req, res, (err) => {
@@ -2807,16 +2810,26 @@ app.post(
   asyncHandler(async (req, res) => {
     const companyId = Number(req.body.companyId);
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const futureFile = req.files?.futureReport?.[0];
+    const salesReportFile = req.files?.salesReport?.[0];
+    const salesReportText = salesReportFile?.buffer ? salesReportFile.buffer.toString("utf8") : null;
+    if (futureFile?.buffer) {
+      const reportText = futureFile.buffer.toString("utf8");
+      const result = await importRentalOrdersFromFutureInventoryReport({ companyId, reportText, salesReportText });
+      res.status(201).json({ ...result, importSource: "future_report" });
+      return;
+    }
+
     const txFile = req.files?.transactions?.[0];
     const instFile = req.files?.instances?.[0];
     if (!txFile?.buffer || !instFile?.buffer) {
-      return res.status(400).json({ error: "Both files are required: transactions + instances." });
+      return res.status(400).json({ error: "Upload the Future Transactions by Inventory Item report, or both legacy files (transactions + instances)." });
     }
 
     const transactionsText = txFile.buffer.toString("utf8");
     const instancesText = instFile.buffer.toString("utf8");
-    const result = await importRentalOrdersFromLegacyExports({ companyId, transactionsText, instancesText });
-    res.status(201).json(result);
+    const result = await importRentalOrdersFromLegacyExports({ companyId, transactionsText, instancesText, salesReportText });
+    res.status(201).json({ ...result, importSource: "legacy_exports" });
   })
 );
 

@@ -1,4 +1,4 @@
-const params = new URLSearchParams(window.location.search);
+﻿const params = new URLSearchParams(window.location.search);
 const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
 
 const companyMeta = document.getElementById("company-meta");
@@ -15,6 +15,8 @@ const searchInput = document.getElementById("search");
 const openLegacyImportBtn = document.getElementById("open-legacy-import");
 const legacyImportModal = document.getElementById("legacy-import-modal");
 const closeLegacyImportBtn = document.getElementById("close-legacy-import");
+const importFutureReportInput = document.getElementById("import-future-report");
+const importSalesReportInput = document.getElementById("import-sales-report");
 const importTransactionsInput = document.getElementById("import-transactions");
 const importInstancesInput = document.getElementById("import-instances");
 const runImportBtn = document.getElementById("run-import");
@@ -328,20 +330,27 @@ runImportBtn?.addEventListener("click", async (e) => {
     if (importResult) importResult.textContent = "Select a company first.";
     return;
   }
+  const futureFile = importFutureReportInput?.files?.[0] || null;
+  const salesFile = importSalesReportInput?.files?.[0] || null;
   const txFile = importTransactionsInput?.files?.[0] || null;
   const instFile = importInstancesInput?.files?.[0] || null;
-  if (!txFile || !instFile) {
-    if (importResult) importResult.textContent = "Choose both files: Transactions + Instances.";
+  if (!futureFile && (!txFile || !instFile)) {
+    if (importResult) importResult.textContent = "Choose the Future Transactions by Inventory Item report, or both legacy files.";
     return;
   }
 
-  if (importResult) importResult.textContent = "Importing legacy rental orders…";
+  if (importResult) importResult.textContent = futureFile ? "Importing Future Transactions report." : "Importing legacy rental orders.";
   runImportBtn.disabled = true;
   try {
     const body = new FormData();
     body.append("companyId", String(activeCompanyId));
-    body.append("transactions", txFile);
-    body.append("instances", instFile);
+    if (futureFile) {
+      body.append("futureReport", futureFile);
+    } else {
+      body.append("transactions", txFile);
+      body.append("instances", instFile);
+    }
+    if (salesFile) body.append("salesReport", salesFile);
     const res = await fetch("/api/rental-orders/import-legacy", { method: "POST", body });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Import failed");
@@ -367,6 +376,8 @@ runImportBtn?.addEventListener("click", async (e) => {
     if (importResult) importResult.textContent = err.message || "Import failed";
   } finally {
     runImportBtn.disabled = false;
+    if (importFutureReportInput) importFutureReportInput.value = "";
+    if (importSalesReportInput) importSalesReportInput.value = "";
     if (importTransactionsInput) importTransactionsInput.value = "";
     if (importInstancesInput) importInstancesInput.value = "";
   }
@@ -403,3 +414,4 @@ backfillLegacyRatesBtn?.addEventListener("click", async (e) => {
     backfillLegacyRatesBtn.disabled = false;
   }
 });
+

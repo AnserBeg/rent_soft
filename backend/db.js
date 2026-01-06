@@ -9686,7 +9686,7 @@ function parseLegacyExport(text) {
   return { rows: rows.slice(1), get, header };
 }
 
-async function importRentalOrdersFromLegacyExports({ companyId, transactionsText, instancesText }) {
+async function importRentalOrdersFromLegacyExports({ companyId, transactionsText, instancesText, salesReportText }) {
   if (!companyId) throw new Error("companyId is required.");
   if (!transactionsText || !instancesText) throw new Error("Both legacy export files are required.");
 
@@ -9724,6 +9724,16 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
     [companyId]
   );
   const existingContractSet = new Set(existingContracts.rows.map((r) => String(r.external_contract_number).trim()));
+  const { contractToSalesperson, salespersonIdByName } = await buildSalespersonLookup({ companyId, salesReportText });
+  const resolveSalespersonId = async (salespersonName) => {
+    const key = normalizeSalespersonKey(salespersonName);
+    if (!key || isNoSalespersonValue(salespersonName)) return null;
+    const existing = salespersonIdByName.get(key);
+    if (existing) return existing;
+    const created = await createSalesPerson({ companyId, name: salespersonName, email: null, phone: null, imageUrl: null });
+    if (created?.id) salespersonIdByName.set(key, created.id);
+    return created?.id || null;
+  };
 
   const stats = {
     ordersCreated: 0,
@@ -9890,6 +9900,9 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
       stats.errors.push({ contractNumber, error: "Unable to resolve customer." });
       continue;
     }
+
+    const salespersonName = contractToSalesperson.get(contractNumber) || null;
+    const salespersonId = salespersonName ? await resolveSalespersonId(salespersonName) : null;
 
     const lineItemGroups = new Map();
     for (const line of lines) {
@@ -10097,6 +10110,419 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
       await createRentalOrder({
         companyId,
         customerId,
+        salespersonId,
+        externalContractNumber: contractNumber,
+        legacyData,
+        createdAt,
+        fulfillmentMethod: "pickup",
+        status,
+        customerPo: null,
+        lineItems,
+        fees: [],
+      });
+      existingContractSet.add(contractNumber);
+      stats.ordersCreated += 1;
+    } catch (err) {
+      const msg = err?.message || String(err);
+      stats.errors.push({ contractNumber, error: msg });
+    }
+  }
+
+  return stats;
+}
+
+function normalizeFutureImportStatus(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeSalespersonKey(value) {
+  if (!value) return "";
+  return String(value).trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function isNoSalespersonValue(value) {
+  const key = normalizeSalespersonKey(value);
+  if (!key) return true;
+  const collapsed = key.replace(/[^a-z0-9]/g, "");
+  if (!collapsed) return true;
+  return key === "no" || key === "none" || key === "n/a" || key === "na" || key === "unassigned" || collapsed === "na";
+}
+
+function parseSalespersonCommissionReport(text) {
+  let report = parseLegacyExport(text);
+  const headerHasContract = report?.header?.some((name) => name === "Contract #" || name === "Contract" || name === "Contract#");
+  const headerHasSalesperson = report?.header?.some((name) => name === "Salesperson");
+  if (!report || !headerHasContract || !headerHasSalesperson) {
+    const lines = String(text || "").split(/\r?\n/);
+    const headerIndex = lines.findIndex((line) => line.includes("Contract #") && line.includes("Salesperson"));
+    if (headerIndex >= 0) {
+      report = parseLegacyExport(lines.slice(headerIndex).join("\n"));
+    }
+  }
+  if (!report) return new Map();
+  const contractToSalesperson = new Map();
+  for (const row of report.rows) {
+    const contractNumber = report.get(row, ["Contract #", "Contract#", "Contract"]);
+    if (!contractNumber) continue;
+    const salesperson = report.get(row, ["Salesperson"]);
+    if (!salesperson || isNoSalespersonValue(salesperson)) continue;
+    const contractKey = String(contractNumber).trim();
+    if (!contractToSalesperson.has(contractKey)) contractToSalesperson.set(contractKey, String(salesperson).trim());
+  }
+  return contractToSalesperson;
+}
+
+async function buildSalespersonLookup({ companyId, salesReportText }) {
+  const existingSalespeople = await pool.query(`SELECT id, name FROM sales_people WHERE company_id = $1`, [companyId]);
+  const salespersonIdByName = new Map(
+    existingSalespeople.rows.map((row) => [normalizeSalespersonKey(row.name), row.id])
+  );
+  const contractToSalesperson = salesReportText ? parseSalespersonCommissionReport(salesReportText) : new Map();
+  return { contractToSalesperson, salespersonIdByName };
+}
+
+function deriveFutureImportOrderStatus(contractNumber, lines) {
+  const contract = String(contractNumber || "").trim().toUpperCase();
+  if (contract.startsWith("Q-")) return "quote";
+  if (contract.startsWith("R-")) return "reservation";
+
+  const codes = (lines || []).map((line) => normalizeFutureImportStatus(line.statusCode));
+  const hasOut = codes.some((code) => code.includes("out") || code.includes("order"));
+  const hasReserved = codes.some((code) => code.includes("reserved"));
+  const hasQuote = codes.some((code) => code.includes("quote"));
+  const allReturned = codes.length > 0 && codes.every((code) => code.includes("returned"));
+
+  if (hasOut) return "ordered";
+  if (allReturned) return "closed";
+  if (hasReserved) return "reservation";
+  if (hasQuote) return "quote";
+  return mapLegacyStatus({ contractNumber, statusCode: lines?.[0]?.statusCode, cancelled: false, completed: false });
+}
+
+async function importRentalOrdersFromFutureInventoryReport({ companyId, reportText, salesReportText }) {
+  if (!companyId) throw new Error("companyId is required.");
+  if (!reportText) throw new Error("reportText is required.");
+
+  const report = parseLegacyExport(reportText);
+  if (!report) {
+    return {
+      ordersCreated: 0,
+      ordersSkipped: 0,
+      customersCreated: 0,
+      typesUpserted: 0,
+      equipmentCreated: 0,
+      placeholderSerialsCreated: 0,
+      endDatesInferred: 0,
+      warnings: [],
+      errors: [],
+    };
+  }
+
+  const existingCustomers = await pool.query(`SELECT id, company_name, email FROM customers WHERE company_id = $1`, [companyId]);
+  const customerIdByCompany = new Map(existingCustomers.rows.map((r) => [normalizeCustomerMatchKey(r.company_name), r.id]));
+  const customerIdByEmail = new Map(existingCustomers.rows.filter((r) => r.email).map((r) => [normalizeCustomerMatchKey(r.email), r.id]));
+
+  const existingEquipment = await pool.query(
+    `SELECT id, serial_number, model_name, type_id FROM equipment WHERE company_id = $1`,
+    [companyId]
+  );
+  const equipmentIdBySerial = new Map(existingEquipment.rows.map((r) => [normalizeSerialKey(r.serial_number), r.id]));
+  const equipmentIdsByModel = new Map();
+  const equipmentIdsByTypeAndModel = new Map();
+  existingEquipment.rows.forEach((r) => {
+    const modelKey = normalizeModelKey(r.model_name);
+    if (!modelKey) return;
+
+    if (!equipmentIdsByModel.has(modelKey)) equipmentIdsByModel.set(modelKey, []);
+    equipmentIdsByModel.get(modelKey).push(r.id);
+
+    if (r.type_id) {
+      const tmKey = `${String(r.type_id)}|${modelKey}`;
+      if (!equipmentIdsByTypeAndModel.has(tmKey)) equipmentIdsByTypeAndModel.set(tmKey, []);
+      equipmentIdsByTypeAndModel.get(tmKey).push(r.id);
+    }
+  });
+
+  const existingContracts = await pool.query(
+    `SELECT external_contract_number FROM rental_orders WHERE company_id = $1 AND external_contract_number IS NOT NULL`,
+    [companyId]
+  );
+  const existingContractSet = new Set(existingContracts.rows.map((r) => String(r.external_contract_number).trim()));
+  const { contractToSalesperson, salespersonIdByName } = await buildSalespersonLookup({ companyId, salesReportText });
+  const resolveSalespersonId = async (salespersonName) => {
+    const key = normalizeSalespersonKey(salespersonName);
+    if (!key || isNoSalespersonValue(salespersonName)) return null;
+    const existing = salespersonIdByName.get(key);
+    if (existing) return existing;
+    const created = await createSalesPerson({ companyId, name: salespersonName, email: null, phone: null, imageUrl: null });
+    if (created?.id) salespersonIdByName.set(key, created.id);
+    return created?.id || null;
+  };
+
+  const stats = {
+    ordersCreated: 0,
+    ordersSkipped: 0,
+    customersCreated: 0,
+    typesUpserted: 0,
+    equipmentCreated: 0,
+    placeholderSerialsCreated: 0,
+    endDatesInferred: 0,
+    warnings: [],
+    errors: [],
+  };
+
+  const lineGroupsByContract = new Map();
+
+  const rowToObject = (parsed, row) => {
+    const obj = {};
+    for (let i = 0; i < parsed.header.length; i += 1) {
+      const k = parsed.header[i];
+      if (!k) continue;
+      const v = String(row[i] ?? "").trim();
+      if (!v) continue;
+      obj[k] = v;
+    }
+    return obj;
+  };
+
+  for (const row of report.rows) {
+    const contractNumber = report.get(row, ["Contract #", "Contract#", "Contract"]);
+    if (!contractNumber) continue;
+
+    const customerRaw = report.get(row, ["Customer", "Company Name", "Customer Name"]) || "Unknown";
+    const email = firstEmailIn(customerRaw);
+    const companyName = customerRaw || "Unknown";
+    const contactName = report.get(row, ["Picked Up By"]) || null;
+
+    const itemName = report.get(row, ["Item"]) || "Unknown item";
+    const categoryName = report.get(row, ["Category"]);
+    const manufacturer = report.get(row, ["Manufacturer"]);
+    const modelRaw = report.get(row, ["Model"]);
+    const serialRaw = report.get(row, ["Serial Number", "Serial"]);
+    const qtyRaw = report.get(row, ["Quantity"]);
+    const quantity = Number.parseInt(String(qtyRaw || "0"), 10) || 0;
+
+    const startIso =
+      parseLegacyDateTime(report.get(row, ["Start Time"])) ||
+      parseLegacyDateTime(report.get(row, ["Start"])) ||
+      null;
+    let endIso = parseLegacyDateTime(report.get(row, ["Due"])) || null;
+    if (!endIso && startIso) {
+      const fallback = new Date(startIso);
+      if (!Number.isNaN(fallback.getTime())) {
+        fallback.setDate(fallback.getDate() + 30);
+        endIso = fallback.toISOString();
+      }
+    }
+    const endInferred = !!endIso && !parseLegacyDateTime(report.get(row, ["Due"])) && !!startIso;
+
+    const returnedRaw = report.get(row, ["Returned"]);
+    const returnedIso = parseLegacyDateTime(returnedRaw) || null;
+    const statusCode = report.get(row, ["Status Code", "Status"]);
+
+    const serials = splitCsvishList(serialRaw).filter((s) => !["unallocated", "unserialized item"].includes(s.toLowerCase()));
+    const models = splitCsvishList(modelRaw);
+
+    const contractKey = String(contractNumber).trim();
+    if (!lineGroupsByContract.has(contractKey)) lineGroupsByContract.set(contractKey, []);
+    lineGroupsByContract.get(contractKey).push({
+      contractNumber: contractKey,
+      companyName,
+      contactName,
+      email,
+      itemName,
+      categoryName,
+      manufacturer,
+      quantity,
+      startIso,
+      endIso,
+      endInferred,
+      returnedIso,
+      statusCode,
+      serials,
+      models,
+      raw: rowToObject(report, row),
+    });
+  }
+
+  const contractNumbers = Array.from(lineGroupsByContract.keys());
+  if (!contractNumbers.length) return stats;
+
+  for (const contractNumber of contractNumbers) {
+    if (existingContractSet.has(contractNumber)) {
+      stats.ordersSkipped += 1;
+      continue;
+    }
+
+    const lines = lineGroupsByContract.get(contractNumber) || [];
+    if (!lines.length) continue;
+    const first = lines[0];
+
+    const status = deriveFutureImportOrderStatus(contractNumber, lines);
+    const demandOnly = isDemandOnlyStatus(status);
+
+    const customerKey = normalizeCustomerMatchKey(first.companyName);
+    const emailKey = normalizeCustomerMatchKey(first.email);
+    let customerId = (emailKey && customerIdByEmail.get(emailKey)) || customerIdByCompany.get(customerKey) || null;
+
+    if (!customerId) {
+      const createdCustomer = await createCustomer({
+        companyId,
+        companyName: first.companyName,
+        contactName: first.contactName || null,
+        streetAddress: null,
+        city: null,
+        region: null,
+        country: null,
+        postalCode: null,
+        email: first.email || null,
+        phone: null,
+        canChargeDeposit: false,
+        notes: `Imported from Future Transactions by Inventory Item. Contract: ${contractNumber}`,
+      });
+      customerId = createdCustomer?.id || null;
+      if (customerId) {
+        customerIdByCompany.set(customerKey, customerId);
+        if (emailKey) customerIdByEmail.set(emailKey, customerId);
+        stats.customersCreated += 1;
+      }
+    }
+
+    if (!customerId) {
+      stats.errors.push({ contractNumber, error: "Unable to resolve customer." });
+      continue;
+    }
+
+    const salespersonName = contractToSalesperson.get(contractNumber) || null;
+    const salespersonId = salespersonName ? await resolveSalespersonId(salespersonName) : null;
+
+    const lineItems = [];
+    const usedEquipmentIdsForContract = new Set();
+
+    for (const line of lines) {
+      if (!line.itemName || !line.startIso || !line.endIso) {
+        stats.warnings.push({
+          contractNumber,
+          warning: "Skipped a line item missing item name or start/end dates.",
+        });
+        continue;
+      }
+
+      const categoryId = await getOrCreateCategoryId({ companyId, name: line.categoryName });
+      const typeId = await upsertEquipmentTypeFromImport({
+        companyId,
+        name: line.itemName,
+        categoryId,
+      });
+      if (!typeId) continue;
+      stats.typesUpserted += 1;
+
+      const targetQty = Number.isFinite(line.quantity) && line.quantity > 0
+        ? line.quantity
+        : Math.max(1, line.serials.length);
+      if (line.endInferred) stats.endDatesInferred += 1;
+
+      const rateBasis = inferRateBasisFromDates(line.startIso, line.endIso);
+      const baseLineItem = {
+        typeId,
+        startAt: line.startIso,
+        endAt: line.endIso,
+        rateBasis,
+        rateAmount: null,
+        fulfilledAt: demandOnly ? null : line.startIso,
+        returnedAt: demandOnly ? null : line.returnedIso || null,
+        beforeNotes: null,
+        afterNotes: null,
+        beforeImages: [],
+        afterImages: [],
+      };
+
+      if (demandOnly) {
+        for (let i = 0; i < targetQty; i += 1) {
+          lineItems.push({ ...baseLineItem, inventoryIds: [] });
+        }
+        continue;
+      }
+
+      const inventoryIds = [];
+      const serials = [...(line.serials || [])];
+      while (serials.length < targetQty) {
+        serials.push(`UNALLOCATED-${contractNumber}-${typeId}-${serials.length + 1}`);
+      }
+
+      for (let i = 0; i < serials.length; i += 1) {
+        const serial = serials[i];
+        const serialKey = normalizeSerialKey(serial);
+        let equipmentId = !serialKey.startsWith("unallocated-") ? (equipmentIdBySerial.get(serialKey) || null) : null;
+        if (!equipmentId) {
+          const modelName = (line.models && line.models[i]) || (line.models && line.models[0]) || line.itemName;
+          const modelKey = normalizeModelKey(modelName);
+          if (modelKey) {
+            const byType = equipmentIdsByTypeAndModel.get(`${String(typeId)}|${modelKey}`) || [];
+            const byModel = equipmentIdsByModel.get(modelKey) || [];
+            const poolIds = byType.length ? byType : byModel;
+            const candidate = poolIds.find((id) => !usedEquipmentIdsForContract.has(id) && !inventoryIds.includes(id));
+            if (candidate) equipmentId = candidate;
+          }
+
+          if (!equipmentId) {
+            const createdEq = await createEquipment({
+              companyId,
+              typeId,
+              modelName: modelName || line.itemName,
+              serialNumber: serial,
+              condition: "Normal Wear & Tear",
+              manufacturer: line.manufacturer || null,
+              purchasePrice: null,
+              notes: `Imported from Future Transactions by Inventory Item. Contract: ${contractNumber}`,
+            });
+            equipmentId = createdEq?.id || null;
+            if (equipmentId) {
+              equipmentIdBySerial.set(serialKey, equipmentId);
+              if (serialKey.startsWith("unallocated-")) stats.placeholderSerialsCreated += 1;
+              stats.equipmentCreated += 1;
+            }
+          }
+        }
+        if (equipmentId) {
+          inventoryIds.push(equipmentId);
+          usedEquipmentIdsForContract.add(equipmentId);
+        }
+      }
+
+      lineItems.push({ ...baseLineItem, inventoryIds });
+    }
+
+    if (!lineItems.length) {
+      stats.warnings.push({ contractNumber, warning: "No valid line items found (missing start/end/type)." });
+      continue;
+    }
+
+    const createdAt = first.startIso || null;
+    const legacyData = {
+      source: "future_transactions_by_inventory_item",
+      contractNumber,
+      statusCode: first.statusCode || null,
+      customer: {
+        companyName: first.companyName || null,
+        contactName: first.contactName || null,
+        email: first.email || null,
+      },
+      totals: {
+        totalNoTax: null,
+        grandTotal: null,
+        amountPaid: null,
+      },
+      exports: {
+        futureTransactionsByInventoryItem: lines.map((l) => l.raw),
+      },
+    };
+
+    try {
+      await createRentalOrder({
+        companyId,
+        customerId,
+        salespersonId,
         externalContractNumber: contractNumber,
         legacyData,
         createdAt,
@@ -12537,6 +12963,7 @@ module.exports = {
   importCustomerPricingFromInventoryText,
   importCustomersFromText,
   importRentalOrdersFromLegacyExports,
+  importRentalOrdersFromFutureInventoryReport,
   backfillLegacyRates,
   listCustomerPricing,
   upsertCustomerPricing,

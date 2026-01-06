@@ -126,14 +126,16 @@
     <div class="modal-content wide">
       <div class="modal-header">
         <div>
-          <h3 style="margin:0;">Import legacy exports</h3>
-          <p class="hint" style="margin: 6px 0 0;">Upload both legacy exports to recreate rental orders/reservations. Upload Transaction List and Transaction List with Item ID reports.</p>
+          <h3 style="margin:0;">Import rental orders</h3>
+          <p class="hint" style="margin: 6px 0 0;">Upload the Future Transactions by Inventory Item report for actual return times, or use the legacy Transaction List + Transaction List with Item ID exports. You can also include the Salesperson Commission Report to assign salespeople.</p>
         </div>
         <button class="ghost small" id="close-legacy-import" type="button">Close</button>
       </div>
 
       <div class="stack">
         <div class="inline-actions" style="flex-wrap:wrap;">
+          <label>Future Transactions by Inventory Item <input type="file" id="import-future-report" accept=".csv,.tsv,.txt" /></label>
+          <label>Salesperson Commission Report <input type="file" id="import-sales-report" accept=".csv,.tsv,.txt" /></label>
           <label>Transaction List <input type="file" id="import-transactions" accept=".csv,.tsv,.txt" /></label>
           <label>Transaction List with Item ID <input type="file" id="import-instances" accept=".csv,.tsv,.txt" /></label>
           <button class="primary" id="run-import" type="button">Import</button>
