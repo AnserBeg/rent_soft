@@ -9902,23 +9902,82 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
     const lineItems = [];
     const usedEquipmentIdsForContract = new Set();
 
+    const sumTotals = (rows) => {
+      const totals = { totalNoTax: 0, grandTotal: 0, amountPaid: 0 };
+      let hasTotalNoTax = false;
+      let hasGrandTotal = false;
+      let hasAmountPaid = false;
+      for (const r of rows) {
+        const t = r?.totals || {};
+        if (Number.isFinite(t.totalNoTax)) {
+          totals.totalNoTax += t.totalNoTax;
+          hasTotalNoTax = true;
+        }
+        if (Number.isFinite(t.grandTotal)) {
+          totals.grandTotal += t.grandTotal;
+          hasGrandTotal = true;
+        }
+        if (Number.isFinite(t.amountPaid)) {
+          totals.amountPaid += t.amountPaid;
+          hasAmountPaid = true;
+        }
+      }
+      return {
+        totalNoTax: hasTotalNoTax ? Number(totals.totalNoTax.toFixed(2)) : null,
+        grandTotal: hasGrandTotal ? Number(totals.grandTotal.toFixed(2)) : null,
+        amountPaid: hasAmountPaid ? Number(totals.amountPaid.toFixed(2)) : null,
+      };
+    };
+
     for (const group of lineItemGroups.values()) {
-      const line = group[0];
-      const categoryId = await getOrCreateCategoryId({ companyId, name: line.categoryName });
+      const txLines = group.filter((g) => g.sourceName === "transactions");
+      const instLines = group.filter((g) => g.sourceName === "instances");
+      const baseLine = txLines[0] || instLines[0] || group[0];
+
+      const qtyFromTx = txLines.reduce((sum, r) => sum + (Number.isFinite(r.quantity) ? r.quantity : 0), 0);
+      const qtyFromInst = instLines.reduce((sum, r) => sum + (Number.isFinite(r.quantity) ? r.quantity : 0), 0);
+
+      const serialsFromInst = instLines.flatMap((r) => r.serials || []);
+      const serialsFromTx = txLines.flatMap((r) => r.serials || []);
+      const rawSerials = serialsFromInst.length ? serialsFromInst : serialsFromTx;
+      const serials = Array.from(new Set(rawSerials.map(String).filter(Boolean)));
+
+      const modelsFromInst = instLines.flatMap((r) => r.models || []);
+      const modelsFromTx = txLines.flatMap((r) => r.models || []);
+      const rawModels = modelsFromInst.length ? modelsFromInst : modelsFromTx;
+      const models = rawModels.map(String).filter(Boolean);
+
+      const totalsFromTx = sumTotals(txLines);
+      const totalsFromInst = sumTotals(instLines);
+      const totals = totalsFromTx.totalNoTax !== null || totalsFromTx.grandTotal !== null || totalsFromTx.amountPaid !== null
+        ? totalsFromTx
+        : totalsFromInst;
+
+      const mergedLine = {
+        ...baseLine,
+        quantity: qtyFromTx > 0 ? qtyFromTx : qtyFromInst > 0 ? qtyFromInst : baseLine.quantity,
+        serials,
+        models,
+        totals: totals.totalNoTax !== null || totals.grandTotal !== null || totals.amountPaid !== null ? totals : baseLine.totals,
+      };
+
+      const categoryId = await getOrCreateCategoryId({ companyId, name: mergedLine.categoryName });
       const typeId = await upsertEquipmentTypeFromImport({
         companyId,
-        name: line.itemName,
+        name: mergedLine.itemName,
         categoryId,
       });
       if (!typeId) continue;
       stats.typesUpserted += 1;
 
-      const targetQty = Number.isFinite(line.quantity) && line.quantity > 0 ? line.quantity : Math.max(1, line.serials.length);
-      if (line.endInferred) stats.endDatesInferred += 1;
+      const targetQty = Number.isFinite(mergedLine.quantity) && mergedLine.quantity > 0
+        ? mergedLine.quantity
+        : Math.max(1, mergedLine.serials.length);
+      if (mergedLine.endInferred) stats.endDatesInferred += 1;
 
       const inventoryIds = [];
       if (!demandOnly) {
-        const serials = [...(line.serials || [])];
+        const serials = [...(mergedLine.serials || [])];
         while (serials.length < targetQty) {
           serials.push(`UNALLOCATED-${contractNumber}-${typeId}-${serials.length + 1}`);
         }
@@ -9928,7 +9987,7 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
           const serialKey = normalizeSerialKey(serial);
           let equipmentId = !serialKey.startsWith("unallocated-") ? (equipmentIdBySerial.get(serialKey) || null) : null;
           if (!equipmentId) {
-            const modelName = (line.models && line.models[i]) || (line.models && line.models[0]) || line.itemName;
+            const modelName = (mergedLine.models && mergedLine.models[i]) || (mergedLine.models && mergedLine.models[0]) || mergedLine.itemName;
             const modelKey = normalizeModelKey(modelName);
             if (modelKey) {
               const byType = equipmentIdsByTypeAndModel.get(`${String(typeId)}|${modelKey}`) || [];
@@ -9942,10 +10001,10 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
               const createdEq = await createEquipment({
                 companyId,
                 typeId,
-                modelName: modelName || line.itemName,
+                modelName: modelName || mergedLine.itemName,
                 serialNumber: serial,
                 condition: "Normal Wear & Tear",
-                manufacturer: line.manufacturer || null,
+                manufacturer: mergedLine.manufacturer || null,
                 purchasePrice: null,
                 notes: `Imported from legacy exports. Contract: ${contractNumber}`,
               });
@@ -9964,15 +10023,15 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
         }
       }
 
-      const rateBasis = rateBasisFromLegacyDuration(line.chargedDuration);
+      const rateBasis = rateBasisFromLegacyDuration(mergedLine.chargedDuration);
       let rateAmount = null;
-      const totalNoTax = line.totals?.totalNoTax ?? null;
-      const basisForPricing = rateBasis || inferRateBasisFromDates(line.startIso, line.endIso);
+      const totalNoTax = mergedLine.totals?.totalNoTax ?? null;
+      const basisForPricing = rateBasis || inferRateBasisFromDates(mergedLine.startIso, mergedLine.endIso);
       const quantityForPricing = demandOnly ? targetQty : inventoryIds.length;
       if (totalNoTax !== null && Number.isFinite(totalNoTax) && basisForPricing && quantityForPricing) {
         const units = computeBillableUnits({
-          startAt: line.startIso,
-          endAt: line.endIso,
+          startAt: mergedLine.startIso,
+          endAt: mergedLine.endIso,
           rateBasis: basisForPricing,
           roundingMode: settings.billing_rounding_mode,
           roundingGranularity: settings.billing_rounding_granularity,
@@ -9986,8 +10045,8 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
 
       const baseLineItem = {
         typeId,
-        startAt: line.startIso,
-        endAt: line.endIso,
+        startAt: mergedLine.startIso,
+        endAt: mergedLine.endIso,
         rateBasis: basisForPricing,
         rateAmount,
         beforeNotes: null,
