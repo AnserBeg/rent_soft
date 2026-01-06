@@ -344,12 +344,9 @@ runImportBtn?.addEventListener("click", async (e) => {
   try {
     const body = new FormData();
     body.append("companyId", String(activeCompanyId));
-    if (futureFile) {
-      body.append("futureReport", futureFile);
-    } else {
-      body.append("transactions", txFile);
-      body.append("instances", instFile);
-    }
+    if (futureFile) body.append("futureReport", futureFile);
+    if (txFile) body.append("transactions", txFile);
+    if (instFile) body.append("instances", instFile);
     if (salesFile) body.append("salesReport", salesFile);
     const res = await fetch("/api/rental-orders/import-legacy", { method: "POST", body });
     const data = await res.json().catch(() => ({}));

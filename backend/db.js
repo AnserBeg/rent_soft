@@ -10307,6 +10307,16 @@ async function importRentalOrdersFromFutureInventoryReport({ companyId, reportTe
     };
   }
 
+  const existingCustomers = await pool.query(`SELECT id, company_name, email, phone FROM customers WHERE company_id = $1`, [companyId]);
+  const customerIdByCompany = new Map(existingCustomers.rows.map((r) => [normalizeCustomerMatchKey(r.company_name), r.id]));
+  const customerIdByEmail = new Map(existingCustomers.rows.filter((r) => r.email).map((r) => [normalizeCustomerMatchKey(r.email), r.id]));
+  const customerIdByPhone = new Map(
+    existingCustomers.rows
+      .map((r) => ({ key: normalizePhoneKey(r.phone), id: r.id }))
+      .filter((r) => r.key)
+      .map((r) => [r.key, r.id])
+  );
+
   const existingEquipment = await pool.query(
     `SELECT id, serial_number, model_name, type_id FROM equipment WHERE company_id = $1`,
     [companyId]
@@ -10379,9 +10389,15 @@ async function importRentalOrdersFromFutureInventoryReport({ companyId, reportTe
     if (!contractNumber) continue;
 
     const customerRaw = report.get(row, ["Customer", "Company Name", "Customer Name"]) || "Unknown";
-    const email = firstEmailIn(customerRaw);
-    const companyName = customerRaw || "Unknown";
-    const contactName = report.get(row, ["Picked Up By"]) || null;
+    const companyName = report.get(row, ["Company Name"]) || report.get(row, ["Customer"]) || report.get(row, ["Customer Name"]) || "Unknown";
+    const contactName = report.get(row, ["Customer Name"]) || report.get(row, ["Picked Up By"]) || null;
+    const email =
+      firstEmailIn(report.get(row, ["Email"])) ||
+      firstEmailIn(customerRaw) ||
+      firstEmailIn(report.get(row, ["Address"]));
+    const phone = report.get(row, ["Primary Phone", "Phone"]);
+    const address = report.get(row, ["Address"]);
+    const postalCode = report.get(row, ["Postal Code", "Postal"]);
 
     const itemName = report.get(row, ["Item"]) || "Unknown item";
     const categoryName = report.get(row, ["Category"]);
@@ -10419,6 +10435,9 @@ async function importRentalOrdersFromFutureInventoryReport({ companyId, reportTe
       companyName,
       contactName,
       email,
+      phone,
+      address,
+      postalCode,
       itemName,
       categoryName,
       manufacturer,
@@ -10450,7 +10469,16 @@ async function importRentalOrdersFromFutureInventoryReport({ companyId, reportTe
     const status = deriveFutureImportOrderStatus(contractNumber, lines);
     const demandOnly = isDemandOnlyStatus(status);
 
-    const customerId = placeholderCustomerId;
+    const customerSeed = lines.find((line) => line.email || line.phone || line.companyName) || first;
+    const customerKey = normalizeCustomerMatchKey(customerSeed.companyName);
+    const emailKey = normalizeCustomerMatchKey(customerSeed.email);
+    const phoneKey = normalizePhoneKey(customerSeed.phone);
+    let customerId =
+      (emailKey && customerIdByEmail.get(emailKey)) ||
+      (phoneKey && customerIdByPhone.get(phoneKey)) ||
+      (customerKey && customerIdByCompany.get(customerKey)) ||
+      null;
+    if (!customerId) customerId = placeholderCustomerId;
     if (!customerId) {
       stats.errors.push({ contractNumber, error: "Unable to resolve placeholder customer." });
       continue;
