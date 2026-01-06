@@ -2567,7 +2567,6 @@ async function refreshAvailabilityForLineItem(li) {
     startAt,
     endAt,
   });
-  if (editingOrderId) qs.set("excludeOrderId", String(editingOrderId));
   const res = await fetch(`/api/rental-orders/availability?${qs.toString()}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to check availability");
