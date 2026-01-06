@@ -9694,9 +9694,15 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
   const inst = parseLegacyExport(instancesText);
   if (!tx || !inst) return { ordersCreated: 0, ordersSkipped: 0, customersCreated: 0, typesUpserted: 0, equipmentCreated: 0, warnings: [], errors: [] };
 
-  const existingCustomers = await pool.query(`SELECT id, company_name, email FROM customers WHERE company_id = $1`, [companyId]);
+  const existingCustomers = await pool.query(`SELECT id, company_name, email, phone FROM customers WHERE company_id = $1`, [companyId]);
   const customerIdByCompany = new Map(existingCustomers.rows.map((r) => [normalizeCustomerMatchKey(r.company_name), r.id]));
   const customerIdByEmail = new Map(existingCustomers.rows.filter((r) => r.email).map((r) => [normalizeCustomerMatchKey(r.email), r.id]));
+  const customerIdByPhone = new Map(
+    existingCustomers.rows
+      .map((r) => ({ key: normalizePhoneKey(r.phone), id: r.id }))
+      .filter((r) => r.key)
+      .map((r) => [r.key, r.id])
+  );
 
   const existingEquipment = await pool.query(
     `SELECT id, serial_number, model_name, type_id FROM equipment WHERE company_id = $1`,
@@ -9868,10 +9874,14 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
       completed: !!first.completed,
     });
     const demandOnly = isDemandOnlyStatus(status);
-
     const customerKey = normalizeCustomerMatchKey(first.companyName);
     const emailKey = normalizeCustomerMatchKey(first.email);
-    let customerId = (emailKey && customerIdByEmail.get(emailKey)) || customerIdByCompany.get(customerKey) || null;
+    const phoneKey = normalizePhoneKey(first.phone);
+    let customerId =
+      (emailKey && customerIdByEmail.get(emailKey)) ||
+      (phoneKey && customerIdByPhone.get(phoneKey)) ||
+      customerIdByCompany.get(customerKey) ||
+      null;
 
     if (!customerId) {
       const createdCustomer = await createCustomer({
@@ -9892,6 +9902,7 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
       if (customerId) {
         customerIdByCompany.set(customerKey, customerId);
         if (emailKey) customerIdByEmail.set(emailKey, customerId);
+        if (phoneKey) customerIdByPhone.set(phoneKey, customerId);
         stats.customersCreated += 1;
       }
     }
@@ -10135,6 +10146,11 @@ function normalizeFutureImportStatus(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function normalizePhoneKey(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  return digits || "";
+}
+
 function normalizeSalespersonKey(value) {
   if (!value) return "";
   return String(value).trim().toLowerCase().replace(/\s+/g, " ");
@@ -10148,7 +10164,7 @@ function isNoSalespersonValue(value) {
   return key === "no" || key === "none" || key === "n/a" || key === "na" || key === "unassigned" || collapsed === "na";
 }
 
-function parseSalespersonCommissionReport(text) {
+function parseSalespersonCommissionReportData(text) {
   let report = parseLegacyExport(text);
   const headerHasContract = report?.header?.some((name) => name === "Contract #" || name === "Contract" || name === "Contract#");
   const headerHasSalesperson = report?.header?.some((name) => name === "Salesperson");
@@ -10167,9 +10183,36 @@ function parseSalespersonCommissionReport(text) {
     const salesperson = report.get(row, ["Salesperson"]);
     if (!salesperson || isNoSalespersonValue(salesperson)) continue;
     const contractKey = String(contractNumber).trim();
-    if (!contractToSalesperson.has(contractKey)) contractToSalesperson.set(contractKey, String(salesperson).trim());
+    if (!contractToSalesperson.has(contractKey)) {
+      contractToSalesperson.set(contractKey, String(salesperson).trim());
+    }
   }
   return contractToSalesperson;
+}
+
+async function getOrCreatePlaceholderCustomer({ companyId, name }) {
+  const label = String(name || "").trim() || "Imported Customer";
+  const existing = await pool.query(
+    `SELECT id FROM customers WHERE company_id = $1 AND LOWER(company_name) = $2 LIMIT 1`,
+    [companyId, normalizeCustomerMatchKey(label)]
+  );
+  if (existing.rows?.[0]?.id) return { id: Number(existing.rows[0].id), created: false };
+
+  const created = await createCustomer({
+    companyId,
+    companyName: label,
+    contactName: null,
+    streetAddress: null,
+    city: null,
+    region: null,
+    country: null,
+    postalCode: null,
+    email: null,
+    phone: null,
+    canChargeDeposit: false,
+    notes: "Placeholder customer for imports.",
+  });
+  return { id: created?.id || null, created: !!created?.id };
 }
 
 async function buildSalespersonLookup({ companyId, salesReportText }) {
@@ -10177,7 +10220,7 @@ async function buildSalespersonLookup({ companyId, salesReportText }) {
   const salespersonIdByName = new Map(
     existingSalespeople.rows.map((row) => [normalizeSalespersonKey(row.name), row.id])
   );
-  const contractToSalesperson = salesReportText ? parseSalespersonCommissionReport(salesReportText) : new Map();
+  const contractToSalesperson = salesReportText ? parseSalespersonCommissionReportData(salesReportText) : new Map();
   return { contractToSalesperson, salespersonIdByName };
 }
 
@@ -10217,10 +10260,6 @@ async function importRentalOrdersFromFutureInventoryReport({ companyId, reportTe
       errors: [],
     };
   }
-
-  const existingCustomers = await pool.query(`SELECT id, company_name, email FROM customers WHERE company_id = $1`, [companyId]);
-  const customerIdByCompany = new Map(existingCustomers.rows.map((r) => [normalizeCustomerMatchKey(r.company_name), r.id]));
-  const customerIdByEmail = new Map(existingCustomers.rows.filter((r) => r.email).map((r) => [normalizeCustomerMatchKey(r.email), r.id]));
 
   const existingEquipment = await pool.query(
     `SELECT id, serial_number, model_name, type_id FROM equipment WHERE company_id = $1`,
@@ -10270,6 +10309,10 @@ async function importRentalOrdersFromFutureInventoryReport({ companyId, reportTe
     warnings: [],
     errors: [],
   };
+
+  const placeholder = await getOrCreatePlaceholderCustomer({ companyId, name: "Imported Customer" });
+  const placeholderCustomerId = placeholder.id || null;
+  if (placeholder.created) stats.customersCreated += 1;
 
   const lineGroupsByContract = new Map();
 
@@ -10361,35 +10404,9 @@ async function importRentalOrdersFromFutureInventoryReport({ companyId, reportTe
     const status = deriveFutureImportOrderStatus(contractNumber, lines);
     const demandOnly = isDemandOnlyStatus(status);
 
-    const customerKey = normalizeCustomerMatchKey(first.companyName);
-    const emailKey = normalizeCustomerMatchKey(first.email);
-    let customerId = (emailKey && customerIdByEmail.get(emailKey)) || customerIdByCompany.get(customerKey) || null;
-
+    const customerId = placeholderCustomerId;
     if (!customerId) {
-      const createdCustomer = await createCustomer({
-        companyId,
-        companyName: first.companyName,
-        contactName: first.contactName || null,
-        streetAddress: null,
-        city: null,
-        region: null,
-        country: null,
-        postalCode: null,
-        email: first.email || null,
-        phone: null,
-        canChargeDeposit: false,
-        notes: `Imported from Future Transactions by Inventory Item. Contract: ${contractNumber}`,
-      });
-      customerId = createdCustomer?.id || null;
-      if (customerId) {
-        customerIdByCompany.set(customerKey, customerId);
-        if (emailKey) customerIdByEmail.set(emailKey, customerId);
-        stats.customersCreated += 1;
-      }
-    }
-
-    if (!customerId) {
-      stats.errors.push({ contractNumber, error: "Unable to resolve customer." });
+      stats.errors.push({ contractNumber, error: "Unable to resolve placeholder customer." });
       continue;
     }
 
