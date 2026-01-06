@@ -2567,13 +2567,19 @@ async function refreshAvailabilityForLineItem(li) {
     startAt,
     endAt,
   });
+  if (editingOrderId) qs.set("excludeOrderId", String(editingOrderId));
   const res = await fetch(`/api/rental-orders/availability?${qs.toString()}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to check availability");
   li.inventoryOptions = data.available || [];
-  li.totalUnits = Number.isFinite(Number(data.totalUnits)) ? Number(data.totalUnits) : null;
-  li.demandUnits = Number.isFinite(Number(data.demandUnits)) ? Number(data.demandUnits) : null;
-  li.capacityUnits = Number.isFinite(Number(data.capacityUnits)) ? Number(data.capacityUnits) : null;
+  const totalUnits = Number.isFinite(Number(data.totalUnits)) ? Number(data.totalUnits) : null;
+  const demandUnits = Number.isFinite(Number(data.demandUnits)) ? Number(data.demandUnits) : 0;
+  const localDemandUnits = computeDraftDemandForRange(li.typeId, startAt, endAt);
+  const adjustedDemandUnits = demandUnits + localDemandUnits;
+  li.totalUnits = totalUnits;
+  li.demandUnits = Number.isFinite(adjustedDemandUnits) ? adjustedDemandUnits : null;
+  li.capacityUnits =
+    totalUnits === null ? null : Math.max(totalUnits - (Number.isFinite(adjustedDemandUnits) ? adjustedDemandUnits : 0), 0);
   if (demandOnly) {
     li.inventoryIds = [];
     return;
@@ -2582,6 +2588,55 @@ async function refreshAvailabilityForLineItem(li) {
   li.inventoryIds = (li.inventoryIds || []).map((x) => Number(x)).filter((id) => availableIds.has(id));
   ensureSingleUnitSelection(li);
   autoSelectUnitForLineItem(li);
+}
+
+function computeDraftDemandForRange(typeId, startAt, endAt) {
+  if (!typeId) return 0;
+  const base = normalizeRangeMs(startAt, endAt);
+  if (!base) return 0;
+  let demand = 0;
+  (draft.lineItems || []).forEach((li) => {
+    if (!li?.typeId || String(li.typeId) !== String(typeId)) return;
+    const range = normalizeLineItemRangeMs(li);
+    if (!range) return;
+    if (range.startMs < base.endMs && range.endMs > base.startMs) {
+      demand += lineItemQty(li);
+    }
+  });
+  return demand;
+}
+
+function normalizeRangeMs(startAt, endAt) {
+  const startMs = Date.parse(startAt);
+  const endMs = Date.parse(endAt);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+  return { startMs, endMs };
+}
+
+function normalizeLineItemRangeMs(li) {
+  const startAt = li.pickedUpAt || fromLocalInputValue(li.startLocal);
+  const endAt = li.returnedAt || fromLocalInputValue(li.endLocal);
+  if (!startAt || !endAt) return null;
+  const range = normalizeRangeMs(startAt, endAt);
+  if (!range) return null;
+  if (!li.returnedAt) {
+    const nowMs = Date.now();
+    if (range.endMs < nowMs) range.endMs = nowMs;
+  }
+  return range;
+}
+
+async function refreshAvailabilityForAllLineItems({ onError } = {}) {
+  const items = draft.lineItems || [];
+  for (const li of items) {
+    try {
+      await refreshAvailabilityForLineItem(li);
+    } catch (err) {
+      if (onError) onError(err);
+    }
+  }
+  draft.lineItems = mergeLineItems(draft.lineItems);
+  renderLineItems();
 }
 
 function autoSelectUnitForLineItem(li) {
@@ -3383,9 +3438,7 @@ lineItemsEl.addEventListener("change", async (e) => {
     li.rateBasis = li.typeId ? defaultRateBasisForType(li.typeId) : "daily";
     li.rateManual = false;
     li.rateAmount = li.typeId ? suggestedRateAmount({ customerId: draft.customerId, typeId: li.typeId, basis: li.rateBasis }) : null;
-    await refreshAvailabilityForLineItem(li).catch((err) => setCompanyMeta(err.message));
-    draft.lineItems = mergeLineItems(draft.lineItems);
-    renderLineItems();
+    await refreshAvailabilityForAllLineItems({ onError: (err) => setCompanyMeta(err.message) });
     scheduleDraftSave();
     return;
   }
@@ -3395,9 +3448,7 @@ lineItemsEl.addEventListener("change", async (e) => {
     if (hours === null) return;
     if (!li.startLocal) li.startLocal = localNowValue();
     li.endLocal = addHoursToLocalValue(li.startLocal, hours);
-    await refreshAvailabilityForLineItem(li).catch(() => {});
-    draft.lineItems = mergeLineItems(draft.lineItems);
-    renderLineItems();
+    await refreshAvailabilityForAllLineItems();
     scheduleDraftSave();
     return;
   }
@@ -3478,7 +3529,7 @@ lineItemsEl.addEventListener("click", async (e) => {
     e.preventDefault();
     draft.lineItems = draft.lineItems.filter((x) => x.tempId !== li.tempId);
     ensureAtLeastOneLineItem();
-    renderLineItems();
+    await refreshAvailabilityForAllLineItems();
     scheduleDraftSave();
     return;
   }
