@@ -4951,12 +4951,12 @@ async function importCustomerPricingFromInventoryText({ companyId, customerId, t
 
 async function importCustomersFromText({ companyId, text }) {
   if (!companyId) throw new Error("companyId is required.");
-  if (!text) return { created: 0, updated: 0, skipped: 0, errors: [] };
+  if (!text) return { created: 0, updated: 0, skipped: 0, errors: [], updatedCustomers: [] };
 
   const firstLine = text.split(/\r?\n/, 1)[0] || "";
   const delimiter = firstLine.includes("\t") ? "\t" : ",";
   const rows = parseDelimitedRows(text, delimiter).filter((r) => r.some((c) => String(c ?? "").trim() !== ""));
-  if (rows.length < 2) return { created: 0, updated: 0, skipped: 0, errors: [] };
+  if (rows.length < 2) return { created: 0, updated: 0, skipped: 0, errors: [], updatedCustomers: [] };
 
   const header = rows[0].map((h) => String(h ?? "").trim());
   const indexByName = new Map();
@@ -4983,7 +4983,7 @@ async function importCustomersFromText({ companyId, text }) {
     if (companyKey && !byCompany.has(companyKey)) byCompany.set(companyKey, c.id);
   });
 
-  const stats = { created: 0, updated: 0, skipped: 0, errors: [] };
+  const stats = { created: 0, updated: 0, skipped: 0, errors: [], updatedCustomers: [] };
 
   await pool.query("BEGIN");
   try {
@@ -5023,6 +5023,12 @@ async function importCustomersFromText({ companyId, text }) {
           [!!canChargeDeposit, existingId, companyId]
         );
         stats.updated += 1;
+        stats.updatedCustomers.push({
+          id: existingId,
+          companyName: companyName || null,
+          email: email || null,
+          row: i + 1,
+        });
         continue;
       }
 
