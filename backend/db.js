@@ -4066,6 +4066,7 @@ async function listEquipment(companyId) {
            e.type_id,
            e.notes,
            CASE
+             WHEN COALESCE(av.has_overdue, FALSE) THEN 'Overdue'
              WHEN COALESCE(av.has_ordered, FALSE) THEN 'Rented out'
              WHEN COALESCE(av.has_reserved_now, FALSE) THEN 'Reserved'
              ELSE 'Available'
@@ -4100,6 +4101,7 @@ async function listEquipment(companyId) {
         AND ro.status IN ('requested','reservation','ordered')
     ) av ON TRUE
     WHERE e.company_id = $1
+      AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
     ORDER BY e.created_at DESC;
   `,
     [companyId]

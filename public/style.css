@@ -2722,6 +2722,7 @@ a.ghost {
 .status-tag.available .status-dot { background: #2bb673; }
 .status-tag.rented .status-dot { background: #d64545; }
 .status-tag.reserved .status-dot { background: #e0b100; }
+.status-tag.overdue .status-dot { background: #ef4444; }
 .status-tag.out-of-service .status-dot { background: var(--danger); }
 .status-tag.return-inspection .status-dot { background: #2563eb; }
 

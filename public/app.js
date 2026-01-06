@@ -308,6 +308,7 @@ function renderEquipmentCards(rows) {
       const raw =
         row.availability_status ?? row.availabilityStatus ?? row.availability ?? row.status ?? row.state ?? row.rental_status;
       const normalized = String(raw || "").toLowerCase();
+      if (row.is_overdue === true || normalized.includes("overdue")) return { key: "overdue", label: "Overdue" };
       if (normalized.includes("reserved")) return { key: "reserved", label: "Reserved" };
       if (normalized.includes("rent") || normalized.includes("out")) return { key: "rented", label: "Rented out" };
       return { key: "available", label: "Available" };
