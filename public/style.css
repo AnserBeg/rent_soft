@@ -621,10 +621,12 @@ textarea:focus {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   gap: 14px;
-  align-items: start;
+  align-items: end;
 }
 
 .invoice-toggle {
+  grid-column: 2;
+  grid-row: 2;
   margin-top: 6px;
   gap: 6px;
 }
@@ -636,7 +638,7 @@ textarea:focus {
 
 .contact-row button {
   height: 38px;
-  margin-top: 22px;
+  align-self: end;
 }
 
 .coverage-block {
@@ -3970,6 +3972,11 @@ body.drawer-open {
 
   .contact-row {
     grid-template-columns: 1fr;
+  }
+
+  .invoice-toggle {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   .contact-row button {
