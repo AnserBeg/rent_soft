@@ -4088,7 +4088,7 @@ async function listEquipment(companyId) {
         BOOL_OR(
           ro.status = 'ordered'
           AND COALESCE(li.fulfilled_at, li.start_at) <= NOW()
-          AND COALESCE(li.returned_at, li.end_at) > NOW()
+          AND COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) > NOW()
         ) AS has_ordered,
         BOOL_OR(ro.status = 'ordered' AND li.returned_at IS NULL AND li.end_at < NOW()) AS has_overdue,
         BOOL_OR(ro.status IN ('reservation','requested') AND li.start_at <= NOW() AND li.end_at > NOW()) AS has_reserved_now
@@ -8098,7 +8098,7 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
   const where = [
     "ro.company_id = $1",
     "COALESCE(li.fulfilled_at, li.start_at) < $3::timestamptz",
-    "COALESCE(li.returned_at, li.end_at) > $2::timestamptz",
+    "COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) > $2::timestamptz",
   ];
   if (useStatuses) {
     params.push(useStatuses);
@@ -8112,7 +8112,7 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            li.type_id,
            et.name AS type_name,
            COALESCE(li.fulfilled_at, li.start_at) AS start_at,
-           COALESCE(li.returned_at, li.end_at) AS end_at,
+           COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
            ro.id AS order_id,
            ro.status,
            ro.quote_number,
@@ -8334,7 +8334,7 @@ async function setLineItemPickedUp({
                  ro.ro_number,
                  c.company_name AS customer_name,
                  COALESCE(li.fulfilled_at, li.start_at) AS start_at,
-                 COALESCE(li.returned_at, li.end_at) AS end_at
+                 COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at
             FROM rental_order_line_inventory liv
             JOIN rental_order_line_items li ON li.id = liv.line_item_id
             JOIN rental_orders ro ON ro.id = li.rental_order_id
@@ -8346,7 +8346,7 @@ async function setLineItemPickedUp({
              AND ro.status IN ('requested','reservation','ordered')
              AND tstzrange(
                COALESCE(li.fulfilled_at, li.start_at),
-               COALESCE(li.returned_at, li.end_at),
+               COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
                '[)'
              ) && tstzrange($5::timestamptz, $6::timestamptz, '[)')
            ORDER BY COALESCE(li.fulfilled_at, li.start_at) ASC
@@ -8746,7 +8746,7 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
            ro.pickup_location_id,
            COALESCE(l.name, 'No location') AS location_name,
            COALESCE(li.fulfilled_at, li.start_at) AS start_at,
-           COALESCE(li.returned_at, li.end_at) AS end_at,
+           COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
            CASE WHEN COUNT(liv.equipment_id) > 0 THEN COUNT(liv.equipment_id) ELSE 1 END AS qty
       FROM rental_order_line_items li
       JOIN rental_orders ro ON ro.id = li.rental_order_id
@@ -8757,7 +8757,7 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
        AND ro.status IN ('quote','requested','reservation','ordered')
        AND (
          COALESCE(li.fulfilled_at, li.start_at) < $4::timestamptz
-         AND COALESCE(li.returned_at, li.end_at) > $3::timestamptz
+         AND COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) > $3::timestamptz
        )
      GROUP BY li.id, ro.pickup_location_id, l.name, li.fulfilled_at, li.start_at, li.returned_at, li.end_at
     `,
@@ -9134,7 +9134,7 @@ async function getLocationTypeStockSummary({ companyId, locationId, at = null } 
        AND ro.pickup_location_id = $2
        AND ro.status IN ('quote','requested','reservation','ordered')
        AND COALESCE(li.fulfilled_at, li.start_at) <= $3::timestamptz
-       AND COALESCE(li.returned_at, li.end_at) > $3::timestamptz
+       AND COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) > $3::timestamptz
      GROUP BY li.id, li.type_id, et.name
     `,
     [companyId, locId, atIso]
@@ -10908,7 +10908,7 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
              ${excludeSql}
              AND tstzrange(
                COALESCE(li.fulfilled_at, li.start_at),
-               COALESCE(li.returned_at, li.end_at),
+               COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
                '[)'
              ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
         )
@@ -10944,7 +10944,7 @@ async function getTypeDemandAvailability({ companyId, typeId, startAt, endAt, ex
        ${excludeSql}
        AND tstzrange(
          COALESCE(li.fulfilled_at, li.start_at),
-         COALESCE(li.returned_at, li.end_at),
+         COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
          '[)'
        ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
      GROUP BY li.id
@@ -11068,7 +11068,7 @@ async function listStorefrontListings({
            AND (e3.serial_number IS NULL OR e3.serial_number NOT ILIKE 'UNALLOCATED-%')
            AND tstzrange(
              COALESCE(li.fulfilled_at, li.start_at),
-             COALESCE(li.returned_at, li.end_at),
+             COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
              '[)'
            ) && tstzrange($1::timestamptz, $2::timestamptz, '[)')
       ) reserved ON TRUE
@@ -11087,7 +11087,7 @@ async function listStorefrontListings({
            AND (e3.serial_number IS NULL OR e3.serial_number NOT ILIKE 'UNALLOCATED-%')
            AND (
              COALESCE(li.fulfilled_at, li.start_at) <= NOW()
-             AND COALESCE(li.returned_at, li.end_at) > NOW()
+             AND COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) > NOW()
            )
       ) reserved ON TRUE
     `;
