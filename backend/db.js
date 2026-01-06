@@ -9686,7 +9686,7 @@ function parseLegacyExport(text) {
   return { rows: rows.slice(1), get, header };
 }
 
-async function importRentalOrdersFromLegacyExports({ companyId, transactionsText, instancesText, salesReportText }) {
+async function importRentalOrdersFromLegacyExports({ companyId, transactionsText, instancesText, salesReportText, futureReportText }) {
   if (!companyId) throw new Error("companyId is required.");
   if (!transactionsText || !instancesText) throw new Error("Both legacy export files are required.");
 
@@ -9731,6 +9731,7 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
   );
   const existingContractSet = new Set(existingContracts.rows.map((r) => String(r.external_contract_number).trim()));
   const { contractToSalesperson, salespersonIdByName } = await buildSalespersonLookup({ companyId, salesReportText });
+  const futureReturnByContractSerial = futureReportText ? parseFutureReturnMap(futureReportText) : new Map();
   const resolveSalespersonId = async (salespersonName) => {
     const key = normalizeSalespersonKey(salespersonName);
     if (!key || isNoSalespersonValue(salespersonName)) return null;
@@ -10000,14 +10001,15 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
       if (mergedLine.endInferred) stats.endDatesInferred += 1;
 
       const inventoryIds = [];
+      let serialsForInventory = [];
       if (!demandOnly) {
-        const serials = [...(mergedLine.serials || [])];
-        while (serials.length < targetQty) {
-          serials.push(`UNALLOCATED-${contractNumber}-${typeId}-${serials.length + 1}`);
+        serialsForInventory = [...(mergedLine.serials || [])];
+        while (serialsForInventory.length < targetQty) {
+          serialsForInventory.push(`UNALLOCATED-${contractNumber}-${typeId}-${serialsForInventory.length + 1}`);
         }
 
-        for (let i = 0; i < serials.length; i += 1) {
-          const serial = serials[i];
+        for (let i = 0; i < serialsForInventory.length; i += 1) {
+          const serial = serialsForInventory[i];
           const serialKey = normalizeSerialKey(serial);
           let equipmentId = !serialKey.startsWith("unallocated-") ? (equipmentIdBySerial.get(serialKey) || null) : null;
           if (!equipmentId) {
@@ -10084,7 +10086,23 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
           lineItems.push({ ...baseLineItem, inventoryIds: [] });
         }
       } else {
-        lineItems.push({ ...baseLineItem, inventoryIds });
+        if (futureReturnByContractSerial.size) {
+          const fulfilledAt = mergedLine.startIso || null;
+          for (let i = 0; i < inventoryIds.length; i += 1) {
+            const serial = serialsForInventory[i];
+            const serialKey = normalizeSerialKey(serial);
+            const returnKey = serialKey ? `${contractNumber}|${serialKey}` : null;
+            const returnedAt = returnKey ? futureReturnByContractSerial.get(returnKey) || null : null;
+            lineItems.push({
+              ...baseLineItem,
+              inventoryIds: [inventoryIds[i]],
+              fulfilledAt,
+              returnedAt,
+            });
+          }
+        } else {
+          lineItems.push({ ...baseLineItem, inventoryIds });
+        }
       }
     }
 
@@ -10188,6 +10206,34 @@ function parseSalespersonCommissionReportData(text) {
     }
   }
   return contractToSalesperson;
+}
+
+function parseFutureReturnMap(text) {
+  let report = parseLegacyExport(text);
+  const headerHasContract = report?.header?.some((name) => name === "Contract #" || name === "Contract" || name === "Contract#");
+  const headerHasReturned = report?.header?.some((name) => name === "Returned");
+  if (!report || !headerHasContract || !headerHasReturned) {
+    const lines = String(text || "").split(/\r?\n/);
+    const headerIndex = lines.findIndex((line) => line.includes("Contract #") && line.includes("Returned"));
+    if (headerIndex >= 0) {
+      report = parseLegacyExport(lines.slice(headerIndex).join("\n"));
+    }
+  }
+  if (!report) return new Map();
+  const map = new Map();
+  for (const row of report.rows) {
+    const contractNumber = report.get(row, ["Contract #", "Contract#", "Contract"]);
+    if (!contractNumber) continue;
+    const serialRaw = report.get(row, ["Serial Number", "Serial"]);
+    if (!serialRaw) continue;
+    const serialKey = normalizeSerialKey(serialRaw);
+    if (!serialKey || serialKey.startsWith("unallocated")) continue;
+    const returnedRaw = report.get(row, ["Returned"]);
+    const returnedIso = parseLegacyDateTime(returnedRaw) || null;
+    const key = `${String(contractNumber).trim()}|${serialKey}`;
+    if (!map.has(key)) map.set(key, returnedIso);
+  }
+  return map;
 }
 
 async function getOrCreatePlaceholderCustomer({ companyId, name }) {

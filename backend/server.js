@@ -2813,22 +2813,43 @@ app.post(
     const futureFile = req.files?.futureReport?.[0];
     const salesReportFile = req.files?.salesReport?.[0];
     const salesReportText = salesReportFile?.buffer ? salesReportFile.buffer.toString("utf8") : null;
+    const txFile = req.files?.transactions?.[0];
+    const instFile = req.files?.instances?.[0];
+    const hasLegacyFiles = !!(txFile?.buffer && instFile?.buffer);
     if (futureFile?.buffer) {
+      if (hasLegacyFiles) {
+        const transactionsText = txFile.buffer.toString("utf8");
+        const instancesText = instFile.buffer.toString("utf8");
+        const futureReportText = futureFile.buffer.toString("utf8");
+        const result = await importRentalOrdersFromLegacyExports({
+          companyId,
+          transactionsText,
+          instancesText,
+          salesReportText,
+          futureReportText,
+        });
+        res.status(201).json({ ...result, importSource: "legacy_plus_future" });
+        return;
+      }
       const reportText = futureFile.buffer.toString("utf8");
       const result = await importRentalOrdersFromFutureInventoryReport({ companyId, reportText, salesReportText });
       res.status(201).json({ ...result, importSource: "future_report" });
       return;
     }
 
-    const txFile = req.files?.transactions?.[0];
-    const instFile = req.files?.instances?.[0];
-    if (!txFile?.buffer || !instFile?.buffer) {
+    if (!hasLegacyFiles) {
       return res.status(400).json({ error: "Upload the Future Transactions by Inventory Item report, or both legacy files (transactions + instances)." });
     }
 
     const transactionsText = txFile.buffer.toString("utf8");
     const instancesText = instFile.buffer.toString("utf8");
-    const result = await importRentalOrdersFromLegacyExports({ companyId, transactionsText, instancesText, salesReportText });
+    const result = await importRentalOrdersFromLegacyExports({
+      companyId,
+      transactionsText,
+      instancesText,
+      salesReportText,
+      futureReportText: null,
+    });
     res.status(201).json({ ...result, importSource: "legacy_exports" });
   })
 );

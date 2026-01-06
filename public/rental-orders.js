@@ -335,7 +335,7 @@ runImportBtn?.addEventListener("click", async (e) => {
   const txFile = importTransactionsInput?.files?.[0] || null;
   const instFile = importInstancesInput?.files?.[0] || null;
   if (!futureFile && (!txFile || !instFile)) {
-    if (importResult) importResult.textContent = "Choose the Future Transactions by Inventory Item report, or both legacy files.";
+    if (importResult) importResult.textContent = "Choose the Future Transactions report, or both legacy files.";
     return;
   }
 
