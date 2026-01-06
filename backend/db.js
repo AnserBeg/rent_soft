@@ -10068,7 +10068,6 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
           if (Number.isFinite(candidate) && candidate >= 0) rateAmount = Number(candidate.toFixed(2));
         }
       }
-
       const baseLineItem = {
         typeId,
         startAt: mergedLine.startIso,

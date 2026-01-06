@@ -334,12 +334,18 @@ runImportBtn?.addEventListener("click", async (e) => {
   const salesFile = importSalesReportInput?.files?.[0] || null;
   const txFile = importTransactionsInput?.files?.[0] || null;
   const instFile = importInstancesInput?.files?.[0] || null;
-  if (!futureFile && (!txFile || !instFile)) {
-    if (importResult) importResult.textContent = "Choose the Future Transactions report, or both legacy files.";
+  if (!txFile || !instFile) {
+    if (importResult) {
+      importResult.textContent = "Choose the Transaction List and Transaction List with Item ID. Future report is optional for return times.";
+    }
     return;
   }
 
-  if (importResult) importResult.textContent = futureFile ? "Importing Future Transactions report." : "Importing legacy rental orders.";
+  if (importResult) {
+    importResult.textContent = futureFile
+      ? "Importing rental orders with future return times."
+      : "Importing rental orders.";
+  }
   runImportBtn.disabled = true;
   try {
     const body = new FormData();

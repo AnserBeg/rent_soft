@@ -2816,41 +2816,23 @@ app.post(
     const txFile = req.files?.transactions?.[0];
     const instFile = req.files?.instances?.[0];
     const hasLegacyFiles = !!(txFile?.buffer && instFile?.buffer);
-    if (futureFile?.buffer) {
-      if (hasLegacyFiles) {
-        const transactionsText = txFile.buffer.toString("utf8");
-        const instancesText = instFile.buffer.toString("utf8");
-        const futureReportText = futureFile.buffer.toString("utf8");
-        const result = await importRentalOrdersFromLegacyExports({
-          companyId,
-          transactionsText,
-          instancesText,
-          salesReportText,
-          futureReportText,
-        });
-        res.status(201).json({ ...result, importSource: "legacy_plus_future" });
-        return;
-      }
-      const reportText = futureFile.buffer.toString("utf8");
-      const result = await importRentalOrdersFromFutureInventoryReport({ companyId, reportText, salesReportText });
-      res.status(201).json({ ...result, importSource: "future_report" });
-      return;
-    }
-
     if (!hasLegacyFiles) {
-      return res.status(400).json({ error: "Upload the Future Transactions by Inventory Item report, or both legacy files (transactions + instances)." });
+      return res.status(400).json({
+        error: "Transaction List and Transaction List with Item ID are required. The Future Transactions report is optional for return times.",
+      });
     }
 
     const transactionsText = txFile.buffer.toString("utf8");
     const instancesText = instFile.buffer.toString("utf8");
+    const futureReportText = futureFile?.buffer ? futureFile.buffer.toString("utf8") : null;
     const result = await importRentalOrdersFromLegacyExports({
       companyId,
       transactionsText,
       instancesText,
       salesReportText,
-      futureReportText: null,
+      futureReportText,
     });
-    res.status(201).json({ ...result, importSource: "legacy_exports" });
+    res.status(201).json({ ...result, importSource: futureReportText ? "legacy_plus_future" : "legacy_exports" });
   })
 );
 
