@@ -130,6 +130,26 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+function setPendingSelectValue(selectEl, value) {
+  if (!selectEl) return;
+  const normalized = value === null || value === undefined || value === "" ? "" : String(value);
+  if (!normalized) return;
+  const hasOption = Array.from(selectEl.options || []).some((opt) => opt.value === normalized);
+  if (hasOption) {
+    selectEl.value = normalized;
+    return;
+  }
+  selectEl.dataset.pendingValue = normalized;
+}
+
+function applyPendingSelectValue(selectEl) {
+  if (!selectEl) return;
+  const pending = selectEl.dataset.pendingValue;
+  if (!pending) return;
+  selectEl.value = pending;
+  delete selectEl.dataset.pendingValue;
+}
+
 function getOutOfServiceMap(companyId) {
   if (!companyId) return new Map();
   const raw = localStorage.getItem(`rentSoft.workOrders.${companyId}`);
@@ -397,7 +417,10 @@ async function loadLocations() {
       addCurrent.value = "__new__";
       addCurrent.textContent = "+ Add new location...";
       currentLocationSelect.appendChild(addCurrent);
+      applyPendingSelectValue(currentLocationSelect);
     }
+
+    applyPendingSelectValue(locationSelect);
 
     if (locationCount) locationCount.textContent = `${baseLocations.length} locations`;
   } catch (err) {
@@ -422,6 +445,7 @@ async function loadTypes() {
     addType.value = "__new_type__";
     addType.textContent = "+ Add new type...";
     typeSelect.appendChild(addType);
+    applyPendingSelectValue(typeSelect);
   } catch (err) {
     companyMeta.textContent = err.message;
   }
@@ -1756,6 +1780,7 @@ function startEditEquipment(item) {
   editingEquipmentId = item.id;
   openEquipmentModal();
   deleteEquipmentBtn.style.display = "inline-flex";
+  setPendingSelectValue(typeSelect, item.type_id);
   typeSelect.value = item.type_id || "";
   if (!typeSelect.value && item.type) {
     const opt = document.createElement("option");
@@ -1768,8 +1793,12 @@ function startEditEquipment(item) {
   equipmentForm.serialNumber.value = item.serial_number || "";
   equipmentForm.condition.value = item.condition || "";
   equipmentForm.manufacturer.value = item.manufacturer || "";
+  setPendingSelectValue(locationSelect, item.location_id);
   locationSelect.value = item.location_id || "";
-  if (currentLocationSelect) currentLocationSelect.value = item.current_location_id || "";
+  if (currentLocationSelect) {
+    setPendingSelectValue(currentLocationSelect, item.current_location_id);
+    currentLocationSelect.value = item.current_location_id || "";
+  }
   equipmentForm.purchasePrice.value = item.purchase_price || "";
 
   pendingEquipmentFiles = [];
