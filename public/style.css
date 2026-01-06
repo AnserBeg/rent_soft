@@ -621,7 +621,7 @@ textarea:focus {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   gap: 14px;
-  align-items: end;
+  align-items: start;
 }
 
 .invoice-toggle {
