@@ -199,8 +199,8 @@ function addContactRow(
     <label>Contact name <input data-contact-field="name" /></label>
     <label>Email <input data-contact-field="email" type="email" /></label>
     <label>Phone number <input data-contact-field="phone" /></label>
-    <button type="button" class="ghost small contact-remove" aria-label="Remove contact">Remove</button>
     ${invoiceMarkup}
+    <button type="button" class="ghost small contact-remove" aria-label="Remove contact">Remove</button>
   `;
   const nameInput = row.querySelector('[data-contact-field="name"]');
   const emailInput = row.querySelector('[data-contact-field="email"]');
