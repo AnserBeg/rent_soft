@@ -21,12 +21,6 @@ const timelineRowsEl = document.getElementById("timeline-rows");
 const scrollHead = document.getElementById("timeline-scroll-head");
 const scrollBody = document.getElementById("timeline-scroll-body");
 
-const revGroup = document.getElementById("rev-group");
-const revLocation = document.getElementById("rev-location");
-const revType = document.getElementById("rev-type");
-const revCanvas = document.getElementById("rev-chart");
-let revenueChart = null;
-
 const revTsGroup = document.getElementById("rev-ts-group");
 const revTsBucket = document.getElementById("rev-ts-bucket");
 const revTsStacked = document.getElementById("rev-ts-stacked");
@@ -160,7 +154,7 @@ function hasBenchStagesUI() {
 }
 
 function hasRevenueUI() {
-  return Boolean(revCanvas);
+  return Boolean(revTsCanvas || spDonutCanvas);
 }
 
 function hasRevenueTimeSeriesUI() {
@@ -652,95 +646,6 @@ async function loadBenchStages() {
   }
 }
 
-async function ensureRevenueLookups() {
-  if (!activeCompanyId) return;
-  if (!revLocation || !revType) return;
-  const [locRes, typeRes] = await Promise.all([
-    fetch(`/api/locations?companyId=${activeCompanyId}`),
-    fetch(`/api/equipment-types?companyId=${activeCompanyId}`),
-  ]);
-  const locData = await locRes.json().catch(() => ({}));
-  const typeData = await typeRes.json().catch(() => ({}));
-  if (locRes.ok) {
-    const current = revLocation.value;
-    revLocation.innerHTML = `<option value="">All</option>`;
-    (locData.locations || []).forEach((l) => {
-      const opt = document.createElement("option");
-      opt.value = String(l.id);
-      opt.textContent = l.name;
-      revLocation.appendChild(opt);
-    });
-    revLocation.value = current;
-  }
-  if (typeRes.ok) {
-    const current = revType.value;
-    revType.innerHTML = `<option value="">All</option>`;
-    (typeData.types || []).forEach((t) => {
-      const opt = document.createElement("option");
-      opt.value = String(t.id);
-      opt.textContent = t.name;
-      revType.appendChild(opt);
-    });
-    revType.value = current;
-  }
-}
-
-async function loadRevenue() {
-  if (!activeCompanyId || !revCanvas) return;
-  if (typeof Chart === "undefined") return;
-  await ensureRevenueLookups().catch(() => null);
-
-  const group = String(revGroup?.value || "location");
-  const pickupLocationId = revLocation?.value ? Number(revLocation.value) : null;
-  const typeId = revType?.value ? Number(revType.value) : null;
-
-  const from = rangeStartDate.toISOString();
-  const to = new Date(rangeStartDate.getTime() + rangeDays * DAY_MS).toISOString();
-
-  const qs = new URLSearchParams({
-    companyId: String(activeCompanyId),
-    from,
-    to,
-    groupBy: group,
-  });
-  if (pickupLocationId) qs.set("pickupLocationId", String(pickupLocationId));
-  if (typeId) qs.set("typeId", String(typeId));
-
-  const res = await fetch(`/api/revenue-summary?${qs.toString()}`);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Unable to load revenue");
-  const rows = Array.isArray(data.rows) ? data.rows : [];
-
-  const labels = rows.map((r) => r.label || "--");
-  const values = rows.map((r) => Number(r.revenue || 0));
-
-  if (revenueChart) revenueChart.destroy();
-  revenueChart = new Chart(revCanvas.getContext("2d"), {
-    type: "bar",
-    data: {
-      labels,
-      datasets: [
-        {
-          label: "Revenue",
-          data: values,
-          backgroundColor: "rgba(37, 99, 235, 0.25)",
-          borderColor: "rgba(37, 99, 235, 0.6)",
-          borderWidth: 1,
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `$${Number(ctx.raw || 0).toFixed(2)}` } } },
-      scales: {
-        y: { beginAtZero: true, ticks: { callback: (v) => `$${v}` } },
-        x: { grid: { display: false } },
-      },
-    },
-  });
-}
-
 async function loadRevenueTimeSeries() {
   if (!activeCompanyId || !hasRevenueTimeSeriesUI()) return;
   if (typeof Chart === "undefined") return;
@@ -759,8 +664,6 @@ async function loadRevenueTimeSeries() {
     groupBy,
     bucket,
   });
-  if (revLocation?.value) qs.set("pickupLocationId", String(Number(revLocation.value)));
-  if (revType?.value) qs.set("typeId", String(Number(revType.value)));
 
   const res = await fetch(`/api/revenue-timeseries?${qs.toString()}`);
   const data = await res.json().catch(() => ({}));
@@ -826,8 +729,6 @@ async function loadSalespersonDonut() {
     to,
     metric,
   });
-  if (revLocation?.value) qs.set("pickupLocationId", String(Number(revLocation.value)));
-  if (revType?.value) qs.set("typeId", String(Number(revType.value)));
 
   const res = await fetch(`/api/salesperson-summary?${qs.toString()}`);
   const data = await res.json().catch(() => ({}));
@@ -1309,7 +1210,7 @@ function initUtilizationUI() {
 
 async function loadRevenueDashboard() {
   if (!hasRevenueUI()) return;
-  await Promise.all([loadRevenue().catch(() => null), loadRevenueTimeSeries().catch(() => null), loadSalespersonDonut().catch(() => null)]);
+  await Promise.all([loadRevenueTimeSeries().catch(() => null), loadSalespersonDonut().catch(() => null)]);
 }
 
 function currentViewRows() {
@@ -2108,7 +2009,6 @@ todayBtn?.addEventListener("click", () => {
   }
 });
 
-[revGroup, revLocation, revType].filter(Boolean).forEach((el) => el.addEventListener("change", () => loadRevenueDashboard().catch(() => null)));
 [revTsGroup, revTsBucket, revTsStacked, spMetric].filter(Boolean).forEach((el) => el.addEventListener("change", () => loadRevenueDashboard().catch(() => null)));
 
 [statusRequested, statusReservation, statusOrdered, statusReceived, statusClosed, statusQuote]

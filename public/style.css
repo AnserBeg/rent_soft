@@ -1587,8 +1587,14 @@ a.ghost {
   margin: 14px 0 0;
 }
 
+.util-card .card-header {
+  flex-wrap: wrap;
+}
+
 .util-controls {
   align-items: flex-end;
+  flex-wrap: wrap;
+  justify-content: flex-start;
 }
 
 .util-kpis {

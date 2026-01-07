@@ -82,6 +82,75 @@
             <p class="hint" id="company-meta">Loading your company…</p>
           </section>
 
+          <section class="card wide">
+            <div class="card-header">
+              <div class="inline-actions" style="justify-content: space-between; width: 100%; flex-wrap: wrap;">
+                <div>
+                  <h2>Revenue</h2>
+                </div>
+                <div class="inline-actions header-actions">
+                  <label>Start <input type="date" id="range-start" /></label>
+                  <label>Days
+                    <select id="range-days">
+                      <option value="14">14</option>
+                      <option value="21">21</option>
+                      <option value="30">30</option>
+                      <option value="60">60</option>
+                      <option value="365" selected>365</option>
+                    </select>
+                  </label>
+                  <button class="ghost small" id="today" type="button">Today</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="two-col" style="align-items: stretch;">
+              <div class="chart-card" style="min-height: 320px;">
+                <div class="chart-head">
+                  <div class="chart-title">Revenue over time</div>
+                  <div class="chart-actions nowrap">
+                    <label>Group
+                      <select id="rev-ts-group">
+                        <option value="location">Location</option>
+                        <option value="type" selected>Equipment type</option>
+                      </select>
+                    </label>
+                    <label>Bucket
+                      <select id="rev-ts-bucket">
+                        <option value="day">Day</option>
+                        <option value="week">Week</option>
+                        <option value="month" selected>Month</option>
+                      </select>
+                    </label>
+                    <label class="filter-pill" style="padding: 8px 10px;">
+                      <input type="checkbox" id="rev-ts-stacked" checked /> Stacked
+                    </label>
+                  </div>
+                </div>
+                <div class="chart-canvas">
+                  <canvas id="rev-ts-chart"></canvas>
+                </div>
+              </div>
+
+              <div class="chart-card" style="min-height: 320px;">
+                <div class="chart-head">
+                  <div class="chart-title">Salesperson</div>
+                  <div class="chart-actions">
+                    <label>Metric
+                      <select id="sp-metric">
+                        <option value="revenue" selected>Revenue</option>
+                        <option value="transactions">Transactions</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+                <div class="chart-canvas">
+                  <canvas id="sp-donut"></canvas>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <section class="card wide util-card" id="utilization-card">
             <div class="card-header">
               <div>
@@ -169,102 +238,6 @@
               </div>
               <div class="chart-canvas">
                 <canvas id="util-forward-chart"></canvas>
-              </div>
-            </div>
-          </section>
-
-          <section class="card wide">
-            <div class="card-header">
-              <div class="inline-actions" style="justify-content: space-between; width: 100%; flex-wrap: wrap;">
-                <div>
-                  <h2>Revenue</h2>
-                </div>
-                <div class="inline-actions header-actions">
-                  <label>Start <input type="date" id="range-start" /></label>
-                  <label>Days
-                    <select id="range-days">
-                      <option value="14">14</option>
-                      <option value="21">21</option>
-                      <option value="30">30</option>
-                      <option value="60">60</option>
-                      <option value="365" selected>365</option>
-                    </select>
-                  </label>
-                  <button class="ghost small" id="today" type="button">Today</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="two-col" style="align-items: stretch;">
-              <div class="chart-card" style="min-height: 320px;">
-                <div class="chart-head">
-                  <div class="chart-title">Revenue over time</div>
-                  <div class="chart-actions nowrap">
-                    <label>Group
-                      <select id="rev-ts-group">
-                        <option value="location">Location</option>
-                        <option value="type" selected>Equipment type</option>
-                      </select>
-                    </label>
-                    <label>Bucket
-                      <select id="rev-ts-bucket">
-                        <option value="day">Day</option>
-                        <option value="week">Week</option>
-                        <option value="month" selected>Month</option>
-                      </select>
-                    </label>
-                    <label class="filter-pill" style="padding: 8px 10px;">
-                      <input type="checkbox" id="rev-ts-stacked" checked /> Stacked
-                    </label>
-                  </div>
-                </div>
-                <div class="chart-canvas">
-                  <canvas id="rev-ts-chart"></canvas>
-                </div>
-              </div>
-
-              <div class="chart-card" style="min-height: 320px;">
-                <div class="chart-head">
-                  <div class="chart-title">Salesperson</div>
-                  <div class="chart-actions">
-                    <label>Metric
-                      <select id="sp-metric">
-                        <option value="revenue" selected>Revenue</option>
-                        <option value="transactions">Transactions</option>
-                      </select>
-                    </label>
-                  </div>
-                </div>
-                <div class="chart-canvas">
-                  <canvas id="sp-donut"></canvas>
-                </div>
-              </div>
-            </div>
-
-            <div class="chart-card">
-              <div class="chart-head">
-                <div class="chart-title">Revenue by group</div>
-                <div class="chart-actions">
-                  <label>Group
-                    <select id="rev-group">
-                      <option value="location">Location</option>
-                      <option value="type" selected>Equipment type</option>
-                    </select>
-                  </label>
-                  <label>Location
-                    <select id="rev-location">
-                      <option value="">All</option>
-                    </select>
-                  </label>
-                  <label>Type
-                    <select id="rev-type">
-                      <option value="">All</option>
-                    </select>
-                  </label>
-                </div>
-              </div>
-              <div class="chart-canvas">
-                <canvas id="rev-chart"></canvas>
               </div>
             </div>
           </section>
