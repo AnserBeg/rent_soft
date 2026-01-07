@@ -8936,8 +8936,25 @@ async function getUtilizationDashboard({
     };
   }
 
+  const equipmentByType = new Map();
+  for (const equip of equipment) {
+    if (!Number.isFinite(equip.typeId)) continue;
+    const existing = equipmentByType.get(equip.typeId) || {
+      count: 0,
+      rackDaily: 0,
+      rackWeekly: 0,
+      rackMonthly: 0,
+    };
+    existing.count += 1;
+    existing.rackDaily = Math.max(existing.rackDaily, Number(equip.rackDaily || 0));
+    existing.rackWeekly = Math.max(existing.rackWeekly, Number(equip.rackWeekly || 0));
+    existing.rackMonthly = Math.max(existing.rackMonthly, Number(equip.rackMonthly || 0));
+    equipmentByType.set(equip.typeId, existing);
+  }
+
   const equipmentIds = equipment.map((e) => e.id);
   const statuses = ["ordered", "reservation", "requested"];
+  const reservedStatuses = ["reservation", "requested"];
   const assignmentsRes = await pool.query(
     `
     SELECT liv.equipment_id,
@@ -8959,17 +8976,71 @@ async function getUtilizationDashboard({
        AND liv.equipment_id = ANY($2::int[])
        AND ro.status = ANY($3::text[])
        AND COALESCE(li.fulfilled_at, li.start_at) < $5::timestamptz
-       AND COALESCE(li.returned_at, li.end_at) > $4::timestamptz
+       AND COALESCE(
+            li.returned_at,
+            CASE
+              WHEN ro.status = 'ordered' THEN GREATEST(li.end_at, NOW())
+              ELSE li.end_at
+            END
+           ) > $4::timestamptz
     `,
     [companyId, equipmentIds, statuses, new Date(horizonStartMs).toISOString(), new Date(horizonEndMs).toISOString()]
   );
 
+  const unassignedParams = [companyId, reservedStatuses, new Date(horizonStartMs).toISOString(), new Date(horizonEndMs).toISOString()];
+  const unassignedWhere = [
+    "ro.company_id = $1",
+    "ro.status = ANY($2::text[])",
+    "COALESCE(li.fulfilled_at, li.start_at) < $4::timestamptz",
+    "COALESCE(li.returned_at, li.end_at) > $3::timestamptz",
+    "NOT EXISTS (SELECT 1 FROM rental_order_line_inventory liv WHERE liv.line_item_id = li.id)",
+  ];
+  if (Number.isFinite(locationIdNum)) {
+    unassignedParams.push(locationIdNum);
+    unassignedWhere.push(`ro.pickup_location_id = $${unassignedParams.length}`);
+  }
+  if (Number.isFinite(typeIdNum)) {
+    unassignedParams.push(typeIdNum);
+    unassignedWhere.push(`li.type_id = $${unassignedParams.length}`);
+  }
+  if (Number.isFinite(categoryIdNum)) {
+    unassignedParams.push(categoryIdNum);
+    unassignedWhere.push(`et.category_id = $${unassignedParams.length}`);
+  }
+
+  const unassignedRes = await pool.query(
+    `
+    SELECT li.id AS line_item_id,
+           li.type_id,
+           ro.status,
+           ro.created_at AS order_created_at,
+           ro.pickup_location_id,
+           li.start_at,
+           li.end_at,
+           li.fulfilled_at,
+           li.returned_at,
+           li.rate_basis,
+           li.rate_amount,
+           li.billable_units,
+           li.line_amount
+      FROM rental_order_line_items li
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+      JOIN equipment_types et ON et.id = li.type_id
+     WHERE ${unassignedWhere.join(" AND ")}
+    `,
+    unassignedParams
+  );
+
   const assignmentsByEquipment = new Map();
+  const unassignedByType = new Map();
   const autoRateBasis = (durationDays) => {
     if (durationDays >= 28) return "monthly";
     if (durationDays >= 7) return "weekly";
     return "daily";
   };
+
+  const nowMs = Date.now();
+  const horizonCapMs = Math.min(nowMs, horizonEndMs);
 
   for (const row of assignmentsRes.rows) {
     const equipmentId = Number(row.equipment_id);
@@ -8979,8 +9050,12 @@ async function getUtilizationDashboard({
     const startRaw = status === "ordered" ? row.fulfilled_at || row.start_at : row.start_at;
     const endRaw = row.returned_at || row.end_at;
     const startMs = Date.parse(startRaw);
-    const endMs = Date.parse(endRaw);
+    let endMs = Date.parse(endRaw);
     if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+    if (status === "ordered" && !row.returned_at) {
+      endMs = Math.max(endMs, horizonCapMs);
+      if (endMs <= startMs) continue;
+    }
 
     const durationDays = Math.max(1, Math.ceil((endMs - startMs) / (24 * 60 * 60 * 1000)));
     let rateBasis = normalizeRateBasis(row.rate_basis) || null;
@@ -9011,6 +9086,65 @@ async function getUtilizationDashboard({
 
     if (!assignmentsByEquipment.has(equipmentId)) assignmentsByEquipment.set(equipmentId, []);
     assignmentsByEquipment.get(equipmentId).push(entry);
+  }
+
+  const statusWeight = (status) => {
+    if (status === "reservation") return 1;
+    if (status === "requested") return 2;
+    if (status === "quote") return 3;
+    return 9;
+  };
+
+  for (const row of unassignedRes.rows) {
+    const typeId = row.type_id === null || row.type_id === undefined ? null : Number(row.type_id);
+    if (!Number.isFinite(typeId)) continue;
+    const status = normalizeRentalOrderStatus(row.status);
+    if (!reservedStatuses.includes(status)) continue;
+    const startRaw = row.start_at;
+    const endRaw = row.returned_at || row.end_at;
+    const startMs = Date.parse(startRaw);
+    const endMs = Date.parse(endRaw);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+
+    const durationDays = Math.max(1, Math.ceil((endMs - startMs) / (24 * 60 * 60 * 1000)));
+    let rateBasis = normalizeRateBasis(row.rate_basis) || null;
+    let rateAmount = row.rate_amount === null || row.rate_amount === undefined ? null : Number(row.rate_amount);
+    const billableUnits = row.billable_units === null || row.billable_units === undefined ? null : Number(row.billable_units);
+    const lineAmount = row.line_amount === null || row.line_amount === undefined ? null : Number(row.line_amount);
+
+    if (!rateBasis) rateBasis = autoRateBasis(durationDays);
+    if (!Number.isFinite(rateAmount) && Number.isFinite(billableUnits) && billableUnits > 0 && Number.isFinite(lineAmount)) {
+      rateAmount = lineAmount / billableUnits;
+    }
+    if (!Number.isFinite(rateAmount) && Number.isFinite(lineAmount)) {
+      rateAmount = lineAmount / durationDays;
+      rateBasis = "daily";
+    }
+    if (!Number.isFinite(rateAmount)) rateAmount = 0;
+
+    const entry = {
+      typeId,
+      lineItemId: Number(row.line_item_id),
+      status,
+      startMs,
+      endMs,
+      rateBasis,
+      rateAmount,
+      orderCreatedAt: row.order_created_at ? Date.parse(row.order_created_at) : 0,
+    };
+
+    if (!unassignedByType.has(typeId)) unassignedByType.set(typeId, []);
+    unassignedByType.get(typeId).push(entry);
+  }
+
+  for (const [typeId, lines] of unassignedByType.entries()) {
+    lines.sort((a, b) => {
+      const aw = statusWeight(a.status);
+      const bw = statusWeight(b.status);
+      if (aw !== bw) return aw - bw;
+      return (a.orderCreatedAt || 0) - (b.orderCreatedAt || 0);
+    });
+    unassignedByType.set(typeId, lines);
   }
 
   const effectivePerDay = (line, monthDays) => {
@@ -9070,6 +9204,8 @@ async function getUtilizationDashboard({
       let activeRack = 0;
       let reservedRack = 0;
       let discountImpact = 0;
+      const outCountByType = new Map();
+      const reservedCountByType = new Map();
 
       for (const equip of equipment) {
         const rack = rackPerDay(equip, monthDays);
@@ -9082,11 +9218,40 @@ async function getUtilizationDashboard({
           activeEffective += eff;
           activeRack += rack;
           discountImpact += rack - eff;
+          if (Number.isFinite(equip.typeId)) {
+            outCountByType.set(equip.typeId, (outCountByType.get(equip.typeId) || 0) + 1);
+          }
         } else if (reservedLine) {
           const eff = effectivePerDay(reservedLine, monthDays);
           reservedEffective += eff;
           reservedRack += rack;
           discountImpact += rack - eff;
+          if (Number.isFinite(equip.typeId)) {
+            reservedCountByType.set(equip.typeId, (reservedCountByType.get(equip.typeId) || 0) + 1);
+          }
+        }
+      }
+
+      if (unassignedByType.size) {
+        for (const [typeId, lines] of unassignedByType.entries()) {
+          const typeEntry = equipmentByType.get(typeId);
+          if (!typeEntry || !Number.isFinite(typeEntry.count) || typeEntry.count <= 0) continue;
+          const outCount = outCountByType.get(typeId) || 0;
+          const reservedCount = reservedCountByType.get(typeId) || 0;
+          let available = typeEntry.count - outCount - reservedCount;
+          if (available <= 0) continue;
+          const rack = rackPerDay(typeEntry, monthDays);
+
+          let allocated = 0;
+          for (const line of lines) {
+            if (allocated >= available) break;
+            if (!overlapsDay(line, dayStartMs, dayEndMs)) continue;
+            const eff = effectivePerDay(line, monthDays);
+            reservedEffective += eff;
+            reservedRack += rack;
+            discountImpact += rack - eff;
+            allocated += 1;
+          }
         }
       }
 
