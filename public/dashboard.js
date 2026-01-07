@@ -37,6 +37,29 @@ const spMetric = document.getElementById("sp-metric");
 const spDonutCanvas = document.getElementById("sp-donut");
 let salespersonDonutChart = null;
 
+const utilPeriodToggle = document.getElementById("util-period-toggle");
+const utilStartInput = document.getElementById("util-start");
+const utilEndInput = document.getElementById("util-end");
+const utilYard = document.getElementById("util-yard");
+const utilCategory = document.getElementById("util-category");
+const utilType = document.getElementById("util-type");
+const utilExpectedToggle = document.getElementById("util-expected");
+const utilTodayBtn = document.getElementById("util-today");
+
+const utilKpiMax = document.getElementById("util-kpi-max");
+const utilKpiActive = document.getElementById("util-kpi-active");
+const utilKpiReserved = document.getElementById("util-kpi-reserved");
+const utilKpiDead = document.getElementById("util-kpi-dead");
+const utilKpiUtilization = document.getElementById("util-kpi-utilization");
+const utilKpiDiscount = document.getElementById("util-kpi-discount");
+
+const utilHeroCanvas = document.getElementById("util-hero-chart");
+const utilTrendCanvas = document.getElementById("util-trend-chart");
+const utilForwardCanvas = document.getElementById("util-forward-chart");
+let utilHeroChart = null;
+let utilTrendChart = null;
+let utilForwardChart = null;
+
 const tooltip = document.getElementById("timeline-tooltip");
 let timelineMenuEl = null;
 const conflictModal = document.getElementById("conflict-modal");
@@ -77,6 +100,7 @@ const benchKpiReservations = document.getElementById("bench-kpi-reservations");
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let rangeStartDate = startOfLocalDay(new Date());
 let rangeDays = 30;
+let utilPeriod = "month";
 let rawEquipment = [];
 let rawAssignments = [];
 let equipmentLabelById = new Map();
@@ -88,6 +112,12 @@ const BAR_H = 18;
 const BAR_GAP = 6;
 const DEFAULT_ENDING_DAYS = 2;
 const ENDING_72H_DAYS = 3;
+const UTIL_COLORS = {
+  active: "rgba(34, 197, 94, 0.7)",
+  reserved: "rgba(37, 99, 235, 0.65)",
+  dead: "rgba(148, 163, 184, 0.55)",
+  max: "rgba(15, 23, 42, 0.6)",
+};
 let focusEndingOnly = false;
 let endingDays = DEFAULT_ENDING_DAYS;
 
@@ -141,9 +171,19 @@ function hasSalespersonDonutUI() {
   return Boolean(spDonutCanvas);
 }
 
+function hasUtilizationUI() {
+  return Boolean(utilHeroCanvas && utilTrendCanvas && utilForwardCanvas);
+}
+
 function fmtMoney(n) {
   const x = Number(n || 0);
   return `$${x.toFixed(2)}`;
+}
+
+function fmtPercent(v) {
+  const x = Number(v || 0);
+  if (!Number.isFinite(x)) return "--";
+  return `${(x * 100).toFixed(1)}%`;
 }
 
 function seriesColor(i) {
@@ -827,6 +867,443 @@ async function loadSalespersonDonut() {
         },
       },
     },
+  });
+}
+
+function utilDefaultRange(period) {
+  const today = startOfLocalDay(new Date());
+  if (period === "month") {
+    return { start: new Date(today.getFullYear(), today.getMonth() - 11, 1), end: today };
+  }
+  if (period === "week") {
+    return { start: new Date(today.getTime() - 12 * 7 * DAY_MS), end: today };
+  }
+  return { start: new Date(today.getTime() - 29 * DAY_MS), end: today };
+}
+
+function setUtilRangeInputs(start, end) {
+  if (utilStartInput) utilStartInput.value = toLocalDateInputValue(start);
+  if (utilEndInput) utilEndInput.value = toLocalDateInputValue(end);
+}
+
+function setUtilPeriod(period, { resetRange = false } = {}) {
+  const next = ["day", "week", "month"].includes(String(period)) ? String(period) : "month";
+  utilPeriod = next;
+  if (utilPeriodToggle) {
+    utilPeriodToggle.querySelectorAll(".view-toggle-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.period === next);
+    });
+  }
+  if (resetRange) {
+    const { start, end } = utilDefaultRange(next);
+    setUtilRangeInputs(start, end);
+  }
+}
+
+function utilRangeFromInputs() {
+  let start = parseLocalDateInputValue(utilStartInput?.value) || startOfLocalDay(new Date());
+  let end = parseLocalDateInputValue(utilEndInput?.value) || startOfLocalDay(new Date());
+  if (end < start) end = start;
+  const endExclusive = new Date(end.getTime() + DAY_MS);
+  return { start, end, endExclusive, from: start.toISOString(), to: endExclusive.toISOString() };
+}
+
+async function ensureUtilizationLookups() {
+  if (!activeCompanyId) return;
+  const requests = [];
+  if (utilYard) requests.push(fetch(`/api/locations?companyId=${activeCompanyId}`));
+  if (utilCategory) requests.push(fetch(`/api/equipment-categories?companyId=${activeCompanyId}`));
+  if (utilType) requests.push(fetch(`/api/equipment-types?companyId=${activeCompanyId}`));
+
+  const responses = await Promise.all(requests);
+  const results = await Promise.all(responses.map((r) => r.json().catch(() => ({}))));
+
+  let idx = 0;
+  if (utilYard) {
+    const locData = results[idx++];
+    if (responses[idx - 1]?.ok) {
+      const current = utilYard.value;
+      utilYard.innerHTML = `<option value="">All</option>`;
+      (locData.locations || []).forEach((l) => {
+        const opt = document.createElement("option");
+        opt.value = String(l.id);
+        opt.textContent = l.name;
+        utilYard.appendChild(opt);
+      });
+      utilYard.value = current;
+    }
+  }
+
+  if (utilCategory) {
+    const catData = results[idx++];
+    if (responses[idx - 1]?.ok) {
+      const current = utilCategory.value;
+      utilCategory.innerHTML = `<option value="">All</option>`;
+      (catData.categories || []).forEach((c) => {
+        const opt = document.createElement("option");
+        opt.value = String(c.id);
+        opt.textContent = c.name;
+        utilCategory.appendChild(opt);
+      });
+      utilCategory.value = current;
+    }
+  }
+
+  if (utilType) {
+    const typeData = results[idx++];
+    if (responses[idx - 1]?.ok) {
+      const current = utilType.value;
+      utilType.innerHTML = `<option value="">All</option>`;
+      (typeData.types || []).forEach((t) => {
+        const opt = document.createElement("option");
+        opt.value = String(t.id);
+        opt.textContent = t.name;
+        utilType.appendChild(opt);
+      });
+      utilType.value = current;
+    }
+  }
+}
+
+function computeUtilSummaryFromDaily(daily, useExpected) {
+  const rollup = daily.reduce(
+    (acc, row) => {
+      acc.rackTotal += Number(row.rackTotal || 0);
+      acc.activeEffective += Number(row.activeEffective || 0);
+      acc.reservedEffective += Number(row.reservedEffective || 0);
+      acc.activeRack += Number(row.activeRack || 0);
+      acc.reservedRack += Number(row.reservedRack || 0);
+      acc.discountImpact += Number(row.discountImpact || 0);
+      return acc;
+    },
+    {
+      rackTotal: 0,
+      activeEffective: 0,
+      reservedEffective: 0,
+      activeRack: 0,
+      reservedRack: 0,
+      discountImpact: 0,
+    }
+  );
+
+  const maxPotential = useExpected
+    ? rollup.rackTotal - (rollup.activeRack + rollup.reservedRack) + (rollup.activeEffective + rollup.reservedEffective)
+    : rollup.rackTotal;
+  const activeRevenue = rollup.activeEffective;
+  const reservedRevenue = rollup.reservedEffective;
+  const deadRevenue = Math.max(0, maxPotential - activeRevenue - reservedRevenue);
+  const utilization = maxPotential > 0 ? (activeRevenue + reservedRevenue) / maxPotential : 0;
+
+  return {
+    maxPotential,
+    activeRevenue,
+    reservedRevenue,
+    deadRevenue,
+    utilization,
+    discountImpact: rollup.discountImpact,
+  };
+}
+
+function buildUtilSeries(daily, bucket, rangeStart, rangeEnd, useExpected) {
+  const series = new Map();
+  daily.forEach((row) => {
+    const dateStr = String(row.date || "");
+    const dateObj = parseLocalDateInputValue(dateStr) || new Date(dateStr);
+    let key = "";
+    if (bucket === "month") key = dateStr.slice(0, 7);
+    else if (bucket === "day") key = dateStr;
+    else if (bucket === "week") key = bucketKey(startOfBucket(dateObj, "week"), "day");
+    else key = bucketKey(dateObj, bucket);
+    if (!key) return;
+    if (!series.has(key)) {
+      series.set(key, { active: 0, reserved: 0, dead: 0, max: 0 });
+    }
+    const active = Number(row.activeEffective || 0);
+    const reserved = Number(row.reservedEffective || 0);
+    const rackTotal = Number(row.rackTotal || 0);
+    const activeRack = Number(row.activeRack || 0);
+    const reservedRack = Number(row.reservedRack || 0);
+    const max = useExpected ? rackTotal - (activeRack + reservedRack) + (active + reserved) : rackTotal;
+    const dead = Math.max(0, max - active - reserved);
+    const bucketEntry = series.get(key);
+    bucketEntry.active += active;
+    bucketEntry.reserved += reserved;
+    bucketEntry.dead += dead;
+    bucketEntry.max += max;
+  });
+
+  let keys = [];
+  if (bucket === "day") {
+    keys = daily.map((row) => String(row.date || ""));
+  } else if (bucket === "month") {
+    const seen = new Set();
+    daily.forEach((row) => {
+      const k = String(row.date || "").slice(0, 7);
+      if (k && !seen.has(k)) {
+        seen.add(k);
+        keys.push(k);
+      }
+    });
+  } else {
+    keys = buildBucketKeys(rangeStart, rangeEnd, bucket);
+  }
+  return {
+    labels: keys,
+    active: keys.map((k) => Number(series.get(k)?.active || 0)),
+    reserved: keys.map((k) => Number(series.get(k)?.reserved || 0)),
+    dead: keys.map((k) => Number(series.get(k)?.dead || 0)),
+    max: keys.map((k) => Number(series.get(k)?.max || 0)),
+  };
+}
+
+function renderUtilKpis(summary) {
+  if (!summary) return;
+  if (utilKpiMax) utilKpiMax.textContent = fmtMoney(summary.maxPotential || 0);
+  if (utilKpiActive) utilKpiActive.textContent = fmtMoney(summary.activeRevenue || 0);
+  if (utilKpiReserved) utilKpiReserved.textContent = fmtMoney(summary.reservedRevenue || 0);
+  if (utilKpiDead) utilKpiDead.textContent = fmtMoney(summary.deadRevenue || 0);
+  if (utilKpiUtilization) utilKpiUtilization.textContent = fmtPercent(summary.utilization || 0);
+  if (utilKpiDiscount) utilKpiDiscount.textContent = fmtMoney(summary.discountImpact || 0);
+}
+
+function renderUtilHeroChart(summary) {
+  if (!utilHeroCanvas || typeof Chart === "undefined") return;
+  const active = Number(summary?.activeRevenue || 0);
+  const reserved = Number(summary?.reservedRevenue || 0);
+  const dead = Number(summary?.deadRevenue || 0);
+  const total = Number(summary?.maxPotential || 0);
+
+  if (utilHeroChart) utilHeroChart.destroy();
+  utilHeroChart = new Chart(utilHeroCanvas.getContext("2d"), {
+    type: "bar",
+    data: {
+      labels: ["Selected window"],
+      datasets: [
+        { label: "Active", data: [active], backgroundColor: UTIL_COLORS.active },
+        { label: "Reserved", data: [reserved], backgroundColor: UTIL_COLORS.reserved },
+        { label: "Dead", data: [dead], backgroundColor: UTIL_COLORS.dead },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const v = Number(ctx.raw || 0);
+              const pct = total > 0 ? ` (${((v / total) * 100).toFixed(1)}%)` : "";
+              return `${ctx.dataset.label}: ${fmtMoney(v)}${pct}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { stacked: true, beginAtZero: true, ticks: { callback: (v) => `$${v}` } },
+        y: { stacked: true, grid: { display: false } },
+      },
+    },
+  });
+}
+
+function renderUtilTrendChart(series) {
+  if (!utilTrendCanvas || typeof Chart === "undefined") return;
+  if (utilTrendChart) utilTrendChart.destroy();
+  utilTrendChart = new Chart(utilTrendCanvas.getContext("2d"), {
+    type: "bar",
+    data: {
+      labels: series.labels,
+      datasets: [
+        {
+          label: "Active",
+          data: series.active,
+          backgroundColor: UTIL_COLORS.active,
+          stack: "util",
+        },
+        {
+          label: "Reserved",
+          data: series.reserved,
+          backgroundColor: UTIL_COLORS.reserved,
+          stack: "util",
+        },
+        {
+          label: "Dead",
+          data: series.dead,
+          backgroundColor: UTIL_COLORS.dead,
+          stack: "util",
+        },
+        {
+          type: "line",
+          label: "Max",
+          data: series.max,
+          borderColor: UTIL_COLORS.max,
+          backgroundColor: "transparent",
+          borderWidth: 2,
+          tension: 0.25,
+          pointRadius: 0,
+          yAxisID: "y",
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${fmtMoney(ctx.raw || 0)}`,
+          },
+        },
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false } },
+        y: { stacked: true, beginAtZero: true, ticks: { callback: (v) => `$${v}` } },
+      },
+    },
+  });
+}
+
+function renderUtilForwardChart(forwardRows, useExpected) {
+  if (!utilForwardCanvas || typeof Chart === "undefined") return;
+  const labels = forwardRows.map((row) => {
+    const dt = new Date(`${row.bucket}-01T00:00:00Z`);
+    return dt.toLocaleString(undefined, { month: "short", year: "2-digit" });
+  });
+
+  const activePct = [];
+  const reservedPct = [];
+  const deadPct = [];
+  const committed = [];
+
+  forwardRows.forEach((row) => {
+    const active = Number(row.activeEffective || 0);
+    const reserved = Number(row.reservedEffective || 0);
+    const rackTotal = Number(row.rackTotal || 0);
+    const activeRack = Number(row.activeRack || 0);
+    const reservedRack = Number(row.reservedRack || 0);
+    const max = useExpected ? rackTotal - (activeRack + reservedRack) + (active + reserved) : rackTotal;
+    const pctBase = max > 0 ? max : 0;
+    activePct.push(pctBase ? (active / pctBase) * 100 : 0);
+    reservedPct.push(pctBase ? (reserved / pctBase) * 100 : 0);
+    deadPct.push(pctBase ? Math.max(0, ((max - active - reserved) / pctBase) * 100) : 0);
+    committed.push(active + reserved);
+  });
+
+  if (utilForwardChart) utilForwardChart.destroy();
+  utilForwardChart = new Chart(utilForwardCanvas.getContext("2d"), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        { label: "Active", data: activePct, backgroundColor: UTIL_COLORS.active, stack: "forward" },
+        { label: "Reserved", data: reservedPct, backgroundColor: UTIL_COLORS.reserved, stack: "forward" },
+        { label: "Dead", data: deadPct, backgroundColor: UTIL_COLORS.dead, stack: "forward" },
+        {
+          type: "line",
+          label: "Committed $",
+          data: committed,
+          borderColor: UTIL_COLORS.max,
+          backgroundColor: "transparent",
+          borderWidth: 2,
+          tension: 0.25,
+          pointRadius: 0,
+          yAxisID: "y2",
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              if (ctx.dataset.yAxisID === "y2") {
+                return `${ctx.dataset.label}: ${fmtMoney(ctx.raw || 0)}`;
+              }
+              return `${ctx.dataset.label}: ${Number(ctx.raw || 0).toFixed(1)}%`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false } },
+        y: {
+          stacked: true,
+          beginAtZero: true,
+          max: 100,
+          ticks: { callback: (v) => `${v}%` },
+        },
+        y2: {
+          position: "right",
+          grid: { drawOnChartArea: false },
+          ticks: { callback: (v) => `$${v}` },
+        },
+      },
+    },
+  });
+}
+
+async function loadUtilizationDashboard() {
+  if (!hasUtilizationUI() || !activeCompanyId) return;
+  if (typeof Chart === "undefined") return;
+  await ensureUtilizationLookups().catch(() => null);
+
+  const range = utilRangeFromInputs();
+  const useExpected = Boolean(utilExpectedToggle?.checked);
+
+  const qs = new URLSearchParams({
+    companyId: String(activeCompanyId),
+    from: range.from,
+    to: range.to,
+    maxBasis: useExpected ? "expected" : "rack",
+  });
+  if (utilYard?.value) qs.set("locationId", String(Number(utilYard.value)));
+  if (utilCategory?.value) qs.set("categoryId", String(Number(utilCategory.value)));
+  if (utilType?.value) qs.set("typeId", String(Number(utilType.value)));
+
+  const res = await fetch(`/api/utilization-dashboard?${qs.toString()}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load utilization");
+
+  const daily = Array.isArray(data.daily) ? data.daily : [];
+  const summary = data.summary || computeUtilSummaryFromDaily(daily, useExpected);
+  renderUtilKpis(summary);
+
+  renderUtilHeroChart(summary);
+  const series = buildUtilSeries(daily, utilPeriod, range.start, range.endExclusive, useExpected);
+  renderUtilTrendChart(series);
+
+  const forward = Array.isArray(data.forward) ? data.forward : [];
+  renderUtilForwardChart(forward, useExpected);
+}
+
+function initUtilizationUI() {
+  if (!hasUtilizationUI()) return;
+  setUtilPeriod(utilPeriod, { resetRange: true });
+
+  utilPeriodToggle?.addEventListener("click", (e) => {
+    const btn = e.target?.closest?.(".view-toggle-btn");
+    if (!btn || !btn.dataset?.period) return;
+    setUtilPeriod(btn.dataset.period, { resetRange: true });
+    loadUtilizationDashboard().catch((err) => (companyMeta.textContent = err.message));
+  });
+
+  utilStartInput?.addEventListener("change", () => loadUtilizationDashboard().catch((err) => (companyMeta.textContent = err.message)));
+  utilEndInput?.addEventListener("change", () => loadUtilizationDashboard().catch((err) => (companyMeta.textContent = err.message)));
+  utilYard?.addEventListener("change", () => loadUtilizationDashboard().catch(() => null));
+  utilCategory?.addEventListener("change", () => loadUtilizationDashboard().catch(() => null));
+  utilType?.addEventListener("change", () => loadUtilizationDashboard().catch(() => null));
+  utilExpectedToggle?.addEventListener("change", () => loadUtilizationDashboard().catch(() => null));
+  utilTodayBtn?.addEventListener("click", () => {
+    setUtilPeriod(utilPeriod, { resetRange: true });
+    loadUtilizationDashboard().catch(() => null);
   });
 }
 
@@ -1560,6 +2037,10 @@ function init() {
     initWorkbenchShortcuts();
   }
 
+  if (hasUtilizationUI()) {
+    initUtilizationUI();
+  }
+
   rangeDays = Number(rangeDaysSelect?.value) || 30;
   rangeStartDate = hasTimelineUI()
     ? startOfLocalDay(new Date())
@@ -1578,8 +2059,11 @@ function init() {
     if (hasTimelineUI()) {
       if (hasBenchStagesUI() && benchActiveView === "stages") loadBenchStages();
       else loadTimeline();
-    } else if (hasRevenueUI()) {
-      loadRevenueDashboard().catch((err) => (companyMeta.textContent = err.message));
+    } else if (hasRevenueUI() || hasUtilizationUI()) {
+      const tasks = [];
+      if (hasUtilizationUI()) tasks.push(loadUtilizationDashboard().catch(() => null));
+      if (hasRevenueUI()) tasks.push(loadRevenueDashboard().catch(() => null));
+      Promise.all(tasks).catch((err) => (companyMeta.textContent = err.message));
     }
   } else {
     companyMeta.textContent = "Log in to view your dashboard.";

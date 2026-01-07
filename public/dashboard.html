@@ -82,6 +82,97 @@
             <p class="hint" id="company-meta">Loading your company…</p>
           </section>
 
+          <section class="card wide util-card" id="utilization-card">
+            <div class="card-header">
+              <div>
+                <h2>Capacity & Utilization</h2>
+                <p class="hint">Track active, reserved, and dead capacity across time.</p>
+              </div>
+              <div class="inline-actions header-actions util-controls">
+                <div class="view-toggle" id="util-period-toggle" role="group" aria-label="Utilization period">
+                  <button class="view-toggle-btn active" type="button" data-period="month">Month</button>
+                  <button class="view-toggle-btn" type="button" data-period="week">Week</button>
+                  <button class="view-toggle-btn" type="button" data-period="day">Day</button>
+                </div>
+                <label>Start <input type="date" id="util-start" /></label>
+                <label>End <input type="date" id="util-end" /></label>
+                <label>Yard
+                  <select id="util-yard">
+                    <option value="">All</option>
+                  </select>
+                </label>
+                <label>Category
+                  <select id="util-category">
+                    <option value="">All</option>
+                  </select>
+                </label>
+                <label>Type
+                  <select id="util-type">
+                    <option value="">All</option>
+                  </select>
+                </label>
+                <label class="filter-pill"><input type="checkbox" id="util-expected" /> Expected max</label>
+                <button class="ghost small" id="util-today" type="button">Today</button>
+              </div>
+            </div>
+
+            <div class="util-kpis">
+              <div class="util-kpi">
+                <div class="util-kpi-label">Max Potential</div>
+                <div class="util-kpi-value" id="util-kpi-max">--</div>
+              </div>
+              <div class="util-kpi">
+                <div class="util-kpi-label">Active (Out)</div>
+                <div class="util-kpi-value" id="util-kpi-active">--</div>
+              </div>
+              <div class="util-kpi">
+                <div class="util-kpi-label">Reserved (Booked)</div>
+                <div class="util-kpi-value" id="util-kpi-reserved">--</div>
+              </div>
+              <div class="util-kpi">
+                <div class="util-kpi-label">Dead</div>
+                <div class="util-kpi-value" id="util-kpi-dead">--</div>
+              </div>
+              <div class="util-kpi">
+                <div class="util-kpi-label">Utilization</div>
+                <div class="util-kpi-value" id="util-kpi-utilization">--</div>
+              </div>
+              <div class="util-kpi">
+                <div class="util-kpi-label">Discount impact</div>
+                <div class="util-kpi-value" id="util-kpi-discount">--</div>
+              </div>
+            </div>
+
+            <div class="two-col util-hero-grid">
+              <div class="chart-card">
+                <div class="chart-head">
+                  <div class="chart-title">Utilization snapshot</div>
+                </div>
+                <div class="chart-canvas">
+                  <canvas id="util-hero-chart"></canvas>
+                </div>
+              </div>
+
+              <div class="chart-card">
+                <div class="chart-head">
+                  <div class="chart-title">Trend</div>
+                </div>
+                <div class="chart-canvas">
+                  <canvas id="util-trend-chart"></canvas>
+                </div>
+              </div>
+            </div>
+
+            <div class="chart-card">
+              <div class="chart-head">
+                <div class="chart-title">Forward bookings (next 12 months)</div>
+              </div>
+              <div class="chart-canvas">
+                <canvas id="util-forward-chart"></canvas>
+              </div>
+            </div>
+          </section>
+
           <section class="card wide">
             <div class="card-header">
               <div class="inline-actions" style="justify-content: space-between; width: 100%; flex-wrap: wrap;">

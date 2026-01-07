@@ -115,6 +115,7 @@ const {
   createReturnBillingForLineItem,
   createPauseBillingAdjustments,
   getTypeAvailabilitySeries,
+  getUtilizationDashboard,
   getRevenueSummary,
   getRevenueTimeSeries,
   getSalespersonSummary,
@@ -3231,6 +3232,27 @@ app.get(
       days: days ? Number(days) : 30,
     });
     res.json(series);
+  })
+);
+
+app.get(
+  "/api/utilization-dashboard",
+  asyncHandler(async (req, res) => {
+    const { companyId, from, to, locationId, categoryId, typeId, maxBasis, forwardMonths } = req.query;
+    if (!companyId || !from || !to) {
+      return res.status(400).json({ error: "companyId, from, and to are required." });
+    }
+    const data = await getUtilizationDashboard({
+      companyId,
+      from,
+      to,
+      locationId: locationId ? Number(locationId) : null,
+      categoryId: categoryId ? Number(categoryId) : null,
+      typeId: typeId ? Number(typeId) : null,
+      maxBasis: maxBasis || "rack",
+      forwardMonths: forwardMonths ? Number(forwardMonths) : 12,
+    });
+    res.json(data);
   })
 );
 

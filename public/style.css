@@ -1583,6 +1583,43 @@ a.ghost {
   line-height: 1;
 }
 
+.util-card .chart-card {
+  margin: 14px 0 0;
+}
+
+.util-controls {
+  align-items: flex-end;
+}
+
+.util-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.util-kpi {
+  border: 1px solid var(--border);
+  background: #f8fafc;
+  border-radius: 14px;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+
+.util-kpi-label {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.util-kpi-value {
+  font-size: 22px;
+  font-weight: 900;
+}
+
 .bench-legend {
   display: flex;
   flex-wrap: wrap;

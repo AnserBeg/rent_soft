@@ -8834,6 +8834,357 @@ function startOfDayMs(ms) {
   return d.getTime();
 }
 
+function daysInUtcMonth(date) {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+function startOfUtcMonth(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+function addUtcMonths(date, count) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + count, 1));
+}
+
+async function getUtilizationDashboard({
+  companyId,
+  from,
+  to,
+  locationId = null,
+  categoryId = null,
+  typeId = null,
+  maxBasis = "rack",
+  forwardMonths = 12,
+} = {}) {
+  const fromIso = normalizeTimestamptz(from);
+  const toIso = normalizeTimestamptz(to);
+  if (!fromIso || !toIso) {
+    return { summary: null, daily: [], forward: [] };
+  }
+
+  const rangeStartMs = Date.parse(fromIso);
+  const rangeEndMs = Date.parse(toIso);
+  if (!Number.isFinite(rangeStartMs) || !Number.isFinite(rangeEndMs) || rangeEndMs <= rangeStartMs) {
+    return { summary: null, daily: [], forward: [] };
+  }
+
+  const forwardCount = Math.max(1, Math.min(18, Number(forwardMonths) || 12));
+  const forwardStart = startOfUtcMonth(new Date());
+  const forwardEnd = addUtcMonths(forwardStart, forwardCount);
+  const horizonStartMs = Math.min(rangeStartMs, forwardStart.getTime());
+  const horizonEndMs = Math.max(rangeEndMs, forwardEnd.getTime());
+
+  const equipmentParams = [companyId];
+  const equipmentFilters = ["e.company_id = $1"];
+  if (Number.isFinite(Number(locationId))) {
+    equipmentParams.push(Number(locationId));
+    equipmentFilters.push(`COALESCE(e.current_location_id, e.location_id) = $${equipmentParams.length}`);
+  }
+  if (Number.isFinite(Number(typeId))) {
+    equipmentParams.push(Number(typeId));
+    equipmentFilters.push(`e.type_id = $${equipmentParams.length}`);
+  }
+  if (Number.isFinite(Number(categoryId))) {
+    equipmentParams.push(Number(categoryId));
+    equipmentFilters.push(`et.category_id = $${equipmentParams.length}`);
+  }
+
+  const equipmentRes = await pool.query(
+    `
+    SELECT e.id,
+           COALESCE(e.current_location_id, e.location_id) AS location_id,
+           e.type_id,
+           et.category_id,
+           et.daily_rate,
+           et.weekly_rate,
+           et.monthly_rate
+      FROM equipment e
+ LEFT JOIN equipment_types et ON et.id = e.type_id
+     WHERE ${equipmentFilters.join(" AND ")}
+     ORDER BY e.id ASC
+    `,
+    equipmentParams
+  );
+
+  const equipment = equipmentRes.rows.map((row) => ({
+    id: Number(row.id),
+    locationId: row.location_id === null || row.location_id === undefined ? null : Number(row.location_id),
+    typeId: row.type_id === null || row.type_id === undefined ? null : Number(row.type_id),
+    categoryId: row.category_id === null || row.category_id === undefined ? null : Number(row.category_id),
+    rackDaily: row.daily_rate === null || row.daily_rate === undefined ? 0 : Number(row.daily_rate),
+    rackWeekly: row.weekly_rate === null || row.weekly_rate === undefined ? 0 : Number(row.weekly_rate),
+    rackMonthly: row.monthly_rate === null || row.monthly_rate === undefined ? 0 : Number(row.monthly_rate),
+  }));
+
+  if (!equipment.length) {
+    return {
+      summary: {
+        maxPotential: 0,
+        activeRevenue: 0,
+        reservedRevenue: 0,
+        deadRevenue: 0,
+        utilization: 0,
+        discountImpact: 0,
+      },
+      daily: [],
+      forward: [],
+    };
+  }
+
+  const equipmentIds = equipment.map((e) => e.id);
+  const statuses = ["ordered", "reservation", "requested"];
+  const assignmentsRes = await pool.query(
+    `
+    SELECT liv.equipment_id,
+           li.id AS line_item_id,
+           ro.status,
+           ro.created_at AS order_created_at,
+           li.start_at,
+           li.end_at,
+           li.fulfilled_at,
+           li.returned_at,
+           li.rate_basis,
+           li.rate_amount,
+           li.billable_units,
+           li.line_amount
+      FROM rental_order_line_inventory liv
+      JOIN rental_order_line_items li ON li.id = liv.line_item_id
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+     WHERE ro.company_id = $1
+       AND liv.equipment_id = ANY($2::int[])
+       AND ro.status = ANY($3::text[])
+       AND COALESCE(li.fulfilled_at, li.start_at) < $5::timestamptz
+       AND COALESCE(li.returned_at, li.end_at) > $4::timestamptz
+    `,
+    [companyId, equipmentIds, statuses, new Date(horizonStartMs).toISOString(), new Date(horizonEndMs).toISOString()]
+  );
+
+  const assignmentsByEquipment = new Map();
+  const autoRateBasis = (durationDays) => {
+    if (durationDays >= 28) return "monthly";
+    if (durationDays >= 7) return "weekly";
+    return "daily";
+  };
+
+  for (const row of assignmentsRes.rows) {
+    const equipmentId = Number(row.equipment_id);
+    if (!Number.isFinite(equipmentId)) continue;
+    const status = normalizeRentalOrderStatus(row.status);
+    if (!["ordered", "reservation", "requested"].includes(status)) continue;
+    const startRaw = status === "ordered" ? row.fulfilled_at || row.start_at : row.start_at;
+    const endRaw = row.returned_at || row.end_at;
+    const startMs = Date.parse(startRaw);
+    const endMs = Date.parse(endRaw);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+
+    const durationDays = Math.max(1, Math.ceil((endMs - startMs) / (24 * 60 * 60 * 1000)));
+    let rateBasis = normalizeRateBasis(row.rate_basis) || null;
+    let rateAmount = row.rate_amount === null || row.rate_amount === undefined ? null : Number(row.rate_amount);
+    const billableUnits = row.billable_units === null || row.billable_units === undefined ? null : Number(row.billable_units);
+    const lineAmount = row.line_amount === null || row.line_amount === undefined ? null : Number(row.line_amount);
+
+    if (!rateBasis) rateBasis = autoRateBasis(durationDays);
+    if (!Number.isFinite(rateAmount) && Number.isFinite(billableUnits) && billableUnits > 0 && Number.isFinite(lineAmount)) {
+      rateAmount = lineAmount / billableUnits;
+    }
+    if (!Number.isFinite(rateAmount) && Number.isFinite(lineAmount)) {
+      rateAmount = lineAmount / durationDays;
+      rateBasis = "daily";
+    }
+    if (!Number.isFinite(rateAmount)) rateAmount = 0;
+
+    const entry = {
+      equipmentId,
+      lineItemId: Number(row.line_item_id),
+      status,
+      startMs,
+      endMs,
+      rateBasis,
+      rateAmount,
+      orderCreatedAt: row.order_created_at ? Date.parse(row.order_created_at) : 0,
+    };
+
+    if (!assignmentsByEquipment.has(equipmentId)) assignmentsByEquipment.set(equipmentId, []);
+    assignmentsByEquipment.get(equipmentId).push(entry);
+  }
+
+  const effectivePerDay = (line, monthDays) => {
+    if (!line) return 0;
+    if (line.rateBasis === "monthly") return line.rateAmount / monthDays;
+    if (line.rateBasis === "weekly") return line.rateAmount / 7;
+    return line.rateAmount;
+  };
+
+  const rackPerDay = (equip, monthDays) => {
+    const daily = Number(equip.rackDaily || 0);
+    const weekly = Number(equip.rackWeekly || 0);
+    const monthly = Number(equip.rackMonthly || 0);
+    const weeklyPerDay = weekly > 0 ? weekly / 7 : 0;
+    const monthlyPerDay = monthly > 0 ? monthly / monthDays : 0;
+    return Math.max(daily, weeklyPerDay, monthlyPerDay);
+  };
+
+  const overlapsDay = (line, dayStartMs, dayEndMs) =>
+    line.startMs < dayEndMs && line.endMs > dayStartMs;
+
+  const selectLineForDay = (lines, dayStartMs, dayEndMs, monthDays, statusOrder) => {
+    if (!lines || !lines.length) return null;
+    for (const status of statusOrder) {
+      let best = null;
+      let bestValue = -Infinity;
+      for (const line of lines) {
+        if (line.status !== status) continue;
+        if (!overlapsDay(line, dayStartMs, dayEndMs)) continue;
+        const val = effectivePerDay(line, monthDays);
+        if (val > bestValue) {
+          bestValue = val;
+          best = line;
+          continue;
+        }
+        if (val === bestValue && best && line.orderCreatedAt < best.orderCreatedAt) {
+          best = line;
+        }
+      }
+      if (best) return best;
+    }
+    return null;
+  };
+
+  const computeDailyTotals = (startMs, endMs) => {
+    const days = Math.ceil((endMs - startMs) / (24 * 60 * 60 * 1000));
+    const dailyRows = [];
+    for (let i = 0; i < days; i++) {
+      const dayStartMs = startMs + i * 24 * 60 * 60 * 1000;
+      const dayEndMs = dayStartMs + 24 * 60 * 60 * 1000;
+      const dayDate = new Date(dayStartMs);
+      const monthDays = daysInUtcMonth(dayDate);
+
+      let rackTotal = 0;
+      let activeEffective = 0;
+      let reservedEffective = 0;
+      let activeRack = 0;
+      let reservedRack = 0;
+      let discountImpact = 0;
+
+      for (const equip of equipment) {
+        const rack = rackPerDay(equip, monthDays);
+        rackTotal += rack;
+        const lines = assignmentsByEquipment.get(equip.id) || [];
+        const outLine = selectLineForDay(lines, dayStartMs, dayEndMs, monthDays, ["ordered"]);
+        const reservedLine = outLine ? null : selectLineForDay(lines, dayStartMs, dayEndMs, monthDays, ["reservation", "requested"]);
+        if (outLine) {
+          const eff = effectivePerDay(outLine, monthDays);
+          activeEffective += eff;
+          activeRack += rack;
+          discountImpact += rack - eff;
+        } else if (reservedLine) {
+          const eff = effectivePerDay(reservedLine, monthDays);
+          reservedEffective += eff;
+          reservedRack += rack;
+          discountImpact += rack - eff;
+        }
+      }
+
+      dailyRows.push({
+        date: dayDate.toISOString().slice(0, 10),
+        rackTotal,
+        activeEffective,
+        reservedEffective,
+        activeRack,
+        reservedRack,
+        discountImpact,
+      });
+    }
+    return dailyRows;
+  };
+
+  const daily = computeDailyTotals(rangeStartMs, rangeEndMs);
+
+  const summary = daily.reduce(
+    (acc, row) => {
+      acc.rackTotal += row.rackTotal;
+      acc.activeEffective += row.activeEffective;
+      acc.reservedEffective += row.reservedEffective;
+      acc.activeRack += row.activeRack;
+      acc.reservedRack += row.reservedRack;
+      acc.discountImpact += row.discountImpact;
+      return acc;
+    },
+    {
+      rackTotal: 0,
+      activeEffective: 0,
+      reservedEffective: 0,
+      activeRack: 0,
+      reservedRack: 0,
+      discountImpact: 0,
+    }
+  );
+
+  const useExpected = String(maxBasis || "").toLowerCase() === "expected";
+  const maxPotential = useExpected
+    ? summary.rackTotal - (summary.activeRack + summary.reservedRack) + (summary.activeEffective + summary.reservedEffective)
+    : summary.rackTotal;
+  const activeRevenue = summary.activeEffective;
+  const reservedRevenue = summary.reservedEffective;
+  const deadRevenue = Math.max(0, maxPotential - activeRevenue - reservedRevenue);
+  const utilization = maxPotential > 0 ? (activeRevenue + reservedRevenue) / maxPotential : 0;
+
+  const forwardDaily = computeDailyTotals(forwardStart.getTime(), forwardEnd.getTime());
+  const forwardBuckets = new Map();
+  for (const row of forwardDaily) {
+    const key = row.date.slice(0, 7);
+    if (!forwardBuckets.has(key)) {
+      forwardBuckets.set(key, {
+        bucket: key,
+        rackTotal: 0,
+        activeEffective: 0,
+        reservedEffective: 0,
+        activeRack: 0,
+        reservedRack: 0,
+        discountImpact: 0,
+      });
+    }
+    const bucket = forwardBuckets.get(key);
+    bucket.rackTotal += row.rackTotal;
+    bucket.activeEffective += row.activeEffective;
+    bucket.reservedEffective += row.reservedEffective;
+    bucket.activeRack += row.activeRack;
+    bucket.reservedRack += row.reservedRack;
+    bucket.discountImpact += row.discountImpact;
+  }
+
+  const forward = [];
+  let cursor = new Date(forwardStart.getTime());
+  for (let i = 0; i < forwardCount; i++) {
+    const key = cursor.toISOString().slice(0, 7);
+    forward.push(forwardBuckets.get(key) || {
+      bucket: key,
+      rackTotal: 0,
+      activeEffective: 0,
+      reservedEffective: 0,
+      activeRack: 0,
+      reservedRack: 0,
+      discountImpact: 0,
+    });
+    cursor = addUtcMonths(cursor, 1);
+  }
+
+  return {
+    summary: {
+      maxPotential,
+      activeRevenue,
+      reservedRevenue,
+      deadRevenue,
+      utilization,
+      discountImpact: summary.discountImpact,
+    },
+    daily,
+    forward,
+  };
+}
+
 async function getRevenueSummary({
   companyId,
   from,
@@ -13122,6 +13473,7 @@ module.exports = {
   createReturnBillingForLineItem,
   createPauseBillingAdjustments,
   getTypeAvailabilitySeries,
+  getUtilizationDashboard,
   getRevenueSummary,
   getRevenueTimeSeries,
   getSalespersonSummary,
