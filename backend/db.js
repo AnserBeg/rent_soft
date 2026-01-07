@@ -9663,6 +9663,14 @@ function mapLegacyStatus({ contractNumber, statusCode, cancelled, completed }) {
   return "quote";
 }
 
+function overrideImportStatusForUnreturnedItems(status, lineItems) {
+  const normalized = normalizeRentalOrderStatus(status);
+  if (normalized !== "closed") return normalized;
+  const items = Array.isArray(lineItems) ? lineItems : [];
+  const hasUnreturned = items.some((item) => item?.fulfilledAt && !item?.returnedAt);
+  return hasUnreturned ? "ordered" : normalized;
+}
+
 function parseLegacyExport(text) {
   if (!text) return null;
   const firstLine = text.split(/\r?\n/, 1)[0] || "";
@@ -9868,7 +9876,7 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
     if (!lines.length) continue;
     const first = lines[0];
 
-    const status = mapLegacyStatus({
+    let status = mapLegacyStatus({
       contractNumber,
       statusCode: first.statusCode,
       cancelled: !!first.cancelled,
@@ -10109,6 +10117,8 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
       stats.warnings.push({ contractNumber, warning: "No valid line items found (missing start/end/type)." });
       continue;
     }
+
+    status = overrideImportStatusForUnreturnedItems(status, lineItems);
 
     const createdAt = first.createdIso || first.startIso || null;
     const legacyData = {
@@ -10465,7 +10475,7 @@ async function importRentalOrdersFromFutureInventoryReport({ companyId, reportTe
     if (!lines.length) continue;
     const first = lines[0];
 
-    const status = deriveFutureImportOrderStatus(contractNumber, lines);
+    let status = deriveFutureImportOrderStatus(contractNumber, lines);
     const demandOnly = isDemandOnlyStatus(status);
 
     const customerSeed = lines.find((line) => line.email || line.phone || line.companyName) || first;
@@ -10587,6 +10597,8 @@ async function importRentalOrdersFromFutureInventoryReport({ companyId, reportTe
       stats.warnings.push({ contractNumber, warning: "No valid line items found (missing start/end/type)." });
       continue;
     }
+
+    status = overrideImportStatusForUnreturnedItems(status, lineItems);
 
     const createdAt = first.startIso || null;
     const legacyData = {
