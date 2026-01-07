@@ -8878,16 +8878,19 @@ async function getUtilizationDashboard({
 
   const equipmentParams = [companyId];
   const equipmentFilters = ["e.company_id = $1"];
-  if (Number.isFinite(Number(locationId))) {
-    equipmentParams.push(Number(locationId));
+  const locationIdNum = locationId === null || locationId === undefined ? null : Number(locationId);
+  const typeIdNum = typeId === null || typeId === undefined ? null : Number(typeId);
+  const categoryIdNum = categoryId === null || categoryId === undefined ? null : Number(categoryId);
+  if (Number.isFinite(locationIdNum)) {
+    equipmentParams.push(locationIdNum);
     equipmentFilters.push(`COALESCE(e.current_location_id, e.location_id) = $${equipmentParams.length}`);
   }
-  if (Number.isFinite(Number(typeId))) {
-    equipmentParams.push(Number(typeId));
+  if (Number.isFinite(typeIdNum)) {
+    equipmentParams.push(typeIdNum);
     equipmentFilters.push(`e.type_id = $${equipmentParams.length}`);
   }
-  if (Number.isFinite(Number(categoryId))) {
-    equipmentParams.push(Number(categoryId));
+  if (Number.isFinite(categoryIdNum)) {
+    equipmentParams.push(categoryIdNum);
     equipmentFilters.push(`et.category_id = $${equipmentParams.length}`);
   }
 
