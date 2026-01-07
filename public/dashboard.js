@@ -169,9 +169,11 @@ function hasUtilizationUI() {
   return Boolean(utilHeroCanvas && utilTrendCanvas && utilForwardCanvas);
 }
 
+const MONEY_FORMAT = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 function fmtMoney(n) {
   const x = Number(n || 0);
-  return `$${x.toFixed(2)}`;
+  return `$${MONEY_FORMAT.format(x)}`;
 }
 
 function fmtPercent(v) {
@@ -510,7 +512,7 @@ function fmtMoneyMaybe(v) {
   if (v === null || v === undefined) return "--";
   const n = Number(v);
   if (!Number.isFinite(n)) return "--";
-  return `$${n.toFixed(2)}`;
+  return `$${MONEY_FORMAT.format(n)}`;
 }
 
 function poOrLegacy(row) {
