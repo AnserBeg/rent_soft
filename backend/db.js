@@ -11006,18 +11006,18 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
       const totalNoTax = mergedLine.totals?.totalNoTax ?? null;
       const basisForPricing = rateBasis || inferRateBasisFromDates(mergedLine.startIso, mergedLine.endIso);
       const quantityForPricing = demandOnly ? targetQty : inventoryIds.length;
-      if (totalNoTax !== null && Number.isFinite(totalNoTax) && basisForPricing && quantityForPricing) {
-        bookedUnits = computeBillableUnits({
-          startAt: mergedLine.startIso,
-          endAt: mergedLine.endIso,
-          rateBasis: basisForPricing,
-          roundingMode: settings.billing_rounding_mode,
-          roundingGranularity: settings.billing_rounding_granularity,
-          monthlyProrationMethod: settings.monthly_proration_method,
-        });
-        if (bookedUnits !== null && Number.isFinite(bookedUnits) && bookedUnits > 0) {
-          const candidate = totalNoTax / (bookedUnits * quantityForPricing);
-          if (Number.isFinite(candidate) && candidate >= 0) rateAmount = Number(candidate.toFixed(2));
+      if (totalNoTax !== null && Number.isFinite(totalNoTax) && quantityForPricing) {
+        const candidate = totalNoTax / quantityForPricing;
+        if (Number.isFinite(candidate) && candidate >= 0) rateAmount = Number(candidate.toFixed(2));
+        if (basisForPricing) {
+          bookedUnits = computeBillableUnits({
+            startAt: mergedLine.startIso,
+            endAt: mergedLine.endIso,
+            rateBasis: basisForPricing,
+            roundingMode: settings.billing_rounding_mode,
+            roundingGranularity: settings.billing_rounding_granularity,
+            monthlyProrationMethod: settings.monthly_proration_method,
+          });
         }
       }
       const baseLineItem = {
@@ -11784,7 +11784,7 @@ async function backfillLegacyRates({ companyId, includeAlreadyRated = false } = 
         continue;
       }
 
-      const rateAmount = Number((totalNoTax / (bookedUnits * qty)).toFixed(2));
+      const rateAmount = Number((totalNoTax / qty).toFixed(2));
       if (!Number.isFinite(rateAmount) || rateAmount < 0) {
         stats.lineItemsSkipped += 1;
         stats.warnings.push({
