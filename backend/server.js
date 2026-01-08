@@ -115,6 +115,9 @@ const {
   createReturnBillingForLineItem,
   createPauseBillingAdjustments,
   getTypeAvailabilitySeries,
+  getAvailabilityShortfallsSummary,
+  getTypeAvailabilitySeriesWithProjection,
+  getTypeAvailabilityShortfallDetails,
   getUtilizationDashboard,
   getRevenueSummary,
   getRevenueTimeSeries,
@@ -3223,15 +3226,69 @@ app.get(
   "/api/equipment-types/:id/availability-series",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { companyId, from, days } = req.query;
+    const { companyId, from, days, includeProjected, splitLocation, locationId } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const wantsProjection =
+      String(includeProjected || "").toLowerCase() === "true" || String(includeProjected || "") === "1";
+    const wantsSplit = String(splitLocation || "").toLowerCase() === "true" || String(splitLocation || "") === "1";
+    const locationIdNum = locationId ? Number(locationId) : null;
+
+    if (wantsProjection || wantsSplit || Number.isFinite(locationIdNum)) {
+      const series = await getTypeAvailabilitySeriesWithProjection({
+        companyId,
+        typeId: Number(id),
+        from: from || new Date().toISOString(),
+        days: days ? Number(days) : 30,
+        locationId: Number.isFinite(locationIdNum) ? locationIdNum : null,
+        splitLocation: wantsSplit,
+      });
+      return res.json(series);
+    }
+
     const series = await getTypeAvailabilitySeries({
       companyId,
       typeId: Number(id),
       from: from || new Date().toISOString(),
       days: days ? Number(days) : 30,
     });
-    res.json(series);
+    return res.json(series);
+  })
+);
+
+app.get(
+  "/api/availability-shortfalls",
+  asyncHandler(async (req, res) => {
+    const { companyId, from, to, locationId, categoryId, typeId } = req.query;
+    if (!companyId || !from || !to) {
+      return res.status(400).json({ error: "companyId, from, and to are required." });
+    }
+    const data = await getAvailabilityShortfallsSummary({
+      companyId,
+      from,
+      to,
+      locationId: locationId ? Number(locationId) : null,
+      categoryId: categoryId ? Number(categoryId) : null,
+      typeId: typeId ? Number(typeId) : null,
+    });
+    res.json(data);
+  })
+);
+
+app.get(
+  "/api/equipment-types/:id/availability-shortfall-details",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId, date, locationId } = req.query;
+    if (!companyId || !date) {
+      return res.status(400).json({ error: "companyId and date are required." });
+    }
+    const data = await getTypeAvailabilityShortfallDetails({
+      companyId,
+      typeId: Number(id),
+      date,
+      locationId: locationId ? Number(locationId) : null,
+    });
+    res.json(data);
   })
 );
 

@@ -165,7 +165,7 @@
                 </div>
                 <label>Start <input type="date" id="util-start" /></label>
                 <label>End <input type="date" id="util-end" /></label>
-                <label>Yard
+                <label>Location
                   <select id="util-yard">
                     <option value="">All</option>
                   </select>
@@ -239,6 +239,69 @@
               <div class="chart-canvas">
                 <canvas id="util-forward-chart"></canvas>
               </div>
+            </div>
+          </section>
+
+          <section class="card wide shortfall-card" id="availability-shortfall-card">
+            <div class="card-header">
+              <div>
+                <h2>Availability Shortfalls</h2>
+                <p class="hint">Committed availability vs. potential availability from quotes and requests.</p>
+              </div>
+              <div class="inline-actions header-actions shortfall-controls">
+                <label>Horizon
+                  <select id="shortfall-days">
+                    <option value="14">14 days</option>
+                    <option value="30" selected>30 days</option>
+                    <option value="60">60 days</option>
+                    <option value="90">90 days</option>
+                  </select>
+                </label>
+                <label>Location
+                  <select id="shortfall-location">
+                    <option value="">All</option>
+                  </select>
+                </label>
+                <label>Category
+                  <select id="shortfall-category">
+                    <option value="">All</option>
+                  </select>
+                </label>
+                <label>Type
+                  <select id="shortfall-type">
+                    <option value="">All</option>
+                  </select>
+                </label>
+                <label class="filter-pill"><input type="checkbox" id="shortfall-split-location" /> Split by location</label>
+              </div>
+            </div>
+
+            <p class="hint" id="shortfall-meta">Loading availability...</p>
+
+            <div class="two-col shortfall-grid">
+              <div class="chart-card">
+                <div class="chart-head">
+                  <div class="chart-title">Worst committed availability by type</div>
+                </div>
+                <div class="chart-canvas" id="shortfall-summary-wrap">
+                  <canvas id="shortfall-summary-chart"></canvas>
+                </div>
+              </div>
+
+              <div class="chart-card">
+                <div class="chart-head">
+                  <div class="chart-title">Availability trend</div>
+                </div>
+                <div class="chart-canvas">
+                  <canvas id="shortfall-detail-chart"></canvas>
+                </div>
+              </div>
+            </div>
+
+            <div class="shortfall-details" id="shortfall-details">
+              <div class="shortfall-details-title">Shortfall details</div>
+              <div class="hint" id="shortfall-details-meta">Hover a negative point to see contributing orders.</div>
+              <div class="shortfall-details-body" id="shortfall-details-body"></div>
             </div>
           </section>
         </main>

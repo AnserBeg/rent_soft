@@ -8828,6 +8828,418 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
   return { dates, series };
 }
 
+async function getAvailabilityShortfallsSummary({
+  companyId,
+  from,
+  to,
+  locationId = null,
+  categoryId = null,
+  typeId = null,
+} = {}) {
+  const fromIso = normalizeTimestamptz(from);
+  const toIso = normalizeTimestamptz(to);
+  if (!fromIso || !toIso) return { rows: [] };
+
+  const rangeStart = new Date(fromIso);
+  if (Number.isNaN(rangeStart.getTime())) return { rows: [] };
+  rangeStart.setHours(0, 0, 0, 0);
+  const rangeEnd = new Date(toIso);
+  if (Number.isNaN(rangeEnd.getTime())) return { rows: [] };
+
+  const dayCount = Math.max(1, Math.min(180, Math.ceil((rangeEnd.getTime() - rangeStart.getTime()) / (24 * 60 * 60 * 1000))));
+  const end = new Date(rangeStart.getTime() + dayCount * 24 * 60 * 60 * 1000);
+
+  const locationIdNum = locationId === null || locationId === undefined ? null : Number(locationId);
+  const categoryIdNum = categoryId === null || categoryId === undefined ? null : Number(categoryId);
+  const typeIdNum = typeId === null || typeId === undefined ? null : Number(typeId);
+
+  const typeParams = [companyId];
+  const typeFilters = ["et.company_id = $1"];
+  if (Number.isFinite(categoryIdNum)) {
+    typeParams.push(categoryIdNum);
+    typeFilters.push(`et.category_id = $${typeParams.length}`);
+  }
+  if (Number.isFinite(typeIdNum)) {
+    typeParams.push(typeIdNum);
+    typeFilters.push(`et.id = $${typeParams.length}`);
+  }
+
+  const typeRes = await pool.query(
+    `
+    SELECT et.id,
+           et.name,
+           ec.name AS category_name
+      FROM equipment_types et
+ LEFT JOIN equipment_categories ec ON ec.id = et.category_id
+     WHERE ${typeFilters.join(" AND ")}
+     ORDER BY et.name
+    `,
+    typeParams
+  );
+  const types = typeRes.rows.map((r) => ({
+    typeId: Number(r.id),
+    typeName: r.name || "--",
+    categoryName: r.category_name || null,
+  }));
+  if (!types.length) return { rows: [] };
+
+  const countParams = [companyId];
+  const countFilters = ["e.company_id = $1", "(e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')"];
+  if (Number.isFinite(locationIdNum)) {
+    countParams.push(locationIdNum);
+    countFilters.push(`e.location_id = $${countParams.length}`);
+  }
+  if (Number.isFinite(categoryIdNum)) {
+    countParams.push(categoryIdNum);
+    countFilters.push(`et.category_id = $${countParams.length}`);
+  }
+  if (Number.isFinite(typeIdNum)) {
+    countParams.push(typeIdNum);
+    countFilters.push(`e.type_id = $${countParams.length}`);
+  }
+
+  const countRes = await pool.query(
+    `
+    SELECT e.type_id,
+           COUNT(*)::int AS total_units
+      FROM equipment e
+      JOIN equipment_types et ON et.id = e.type_id AND et.company_id = e.company_id
+     WHERE ${countFilters.join(" AND ")}
+     GROUP BY e.type_id
+    `,
+    countParams
+  );
+  const totalsByType = new Map(countRes.rows.map((r) => [String(r.type_id), Number(r.total_units || 0)]));
+
+  const byType = new Map();
+  types.forEach((t) => {
+    const totalUnits = totalsByType.get(String(t.typeId)) || 0;
+    byType.set(String(t.typeId), {
+      typeId: t.typeId,
+      typeName: t.typeName,
+      categoryName: t.categoryName,
+      totalUnits,
+      committedByDay: new Array(dayCount).fill(0),
+      projectedByDay: new Array(dayCount).fill(0),
+    });
+  });
+
+  const demandParams = [companyId, rangeStart.toISOString(), end.toISOString()];
+  const demandFilters = [
+    "ro.company_id = $1",
+    "ro.status IN ('quote','requested','reservation','ordered')",
+    "COALESCE(li.fulfilled_at, li.start_at) < $3::timestamptz",
+    "COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) > $2::timestamptz",
+  ];
+  if (Number.isFinite(locationIdNum)) {
+    demandParams.push(locationIdNum);
+    demandFilters.push(`ro.pickup_location_id = $${demandParams.length}`);
+  }
+  if (Number.isFinite(categoryIdNum)) {
+    demandParams.push(categoryIdNum);
+    demandFilters.push(`et.category_id = $${demandParams.length}`);
+  }
+  if (Number.isFinite(typeIdNum)) {
+    demandParams.push(typeIdNum);
+    demandFilters.push(`li.type_id = $${demandParams.length}`);
+  }
+
+  const demandRes = await pool.query(
+    `
+    SELECT li.id,
+           li.type_id,
+           ro.status,
+           COALESCE(li.fulfilled_at, li.start_at) AS start_at,
+           COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
+           CASE WHEN COUNT(liv.equipment_id) > 0 THEN COUNT(liv.equipment_id) ELSE 1 END AS qty,
+           et.name AS type_name,
+           ec.name AS category_name
+      FROM rental_order_line_items li
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+      JOIN equipment_types et ON et.id = li.type_id AND et.company_id = ro.company_id
+ LEFT JOIN equipment_categories ec ON ec.id = et.category_id
+ LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
+     WHERE ${demandFilters.join(" AND ")}
+     GROUP BY li.id, li.type_id, ro.status, li.fulfilled_at, li.start_at, li.returned_at, li.end_at, et.name, ec.name
+    `,
+    demandParams
+  );
+
+  const committedStatuses = new Set(["reservation", "ordered"]);
+  const startMs = rangeStart.getTime();
+  demandRes.rows.forEach((r) => {
+    const typeKey = String(r.type_id);
+    if (!byType.has(typeKey)) {
+      byType.set(typeKey, {
+        typeId: Number(r.type_id),
+        typeName: r.type_name || "--",
+        categoryName: r.category_name || null,
+        totalUnits: totalsByType.get(typeKey) || 0,
+        committedByDay: new Array(dayCount).fill(0),
+        projectedByDay: new Array(dayCount).fill(0),
+      });
+    }
+    const bucket = byType.get(typeKey);
+    if (!bucket) return;
+
+    const qty = Number(r.qty || 0);
+    if (!Number.isFinite(qty) || qty <= 0) return;
+    const s = Date.parse(r.start_at);
+    const e = Date.parse(r.end_at);
+    if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return;
+    const first = Math.max(0, Math.floor((startOfDayMs(s) - startMs) / (24 * 60 * 60 * 1000)));
+    const last = Math.min(dayCount - 1, Math.floor((startOfDayMs(e - 1) - startMs) / (24 * 60 * 60 * 1000)));
+    const target = committedStatuses.has(String(r.status || "").toLowerCase())
+      ? bucket.committedByDay
+      : bucket.projectedByDay;
+    for (let i = first; i <= last; i++) target[i] += qty;
+  });
+
+  const rows = [];
+  byType.forEach((bucket) => {
+    let minCommitted = null;
+    let minPotential = null;
+    for (let i = 0; i < dayCount; i++) {
+      const committedAvail = bucket.totalUnits - bucket.committedByDay[i];
+      const potentialAvail = committedAvail - bucket.projectedByDay[i];
+      minCommitted = minCommitted === null ? committedAvail : Math.min(minCommitted, committedAvail);
+      minPotential = minPotential === null ? potentialAvail : Math.min(minPotential, potentialAvail);
+    }
+    const hasDemand =
+      bucket.committedByDay.some((v) => v > 0) || bucket.projectedByDay.some((v) => v > 0) || bucket.totalUnits > 0;
+    if (!hasDemand) return;
+    rows.push({
+      typeId: bucket.typeId,
+      typeName: bucket.typeName,
+      categoryName: bucket.categoryName,
+      totalUnits: bucket.totalUnits,
+      minCommitted: minCommitted ?? bucket.totalUnits,
+      minPotential: minPotential ?? bucket.totalUnits,
+    });
+  });
+
+  rows.sort((a, b) => {
+    if (a.minCommitted !== b.minCommitted) return a.minCommitted - b.minCommitted;
+    return String(a.typeName || "").localeCompare(String(b.typeName || ""));
+  });
+
+  return { rows };
+}
+
+async function getTypeAvailabilitySeriesWithProjection({
+  companyId,
+  typeId,
+  from,
+  days = 30,
+  locationId = null,
+  splitLocation = false,
+} = {}) {
+  const fromDate = new Date(from || new Date().toISOString());
+  if (Number.isNaN(fromDate.getTime())) return { dates: [], series: [] };
+  const dayCount = Math.max(1, Math.min(180, Number(days) || 30));
+  const start = new Date(fromDate);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start.getTime() + dayCount * 24 * 60 * 60 * 1000);
+
+  const locationIdNum = locationId === null || locationId === undefined ? null : Number(locationId);
+  const doSplit = Boolean(splitLocation && !Number.isFinite(locationIdNum));
+
+  const equipmentParams = [companyId, typeId];
+  const equipmentFilters = [
+    "e.company_id = $1",
+    "e.type_id = $2",
+    "(e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')",
+  ];
+  if (Number.isFinite(locationIdNum)) {
+    equipmentParams.push(locationIdNum);
+    equipmentFilters.push(`e.location_id = $${equipmentParams.length}`);
+  }
+
+  const equipmentRes = await pool.query(
+    `
+    SELECT e.id, e.location_id, l.name AS location_name
+      FROM equipment e
+ LEFT JOIN locations l ON l.id = e.location_id
+     WHERE ${equipmentFilters.join(" AND ")}
+    `,
+    equipmentParams
+  );
+  const units = equipmentRes.rows.map((r) => ({
+    id: Number(r.id),
+    locationId: r.location_id === null || r.location_id === undefined ? null : Number(r.location_id),
+    locationName: r.location_name || "No location",
+  }));
+
+  const byLocation = new Map();
+  if (doSplit) {
+    units.forEach((u) => {
+      const key = String(u.locationId ?? "none");
+      if (!byLocation.has(key)) {
+        byLocation.set(key, {
+          locationId: u.locationId,
+          locationName: u.locationName,
+          total: 0,
+          committedByDay: new Array(dayCount).fill(0),
+          projectedByDay: new Array(dayCount).fill(0),
+        });
+      }
+      byLocation.get(key).total += 1;
+    });
+  } else {
+    const total = units.length;
+    const locationName = Number.isFinite(locationIdNum)
+      ? units[0]?.locationName || "Location"
+      : "All locations";
+    byLocation.set("all", {
+      locationId: Number.isFinite(locationIdNum) ? locationIdNum : null,
+      locationName,
+      total,
+      committedByDay: new Array(dayCount).fill(0),
+      projectedByDay: new Array(dayCount).fill(0),
+    });
+  }
+
+  const demandParams = [companyId, typeId, start.toISOString(), end.toISOString()];
+  const demandFilters = [
+    "ro.company_id = $1",
+    "li.type_id = $2",
+    "ro.status IN ('quote','requested','reservation','ordered')",
+    "COALESCE(li.fulfilled_at, li.start_at) < $4::timestamptz",
+    "COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) > $3::timestamptz",
+  ];
+  if (Number.isFinite(locationIdNum)) {
+    demandParams.push(locationIdNum);
+    demandFilters.push(`ro.pickup_location_id = $${demandParams.length}`);
+  }
+
+  const demandRes = await pool.query(
+    `
+    SELECT li.id,
+           ro.status,
+           ro.pickup_location_id,
+           COALESCE(l.name, 'No location') AS location_name,
+           COALESCE(li.fulfilled_at, li.start_at) AS start_at,
+           COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
+           CASE WHEN COUNT(liv.equipment_id) > 0 THEN COUNT(liv.equipment_id) ELSE 1 END AS qty
+      FROM rental_order_line_items li
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+ LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
+ LEFT JOIN locations l ON l.id = ro.pickup_location_id
+     WHERE ${demandFilters.join(" AND ")}
+     GROUP BY li.id, ro.status, ro.pickup_location_id, l.name, li.fulfilled_at, li.start_at, li.returned_at, li.end_at
+    `,
+    demandParams
+  );
+
+  const committedStatuses = new Set(["reservation", "ordered"]);
+  const startMs = start.getTime();
+  demandRes.rows.forEach((r) => {
+    const locKey = doSplit ? String(r.pickup_location_id ?? "none") : "all";
+    if (!byLocation.has(locKey)) {
+      byLocation.set(locKey, {
+        locationId: r.pickup_location_id === null || r.pickup_location_id === undefined ? null : Number(r.pickup_location_id),
+        locationName: r.location_name || "No location",
+        total: 0,
+        committedByDay: new Array(dayCount).fill(0),
+        projectedByDay: new Array(dayCount).fill(0),
+      });
+    }
+    const bucket = byLocation.get(locKey);
+    if (!bucket) return;
+
+    const qty = Number(r.qty || 0);
+    if (!Number.isFinite(qty) || qty <= 0) return;
+    const s = Date.parse(r.start_at);
+    const e = Date.parse(r.end_at);
+    if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return;
+    const first = Math.max(0, Math.floor((startOfDayMs(s) - startMs) / (24 * 60 * 60 * 1000)));
+    const last = Math.min(dayCount - 1, Math.floor((startOfDayMs(e - 1) - startMs) / (24 * 60 * 60 * 1000)));
+    const target = committedStatuses.has(String(r.status || "").toLowerCase())
+      ? bucket.committedByDay
+      : bucket.projectedByDay;
+    for (let i = first; i <= last; i++) target[i] += qty;
+  });
+
+  const dates = [];
+  for (let i = 0; i < dayCount; i++) {
+    const d = new Date(startMs + i * 24 * 60 * 60 * 1000);
+    dates.push(d.toISOString().slice(0, 10));
+  }
+
+  const series = Array.from(byLocation.values())
+    .sort((a, b) => String(a.locationName).localeCompare(String(b.locationName)))
+    .map((loc) => ({
+      locationId: loc.locationId,
+      locationName: loc.locationName,
+      total: loc.total,
+      committedValues: loc.committedByDay.map((reserved) => loc.total - reserved),
+      potentialValues: loc.committedByDay.map((reserved, idx) => loc.total - reserved - loc.projectedByDay[idx]),
+    }));
+
+  return { dates, series };
+}
+
+async function getTypeAvailabilityShortfallDetails({ companyId, typeId, date, locationId = null } = {}) {
+  const dayStart = date ? new Date(date) : null;
+  if (!dayStart || Number.isNaN(dayStart.getTime())) return { committed: [], projected: [] };
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+
+  const startIso = normalizeTimestamptz(dayStart);
+  const endIso = normalizeTimestamptz(dayEnd);
+  if (!startIso || !endIso) return { committed: [], projected: [] };
+
+  const locationIdNum = locationId === null || locationId === undefined ? null : Number(locationId);
+  const params = [companyId, typeId, startIso, endIso];
+  const filters = [
+    "ro.company_id = $1",
+    "li.type_id = $2",
+    "ro.status IN ('quote','requested','reservation','ordered')",
+    "tstzrange(COALESCE(li.fulfilled_at, li.start_at), COALESCE(li.returned_at, GREATEST(li.end_at, NOW())), '[)')",
+    "&& tstzrange($3::timestamptz, $4::timestamptz, '[)')",
+  ];
+  if (Number.isFinite(locationIdNum)) {
+    params.push(locationIdNum);
+    filters.push(`ro.pickup_location_id = $${params.length}`);
+  }
+
+  const res = await pool.query(
+    `
+    SELECT li.id AS line_item_id,
+           ro.id AS order_id,
+           ro.status,
+           ro.quote_number,
+           ro.ro_number,
+           c.company_name AS customer_name,
+           ro.pickup_location_id,
+           COALESCE(l.name, 'No location') AS location_name,
+           COALESCE(li.fulfilled_at, li.start_at) AS start_at,
+           COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
+           CASE WHEN COUNT(liv.equipment_id) > 0 THEN COUNT(liv.equipment_id) ELSE 1 END AS qty
+      FROM rental_order_line_items li
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+      JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
+ LEFT JOIN locations l ON l.id = ro.pickup_location_id
+     WHERE ${filters.join(" AND ")}
+     GROUP BY li.id, ro.id, ro.status, ro.quote_number, ro.ro_number, c.company_name, ro.pickup_location_id, l.name,
+              li.fulfilled_at, li.start_at, li.returned_at, li.end_at
+     ORDER BY COALESCE(li.fulfilled_at, li.start_at) ASC
+    `,
+    params
+  );
+
+  const committed = [];
+  const projected = [];
+  res.rows.forEach((row) => {
+    const status = String(row.status || "").toLowerCase();
+    if (status === "reservation" || status === "ordered") committed.push(row);
+    else projected.push(row);
+  });
+
+  return { committed, projected };
+}
+
 function startOfDayMs(ms) {
   const d = new Date(ms);
   d.setHours(0, 0, 0, 0);
@@ -13641,6 +14053,9 @@ module.exports = {
   createReturnBillingForLineItem,
   createPauseBillingAdjustments,
   getTypeAvailabilitySeries,
+  getAvailabilityShortfallsSummary,
+  getTypeAvailabilitySeriesWithProjection,
+  getTypeAvailabilityShortfallDetails,
   getUtilizationDashboard,
   getRevenueSummary,
   getRevenueTimeSeries,

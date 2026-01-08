@@ -54,6 +54,28 @@ let utilHeroChart = null;
 let utilTrendChart = null;
 let utilForwardChart = null;
 
+const shortfallDaysSelect = document.getElementById("shortfall-days");
+const shortfallLocation = document.getElementById("shortfall-location");
+const shortfallCategory = document.getElementById("shortfall-category");
+const shortfallType = document.getElementById("shortfall-type");
+const shortfallSplitToggle = document.getElementById("shortfall-split-location");
+const shortfallSummaryCanvas = document.getElementById("shortfall-summary-chart");
+const shortfallSummaryWrap = document.getElementById("shortfall-summary-wrap");
+const shortfallDetailCanvas = document.getElementById("shortfall-detail-chart");
+const shortfallMeta = document.getElementById("shortfall-meta");
+const shortfallDetails = document.getElementById("shortfall-details");
+const shortfallDetailsMeta = document.getElementById("shortfall-details-meta");
+const shortfallDetailsBody = document.getElementById("shortfall-details-body");
+let shortfallSummaryChart = null;
+let shortfallDetailChart = null;
+let shortfallSummaryRows = [];
+let shortfallSeriesData = null;
+let shortfallSeriesMeta = [];
+let shortfallSelectedTypeId = null;
+let shortfallHoverKey = "";
+let shortfallDetailsCache = new Map();
+let shortfallLoadSeq = 0;
+
 const tooltip = document.getElementById("timeline-tooltip");
 let timelineMenuEl = null;
 const conflictModal = document.getElementById("conflict-modal");
@@ -169,6 +191,10 @@ function hasUtilizationUI() {
   return Boolean(utilHeroCanvas && utilTrendCanvas && utilForwardCanvas);
 }
 
+function hasShortfallUI() {
+  return Boolean(shortfallSummaryCanvas && shortfallDetailCanvas);
+}
+
 const MONEY_FORMAT = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function fmtMoney(n) {
@@ -180,6 +206,12 @@ function fmtPercent(v) {
   const x = Number(v || 0);
   if (!Number.isFinite(x)) return "--";
   return `${(x * 100).toFixed(1)}%`;
+}
+
+function fmtCount(v) {
+  const x = Number(v || 0);
+  if (!Number.isFinite(x)) return "--";
+  return String(Math.round(x));
 }
 
 function seriesColor(i) {
@@ -1210,6 +1242,499 @@ function initUtilizationUI() {
   });
 }
 
+function shortfallRangeFromInputs() {
+  const days = Math.max(1, Math.min(180, Number(shortfallDaysSelect?.value) || 30));
+  const start = startOfLocalDay(new Date());
+  const end = new Date(start.getTime() + days * DAY_MS);
+  return { start, end, days, from: start.toISOString(), to: end.toISOString() };
+}
+
+function setShortfallMeta(message) {
+  if (shortfallMeta) shortfallMeta.textContent = message ? String(message) : "";
+}
+
+function renderShortfallDetailsEmpty(message) {
+  if (shortfallDetailsBody) shortfallDetailsBody.replaceChildren();
+  if (shortfallDetailsMeta) {
+    shortfallDetailsMeta.textContent = message || "Hover a negative point to see contributing orders.";
+  }
+}
+
+function syncShortfallSplitToggle() {
+  if (!shortfallSplitToggle) return;
+  const allowSplit = !shortfallLocation?.value;
+  shortfallSplitToggle.disabled = !allowSplit;
+  if (!allowSplit) shortfallSplitToggle.checked = false;
+}
+
+async function ensureShortfallLookups() {
+  if (!activeCompanyId) return;
+  const requests = [];
+  if (shortfallLocation) requests.push(fetch(`/api/locations?companyId=${activeCompanyId}`));
+  if (shortfallCategory) requests.push(fetch(`/api/equipment-categories?companyId=${activeCompanyId}`));
+  if (shortfallType) requests.push(fetch(`/api/equipment-types?companyId=${activeCompanyId}`));
+
+  if (!requests.length) return;
+  const responses = await Promise.all(requests);
+  const results = await Promise.all(responses.map((r) => r.json().catch(() => ({}))));
+
+  let idx = 0;
+  if (shortfallLocation) {
+    const locData = results[idx++];
+    if (responses[idx - 1]?.ok) {
+      const current = shortfallLocation.value;
+      shortfallLocation.innerHTML = `<option value="">All</option>`;
+      (locData.locations || []).forEach((l) => {
+        const opt = document.createElement("option");
+        opt.value = String(l.id);
+        opt.textContent = l.name;
+        shortfallLocation.appendChild(opt);
+      });
+      shortfallLocation.value = current;
+    }
+  }
+
+  if (shortfallCategory) {
+    const catData = results[idx++];
+    if (responses[idx - 1]?.ok) {
+      const current = shortfallCategory.value;
+      shortfallCategory.innerHTML = `<option value="">All</option>`;
+      (catData.categories || []).forEach((c) => {
+        const opt = document.createElement("option");
+        opt.value = String(c.id);
+        opt.textContent = c.name;
+        shortfallCategory.appendChild(opt);
+      });
+      shortfallCategory.value = current;
+    }
+  }
+
+  if (shortfallType) {
+    const typeData = results[idx++];
+    if (responses[idx - 1]?.ok) {
+      const current = shortfallType.value;
+      shortfallType.innerHTML = `<option value="">All</option>`;
+      (typeData.types || []).forEach((t) => {
+        const opt = document.createElement("option");
+        opt.value = String(t.id);
+        opt.textContent = t.name;
+        shortfallType.appendChild(opt);
+      });
+      shortfallType.value = current;
+    }
+  }
+}
+
+function renderShortfallSummaryChart() {
+  if (!shortfallSummaryCanvas || typeof Chart === "undefined") return;
+  const rows = Array.isArray(shortfallSummaryRows) ? shortfallSummaryRows : [];
+  if (shortfallSummaryChart) shortfallSummaryChart.destroy();
+
+  if (!rows.length) {
+    const ctx = shortfallSummaryCanvas.getContext("2d");
+    ctx?.clearRect(0, 0, shortfallSummaryCanvas.width, shortfallSummaryCanvas.height);
+    return;
+  }
+
+  if (shortfallSummaryWrap) {
+    const height = Math.max(260, rows.length * 28);
+    shortfallSummaryWrap.style.height = `${height}px`;
+    shortfallSummaryWrap.style.maxHeight = `${height}px`;
+  }
+
+  const labels = rows.map((r) => r.typeName || `Type ${r.typeId}`);
+  const values = rows.map((r) => Number(r.minCommitted || 0));
+  const selectedIndex = rows.findIndex((r) => String(r.typeId) === String(shortfallSelectedTypeId));
+  const colors = values.map((v, idx) => {
+    const base = v < 0 ? [239, 68, 68] : [37, 99, 235];
+    const alpha = idx === selectedIndex ? 0.9 : 0.55;
+    return `rgba(${base[0]}, ${base[1]}, ${base[2]}, ${alpha})`;
+  });
+  const borderColors = values.map((v) => (v < 0 ? "rgba(239, 68, 68, 0.9)" : "rgba(37, 99, 235, 0.9)"));
+  const borderWidths = values.map((_, idx) => (idx === selectedIndex ? 2 : 1));
+
+  shortfallSummaryChart = new Chart(shortfallSummaryCanvas.getContext("2d"), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Committed availability",
+          data: values,
+          backgroundColor: colors,
+          borderColor: borderColors,
+          borderWidth: borderWidths,
+        },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      onClick: (evt) => {
+        const points = shortfallSummaryChart.getElementsAtEventForMode(evt, "nearest", { intersect: true }, true);
+        if (!points?.length) return;
+        const idx = points[0].index;
+        const row = shortfallSummaryRows[idx];
+        if (!row?.typeId) return;
+        shortfallSelectedTypeId = row.typeId;
+        shortfallHoverKey = "";
+        shortfallDetailsCache.clear();
+        renderShortfallSummaryChart();
+        loadShortfallSeries().catch(() => null);
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `Committed min: ${fmtCount(ctx.raw)}`,
+            afterLabel: (ctx) => {
+              const row = shortfallSummaryRows[ctx.dataIndex];
+              if (!row) return "";
+              return `Potential min: ${fmtCount(row.minPotential)}`;
+            },
+            footer: (items) => {
+              const row = shortfallSummaryRows[items?.[0]?.dataIndex];
+              if (!row) return "";
+              return `Total units: ${fmtCount(row.totalUnits)}`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: { precision: 0 },
+          grid: {
+            color: (ctx) => (ctx.tick?.value === 0 ? "rgba(148, 163, 184, 0.8)" : "rgba(226, 232, 240, 0.8)"),
+          },
+        },
+        y: { grid: { display: false } },
+      },
+    },
+  });
+}
+
+function renderShortfallDetailChart() {
+  if (!shortfallDetailCanvas || typeof Chart === "undefined") return;
+  if (shortfallDetailChart) shortfallDetailChart.destroy();
+  shortfallSeriesMeta = [];
+
+  const payload = shortfallSeriesData || {};
+  const dates = Array.isArray(payload.dates) ? payload.dates : [];
+  const series = Array.isArray(payload.series) ? payload.series : [];
+
+  if (!dates.length || !series.length) {
+    const ctx = shortfallDetailCanvas.getContext("2d");
+    ctx?.clearRect(0, 0, shortfallDetailCanvas.width, shortfallDetailCanvas.height);
+    renderShortfallDetailsEmpty();
+    return;
+  }
+
+  const labels = dates.map((d) => String(d).slice(5));
+  const splitEnabled = Boolean(shortfallSplitToggle?.checked && !shortfallLocation?.value);
+  const datasets = [];
+
+  series.forEach((loc, idx) => {
+    const c = seriesColor(idx);
+    const base = `rgba(${c.r}, ${c.g}, ${c.b}, 0.85)`;
+    const faded = `rgba(${c.r}, ${c.g}, ${c.b}, 0.45)`;
+    const locationLabel = loc.locationName || "Location";
+    const committedLabel = splitEnabled ? `${locationLabel} (committed)` : "Committed";
+    const potentialLabel = splitEnabled ? `${locationLabel} (potential)` : "Potential (quotes + requests)";
+
+    datasets.push({
+      label: committedLabel,
+      data: Array.isArray(loc.committedValues) ? loc.committedValues : [],
+      borderColor: base,
+      backgroundColor: "transparent",
+      tension: 0.25,
+      borderWidth: 2,
+      pointRadius: 0,
+      segment: {
+        borderColor: (ctx) => (ctx.p0.parsed.y < 0 || ctx.p1.parsed.y < 0 ? "rgba(239, 68, 68, 0.95)" : base),
+      },
+    });
+    shortfallSeriesMeta.push({ seriesIndex: idx, kind: "committed" });
+
+    datasets.push({
+      label: potentialLabel,
+      data: Array.isArray(loc.potentialValues) ? loc.potentialValues : [],
+      borderColor: faded,
+      backgroundColor: "transparent",
+      tension: 0.25,
+      borderWidth: 2,
+      pointRadius: 0,
+      borderDash: [6, 4],
+    });
+    shortfallSeriesMeta.push({ seriesIndex: idx, kind: "potential" });
+  });
+
+  shortfallDetailChart = new Chart(shortfallDetailCanvas.getContext("2d"), {
+    type: "line",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "nearest", intersect: false },
+      onHover: (_, active) => handleShortfallHover(active),
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 10, usePointStyle: true, pointStyle: "line" } },
+        tooltip: {
+          mode: "index",
+          intersect: false,
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${fmtCount(ctx.raw)}`,
+          },
+        },
+      },
+      scales: {
+        y: {
+          ticks: { precision: 0 },
+          grid: {
+            color: (ctx) => (ctx.tick?.value === 0 ? "rgba(148, 163, 184, 0.8)" : "rgba(226, 232, 240, 0.8)"),
+          },
+        },
+        x: { ticks: { maxRotation: 0 }, grid: { display: false }, title: { display: true, text: "Date" } },
+      },
+    },
+  });
+
+  renderShortfallDetailsEmpty();
+}
+
+function renderShortfallRow(row) {
+  const div = document.createElement("div");
+  div.className = "shortfall-row";
+
+  const title = document.createElement("div");
+  title.className = "shortfall-row-title";
+  const label = document.createElement("span");
+  label.textContent = `${docNumber(row)} • ${statusLabel(row.status)}`;
+  title.appendChild(label);
+
+  if (row.order_id) {
+    const link = document.createElement("a");
+    link.className = "ghost small";
+    link.href = `rental-order-form.html?id=${row.order_id}&from=dashboard`;
+    link.textContent = "Open";
+    title.appendChild(link);
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "shortfall-row-meta";
+  meta.textContent = `${row.customer_name || "--"} • Qty ${fmtCount(row.qty || 0)} • ${fmtDateTime(row.start_at)} - ${fmtDateTime(
+    row.end_at
+  )}`;
+
+  div.appendChild(title);
+  div.appendChild(meta);
+  return div;
+}
+
+function renderShortfallGroup(title, rows) {
+  const group = document.createElement("div");
+  group.className = "shortfall-group";
+  const heading = document.createElement("div");
+  heading.className = "shortfall-group-title";
+  heading.textContent = title;
+  group.appendChild(heading);
+  rows.forEach((row) => group.appendChild(renderShortfallRow(row)));
+  return group;
+}
+
+function renderShortfallDetails(data, { date, locationName } = {}) {
+  if (!shortfallDetailsBody) return;
+  shortfallDetailsBody.replaceChildren();
+  const dateLabel = date ? new Date(`${date}T00:00:00`).toLocaleDateString() : "";
+  const locLabel = locationName || "All locations";
+  if (shortfallDetailsMeta) {
+    shortfallDetailsMeta.textContent = [dateLabel, locLabel].filter(Boolean).join(" • ");
+  }
+
+  const committed = Array.isArray(data?.committed) ? data.committed : [];
+  const projected = Array.isArray(data?.projected) ? data.projected : [];
+
+  if (!committed.length && !projected.length) {
+    renderShortfallDetailsEmpty("No overlapping orders for this date.");
+    return;
+  }
+
+  if (committed.length) shortfallDetailsBody.appendChild(renderShortfallGroup("Orders + reservations", committed));
+  if (projected.length) shortfallDetailsBody.appendChild(renderShortfallGroup("Quotes + requests", projected));
+}
+
+function renderShortfallDetailsLoading(dateLabel) {
+  if (shortfallDetailsBody) shortfallDetailsBody.replaceChildren();
+  if (shortfallDetailsMeta) shortfallDetailsMeta.textContent = dateLabel || "Loading shortfall details...";
+}
+
+async function loadShortfallDetails({ typeId, date, locationId, locationName }) {
+  if (!activeCompanyId || !typeId || !date) return;
+  const key = `${typeId}:${locationId ?? "all"}:${date}`;
+  const cached = shortfallDetailsCache.get(key);
+  if (cached) {
+    renderShortfallDetails(cached, { date, locationName });
+    return;
+  }
+
+  renderShortfallDetailsLoading("Loading shortfall details...");
+  const qs = new URLSearchParams({ companyId: String(activeCompanyId), date: String(date) });
+  if (locationId !== null && locationId !== undefined) qs.set("locationId", String(locationId));
+
+  try {
+    const res = await fetch(`/api/equipment-types/${encodeURIComponent(String(typeId))}/availability-shortfall-details?${qs.toString()}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load shortfall details");
+    const payload = {
+      committed: Array.isArray(data.committed) ? data.committed : [],
+      projected: Array.isArray(data.projected) ? data.projected : [],
+    };
+    shortfallDetailsCache.set(key, payload);
+    renderShortfallDetails(payload, { date, locationName });
+  } catch (err) {
+    renderShortfallDetailsEmpty(err.message || "Unable to load shortfall details.");
+  }
+}
+
+function handleShortfallHover(active) {
+  if (!active?.length || !shortfallSeriesData) return;
+  const point = active[0];
+  const meta = shortfallSeriesMeta[point.datasetIndex];
+  if (!meta) return;
+  const series = shortfallSeriesData.series?.[meta.seriesIndex];
+  const date = shortfallSeriesData.dates?.[point.index];
+  if (!series || !date) return;
+
+  const committedValue = Number(series.committedValues?.[point.index] ?? 0);
+  const potentialValue = Number(series.potentialValues?.[point.index] ?? 0);
+  if (committedValue >= 0 && potentialValue >= 0) {
+    renderShortfallDetailsEmpty();
+    return;
+  }
+
+  const locationId = series.locationId ?? null;
+  const key = `${shortfallSelectedTypeId}:${locationId ?? "all"}:${date}`;
+  if (shortfallHoverKey === key) return;
+  shortfallHoverKey = key;
+  loadShortfallDetails({ typeId: shortfallSelectedTypeId, date, locationId, locationName: series.locationName }).catch(() => null);
+}
+
+async function loadShortfallSeries() {
+  if (!hasShortfallUI() || !activeCompanyId) return;
+  if (!shortfallSelectedTypeId) {
+    shortfallSeriesData = null;
+    renderShortfallDetailChart();
+    return;
+  }
+
+  const range = shortfallRangeFromInputs();
+  const qs = new URLSearchParams({
+    companyId: String(activeCompanyId),
+    from: range.from,
+    days: String(range.days),
+    includeProjected: "1",
+  });
+  if (shortfallLocation?.value) qs.set("locationId", String(Number(shortfallLocation.value)));
+  if (shortfallSplitToggle?.checked && !shortfallLocation?.value) qs.set("splitLocation", "1");
+
+  const res = await fetch(
+    `/api/equipment-types/${encodeURIComponent(String(shortfallSelectedTypeId))}/availability-series?${qs.toString()}`
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load availability series");
+  shortfallSeriesData = {
+    dates: Array.isArray(data.dates) ? data.dates : [],
+    series: Array.isArray(data.series)
+      ? data.series.map((row) => ({
+          locationId: row.locationId ?? null,
+          locationName: row.locationName || "Location",
+          total: Number(row.total || 0),
+          committedValues: Array.isArray(row.committedValues) ? row.committedValues : [],
+          potentialValues: Array.isArray(row.potentialValues) ? row.potentialValues : [],
+        }))
+      : [],
+  };
+  renderShortfallDetailChart();
+}
+
+async function loadShortfallDashboard() {
+  if (!hasShortfallUI() || !activeCompanyId) return;
+  if (typeof Chart === "undefined") return;
+
+  const seq = (shortfallLoadSeq += 1);
+  setShortfallMeta("Loading availability...");
+  await ensureShortfallLookups().catch(() => null);
+  syncShortfallSplitToggle();
+
+  const range = shortfallRangeFromInputs();
+  const qs = new URLSearchParams({
+    companyId: String(activeCompanyId),
+    from: range.from,
+    to: range.to,
+  });
+  if (shortfallLocation?.value) qs.set("locationId", String(Number(shortfallLocation.value)));
+  if (shortfallCategory?.value) qs.set("categoryId", String(Number(shortfallCategory.value)));
+  if (shortfallType?.value) qs.set("typeId", String(Number(shortfallType.value)));
+
+  try {
+    const res = await fetch(`/api/availability-shortfalls?${qs.toString()}`);
+    const data = await res.json().catch(() => ({}));
+    if (seq !== shortfallLoadSeq) return;
+    if (!res.ok) throw new Error(data.error || "Unable to load availability");
+
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    shortfallSummaryRows = rows
+      .map((r) => ({
+        typeId: r.typeId ?? r.type_id ?? null,
+        typeName: r.typeName || r.type_name || "--",
+        categoryName: r.categoryName || r.category_name || null,
+        totalUnits: Number(r.totalUnits ?? r.total_units ?? 0),
+        minCommitted: Number(r.minCommitted ?? r.min_committed ?? 0),
+        minPotential: Number(r.minPotential ?? r.min_potential ?? 0),
+      }))
+      .filter((r) => r.typeId !== null)
+      .sort((a, b) => {
+        if (a.minCommitted !== b.minCommitted) return a.minCommitted - b.minCommitted;
+        return String(a.typeName || "").localeCompare(String(b.typeName || ""));
+      });
+
+    const typeFilterId = shortfallType?.value ? Number(shortfallType.value) : null;
+    if (Number.isFinite(typeFilterId)) {
+      shortfallSelectedTypeId = typeFilterId;
+    } else if (
+      !shortfallSelectedTypeId ||
+      !shortfallSummaryRows.some((r) => String(r.typeId) === String(shortfallSelectedTypeId))
+    ) {
+      shortfallSelectedTypeId = shortfallSummaryRows[0]?.typeId ?? null;
+    }
+
+    shortfallDetailsCache.clear();
+    shortfallHoverKey = "";
+    renderShortfallSummaryChart();
+    await loadShortfallSeries().catch(() => null);
+
+    const summaryLabel = shortfallSummaryRows.length
+      ? `Showing next ${range.days} days.`
+      : "No availability data for this range.";
+    setShortfallMeta(summaryLabel);
+  } catch (err) {
+    if (seq !== shortfallLoadSeq) return;
+    setShortfallMeta(err.message || "Unable to load availability.");
+  }
+}
+
+function initShortfallUI() {
+  if (!hasShortfallUI()) return;
+  renderShortfallDetailsEmpty();
+  syncShortfallSplitToggle();
+
+  shortfallDaysSelect?.addEventListener("change", () => loadShortfallDashboard().catch(() => null));
+  shortfallLocation?.addEventListener("change", () => loadShortfallDashboard().catch(() => null));
+  shortfallCategory?.addEventListener("change", () => loadShortfallDashboard().catch(() => null));
+  shortfallType?.addEventListener("change", () => loadShortfallDashboard().catch(() => null));
+  shortfallSplitToggle?.addEventListener("change", () => loadShortfallSeries().catch(() => null));
+}
+
 async function loadRevenueDashboard() {
   if (!hasRevenueUI()) return;
   await Promise.all([loadRevenueTimeSeries().catch(() => null), loadSalespersonDonut().catch(() => null)]);
@@ -1944,6 +2469,10 @@ function init() {
     initUtilizationUI();
   }
 
+  if (hasShortfallUI()) {
+    initShortfallUI();
+  }
+
   rangeDays = Number(rangeDaysSelect?.value) || 30;
   rangeStartDate = hasTimelineUI()
     ? startOfLocalDay(new Date())
@@ -1962,9 +2491,10 @@ function init() {
     if (hasTimelineUI()) {
       if (hasBenchStagesUI() && benchActiveView === "stages") loadBenchStages();
       else loadTimeline();
-    } else if (hasRevenueUI() || hasUtilizationUI()) {
+    } else if (hasRevenueUI() || hasUtilizationUI() || hasShortfallUI()) {
       const tasks = [];
       if (hasUtilizationUI()) tasks.push(loadUtilizationDashboard().catch(() => null));
+      if (hasShortfallUI()) tasks.push(loadShortfallDashboard().catch(() => null));
       if (hasRevenueUI()) tasks.push(loadRevenueDashboard().catch(() => null));
       Promise.all(tasks).catch((err) => (companyMeta.textContent = err.message));
     }
