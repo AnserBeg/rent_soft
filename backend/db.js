@@ -10348,6 +10348,14 @@ async function createRentalOrder({
       if (!item.typeId || !startAt || !endAt) continue;
       const rateBasis = normalizeRateBasis(item.rateBasis);
       const rateAmount = item.rateAmount === "" || item.rateAmount === null || item.rateAmount === undefined ? null : Number(item.rateAmount);
+      const billableUnitsOverride =
+        item.billableUnits === "" || item.billableUnits === null || item.billableUnits === undefined
+          ? null
+          : Number(item.billableUnits);
+      const lineAmountOverride =
+        item.lineAmount === "" || item.lineAmount === null || item.lineAmount === undefined
+          ? null
+          : Number(item.lineAmount);
       const fulfilledAt = normalizeTimestamptz(item.fulfilledAt) || null;
       const returnedAt = fulfilledAt ? normalizeTimestamptz(item.returnedAt) || null : null;
       const pausePeriods = normalizePausePeriods(item.pausePeriods);
@@ -10355,7 +10363,7 @@ async function createRentalOrder({
       const inventoryIds = demandOnly ? [] : rawInventoryIds;
       const qty = inventoryIds.length;
       const effectiveQty = qty || (demandOnly ? 1 : 0);
-      const billableUnits = computeBillableUnits({
+      const computedUnits = computeBillableUnits({
         startAt,
         endAt,
         rateBasis,
@@ -10363,10 +10371,14 @@ async function createRentalOrder({
         roundingGranularity: settings.billing_rounding_granularity,
         monthlyProrationMethod: settings.monthly_proration_method,
       });
+      const billableUnits =
+        Number.isFinite(billableUnitsOverride) && billableUnitsOverride > 0 ? billableUnitsOverride : computedUnits;
       const lineAmount =
-        rateAmount !== null && Number.isFinite(rateAmount) && billableUnits !== null && Number.isFinite(billableUnits)
-          ? Number((rateAmount * billableUnits * effectiveQty).toFixed(2))
-          : null;
+        Number.isFinite(lineAmountOverride)
+          ? lineAmountOverride
+          : rateAmount !== null && Number.isFinite(rateAmount) && billableUnits !== null && Number.isFinite(billableUnits)
+            ? Number((rateAmount * billableUnits * effectiveQty).toFixed(2))
+            : null;
       const liRes = await client.query(
         `INSERT INTO rental_order_line_items (rental_order_id, type_id, start_at, end_at, fulfilled_at, returned_at, rate_basis, rate_amount, billable_units, line_amount)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
@@ -10990,11 +11002,12 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
 
       const rateBasis = rateBasisFromLegacyDuration(mergedLine.chargedDuration);
       let rateAmount = null;
+      let bookedUnits = null;
       const totalNoTax = mergedLine.totals?.totalNoTax ?? null;
       const basisForPricing = rateBasis || inferRateBasisFromDates(mergedLine.startIso, mergedLine.endIso);
       const quantityForPricing = demandOnly ? targetQty : inventoryIds.length;
       if (totalNoTax !== null && Number.isFinite(totalNoTax) && basisForPricing && quantityForPricing) {
-        const units = computeBillableUnits({
+        bookedUnits = computeBillableUnits({
           startAt: mergedLine.startIso,
           endAt: mergedLine.endIso,
           rateBasis: basisForPricing,
@@ -11002,8 +11015,8 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
           roundingGranularity: settings.billing_rounding_granularity,
           monthlyProrationMethod: settings.monthly_proration_method,
         });
-        if (units !== null && Number.isFinite(units) && units > 0) {
-          const candidate = totalNoTax / (units * quantityForPricing);
+        if (bookedUnits !== null && Number.isFinite(bookedUnits) && bookedUnits > 0) {
+          const candidate = totalNoTax / (bookedUnits * quantityForPricing);
           if (Number.isFinite(candidate) && candidate >= 0) rateAmount = Number(candidate.toFixed(2));
         }
       }
@@ -11018,10 +11031,35 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
         beforeImages: [],
         afterImages: [],
       };
+      const actualUnitsForEnd = (actualEndIso) => {
+        if (!basisForPricing || !mergedLine.startIso) return bookedUnits;
+        const endIso = actualEndIso || mergedLine.endIso;
+        if (!endIso) return bookedUnits;
+        const units = computeBillableUnits({
+          startAt: mergedLine.startIso,
+          endAt: endIso,
+          rateBasis: basisForPricing,
+          roundingMode: settings.billing_rounding_mode,
+          roundingGranularity: settings.billing_rounding_granularity,
+          monthlyProrationMethod: settings.monthly_proration_method,
+        });
+        if (units !== null && Number.isFinite(units) && units > 0) return units;
+        return bookedUnits;
+      };
+      const lineAmountForUnits = (units, qty) =>
+        rateAmount !== null && Number.isFinite(rateAmount) && units !== null && Number.isFinite(units) && Number.isFinite(qty) && qty > 0
+          ? Number((rateAmount * units * qty).toFixed(2))
+          : null;
 
       if (demandOnly) {
         for (let i = 0; i < targetQty; i += 1) {
-          lineItems.push({ ...baseLineItem, inventoryIds: [] });
+          const billableUnits = actualUnitsForEnd(mergedLine.endIso);
+          lineItems.push({
+            ...baseLineItem,
+            inventoryIds: [],
+            billableUnits,
+            lineAmount: lineAmountForUnits(billableUnits, 1),
+          });
         }
       } else {
         if (futureReturnByContractSerial.size) {
@@ -11031,15 +11069,24 @@ async function importRentalOrdersFromLegacyExports({ companyId, transactionsText
             const serialKey = normalizeSerialKey(serial);
             const returnKey = serialKey ? `${contractNumber}|${serialKey}` : null;
             const returnedAt = returnKey ? futureReturnByContractSerial.get(returnKey) || null : null;
+            const billableUnits = actualUnitsForEnd(returnedAt || mergedLine.endIso);
             lineItems.push({
               ...baseLineItem,
               inventoryIds: [inventoryIds[i]],
               fulfilledAt,
               returnedAt,
+              billableUnits,
+              lineAmount: lineAmountForUnits(billableUnits, 1),
             });
           }
         } else {
-          lineItems.push({ ...baseLineItem, inventoryIds });
+          const billableUnits = actualUnitsForEnd(mergedLine.endIso);
+          lineItems.push({
+            ...baseLineItem,
+            inventoryIds,
+            billableUnits,
+            lineAmount: lineAmountForUnits(billableUnits, inventoryIds.length),
+          });
         }
       }
     }
@@ -11625,6 +11672,7 @@ async function backfillLegacyRates({ companyId, includeAlreadyRated = false } = 
              et.name AS type_name,
              li.start_at,
              li.end_at,
+             li.returned_at,
              li.rate_basis,
              li.rate_amount,
              li.billable_units,
@@ -11717,7 +11765,7 @@ async function backfillLegacyRates({ companyId, includeAlreadyRated = false } = 
         inferRateBasisFromDates(row.start_at, row.end_at) ||
         "daily";
 
-      const billableUnits = computeBillableUnits({
+      const bookedUnits = computeBillableUnits({
         startAt: row.start_at,
         endAt: row.end_at,
         rateBasis: basis,
@@ -11726,7 +11774,7 @@ async function backfillLegacyRates({ companyId, includeAlreadyRated = false } = 
         monthlyProrationMethod: settings.monthly_proration_method,
       });
 
-      if (billableUnits === null || !Number.isFinite(billableUnits) || billableUnits <= 0) {
+      if (bookedUnits === null || !Number.isFinite(bookedUnits) || bookedUnits <= 0) {
         stats.lineItemsSkipped += 1;
         stats.warnings.push({
           contractNumber: row.external_contract_number,
@@ -11736,7 +11784,7 @@ async function backfillLegacyRates({ companyId, includeAlreadyRated = false } = 
         continue;
       }
 
-      const rateAmount = Number((totalNoTax / (billableUnits * qty)).toFixed(2));
+      const rateAmount = Number((totalNoTax / (bookedUnits * qty)).toFixed(2));
       if (!Number.isFinite(rateAmount) || rateAmount < 0) {
         stats.lineItemsSkipped += 1;
         stats.warnings.push({
@@ -11747,6 +11795,17 @@ async function backfillLegacyRates({ companyId, includeAlreadyRated = false } = 
         continue;
       }
 
+      const actualEnd = row.returned_at || row.end_at;
+      const actualUnits = computeBillableUnits({
+        startAt: row.start_at,
+        endAt: actualEnd,
+        rateBasis: basis,
+        roundingMode: settings.billing_rounding_mode,
+        roundingGranularity: settings.billing_rounding_granularity,
+        monthlyProrationMethod: settings.monthly_proration_method,
+      });
+      const billableUnits =
+        actualUnits !== null && Number.isFinite(actualUnits) && actualUnits > 0 ? actualUnits : bookedUnits;
       const lineAmount = Number((rateAmount * billableUnits * qty).toFixed(2));
 
       await client.query(
