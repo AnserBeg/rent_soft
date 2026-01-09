@@ -68,11 +68,13 @@
           <section class="card wide">
             <div class="card-header">
               <div>
-                <p class="eyebrow" id="mode-label">New purchase order</p>
                 <h2 id="form-title">Purchase order details</h2>
-                <p class="hint" id="po-meta"></p>
               </div>
-              <button class="ghost danger" id="delete-po" style="display:none;">Delete</button>
+              <div class="inline-actions header-actions">
+                <button class="ghost small" id="close-po" type="button" style="display:none;">Close</button>
+                <button class="ghost small" id="open-po" type="button" style="display:none;">Open</button>
+                <button class="ghost danger" id="delete-po" type="button" style="display:none;">Delete</button>
+              </div>
             </div>
             <div class="form-body">
               <form id="purchase-order-form" class="stack">
@@ -90,15 +92,8 @@
                     </select>
                   </label>
                 </div>
-                <div class="two-col">
-                  <label>Expected possession date <input name="expectedPossessionDate" type="date" required /></label>
-                  <label>Status
-                    <select name="status" id="status-select">
-                      <option value="open">Open</option>
-                      <option value="closed">Closed</option>
-                    </select>
-                  </label>
-                </div>
+                <label>Expected possession date <input name="expectedPossessionDate" type="date" required /></label>
+                <input name="status" id="status-input" type="hidden" value="open" />
 
                 <div class="two-col">
                   <label>Model name <input name="modelName" /></label>

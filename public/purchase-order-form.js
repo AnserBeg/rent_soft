@@ -9,11 +9,13 @@ const deletePoBtn = document.getElementById("delete-po");
 const poForm = document.getElementById("purchase-order-form");
 const vendorSelect = document.getElementById("vendor-select");
 const typeSelect = document.getElementById("type-select");
-const statusSelect = document.getElementById("status-select");
+const statusInput = document.getElementById("status-input");
 const locationSelect = document.getElementById("location-select");
 const currentLocationSelect = document.getElementById("current-location-select");
 const poImagesRow = document.getElementById("po-images");
 const clearPoImagesBtn = document.getElementById("remove-po-images");
+const closePoBtn = document.getElementById("close-po");
+const openPoBtn = document.getElementById("open-po");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let vendorsCache = [];
@@ -31,22 +33,44 @@ const closeRequiredFields = [
 
 function updateModeLabels() {
   if (editingPoId) {
-    modeLabel.textContent = `Edit PO #${editingPoId}`;
+    if (modeLabel) modeLabel.textContent = `Edit PO #${editingPoId}`;
     formTitle.textContent = "Purchase order";
     deletePoBtn.style.display = "inline-flex";
   } else {
-    modeLabel.textContent = "New purchase order";
+    if (modeLabel) modeLabel.textContent = "New purchase order";
     formTitle.textContent = "Purchase order";
     deletePoBtn.style.display = "none";
   }
+  syncStatusActions();
 }
 
 function syncCloseRequirements() {
-  const closing = String(statusSelect?.value || "open").toLowerCase() === "closed";
+  const closing = String(statusInput?.value || "open").toLowerCase() === "closed";
   closeRequiredFields.forEach((name) => {
     const field = poForm?.elements?.[name];
     if (field && "required" in field) field.required = closing;
   });
+}
+
+function syncStatusActions() {
+  if (!closePoBtn || !openPoBtn) return;
+  if (!editingPoId) {
+    closePoBtn.style.display = "none";
+    openPoBtn.style.display = "none";
+    return;
+  }
+  const isClosed = String(statusInput?.value || "open").toLowerCase() === "closed";
+  closePoBtn.style.display = isClosed ? "none" : "inline-flex";
+  openPoBtn.style.display = isClosed ? "inline-flex" : "none";
+}
+
+function submitPurchaseOrderForm() {
+  if (!poForm) return;
+  if (typeof poForm.requestSubmit === "function") {
+    poForm.requestSubmit();
+    return;
+  }
+  poForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
 
 function getFormData(form) {
@@ -236,7 +260,7 @@ async function loadPurchaseOrder() {
   vendorSelect.value = po.vendor_id || "";
   typeSelect.value = po.type_id || "";
   poForm.expectedPossessionDate.value = po.expected_possession_date || "";
-  poForm.status.value = po.status || "open";
+  if (statusInput) statusInput.value = po.status || "open";
   poForm.modelName.value = po.model_name || "";
   poForm.serialNumber.value = po.serial_number || "";
   poForm.condition.value = po.condition || "New";
@@ -257,6 +281,7 @@ async function loadPurchaseOrder() {
     poMeta.textContent = parts.join(" • ");
   }
   syncCloseRequirements();
+  syncStatusActions();
 }
 
 function handleVendorAddSelected() {
@@ -277,10 +302,6 @@ typeSelect?.addEventListener("change", (e) => {
     const returnTo = editingPoId ? `purchase-order-form.html?id=${editingPoId}` : "purchase-order-form.html";
     window.location.href = `equipment-type-form.html?returnTo=${encodeURIComponent(returnTo)}`;
   }
-});
-
-statusSelect?.addEventListener("change", () => {
-  syncCloseRequirements();
 });
 
 poForm.imageFiles?.addEventListener("change", (e) => {
@@ -401,6 +422,22 @@ poForm.addEventListener("submit", async (e) => {
   }
 });
 
+closePoBtn?.addEventListener("click", () => {
+  if (!statusInput) return;
+  statusInput.value = "closed";
+  syncCloseRequirements();
+  syncStatusActions();
+  submitPurchaseOrderForm();
+});
+
+openPoBtn?.addEventListener("click", () => {
+  if (!statusInput) return;
+  statusInput.value = "open";
+  syncCloseRequirements();
+  syncStatusActions();
+  submitPurchaseOrderForm();
+});
+
 deletePoBtn?.addEventListener("click", async (e) => {
   e.preventDefault();
   if (!activeCompanyId || !editingPoId) return;
@@ -424,6 +461,7 @@ async function init() {
   await Promise.all([loadVendors(), loadTypes(), loadLocations()]);
   await loadPurchaseOrder();
   syncCloseRequirements();
+  syncStatusActions();
 }
 
 init();
