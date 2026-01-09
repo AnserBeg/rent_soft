@@ -9719,10 +9719,11 @@ async function getTypeAvailabilitySeriesWithProjection({
     .map((loc) => ({
       locationId: loc.locationId,
       locationName: loc.locationName,
-      total: loc.total + Math.max(0, ...loc.incomingByDay),
-      committedValues: loc.committedByDay.map((reserved, idx) => loc.total + loc.incomingByDay[idx] - reserved),
-      potentialValues: loc.committedByDay.map(
-        (reserved, idx) => loc.total + loc.incomingByDay[idx] - reserved - loc.projectedByDay[idx]
+      total: loc.total,
+      committedValues: loc.committedByDay.map((reserved) => loc.total - reserved),
+      potentialValues: loc.committedByDay.map((reserved, idx) => loc.total - reserved - loc.projectedByDay[idx]),
+      availableWithIncomingValues: loc.committedByDay.map(
+        (reserved, idx) => loc.total + loc.incomingByDay[idx] - reserved
       ),
     }));
 

@@ -1440,6 +1440,7 @@ function renderShortfallDetailChart() {
     const faded = `rgba(${c.r}, ${c.g}, ${c.b}, 0.45)`;
     const locationLabel = loc.locationName || "Location";
     const committedLabel = splitEnabled ? `${locationLabel} (committed)` : "Committed";
+    const incomingLabel = splitEnabled ? `${locationLabel} (with purchases)` : "Available w/ purchases";
     const potentialLabel = splitEnabled ? `${locationLabel} (potential)` : "Potential (quotes + requests)";
 
     datasets.push({
@@ -1455,6 +1456,18 @@ function renderShortfallDetailChart() {
       },
     });
     shortfallSeriesMeta.push({ seriesIndex: idx, kind: "committed" });
+
+    datasets.push({
+      label: incomingLabel,
+      data: Array.isArray(loc.availableWithIncomingValues) ? loc.availableWithIncomingValues : [],
+      borderColor: "rgba(34, 197, 94, 0.85)",
+      backgroundColor: "transparent",
+      tension: 0.25,
+      borderWidth: 2,
+      pointRadius: 0,
+      borderDash: [3, 5],
+    });
+    shortfallSeriesMeta.push({ seriesIndex: idx, kind: "incoming" });
 
     datasets.push({
       label: potentialLabel,
@@ -1651,6 +1664,7 @@ async function loadShortfallSeries() {
           total: Number(row.total || 0),
           committedValues: Array.isArray(row.committedValues) ? row.committedValues : [],
           potentialValues: Array.isArray(row.potentialValues) ? row.potentialValues : [],
+          availableWithIncomingValues: Array.isArray(row.availableWithIncomingValues) ? row.availableWithIncomingValues : [],
         }))
       : [],
   };
