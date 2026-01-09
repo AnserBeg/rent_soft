@@ -83,6 +83,24 @@ CREATE TABLE IF NOT EXISTS customers (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS vendors (
+  id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  company_name TEXT NOT NULL,
+  contact_name TEXT,
+  street_address TEXT,
+  city TEXT,
+  region TEXT,
+  country TEXT,
+  postal_code TEXT,
+  email TEXT,
+  phone TEXT,
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS vendors_company_id_idx ON vendors (company_id);
+
 CREATE TABLE IF NOT EXISTS customer_pricing (
   id SERIAL PRIMARY KEY,
   company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -110,6 +128,33 @@ CREATE TABLE IF NOT EXISTS equipment (
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS purchase_orders (
+  id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  vendor_id INTEGER REFERENCES vendors(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  expected_possession_date DATE,
+  type_id INTEGER REFERENCES equipment_types(id) ON DELETE SET NULL,
+  model_name TEXT,
+  serial_number TEXT,
+  condition TEXT,
+  manufacturer TEXT,
+  image_url TEXT,
+  image_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
+  location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+  current_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+  purchase_price NUMERIC(12, 2),
+  notes TEXT,
+  equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
+  closed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS purchase_orders_company_id_idx ON purchase_orders (company_id);
+CREATE INDEX IF NOT EXISTS purchase_orders_company_status_idx ON purchase_orders (company_id, status);
+CREATE INDEX IF NOT EXISTS purchase_orders_company_expected_idx ON purchase_orders (company_id, expected_possession_date);
 
 -- Rental Orders (RO)
 CREATE TABLE IF NOT EXISTS rental_orders (

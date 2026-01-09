@@ -120,6 +120,35 @@ document.addEventListener("DOMContentLoaded", () => {
   const SIDEBAR_COLLAPSE_KEY = "rentSoft.sidebarCollapsed";
   const NAV_GROUP_STATE_KEY = "rentSoft.navGroupState";
 
+  function ensurePurchaseNavGroup() {
+    const navLinks = sidebar.querySelector(".nav-links");
+    if (!navLinks) return;
+    const groups = Array.from(navLinks.querySelectorAll(".nav-group"));
+    const hasPurchase = groups.some((group) => {
+      const title = group.querySelector(".nav-group-title");
+      return String(title?.textContent || "").trim().toLowerCase() === "purchase";
+    });
+    if (hasPurchase) return;
+
+    const group = document.createElement("div");
+    group.className = "nav-group";
+    group.innerHTML = `
+      <div class="nav-group-title">Purchase</div>
+      <a class="nav-link" href="purchase-orders.html">Purchase Orders</a>
+      <a class="nav-link" href="vendors.html">Vendors</a>
+    `;
+
+    const inventoryGroup = groups.find((g) => {
+      const title = g.querySelector(".nav-group-title");
+      return String(title?.textContent || "").trim().toLowerCase() === "inventory";
+    });
+    if (inventoryGroup?.parentElement) {
+      inventoryGroup.parentElement.insertBefore(group, inventoryGroup.nextSibling);
+    } else {
+      navLinks.appendChild(group);
+    }
+  }
+
   function getCurrentPage() {
     const rawPath = window.location.pathname || "";
     const file = rawPath.split("/").filter(Boolean).at(-1) || "";
@@ -179,6 +208,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (href.includes("work-bench")) return "wrench";
     if (href.includes("dispatch")) return "truck";
     if (href.includes("reports")) return "bar-chart";
+    if (href.includes("purchase-order") || href.includes("purchase-orders")) return "clipboard";
     if (href.includes("rental-orders")) return "clipboard";
     if (href.includes("work-orders")) return "file-text";
     if (href.includes("rental-quotes")) return "file-text";
@@ -187,6 +217,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (href.includes("types")) return "truck";
     if (href.includes("locations") || href.includes("location")) return "map-pin";
     if (href.includes("customers")) return "users";
+    if (href.includes("vendors") || href.includes("vendor")) return "users";
     if (href.includes("sales-people") || href.includes("sales-person")) return "user-check";
     if (href.includes("settings")) return "gear";
     if (href.includes("accounts")) return "credit-card";
@@ -379,6 +410,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Escape") setOpen(false);
   });
 
+  ensurePurchaseNavGroup();
   setActiveLink();
   mountNavGroupToggles();
   mountNavIcons();

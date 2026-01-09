@@ -1,0 +1,446 @@
+const params = new URLSearchParams(window.location.search);
+const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
+const editingPoId = params.get("id");
+
+const companyMeta = document.getElementById("company-meta");
+const poMeta = document.getElementById("po-meta");
+const modeLabel = document.getElementById("mode-label");
+const formTitle = document.getElementById("form-title");
+const deletePoBtn = document.getElementById("delete-po");
+const poForm = document.getElementById("purchase-order-form");
+const vendorSelect = document.getElementById("vendor-select");
+const typeSelect = document.getElementById("type-select");
+const statusSelect = document.getElementById("status-select");
+const locationSelect = document.getElementById("location-select");
+const currentLocationSelect = document.getElementById("current-location-select");
+const poImagesRow = document.getElementById("po-images");
+const clearPoImagesBtn = document.getElementById("remove-po-images");
+
+let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
+let vendorsCache = [];
+let typesCache = [];
+let locationsCache = [];
+let pendingFiles = [];
+const closeRequiredFields = [
+  "modelName",
+  "serialNumber",
+  "condition",
+  "manufacturer",
+  "locationId",
+  "purchasePrice",
+];
+
+function updateModeLabels() {
+  if (editingPoId) {
+    modeLabel.textContent = `Edit PO #${editingPoId}`;
+    formTitle.textContent = "Purchase order";
+    deletePoBtn.style.display = "inline-flex";
+  } else {
+    modeLabel.textContent = "New purchase order";
+    formTitle.textContent = "Purchase order";
+    deletePoBtn.style.display = "none";
+  }
+}
+
+function syncCloseRequirements() {
+  const closing = String(statusSelect?.value || "open").toLowerCase() === "closed";
+  closeRequiredFields.forEach((name) => {
+    const field = poForm?.elements?.[name];
+    if (field && "required" in field) field.required = closing;
+  });
+}
+
+function getFormData(form) {
+  const data = new FormData(form);
+  return Object.fromEntries(data.entries());
+}
+
+function safeParseJsonArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  const raw = value.trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function syncFileInputFiles(inputEl, files) {
+  if (!inputEl) return;
+  const dt = new DataTransfer();
+  (files || []).forEach((f) => dt.items.add(f));
+  inputEl.files = dt.files;
+}
+
+function getPoImageUrls() {
+  return safeParseJsonArray(poForm?.imageUrls?.value).filter(Boolean).map(String);
+}
+
+function setPoImageUrls(urls) {
+  if (!poForm?.imageUrls) return;
+  const normalized = (urls || []).filter(Boolean).map(String);
+  poForm.imageUrls.value = JSON.stringify(normalized);
+  if (poForm.imageUrl) poForm.imageUrl.value = normalized[0] || "";
+}
+
+function getDeleteImageUrls() {
+  return safeParseJsonArray(poForm?.dataset?.deleteImageUrls).filter(Boolean).map(String);
+}
+
+function addDeleteImageUrl(url) {
+  if (!url || !poForm) return;
+  const existing = new Set(getDeleteImageUrls());
+  existing.add(String(url));
+  poForm.dataset.deleteImageUrls = JSON.stringify(Array.from(existing));
+}
+
+function clearDeleteImageUrls() {
+  if (!poForm) return;
+  delete poForm.dataset.deleteImageUrls;
+}
+
+function renderPoImages() {
+  if (!poImagesRow) return;
+  poImagesRow.replaceChildren();
+
+  const existingUrls = getPoImageUrls();
+  existingUrls.forEach((url) => {
+    const tile = document.createElement("div");
+    tile.className = "thumb-tile";
+    tile.dataset.kind = "url";
+    tile.dataset.url = url;
+    tile.innerHTML = `
+      <img class="thumb" src="${url}" alt="" loading="lazy" referrerpolicy="no-referrer" />
+      <button type="button" class="ghost small danger" data-action="remove-existing" data-url="${url}">Remove</button>
+    `;
+    poImagesRow.appendChild(tile);
+  });
+
+  pendingFiles.forEach((file, idx) => {
+    const objectUrl = URL.createObjectURL(file);
+    const tile = document.createElement("div");
+    tile.className = "thumb-tile";
+    tile.dataset.kind = "pending";
+    tile.dataset.index = String(idx);
+    tile.innerHTML = `
+      <img class="thumb" src="${objectUrl}" alt="" loading="lazy" />
+      <button type="button" class="ghost small danger" data-action="remove-pending" data-index="${idx}">Remove</button>
+    `;
+    poImagesRow.appendChild(tile);
+    tile.querySelector("img")?.addEventListener(
+      "load",
+      () => {
+        URL.revokeObjectURL(objectUrl);
+      },
+      { once: true }
+    );
+  });
+
+  const hasAny = existingUrls.length > 0 || pendingFiles.length > 0;
+  if (clearPoImagesBtn) clearPoImagesBtn.style.display = hasAny ? "inline-flex" : "none";
+}
+
+async function uploadImage({ companyId, file }) {
+  const body = new FormData();
+  body.append("companyId", String(companyId));
+  body.append("image", file);
+  const res = await fetch("/api/uploads/image", { method: "POST", body });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to upload image");
+  if (!data.url) throw new Error("Upload did not return an image url");
+  return data.url;
+}
+
+async function deleteUploadedImage({ companyId, url }) {
+  if (!url) return;
+  const res = await fetch("/api/uploads/image", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId, url }),
+  });
+  if (res.ok) return;
+  const data = await res.json().catch(() => ({}));
+  throw new Error(data.error || "Unable to delete image");
+}
+
+async function loadVendors() {
+  if (!activeCompanyId) return;
+  const res = await fetch(`/api/vendors?companyId=${activeCompanyId}`);
+  if (!res.ok) throw new Error("Unable to fetch vendors");
+  const data = await res.json();
+  vendorsCache = data.vendors || [];
+  vendorSelect.innerHTML = `<option value="">Select vendor</option>`;
+  vendorsCache.forEach((vendor) => {
+    const opt = document.createElement("option");
+    opt.value = vendor.id;
+    opt.textContent = vendor.company_name;
+    vendorSelect.appendChild(opt);
+  });
+  const addOpt = document.createElement("option");
+  addOpt.value = "__new_vendor__";
+  addOpt.textContent = "+ Add new vendor...";
+  vendorSelect.appendChild(addOpt);
+}
+
+async function loadTypes() {
+  if (!activeCompanyId) return;
+  const res = await fetch(`/api/equipment-types?companyId=${activeCompanyId}`);
+  if (!res.ok) throw new Error("Unable to fetch types");
+  const data = await res.json();
+  typesCache = data.types || [];
+  typeSelect.innerHTML = `<option value="">Select type</option>`;
+  typesCache.forEach((type) => {
+    const opt = document.createElement("option");
+    opt.value = type.id;
+    opt.textContent = type.name;
+    typeSelect.appendChild(opt);
+  });
+  const addOpt = document.createElement("option");
+  addOpt.value = "__new_type__";
+  addOpt.textContent = "+ Add new type...";
+  typeSelect.appendChild(addOpt);
+}
+
+async function loadLocations() {
+  if (!activeCompanyId) return;
+  const res = await fetch(`/api/locations?companyId=${activeCompanyId}`);
+  if (!res.ok) throw new Error("Unable to fetch locations");
+  const data = await res.json();
+  locationsCache = data.locations || [];
+  locationSelect.innerHTML = `<option value="">Select a location</option>`;
+  currentLocationSelect.innerHTML = `<option value="">Same as base location</option>`;
+  locationsCache.forEach((loc) => {
+    const opt = document.createElement("option");
+    opt.value = loc.id;
+    opt.textContent = loc.name;
+    locationSelect.appendChild(opt);
+    const opt2 = document.createElement("option");
+    opt2.value = loc.id;
+    opt2.textContent = loc.name;
+    currentLocationSelect.appendChild(opt2);
+  });
+}
+
+async function loadPurchaseOrder() {
+  if (!editingPoId) return;
+  const res = await fetch(`/api/purchase-orders/${editingPoId}?companyId=${activeCompanyId}`);
+  if (!res.ok) throw new Error("Unable to load purchase order");
+  const data = await res.json();
+  const po = data.purchaseOrder;
+  if (!po) throw new Error("Purchase order not found.");
+
+  vendorSelect.value = po.vendor_id || "";
+  typeSelect.value = po.type_id || "";
+  poForm.expectedPossessionDate.value = po.expected_possession_date || "";
+  poForm.status.value = po.status || "open";
+  poForm.modelName.value = po.model_name || "";
+  poForm.serialNumber.value = po.serial_number || "";
+  poForm.condition.value = po.condition || "New";
+  poForm.manufacturer.value = po.manufacturer || "";
+  poForm.locationId.value = po.location_id || "";
+  poForm.currentLocationId.value = po.current_location_id || "";
+  poForm.purchasePrice.value = po.purchase_price || "";
+  poForm.notes.value = po.notes || "";
+  setPoImageUrls(Array.isArray(po.image_urls) ? po.image_urls : (po.image_url ? [po.image_url] : []));
+  pendingFiles = [];
+  syncFileInputFiles(poForm.imageFiles, []);
+  clearDeleteImageUrls();
+  renderPoImages();
+
+  if (poMeta) {
+    const parts = [`PO #${po.id}`];
+    if (po.equipment_id) parts.push(`Asset #${po.equipment_id}`);
+    poMeta.textContent = parts.join(" • ");
+  }
+  syncCloseRequirements();
+}
+
+vendorSelect?.addEventListener("change", (e) => {
+  if (e.target.value === "__new_vendor__") {
+    e.target.value = "";
+    const returnTo = editingPoId ? `purchase-order-form.html?id=${editingPoId}` : "purchase-order-form.html";
+    window.location.href = `vendors-form.html?returnTo=${encodeURIComponent(returnTo)}`;
+  }
+});
+
+typeSelect?.addEventListener("change", (e) => {
+  if (e.target.value === "__new_type__") {
+    e.target.value = "";
+    const returnTo = editingPoId ? `purchase-order-form.html?id=${editingPoId}` : "purchase-order-form.html";
+    window.location.href = `equipment-type-form.html?returnTo=${encodeURIComponent(returnTo)}`;
+  }
+});
+
+statusSelect?.addEventListener("change", () => {
+  syncCloseRequirements();
+});
+
+poForm.imageFiles?.addEventListener("change", (e) => {
+  const next = Array.from(e.target.files || []);
+  if (!next.length) return;
+  pendingFiles = pendingFiles.concat(next);
+  syncFileInputFiles(poForm.imageFiles, pendingFiles);
+  renderPoImages();
+});
+
+poImagesRow?.addEventListener("click", (e) => {
+  const btn = e.target.closest?.("button[data-action]");
+  const action = btn?.dataset?.action;
+  if (!action) return;
+  if (action === "remove-existing") {
+    const url = btn.dataset.url;
+    const next = getPoImageUrls().filter((u) => u !== url);
+    setPoImageUrls(next);
+    addDeleteImageUrl(url);
+    renderPoImages();
+  }
+  if (action === "remove-pending") {
+    const idx = Number(btn.dataset.index);
+    if (Number.isFinite(idx)) {
+      pendingFiles = pendingFiles.filter((_, i) => i !== idx);
+      syncFileInputFiles(poForm.imageFiles, pendingFiles);
+      renderPoImages();
+    }
+  }
+});
+
+clearPoImagesBtn?.addEventListener("click", () => {
+  const existing = getPoImageUrls();
+  existing.forEach((url) => addDeleteImageUrl(url));
+  setPoImageUrls([]);
+  pendingFiles = [];
+  syncFileInputFiles(poForm.imageFiles, []);
+  renderPoImages();
+});
+
+poForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) {
+    companyMeta.textContent = "Log in to continue.";
+    return;
+  }
+
+  const payload = getFormData(poForm);
+  if (payload.vendorId === "__new_vendor__") {
+    vendorSelect.value = "";
+    companyMeta.textContent = "Choose a vendor.";
+    return;
+  }
+  if (payload.typeId === "__new_type__") {
+    typeSelect.value = "";
+    companyMeta.textContent = "Choose an equipment type.";
+    return;
+  }
+  if (!payload.vendorId || !payload.typeId || !payload.expectedPossessionDate) {
+    companyMeta.textContent = "Vendor, type, and expected possession date are required.";
+    return;
+  }
+
+  const closing = String(payload.status || "open").toLowerCase() === "closed";
+  if (closing) {
+    const required = [
+      { key: "modelName", label: "Model name" },
+      { key: "serialNumber", label: "Serial number" },
+      { key: "condition", label: "Condition" },
+      { key: "manufacturer", label: "Manufacturer" },
+      { key: "locationId", label: "Base location" },
+      { key: "purchasePrice", label: "Purchase price" },
+    ];
+    const missing = required.filter((item) => !payload[item.key]);
+    if (missing.length) {
+      companyMeta.textContent = `Missing fields to close: ${missing.map((m) => m.label).join(", ")}.`;
+      return;
+    }
+  }
+
+  payload.companyId = activeCompanyId;
+  payload.vendorId = Number(payload.vendorId);
+  payload.typeId = Number(payload.typeId);
+  if (payload.locationId === "") payload.locationId = null;
+  if (payload.currentLocationId === "") payload.currentLocationId = null;
+  if (closing && !payload.currentLocationId && payload.locationId) {
+    payload.currentLocationId = payload.locationId;
+  }
+  payload.purchasePrice = payload.purchasePrice ? Number(payload.purchasePrice) : null;
+  if (!payload.manufacturer) payload.manufacturer = null;
+  if (!payload.notes) payload.notes = null;
+
+  const existingUrls = getPoImageUrls();
+  const deleteAfterSave = new Set(getDeleteImageUrls());
+
+  try {
+    const uploadedUrls = [];
+    for (const file of pendingFiles) {
+      if (!file?.size) continue;
+      const url = await uploadImage({ companyId: activeCompanyId, file });
+      uploadedUrls.push(url);
+    }
+    const finalUrls = [...existingUrls, ...uploadedUrls];
+    payload.imageUrls = finalUrls;
+    payload.imageUrl = finalUrls[0] || null;
+
+    const res = await fetch(editingPoId ? `/api/purchase-orders/${editingPoId}` : "/api/purchase-orders", {
+      method: editingPoId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      for (const url of uploadedUrls) {
+        await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
+      }
+      throw new Error(data.error || "Unable to save purchase order");
+    }
+
+    for (const url of deleteAfterSave) {
+      await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
+    }
+    window.location.href = "purchase-orders.html";
+  } catch (err) {
+    companyMeta.textContent = err.message || "Unable to save purchase order.";
+  }
+});
+
+deletePoBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId || !editingPoId) return;
+  if (!window.confirm("Delete this purchase order?")) return;
+  try {
+    const res = await fetch(`/api/purchase-orders/${editingPoId}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyId: activeCompanyId }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || "Unable to delete purchase order");
+    }
+    window.location.href = "purchase-orders.html";
+  } catch (err) {
+    companyMeta.textContent = err.message || "Unable to delete purchase order.";
+  }
+});
+
+async function init() {
+  if (!activeCompanyId) {
+    companyMeta.textContent = "Log in to view purchase orders.";
+    updateModeLabels();
+    return;
+  }
+  window.RentSoft?.setCompanyId?.(activeCompanyId);
+  companyMeta.textContent = `Using company #${activeCompanyId}`;
+  updateModeLabels();
+  try {
+    await Promise.all([loadVendors(), loadTypes(), loadLocations()]);
+    await loadPurchaseOrder();
+    syncCloseRequirements();
+  } catch (err) {
+    companyMeta.textContent = err.message || "Unable to load purchase order.";
+  }
+}
+
+init();

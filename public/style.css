@@ -2932,6 +2932,10 @@ a.ghost {
   grid-template-columns: 1.4fr 1.1fr 1.2fr 1fr 1fr 1fr 0.9fr 0.9fr 0.9fr 1fr 0.7fr;
 }
 
+#vendors-table .table-row {
+  grid-template-columns: 1.4fr 1.1fr 1.2fr 1fr 1fr 0.9fr 0.9fr 0.9fr;
+}
+
 #equipment-table .table-row {
   grid-template-columns: 64px 1.2fr 1.2fr 1.1fr 1.1fr 1.2fr 1.1fr 1fr;
 }
@@ -2954,6 +2958,10 @@ a.ghost {
 
 #rental-quotes-table .table-row {
   grid-template-columns: 1fr 1fr 1.6fr 1.1fr 1.1fr 1.1fr 0.8fr 0.9fr 1fr auto auto;
+}
+
+#purchase-orders-table .table-row {
+  grid-template-columns: 0.7fr 1.4fr 1.2fr 1fr 0.9fr 1.1fr 1.1fr 1fr 0.9fr;
 }
 
 #work-orders-table .table-row {

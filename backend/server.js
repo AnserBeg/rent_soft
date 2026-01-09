@@ -54,6 +54,15 @@ const {
   createCustomer,
   updateCustomer,
   deleteCustomer,
+  listVendors,
+  createVendor,
+  updateVendor,
+  deleteVendor,
+  listPurchaseOrders,
+  getPurchaseOrder,
+  createPurchaseOrder,
+  updatePurchaseOrder,
+  deletePurchaseOrder,
   importCustomersFromText,
   importInventoryFromText,
   importCustomerPricingFromInventoryText,
@@ -162,7 +171,8 @@ const PORT = process.env.PORT || 4000;
 
 const publicRoot = path.join(__dirname, "..", "public");
 const spaRoot = path.join(publicRoot, "spa");
-const uploadRoot = path.join(publicRoot, "uploads");
+const defaultUploadRoot = path.join(publicRoot, "uploads");
+const uploadRoot = process.env.UPLOAD_ROOT ? path.resolve(process.env.UPLOAD_ROOT) : defaultUploadRoot;
 
 function normalizeInvoiceDocumentType(value) {
   const raw = String(value || "").trim().toLowerCase();
@@ -354,6 +364,7 @@ app.use((req, res, next) => {
 if (fs.existsSync(spaRoot)) {
   app.use(express.static(spaRoot));
 }
+app.use("/uploads", express.static(uploadRoot));
 app.use(express.static(publicRoot));
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
@@ -391,6 +402,12 @@ function parseBoolean(value) {
   if (["true", "1", "yes", "y", "on"].includes(raw)) return true;
   if (["false", "0", "no", "n", "off"].includes(raw)) return false;
   return null;
+}
+
+function normalizePurchaseOrderStatus(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (raw === "closed") return "closed";
+  return "open";
 }
 
 function getInvoiceRecipientEmails(invoice) {
@@ -1699,9 +1716,11 @@ function resolveCompanyUploadPath({ companyId, url, allowFiles = false }) {
   if (!raw.startsWith(base)) return null;
   if (!allowFiles && raw.startsWith(`${base}files/`)) return null;
   const clean = raw.replace(/^\/+/, "");
-  const full = path.join(publicRoot, clean);
-  const rel = path.relative(publicRoot, full);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  if (!clean.startsWith("uploads/")) return null;
+  const rel = clean.slice("uploads/".length);
+  const full = path.join(uploadRoot, rel);
+  const safeRel = path.relative(uploadRoot, full);
+  if (safeRel.startsWith("..") || path.isAbsolute(safeRel)) return null;
   return full;
 }
 
@@ -2468,6 +2487,80 @@ app.get(
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     const customers = await listCustomers(companyId);
     res.json({ customers });
+  })
+);
+
+app.get(
+  "/api/vendors",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.query;
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const vendors = await listVendors(companyId);
+    res.json({ vendors });
+  })
+);
+
+app.post(
+  "/api/vendors",
+  asyncHandler(async (req, res) => {
+    const { companyId, companyName, contactName, streetAddress, city, region, country, postalCode, email, phone, notes } =
+      req.body || {};
+    if (!companyId || !companyName) {
+      return res.status(400).json({ error: "companyId and companyName are required." });
+    }
+    const vendor = await createVendor({
+      companyId,
+      companyName,
+      contactName,
+      streetAddress,
+      city,
+      region,
+      country,
+      postalCode,
+      email,
+      phone,
+      notes,
+    });
+    res.status(201).json(vendor);
+  })
+);
+
+app.put(
+  "/api/vendors/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId, companyName, contactName, streetAddress, city, region, country, postalCode, email, phone, notes } =
+      req.body || {};
+    if (!companyId || !companyName) {
+      return res.status(400).json({ error: "companyId and companyName are required." });
+    }
+    const updated = await updateVendor({
+      id,
+      companyId,
+      companyName,
+      contactName,
+      streetAddress,
+      city,
+      region,
+      country,
+      postalCode,
+      email,
+      phone,
+      notes,
+    });
+    if (!updated) return res.status(404).json({ error: "Vendor not found" });
+    res.json(updated);
+  })
+);
+
+app.delete(
+  "/api/vendors/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    await deleteVendor({ id, companyId });
+    res.status(204).end();
   })
 );
 
@@ -4411,6 +4504,266 @@ app.get(
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     const summary = await getAccountsReceivableSummary(Number(companyId));
     res.json({ summary });
+  })
+);
+
+app.get(
+  "/api/purchase-orders",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const purchaseOrders = await listPurchaseOrders(Number(companyId));
+    res.json({ purchaseOrders });
+  })
+);
+
+app.get(
+  "/api/purchase-orders/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const purchaseOrder = await getPurchaseOrder({ companyId: Number(companyId), id: Number(id) });
+    if (!purchaseOrder) return res.status(404).json({ error: "Purchase order not found." });
+    res.json({ purchaseOrder });
+  })
+);
+
+app.post(
+  "/api/purchase-orders",
+  asyncHandler(async (req, res) => {
+    const {
+      companyId,
+      vendorId,
+      status,
+      expectedPossessionDate,
+      typeId,
+      modelName,
+      serialNumber,
+      condition,
+      manufacturer,
+      imageUrl,
+      imageUrls,
+      locationId,
+      currentLocationId,
+      purchasePrice,
+      notes,
+    } = req.body || {};
+    if (!companyId || !vendorId || !typeId || !expectedPossessionDate) {
+      return res.status(400).json({ error: "companyId, vendorId, typeId, and expectedPossessionDate are required." });
+    }
+    const normalizedStatus = normalizePurchaseOrderStatus(status);
+    const expectedDate = String(expectedPossessionDate || "").trim();
+    const locationIdNum = locationId === "" || locationId === null || locationId === undefined ? null : Number(locationId);
+    const purchasePriceNum =
+      purchasePrice === "" || purchasePrice === null || purchasePrice === undefined ? null : Number(purchasePrice);
+    if (!expectedDate || Number.isNaN(Date.parse(expectedDate))) {
+      return res.status(400).json({ error: "expectedPossessionDate must be a valid date." });
+    }
+    const locationIdNum = locationId === "" || locationId === null || locationId === undefined ? null : Number(locationId);
+    const purchasePriceNum =
+      purchasePrice === "" || purchasePrice === null || purchasePrice === undefined ? null : Number(purchasePrice);
+    if (
+      normalizedStatus === "closed" &&
+      (!modelName || !serialNumber || !condition || !manufacturer || !Number.isFinite(locationIdNum) || purchasePriceNum === null)
+    ) {
+      return res.status(400).json({
+        error: "modelName, serialNumber, condition, manufacturer, locationId, and purchasePrice are required to close a PO.",
+      });
+    }
+
+    const order = await createPurchaseOrder({
+      companyId,
+      vendorId: Number(vendorId),
+      status: normalizedStatus,
+      expectedPossessionDate: expectedDate,
+      typeId: Number(typeId),
+      modelName,
+      serialNumber,
+      condition,
+      manufacturer,
+      imageUrl,
+      imageUrls: parseStringArray(imageUrls),
+      locationId: Number.isFinite(locationIdNum) ? locationIdNum : null,
+      currentLocationId: currentLocationId ? Number(currentLocationId) : null,
+      purchasePrice: purchasePriceNum,
+      notes,
+      closedAt: normalizedStatus === "closed" ? new Date().toISOString() : null,
+    });
+
+    let finalOrder = order;
+    let equipment = null;
+    if (normalizedStatus === "closed" && order && !order.equipment_id) {
+      equipment = await createEquipment({
+        companyId,
+        typeId: Number(typeId),
+        modelName,
+        serialNumber,
+        condition,
+        manufacturer,
+        imageUrl,
+        imageUrls: parseStringArray(imageUrls),
+        locationId: Number.isFinite(locationIdNum) ? locationIdNum : null,
+        currentLocationId: currentLocationId ? Number(currentLocationId) : null,
+        purchasePrice: purchasePriceNum,
+        notes,
+      });
+      if (equipment?.id && equipment?.current_location_id) {
+        await recordEquipmentCurrentLocationChange({
+          companyId,
+          equipmentId: Number(equipment.id),
+          fromLocationId: null,
+          toLocationId: Number(equipment.current_location_id),
+        }).catch(() => null);
+      }
+      finalOrder = await updatePurchaseOrder({
+        id: order.id,
+        companyId,
+        vendorId: Number(vendorId),
+        status: "closed",
+        expectedPossessionDate: expectedDate,
+        typeId: Number(typeId),
+        modelName,
+        serialNumber,
+        condition,
+        manufacturer,
+        imageUrl,
+        imageUrls: parseStringArray(imageUrls),
+        locationId: locationId ? Number(locationId) : null,
+        currentLocationId: currentLocationId ? Number(currentLocationId) : null,
+        purchasePrice: purchasePrice === "" || purchasePrice === null ? null : Number(purchasePrice),
+        notes,
+        equipmentId: equipment?.id || null,
+        closedAt: new Date().toISOString(),
+      });
+    }
+
+    res.status(201).json({ purchaseOrder: finalOrder, equipment });
+  })
+);
+
+app.put(
+  "/api/purchase-orders/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const {
+      companyId,
+      vendorId,
+      status,
+      expectedPossessionDate,
+      typeId,
+      modelName,
+      serialNumber,
+      condition,
+      manufacturer,
+      imageUrl,
+      imageUrls,
+      locationId,
+      currentLocationId,
+      purchasePrice,
+      notes,
+    } = req.body || {};
+    if (!companyId || !vendorId || !typeId || !expectedPossessionDate) {
+      return res.status(400).json({ error: "companyId, vendorId, typeId, and expectedPossessionDate are required." });
+    }
+    const existing = await getPurchaseOrder({ companyId: Number(companyId), id: Number(id) });
+    if (!existing) return res.status(404).json({ error: "Purchase order not found." });
+
+    const normalizedStatus = normalizePurchaseOrderStatus(status);
+    const expectedDate = String(expectedPossessionDate || "").trim();
+    if (!expectedDate || Number.isNaN(Date.parse(expectedDate))) {
+      return res.status(400).json({ error: "expectedPossessionDate must be a valid date." });
+    }
+    if (
+      normalizedStatus === "closed" &&
+      (!modelName || !serialNumber || !condition || !manufacturer || !Number.isFinite(locationIdNum) || purchasePriceNum === null)
+    ) {
+      return res.status(400).json({
+        error: "modelName, serialNumber, condition, manufacturer, locationId, and purchasePrice are required to close a PO.",
+      });
+    }
+
+    const closedAt = normalizedStatus === "closed" ? existing.closed_at || new Date().toISOString() : null;
+    let updated = await updatePurchaseOrder({
+      id,
+      companyId,
+      vendorId: Number(vendorId),
+      status: normalizedStatus,
+      expectedPossessionDate: expectedDate,
+      typeId: Number(typeId),
+      modelName,
+      serialNumber,
+      condition,
+      manufacturer,
+      imageUrl,
+      imageUrls: parseStringArray(imageUrls),
+      locationId: Number.isFinite(locationIdNum) ? locationIdNum : null,
+      currentLocationId: currentLocationId ? Number(currentLocationId) : null,
+      purchasePrice: purchasePriceNum,
+      notes,
+      equipmentId: existing.equipment_id || null,
+      closedAt,
+    });
+    if (!updated) return res.status(404).json({ error: "Purchase order not found." });
+
+    let equipment = null;
+    if (normalizedStatus === "closed" && !existing.equipment_id) {
+      equipment = await createEquipment({
+        companyId,
+        typeId: Number(typeId),
+        modelName,
+        serialNumber,
+        condition,
+        manufacturer,
+        imageUrl,
+        imageUrls: parseStringArray(imageUrls),
+        locationId: Number.isFinite(locationIdNum) ? locationIdNum : null,
+        currentLocationId: currentLocationId ? Number(currentLocationId) : null,
+        purchasePrice: purchasePriceNum,
+        notes,
+      });
+      if (equipment?.id && equipment?.current_location_id) {
+        await recordEquipmentCurrentLocationChange({
+          companyId,
+          equipmentId: Number(equipment.id),
+          fromLocationId: null,
+          toLocationId: Number(equipment.current_location_id),
+        }).catch(() => null);
+      }
+      updated = await updatePurchaseOrder({
+        id,
+        companyId,
+        vendorId: Number(vendorId),
+        status: "closed",
+        expectedPossessionDate: expectedDate,
+        typeId: Number(typeId),
+        modelName,
+        serialNumber,
+        condition,
+        manufacturer,
+        imageUrl,
+        imageUrls: parseStringArray(imageUrls),
+        locationId: locationId ? Number(locationId) : null,
+        currentLocationId: currentLocationId ? Number(currentLocationId) : null,
+        purchasePrice: purchasePrice === "" || purchasePrice === null ? null : Number(purchasePrice),
+        notes,
+        equipmentId: equipment?.id || null,
+        closedAt: closedAt || new Date().toISOString(),
+      });
+    }
+
+    res.json({ purchaseOrder: updated, equipment });
+  })
+);
+
+app.delete(
+  "/api/purchase-orders/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    await deletePurchaseOrder({ id, companyId });
+    res.status(204).end();
   })
 );
 

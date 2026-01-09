@@ -332,6 +332,34 @@ async function ensureTables() {
     await client.query(`CREATE INDEX IF NOT EXISTS customers_parent_customer_id_idx ON customers (parent_customer_id);`);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS vendors (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        company_name TEXT NOT NULL,
+        contact_name TEXT,
+        street_address TEXT,
+        city TEXT,
+        region TEXT,
+        country TEXT,
+        postal_code TEXT,
+        email TEXT,
+        phone TEXT,
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS contact_name TEXT;`);
+    await client.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS street_address TEXT;`);
+    await client.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS city TEXT;`);
+    await client.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS region TEXT;`);
+    await client.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS country TEXT;`);
+    await client.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS postal_code TEXT;`);
+    await client.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS email TEXT;`);
+    await client.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS phone TEXT;`);
+    await client.query(`ALTER TABLE vendors ADD COLUMN IF NOT EXISTS notes TEXT;`);
+    await client.query(`CREATE INDEX IF NOT EXISTS vendors_company_id_idx ON vendors (company_id);`);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS customer_documents (
         id SERIAL PRIMARY KEY,
         customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
@@ -468,6 +496,53 @@ async function ensureTables() {
     await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS type_id INTEGER REFERENCES equipment_types(id) ON DELETE SET NULL;`);
     await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS notes TEXT;`);
     await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS current_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL;`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS purchase_orders (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        vendor_id INTEGER REFERENCES vendors(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        expected_possession_date DATE,
+        type_id INTEGER REFERENCES equipment_types(id) ON DELETE SET NULL,
+        model_name TEXT,
+        serial_number TEXT,
+        condition TEXT,
+        manufacturer TEXT,
+        image_url TEXT,
+        image_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
+        location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+        current_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+        purchase_price NUMERIC(12, 2),
+        notes TEXT,
+        equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
+        closed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS vendor_id INTEGER REFERENCES vendors(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open';`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_possession_date DATE;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS type_id INTEGER REFERENCES equipment_types(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS model_name TEXT;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS serial_number TEXT;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS condition TEXT;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS manufacturer TEXT;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS image_url TEXT;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS image_urls JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS current_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS purchase_price NUMERIC(12, 2);`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS notes TEXT;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;`);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+    await client.query(`CREATE INDEX IF NOT EXISTS purchase_orders_company_id_idx ON purchase_orders (company_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS purchase_orders_company_status_idx ON purchase_orders (company_id, status);`);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS purchase_orders_company_expected_idx ON purchase_orders (company_id, expected_possession_date);`
+    );
 
     // Repair: if a pre-existing location had an address and was accidentally marked non-base, restore it.
     // (Current-only locations created via picker typically have no address, and dropoff locations are prefixed.)
@@ -4242,6 +4317,311 @@ async function purgeEquipmentForCompany({ companyId }) {
     await pool.query("ROLLBACK");
     throw err;
   }
+}
+
+async function listVendors(companyId) {
+  const result = await pool.query(
+    `SELECT id,
+            company_name,
+            contact_name,
+            street_address,
+            city,
+            region,
+            country,
+            postal_code,
+            email,
+            phone,
+            notes
+       FROM vendors
+      WHERE company_id = $1
+      ORDER BY company_name`,
+    [companyId]
+  );
+  return result.rows;
+}
+
+async function createVendor({
+  companyId,
+  companyName,
+  contactName,
+  streetAddress,
+  city,
+  region,
+  country,
+  postalCode,
+  email,
+  phone,
+  notes,
+}) {
+  const result = await pool.query(
+    `INSERT INTO vendors (company_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, notes`,
+    [
+      companyId,
+      companyName,
+      contactName || null,
+      streetAddress || null,
+      city || null,
+      region || null,
+      country || null,
+      postalCode || null,
+      email || null,
+      phone || null,
+      notes || null,
+    ]
+  );
+  return result.rows[0];
+}
+
+async function updateVendor({
+  id,
+  companyId,
+  companyName,
+  contactName,
+  streetAddress,
+  city,
+  region,
+  country,
+  postalCode,
+  email,
+  phone,
+  notes,
+}) {
+  const result = await pool.query(
+    `UPDATE vendors
+        SET company_name = $1,
+            contact_name = $2,
+            street_address = $3,
+            city = $4,
+            region = $5,
+            country = $6,
+            postal_code = $7,
+            email = $8,
+            phone = $9,
+            notes = $10
+      WHERE id = $11 AND company_id = $12
+      RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, notes`,
+    [
+      companyName,
+      contactName || null,
+      streetAddress || null,
+      city || null,
+      region || null,
+      country || null,
+      postalCode || null,
+      email || null,
+      phone || null,
+      notes || null,
+      id,
+      companyId,
+    ]
+  );
+  return result.rows[0];
+}
+
+async function deleteVendor({ id, companyId }) {
+  await pool.query(`DELETE FROM vendors WHERE id = $1 AND company_id = $2`, [id, companyId]);
+}
+
+async function listPurchaseOrders(companyId) {
+  const result = await pool.query(
+    `SELECT po.id,
+            po.company_id,
+            po.vendor_id,
+            po.status,
+            po.expected_possession_date,
+            po.type_id,
+            po.model_name,
+            po.serial_number,
+            po.condition,
+            po.manufacturer,
+            po.image_url,
+            po.image_urls,
+            po.location_id,
+            po.current_location_id,
+            po.purchase_price,
+            po.notes,
+            po.equipment_id,
+            po.closed_at,
+            po.created_at,
+            po.updated_at,
+            v.company_name AS vendor_name,
+            et.name AS type_name,
+            l.name AS location_name,
+            cl.name AS current_location_name
+       FROM purchase_orders po
+  LEFT JOIN vendors v ON v.id = po.vendor_id
+  LEFT JOIN equipment_types et ON et.id = po.type_id
+  LEFT JOIN locations l ON l.id = po.location_id
+  LEFT JOIN locations cl ON cl.id = po.current_location_id
+      WHERE po.company_id = $1
+      ORDER BY po.created_at DESC, po.id DESC`,
+    [companyId]
+  );
+  return result.rows;
+}
+
+async function getPurchaseOrder({ companyId, id }) {
+  const result = await pool.query(
+    `SELECT po.id,
+            po.company_id,
+            po.vendor_id,
+            po.status,
+            po.expected_possession_date,
+            po.type_id,
+            po.model_name,
+            po.serial_number,
+            po.condition,
+            po.manufacturer,
+            po.image_url,
+            po.image_urls,
+            po.location_id,
+            po.current_location_id,
+            po.purchase_price,
+            po.notes,
+            po.equipment_id,
+            po.closed_at,
+            po.created_at,
+            po.updated_at,
+            v.company_name AS vendor_name,
+            et.name AS type_name,
+            l.name AS location_name,
+            cl.name AS current_location_name
+       FROM purchase_orders po
+  LEFT JOIN vendors v ON v.id = po.vendor_id
+  LEFT JOIN equipment_types et ON et.id = po.type_id
+  LEFT JOIN locations l ON l.id = po.location_id
+  LEFT JOIN locations cl ON cl.id = po.current_location_id
+      WHERE po.company_id = $1 AND po.id = $2`,
+    [companyId, id]
+  );
+  return result.rows[0];
+}
+
+async function createPurchaseOrder({
+  companyId,
+  vendorId,
+  status,
+  expectedPossessionDate,
+  typeId,
+  modelName,
+  serialNumber,
+  condition,
+  manufacturer,
+  imageUrl,
+  imageUrls,
+  locationId,
+  currentLocationId,
+  purchasePrice,
+  notes,
+  equipmentId,
+  closedAt,
+}) {
+  const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean).map(String) : [];
+  const primaryUrl = urls[0] || imageUrl || null;
+  const result = await pool.query(
+    `INSERT INTO purchase_orders
+      (company_id, vendor_id, status, expected_possession_date, type_id, model_name, serial_number, condition, manufacturer,
+       image_url, image_urls, location_id, current_location_id, purchase_price, notes, equipment_id, closed_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())
+     RETURNING id, company_id, vendor_id, status, expected_possession_date, type_id, model_name, serial_number, condition,
+               manufacturer, image_url, image_urls, location_id, current_location_id, purchase_price, notes, equipment_id,
+               closed_at, created_at, updated_at`,
+    [
+      companyId,
+      vendorId || null,
+      status || "open",
+      expectedPossessionDate || null,
+      typeId || null,
+      modelName || null,
+      serialNumber || null,
+      condition || null,
+      manufacturer || null,
+      primaryUrl,
+      JSON.stringify(urls),
+      locationId || null,
+      currentLocationId || null,
+      purchasePrice,
+      notes || null,
+      equipmentId || null,
+      closedAt || null,
+    ]
+  );
+  return result.rows[0];
+}
+
+async function updatePurchaseOrder({
+  id,
+  companyId,
+  vendorId,
+  status,
+  expectedPossessionDate,
+  typeId,
+  modelName,
+  serialNumber,
+  condition,
+  manufacturer,
+  imageUrl,
+  imageUrls,
+  locationId,
+  currentLocationId,
+  purchasePrice,
+  notes,
+  equipmentId,
+  closedAt,
+}) {
+  const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean).map(String) : [];
+  const primaryUrl = urls[0] || imageUrl || null;
+  const result = await pool.query(
+    `UPDATE purchase_orders
+        SET vendor_id = $1,
+            status = $2,
+            expected_possession_date = $3,
+            type_id = $4,
+            model_name = $5,
+            serial_number = $6,
+            condition = $7,
+            manufacturer = $8,
+            image_url = $9,
+            image_urls = $10,
+            location_id = $11,
+            current_location_id = $12,
+            purchase_price = $13,
+            notes = $14,
+            equipment_id = $15,
+            closed_at = $16,
+            updated_at = NOW()
+      WHERE id = $17 AND company_id = $18
+      RETURNING id, company_id, vendor_id, status, expected_possession_date, type_id, model_name, serial_number, condition,
+                manufacturer, image_url, image_urls, location_id, current_location_id, purchase_price, notes, equipment_id,
+                closed_at, created_at, updated_at`,
+    [
+      vendorId || null,
+      status || "open",
+      expectedPossessionDate || null,
+      typeId || null,
+      modelName || null,
+      serialNumber || null,
+      condition || null,
+      manufacturer || null,
+      primaryUrl,
+      JSON.stringify(urls),
+      locationId || null,
+      currentLocationId || null,
+      purchasePrice,
+      notes || null,
+      equipmentId || null,
+      closedAt || null,
+      id,
+      companyId,
+    ]
+  );
+  return result.rows[0];
+}
+
+async function deletePurchaseOrder({ id, companyId }) {
+  await pool.query(`DELETE FROM purchase_orders WHERE id = $1 AND company_id = $2`, [id, companyId]);
 }
 
 async function listCustomers(companyId) {
@@ -8781,6 +9161,7 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
         locationName: u.locationName,
         total: 0,
         reservedByDay: new Array(dayCount).fill(0),
+        incomingByDay: new Array(dayCount).fill(0),
       });
     }
     byLocation.get(key).total += 1;
@@ -8795,6 +9176,7 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
         locationName: r.location_name || "No location",
         total: 0,
         reservedByDay: new Array(dayCount).fill(0),
+        incomingByDay: new Array(dayCount).fill(0),
       });
     }
     const bucket = byLocation.get(locKey);
@@ -8810,6 +9192,48 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     for (let i = first; i <= last; i++) bucket.reservedByDay[i] += qty;
   });
 
+  const incomingRes = await pool.query(
+    `
+    SELECT po.expected_possession_date,
+           po.location_id,
+           COALESCE(l.name, 'No location') AS location_name,
+           COUNT(*)::int AS qty
+      FROM purchase_orders po
+ LEFT JOIN locations l ON l.id = po.location_id
+     WHERE po.company_id = $1
+       AND po.type_id = $2
+       AND po.status <> 'closed'
+       AND po.equipment_id IS NULL
+       AND po.expected_possession_date IS NOT NULL
+       AND po.expected_possession_date <= $3::date
+     GROUP BY po.expected_possession_date, po.location_id, l.name
+    `,
+    [companyId, typeId, end.toISOString().slice(0, 10)]
+  );
+
+  incomingRes.rows.forEach((row) => {
+    const locKey = String(row.location_id ?? "none");
+    if (!byLocation.has(locKey)) {
+      byLocation.set(locKey, {
+        locationId: row.location_id === null || row.location_id === undefined ? null : Number(row.location_id),
+        locationName: row.location_name || "No location",
+        total: 0,
+        reservedByDay: new Array(dayCount).fill(0),
+        incomingByDay: new Array(dayCount).fill(0),
+      });
+    }
+    const bucket = byLocation.get(locKey);
+    if (!bucket) return;
+    const qty = Number(row.qty || 0);
+    if (!Number.isFinite(qty) || qty <= 0) return;
+    const expectedMs = Date.parse(row.expected_possession_date);
+    if (!Number.isFinite(expectedMs)) return;
+    let idx = Math.floor((startOfDayMs(expectedMs) - startMs) / (24 * 60 * 60 * 1000));
+    if (idx < 0) idx = 0;
+    if (idx >= dayCount) return;
+    for (let i = idx; i < dayCount; i++) bucket.incomingByDay[i] += qty;
+  });
+
   const dates = [];
   for (let i = 0; i < dayCount; i++) {
     const d = new Date(startMs + i * 24 * 60 * 60 * 1000);
@@ -8821,8 +9245,8 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     .map((loc) => ({
       locationId: loc.locationId,
       locationName: loc.locationName,
-      values: loc.reservedByDay.map((reserved) => loc.total - reserved),
-      total: loc.total,
+      values: loc.reservedByDay.map((reserved, idx) => loc.total + loc.incomingByDay[idx] - reserved),
+      total: loc.total + Math.max(0, ...loc.incomingByDay),
     }));
 
   return { dates, series };
@@ -8921,6 +9345,7 @@ async function getAvailabilityShortfallsSummary({
       totalUnits,
       committedByDay: new Array(dayCount).fill(0),
       projectedByDay: new Array(dayCount).fill(0),
+      incomingByDay: new Array(dayCount).fill(0),
     });
   });
 
@@ -8977,6 +9402,7 @@ async function getAvailabilityShortfallsSummary({
         totalUnits: totalsByType.get(typeKey) || 0,
         committedByDay: new Array(dayCount).fill(0),
         projectedByDay: new Array(dayCount).fill(0),
+        incomingByDay: new Array(dayCount).fill(0),
       });
     }
     const bucket = byType.get(typeKey);
@@ -8995,26 +9421,93 @@ async function getAvailabilityShortfallsSummary({
     for (let i = first; i <= last; i++) target[i] += qty;
   });
 
+  const incomingParams = [companyId, end.toISOString().slice(0, 10)];
+  const incomingFilters = [
+    "po.company_id = $1",
+    "po.status <> 'closed'",
+    "po.equipment_id IS NULL",
+    "po.expected_possession_date IS NOT NULL",
+    "po.expected_possession_date <= $2::date",
+  ];
+  if (Number.isFinite(locationIdNum)) {
+    incomingParams.push(locationIdNum);
+    incomingFilters.push(`po.location_id = $${incomingParams.length}`);
+  }
+  if (Number.isFinite(categoryIdNum)) {
+    incomingParams.push(categoryIdNum);
+    incomingFilters.push(`et.category_id = $${incomingParams.length}`);
+  }
+  if (Number.isFinite(typeIdNum)) {
+    incomingParams.push(typeIdNum);
+    incomingFilters.push(`po.type_id = $${incomingParams.length}`);
+  }
+
+  const incomingRes = await pool.query(
+    `
+    SELECT po.type_id,
+           po.expected_possession_date,
+           COUNT(*)::int AS qty,
+           et.name AS type_name,
+           ec.name AS category_name
+      FROM purchase_orders po
+      JOIN equipment_types et ON et.id = po.type_id AND et.company_id = po.company_id
+ LEFT JOIN equipment_categories ec ON ec.id = et.category_id
+     WHERE ${incomingFilters.join(" AND ")}
+     GROUP BY po.type_id, po.expected_possession_date, et.name, ec.name
+    `,
+    incomingParams
+  );
+
+  incomingRes.rows.forEach((row) => {
+    const typeKey = String(row.type_id);
+    if (!byType.has(typeKey)) {
+      byType.set(typeKey, {
+        typeId: Number(row.type_id),
+        typeName: row.type_name || "--",
+        categoryName: row.category_name || null,
+        totalUnits: totalsByType.get(typeKey) || 0,
+        committedByDay: new Array(dayCount).fill(0),
+        projectedByDay: new Array(dayCount).fill(0),
+        incomingByDay: new Array(dayCount).fill(0),
+      });
+    }
+    const bucket = byType.get(typeKey);
+    if (!bucket) return;
+    const qty = Number(row.qty || 0);
+    if (!Number.isFinite(qty) || qty <= 0) return;
+    const expectedMs = Date.parse(row.expected_possession_date);
+    if (!Number.isFinite(expectedMs)) return;
+    let idx = Math.floor((startOfDayMs(expectedMs) - startMs) / (24 * 60 * 60 * 1000));
+    if (idx < 0) idx = 0;
+    if (idx >= dayCount) return;
+    for (let i = idx; i < dayCount; i++) bucket.incomingByDay[i] += qty;
+  });
+
   const rows = [];
   byType.forEach((bucket) => {
     let minCommitted = null;
     let minPotential = null;
     for (let i = 0; i < dayCount; i++) {
-      const committedAvail = bucket.totalUnits - bucket.committedByDay[i];
+      const incoming = bucket.incomingByDay[i] || 0;
+      const committedAvail = bucket.totalUnits + incoming - bucket.committedByDay[i];
       const potentialAvail = committedAvail - bucket.projectedByDay[i];
       minCommitted = minCommitted === null ? committedAvail : Math.min(minCommitted, committedAvail);
       minPotential = minPotential === null ? potentialAvail : Math.min(minPotential, potentialAvail);
     }
+    const maxIncoming = Math.max(0, ...bucket.incomingByDay);
     const hasDemand =
-      bucket.committedByDay.some((v) => v > 0) || bucket.projectedByDay.some((v) => v > 0) || bucket.totalUnits > 0;
+      bucket.committedByDay.some((v) => v > 0) ||
+      bucket.projectedByDay.some((v) => v > 0) ||
+      bucket.totalUnits > 0 ||
+      maxIncoming > 0;
     if (!hasDemand) return;
     rows.push({
       typeId: bucket.typeId,
       typeName: bucket.typeName,
       categoryName: bucket.categoryName,
-      totalUnits: bucket.totalUnits,
-      minCommitted: minCommitted ?? bucket.totalUnits,
-      minPotential: minPotential ?? bucket.totalUnits,
+      totalUnits: bucket.totalUnits + maxIncoming,
+      minCommitted: minCommitted ?? bucket.totalUnits + maxIncoming,
+      minPotential: minPotential ?? bucket.totalUnits + maxIncoming,
     });
   });
 
@@ -9081,6 +9574,7 @@ async function getTypeAvailabilitySeriesWithProjection({
           total: 0,
           committedByDay: new Array(dayCount).fill(0),
           projectedByDay: new Array(dayCount).fill(0),
+          incomingByDay: new Array(dayCount).fill(0),
         });
       }
       byLocation.get(key).total += 1;
@@ -9096,6 +9590,7 @@ async function getTypeAvailabilitySeriesWithProjection({
       total,
       committedByDay: new Array(dayCount).fill(0),
       projectedByDay: new Array(dayCount).fill(0),
+      incomingByDay: new Array(dayCount).fill(0),
     });
   }
 
@@ -9142,6 +9637,7 @@ async function getTypeAvailabilitySeriesWithProjection({
         total: 0,
         committedByDay: new Array(dayCount).fill(0),
         projectedByDay: new Array(dayCount).fill(0),
+        incomingByDay: new Array(dayCount).fill(0),
       });
     }
     const bucket = byLocation.get(locKey);
@@ -9160,6 +9656,58 @@ async function getTypeAvailabilitySeriesWithProjection({
     for (let i = first; i <= last; i++) target[i] += qty;
   });
 
+  const incomingParams = [companyId, typeId, end.toISOString().slice(0, 10)];
+  const incomingFilters = [
+    "po.company_id = $1",
+    "po.type_id = $2",
+    "po.status <> 'closed'",
+    "po.equipment_id IS NULL",
+    "po.expected_possession_date IS NOT NULL",
+    "po.expected_possession_date <= $3::date",
+  ];
+  if (Number.isFinite(locationIdNum)) {
+    incomingParams.push(locationIdNum);
+    incomingFilters.push(`po.location_id = $${incomingParams.length}`);
+  }
+
+  const incomingRes = await pool.query(
+    `
+    SELECT po.expected_possession_date,
+           po.location_id,
+           COALESCE(l.name, 'No location') AS location_name,
+           COUNT(*)::int AS qty
+      FROM purchase_orders po
+ LEFT JOIN locations l ON l.id = po.location_id
+     WHERE ${incomingFilters.join(" AND ")}
+     GROUP BY po.expected_possession_date, po.location_id, l.name
+    `,
+    incomingParams
+  );
+
+  incomingRes.rows.forEach((row) => {
+    const locKey = doSplit ? String(row.location_id ?? "none") : "all";
+    if (!byLocation.has(locKey)) {
+      byLocation.set(locKey, {
+        locationId: row.location_id === null || row.location_id === undefined ? null : Number(row.location_id),
+        locationName: row.location_name || "No location",
+        total: 0,
+        committedByDay: new Array(dayCount).fill(0),
+        projectedByDay: new Array(dayCount).fill(0),
+        incomingByDay: new Array(dayCount).fill(0),
+      });
+    }
+    const bucket = byLocation.get(locKey);
+    if (!bucket) return;
+    const qty = Number(row.qty || 0);
+    if (!Number.isFinite(qty) || qty <= 0) return;
+    const expectedMs = Date.parse(row.expected_possession_date);
+    if (!Number.isFinite(expectedMs)) return;
+    let idx = Math.floor((startOfDayMs(expectedMs) - startMs) / (24 * 60 * 60 * 1000));
+    if (idx < 0) idx = 0;
+    if (idx >= dayCount) return;
+    for (let i = idx; i < dayCount; i++) bucket.incomingByDay[i] += qty;
+  });
+
   const dates = [];
   for (let i = 0; i < dayCount; i++) {
     const d = new Date(startMs + i * 24 * 60 * 60 * 1000);
@@ -9171,9 +9719,11 @@ async function getTypeAvailabilitySeriesWithProjection({
     .map((loc) => ({
       locationId: loc.locationId,
       locationName: loc.locationName,
-      total: loc.total,
-      committedValues: loc.committedByDay.map((reserved) => loc.total - reserved),
-      potentialValues: loc.committedByDay.map((reserved, idx) => loc.total - reserved - loc.projectedByDay[idx]),
+      total: loc.total + Math.max(0, ...loc.incomingByDay),
+      committedValues: loc.committedByDay.map((reserved, idx) => loc.total + loc.incomingByDay[idx] - reserved),
+      potentialValues: loc.committedByDay.map(
+        (reserved, idx) => loc.total + loc.incomingByDay[idx] - reserved - loc.projectedByDay[idx]
+      ),
     }));
 
   return { dates, series };
@@ -14051,6 +14601,15 @@ module.exports = {
   createCustomer,
   updateCustomer,
   deleteCustomer,
+  listVendors,
+  createVendor,
+  updateVendor,
+  deleteVendor,
+  listPurchaseOrders,
+  getPurchaseOrder,
+  createPurchaseOrder,
+  updatePurchaseOrder,
+  deletePurchaseOrder,
   importInventoryFromText,
   importCustomerPricingFromInventoryText,
   importCustomersFromText,

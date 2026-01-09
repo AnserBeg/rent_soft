@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Purchase Order</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <header class="hero">
+          <div>
+            <p class="eyebrow" id="mode-label">New purchase order</p>
+            <h1 id="form-title">Purchase order</h1>
+            <p class="lede">Track expected arrivals and close orders directly into inventory.</p>
+          </div>
+          <div class="hero-badge">
+            <span>Vendor</span>
+            <span>Equipment details</span>
+            <span>Availability</span>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card company-context-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Context</p>
+                <h2>Company</h2>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="inline-actions">
+                <a href="purchase-orders.html" class="ghost small">Back to list</a>
+              </div>
+              <p class="hint" id="company-meta">Loading your company...</p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Purchase order details</h2>
+                <p class="hint" id="po-meta"></p>
+              </div>
+              <button class="ghost danger" id="delete-po" style="display:none;">Delete</button>
+            </div>
+            <div class="form-body">
+              <form id="purchase-order-form" class="stack">
+                <div class="two-col">
+                  <label>Vendor
+                    <select name="vendorId" id="vendor-select" required>
+                      <option value="">Select vendor</option>
+                      <option value="__new_vendor__">+ Add new vendor...</option>
+                    </select>
+                  </label>
+                  <label>Equipment type
+                    <select name="typeId" id="type-select" required>
+                      <option value="">Select type</option>
+                      <option value="__new_type__">+ Add new type...</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="two-col">
+                  <label>Expected possession date <input name="expectedPossessionDate" type="date" required /></label>
+                  <label>Status
+                    <select name="status" id="status-select">
+                      <option value="open">Open</option>
+                      <option value="closed">Closed</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div class="two-col">
+                  <label>Model name <input name="modelName" /></label>
+                  <label>Serial # <input name="serialNumber" /></label>
+                </div>
+                <div class="two-col">
+                  <label>Condition
+                    <select name="condition">
+                      <option>New</option>
+                      <option>Normal Wear &amp; Tear</option>
+                      <option>Damaged but Usable</option>
+                      <option>Needs Repair</option>
+                      <option>Unusable</option>
+                      <option>Lost</option>
+                    </select>
+                  </label>
+                  <label>Manufacturer <input name="manufacturer" /></label>
+                </div>
+
+                <label>Images (optional) <input name="imageFiles" type="file" accept="image/*" multiple /></label>
+                <input name="imageUrls" type="hidden" />
+                <input name="imageUrl" type="hidden" />
+                <div class="image-tools">
+                  <div class="thumb-row" id="po-images"></div>
+                  <button type="button" class="ghost small danger" id="remove-po-images" style="display:none;">Clear images</button>
+                </div>
+
+                <div class="two-col">
+                  <label>Base location
+                    <select name="locationId" id="location-select">
+                      <option value="">Select a location</option>
+                    </select>
+                  </label>
+                  <label>Current location
+                    <select name="currentLocationId" id="current-location-select">
+                      <option value="">Same as base location</option>
+                    </select>
+                  </label>
+                </div>
+                <label>Purchase price ($) <input name="purchasePrice" type="number" min="0" step="0.01" /></label>
+                <label>Notes <textarea name="notes" class="notes-area"></textarea></label>
+                <p class="hint">Closing a PO will add the asset to the Assets page once all required details are provided.</p>
+                <div class="inline-actions">
+                  <button type="submit" class="primary" id="save-po">Save purchase order</button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="purchase-order-form.js"></script>
+</body>
+</html>

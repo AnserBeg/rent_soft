@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Vendor</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <header class="hero">
+          <div>
+            <p class="eyebrow" id="mode-label">New vendor</p>
+            <h1 id="form-title">Vendor details</h1>
+            <p class="lede">Capture vendor contacts, address, and notes for purchase orders.</p>
+          </div>
+          <div class="hero-badge">
+            <span>Contacts</span>
+            <span>Address</span>
+            <span>Notes</span>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card company-context-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Context</p>
+                <h2>Company</h2>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="inline-actions">
+                <a href="vendors.html" class="ghost small">Back to list</a>
+              </div>
+              <p class="hint" id="company-meta">Loading your company...</p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Core details</h2>
+              </div>
+              <button class="ghost danger" id="delete-vendor" style="display:none;">Delete</button>
+            </div>
+            <div class="form-body">
+              <form id="vendor-form" class="stack">
+                <label>Vendor name <input name="companyName" required /></label>
+                <div class="two-col">
+                  <label>Contact name <input name="contactName" /></label>
+                  <label>Email <input name="email" type="email" /></label>
+                </div>
+                <div class="two-col">
+                  <label>Phone <input name="phone" /></label>
+                  <label>Street address <input name="streetAddress" /></label>
+                </div>
+                <div class="two-col">
+                  <label>City <input name="city" /></label>
+                  <label>Province/State <input name="region" /></label>
+                </div>
+                <div class="two-col">
+                  <label>Country <input name="country" /></label>
+                  <label>Postal code <input name="postalCode" /></label>
+                </div>
+                <label>Notes <textarea name="notes" class="notes-area"></textarea></label>
+                <div class="inline-actions">
+                  <button type="submit" class="primary">Save vendor</button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="vendors-form.js"></script>
+</body>
+</html>
