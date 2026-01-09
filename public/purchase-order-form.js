@@ -380,23 +380,25 @@ poForm.addEventListener("submit", async (e) => {
     payload.imageUrls = finalUrls;
     payload.imageUrl = finalUrls[0] || null;
 
-  const res = await fetch(editingPoId ? `/api/purchase-orders/${editingPoId}` : "/api/purchase-orders", {
-    method: editingPoId ? "PUT" : "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    for (const url of uploadedUrls) {
+    const res = await fetch(editingPoId ? `/api/purchase-orders/${editingPoId}` : "/api/purchase-orders", {
+      method: editingPoId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      for (const url of uploadedUrls) {
+        await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
+      }
+      return;
+    }
+
+    for (const url of deleteAfterSave) {
       await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
     }
-    return;
+    window.location.href = "purchase-orders.html";
+  } catch (err) {
+    console.error(err);
   }
-
-  for (const url of deleteAfterSave) {
-    await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
-  }
-  window.location.href = "purchase-orders.html";
-});
 });
 
 deletePoBtn?.addEventListener("click", async (e) => {
