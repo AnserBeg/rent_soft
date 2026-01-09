@@ -268,6 +268,8 @@ function handleVendorAddSelected() {
 
 vendorSelect?.addEventListener("change", handleVendorAddSelected);
 vendorSelect?.addEventListener("input", handleVendorAddSelected);
+vendorSelect?.addEventListener("click", handleVendorAddSelected);
+vendorSelect?.addEventListener("blur", handleVendorAddSelected);
 
 typeSelect?.addEventListener("change", (e) => {
   if (e.target.value === "__new_type__") {
