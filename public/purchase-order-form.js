@@ -2,7 +2,6 @@ const params = new URLSearchParams(window.location.search);
 const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
 const editingPoId = params.get("id");
 
-const companyMeta = document.getElementById("company-meta");
 const poMeta = document.getElementById("po-meta");
 const modeLabel = document.getElementById("mode-label");
 const formTitle = document.getElementById("form-title");
@@ -319,24 +318,18 @@ clearPoImagesBtn?.addEventListener("click", () => {
 
 poForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (!activeCompanyId) {
-    companyMeta.textContent = "Log in to continue.";
-    return;
-  }
+  if (!activeCompanyId) return;
 
   const payload = getFormData(poForm);
   if (payload.vendorId === "__new_vendor__") {
     vendorSelect.value = "";
-    companyMeta.textContent = "Choose a vendor.";
     return;
   }
   if (payload.typeId === "__new_type__") {
     typeSelect.value = "";
-    companyMeta.textContent = "Choose an equipment type.";
     return;
   }
   if (!payload.vendorId || !payload.typeId || !payload.expectedPossessionDate) {
-    companyMeta.textContent = "Vendor, type, and expected possession date are required.";
     return;
   }
 
@@ -352,7 +345,6 @@ poForm.addEventListener("submit", async (e) => {
     ];
     const missing = required.filter((item) => !payload[item.key]);
     if (missing.length) {
-      companyMeta.textContent = `Missing fields to close: ${missing.map((m) => m.label).join(", ")}.`;
       return;
     }
   }
@@ -383,64 +375,48 @@ poForm.addEventListener("submit", async (e) => {
     payload.imageUrls = finalUrls;
     payload.imageUrl = finalUrls[0] || null;
 
-    const res = await fetch(editingPoId ? `/api/purchase-orders/${editingPoId}` : "/api/purchase-orders", {
-      method: editingPoId ? "PUT" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      for (const url of uploadedUrls) {
-        await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
-      }
-      throw new Error(data.error || "Unable to save purchase order");
-    }
-
-    for (const url of deleteAfterSave) {
+  const res = await fetch(editingPoId ? `/api/purchase-orders/${editingPoId}` : "/api/purchase-orders", {
+    method: editingPoId ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    for (const url of uploadedUrls) {
       await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
     }
-    window.location.href = "purchase-orders.html";
-  } catch (err) {
-    companyMeta.textContent = err.message || "Unable to save purchase order.";
+    return;
   }
+
+  for (const url of deleteAfterSave) {
+    await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
+  }
+  window.location.href = "purchase-orders.html";
+});
 });
 
 deletePoBtn?.addEventListener("click", async (e) => {
   e.preventDefault();
   if (!activeCompanyId || !editingPoId) return;
   if (!window.confirm("Delete this purchase order?")) return;
-  try {
-    const res = await fetch(`/api/purchase-orders/${editingPoId}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId: activeCompanyId }),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "Unable to delete purchase order");
-    }
-    window.location.href = "purchase-orders.html";
-  } catch (err) {
-    companyMeta.textContent = err.message || "Unable to delete purchase order.";
-  }
+  const res = await fetch(`/api/purchase-orders/${editingPoId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId: activeCompanyId }),
+  });
+  if (!res.ok) return;
+  window.location.href = "purchase-orders.html";
 });
 
 async function init() {
   if (!activeCompanyId) {
-    companyMeta.textContent = "Log in to view purchase orders.";
     updateModeLabels();
     return;
   }
   window.RentSoft?.setCompanyId?.(activeCompanyId);
-  companyMeta.textContent = `Using company #${activeCompanyId}`;
   updateModeLabels();
-  try {
-    await Promise.all([loadVendors(), loadTypes(), loadLocations()]);
-    await loadPurchaseOrder();
-    syncCloseRequirements();
-  } catch (err) {
-    companyMeta.textContent = err.message || "Unable to load purchase order.";
-  }
+  await Promise.all([loadVendors(), loadTypes(), loadLocations()]);
+  await loadPurchaseOrder();
+  syncCloseRequirements();
 }
 
 init();

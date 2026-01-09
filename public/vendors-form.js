@@ -3,7 +3,6 @@ const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyI
 const editingVendorId = params.get("id");
 const returnTo = params.get("returnTo");
 
-const companyMeta = document.getElementById("company-meta");
 const modeLabel = document.getElementById("mode-label");
 const formTitle = document.getElementById("form-title");
 const deleteVendorBtn = document.getElementById("delete-vendor");
@@ -42,7 +41,6 @@ async function loadVendor() {
   await loadVendors();
   const vendor = vendorsCache.find((v) => String(v.id) === String(editingVendorId));
   if (!vendor) {
-    companyMeta.textContent = "Vendor not found.";
     return;
   }
   vendorForm.companyName.value = vendor.company_name || "";
@@ -59,15 +57,9 @@ async function loadVendor() {
 
 vendorForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (!activeCompanyId) {
-    companyMeta.textContent = "Log in to continue.";
-    return;
-  }
+  if (!activeCompanyId) return;
   const payload = getFormData(vendorForm);
-  if (!payload.companyName) {
-    companyMeta.textContent = "Vendor name is required.";
-    return;
-  }
+  if (!payload.companyName) return;
   payload.companyId = activeCompanyId;
   if (!payload.contactName) payload.contactName = null;
   if (!payload.email) payload.email = null;
@@ -79,51 +71,32 @@ vendorForm.addEventListener("submit", async (e) => {
   if (!payload.postalCode) payload.postalCode = null;
   if (!payload.notes) payload.notes = null;
 
-  try {
-    const res = await fetch(editingVendorId ? `/api/vendors/${editingVendorId}` : "/api/vendors", {
-      method: editingVendorId ? "PUT" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "Unable to save vendor");
-    }
-    companyMeta.textContent = editingVendorId ? "Vendor updated." : "Vendor created.";
-    window.location.href = returnTo || "vendors.html";
-  } catch (err) {
-    companyMeta.textContent = err.message || "Unable to save vendor.";
-  }
+  const res = await fetch(editingVendorId ? `/api/vendors/${editingVendorId}` : "/api/vendors", {
+    method: editingVendorId ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) return;
+  window.location.href = returnTo || "vendors.html";
 });
 
 deleteVendorBtn?.addEventListener("click", async (e) => {
   e.preventDefault();
   if (!activeCompanyId || !editingVendorId) return;
   if (!window.confirm("Delete this vendor?")) return;
-  try {
-    const res = await fetch(`/api/vendors/${editingVendorId}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId: activeCompanyId }),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "Unable to delete vendor");
-    }
-    window.location.href = "vendors.html";
-  } catch (err) {
-    companyMeta.textContent = err.message || "Unable to delete vendor.";
-  }
+  const res = await fetch(`/api/vendors/${editingVendorId}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId: activeCompanyId }),
+  });
+  if (!res.ok) return;
+  window.location.href = "vendors.html";
 });
 
 if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
-  companyMeta.textContent = `Using company #${activeCompanyId}`;
   updateModeLabels();
-  loadVendor().catch((err) => {
-    companyMeta.textContent = err.message || "Unable to load vendor.";
-  });
+  loadVendor().catch(() => {});
 } else {
-  companyMeta.textContent = "Log in to view vendors.";
   updateModeLabels();
 }
