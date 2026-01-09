@@ -123,13 +123,13 @@ function isDemandOnlyStatus(status) {
   return normalized === "quote" || normalized === "quote_rejected" || normalized === "reservation" || normalized === "requested";
 }
 
-function formatDocNumber(prefix, year, seq) {
-  const yy = String(year).slice(-2);
-  const nnnn = String(seq).padStart(4, "0");
-  return `${prefix}-${yy}-${nnnn}`;
+function formatDocNumber(prefix, year, seq, { yearDigits = 2, seqDigits = 4 } = {}) {
+  const yearStr = yearDigits === 4 ? String(year).padStart(4, "0") : String(year).slice(-yearDigits).padStart(yearDigits, "0");
+  const seqStr = String(seq).padStart(seqDigits, "0");
+  return `${prefix}-${yearStr}-${seqStr}`;
 }
 
-async function nextDocumentNumber(client, companyId, prefix, effectiveDate = new Date()) {
+async function nextDocumentNumber(client, companyId, prefix, effectiveDate = new Date(), options = {}) {
   const year = effectiveDate.getFullYear();
   const res = await client.query(
     `
@@ -146,7 +146,7 @@ async function nextDocumentNumber(client, companyId, prefix, effectiveDate = new
   );
   const seq = Number(res.rows?.[0]?.seq);
   if (!Number.isFinite(seq) || seq <= 0) throw new Error("Unable to generate document number.");
-  return formatDocNumber(String(prefix).trim().toUpperCase(), year, seq);
+  return formatDocNumber(String(prefix).trim().toUpperCase(), year, seq, options);
 }
 
 async function ensureTables() {
@@ -501,6 +501,7 @@ async function ensureTables() {
       CREATE TABLE IF NOT EXISTS purchase_orders (
         id SERIAL PRIMARY KEY,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        po_number TEXT,
         vendor_id INTEGER REFERENCES vendors(id) ON DELETE SET NULL,
         status TEXT NOT NULL DEFAULT 'open',
         expected_possession_date DATE,
@@ -521,6 +522,7 @@ async function ensureTables() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS po_number TEXT;`);
     await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS vendor_id INTEGER REFERENCES vendors(id) ON DELETE SET NULL;`);
     await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open';`);
     await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS expected_possession_date DATE;`);
@@ -540,6 +542,9 @@ async function ensureTables() {
     await client.query(`ALTER TABLE purchase_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
     await client.query(`CREATE INDEX IF NOT EXISTS purchase_orders_company_id_idx ON purchase_orders (company_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS purchase_orders_company_status_idx ON purchase_orders (company_id, status);`);
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS purchase_orders_po_number_uniq ON purchase_orders (company_id, po_number) WHERE po_number IS NOT NULL;`
+    );
     await client.query(
       `CREATE INDEX IF NOT EXISTS purchase_orders_company_expected_idx ON purchase_orders (company_id, expected_possession_date);`
     );
@@ -4428,6 +4433,7 @@ async function listPurchaseOrders(companyId) {
   const result = await pool.query(
     `SELECT po.id,
             po.company_id,
+            po.po_number,
             po.vendor_id,
             po.status,
             po.expected_possession_date,
@@ -4466,6 +4472,7 @@ async function getPurchaseOrder({ companyId, id }) {
   const result = await pool.query(
     `SELECT po.id,
             po.company_id,
+            po.po_number,
             po.vendor_id,
             po.status,
             po.expected_possession_date,
@@ -4501,6 +4508,7 @@ async function getPurchaseOrder({ companyId, id }) {
 
 async function createPurchaseOrder({
   companyId,
+  poNumber,
   vendorId,
   status,
   expectedPossessionDate,
@@ -4520,16 +4528,21 @@ async function createPurchaseOrder({
 }) {
   const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean).map(String) : [];
   const primaryUrl = urls[0] || imageUrl || null;
+  let effectiveDate = expectedPossessionDate ? new Date(expectedPossessionDate) : new Date();
+  if (Number.isNaN(effectiveDate.getTime())) effectiveDate = new Date();
+  const poNumberValue =
+    poNumber || (await nextDocumentNumber(pool, companyId, "PO", effectiveDate, { yearDigits: 4, seqDigits: 5 }));
   const result = await pool.query(
     `INSERT INTO purchase_orders
-      (company_id, vendor_id, status, expected_possession_date, type_id, model_name, serial_number, condition, manufacturer,
+      (company_id, po_number, vendor_id, status, expected_possession_date, type_id, model_name, serial_number, condition, manufacturer,
        image_url, image_urls, location_id, current_location_id, purchase_price, notes, equipment_id, closed_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())
-     RETURNING id, company_id, vendor_id, status, expected_possession_date, type_id, model_name, serial_number, condition,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NOW())
+     RETURNING id, company_id, po_number, vendor_id, status, expected_possession_date, type_id, model_name, serial_number, condition,
                manufacturer, image_url, image_urls, location_id, current_location_id, purchase_price, notes, equipment_id,
                closed_at, created_at, updated_at`,
     [
       companyId,
+      poNumberValue,
       vendorId || null,
       status || "open",
       expectedPossessionDate || null,
@@ -4593,7 +4606,7 @@ async function updatePurchaseOrder({
             closed_at = $16,
             updated_at = NOW()
       WHERE id = $17 AND company_id = $18
-      RETURNING id, company_id, vendor_id, status, expected_possession_date, type_id, model_name, serial_number, condition,
+      RETURNING id, company_id, po_number, vendor_id, status, expected_possession_date, type_id, model_name, serial_number, condition,
                 manufacturer, image_url, image_urls, location_id, current_location_id, purchase_price, notes, equipment_id,
                 closed_at, created_at, updated_at`,
     [

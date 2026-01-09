@@ -43,8 +43,9 @@ function renderPurchaseOrders(rows) {
     const div = document.createElement("div");
     div.className = "table-row";
     div.dataset.id = row.id;
+    const poNumber = row.po_number || row.poNumber || null;
     div.innerHTML = `
-      <span>#${row.id}</span>
+      <span>${poNumber || `#${row.id}`}</span>
       <span>${row.vendor_name || "--"}</span>
       <span>${row.type_name || "--"}</span>
       <span>${row.expected_possession_date || "--"}</span>
@@ -74,6 +75,8 @@ function applyFilters() {
     rows = rows.filter((r) => {
       return [
         r.id,
+        r.po_number,
+        r.poNumber,
         r.vendor_name,
         r.type_name,
         r.model_name,

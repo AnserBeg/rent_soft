@@ -78,6 +78,21 @@ function getFormData(form) {
   return Object.fromEntries(data.entries());
 }
 
+function toDateInputValue(value) {
+  if (!value) return "";
+  if (value instanceof Date && Number.isFinite(value.valueOf())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const raw = String(value).trim();
+  if (!raw) return "";
+  const tIndex = raw.indexOf("T");
+  if (tIndex > 0) return raw.slice(0, tIndex);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed)) return "";
+  return new Date(parsed).toISOString().slice(0, 10);
+}
+
 function safeParseJsonArray(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value;
@@ -259,7 +274,7 @@ async function loadPurchaseOrder() {
 
   vendorSelect.value = po.vendor_id || "";
   typeSelect.value = po.type_id || "";
-  poForm.expectedPossessionDate.value = po.expected_possession_date || "";
+  poForm.expectedPossessionDate.value = toDateInputValue(po.expected_possession_date);
   if (statusInput) statusInput.value = po.status || "open";
   poForm.modelName.value = po.model_name || "";
   poForm.serialNumber.value = po.serial_number || "";
@@ -276,7 +291,8 @@ async function loadPurchaseOrder() {
   renderPoImages();
 
   if (poMeta) {
-    const parts = [`PO #${po.id}`];
+    const label = po.po_number || po.poNumber || `PO #${po.id}`;
+    const parts = [label];
     if (po.equipment_id) parts.push(`Asset #${po.equipment_id}`);
     poMeta.textContent = parts.join(" • ");
   }
