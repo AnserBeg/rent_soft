@@ -183,6 +183,7 @@ async function loadVendors() {
   addOpt.value = "__new_vendor__";
   addOpt.textContent = "+ Add new vendor...";
   vendorSelect.appendChild(addOpt);
+  if (!editingPoId) vendorSelect.value = "";
 }
 
 async function loadTypes() {
@@ -258,13 +259,15 @@ async function loadPurchaseOrder() {
   syncCloseRequirements();
 }
 
-vendorSelect?.addEventListener("change", (e) => {
-  if (e.target.value === "__new_vendor__") {
-    e.target.value = "";
-    const returnTo = editingPoId ? `purchase-order-form.html?id=${editingPoId}` : "purchase-order-form.html";
-    window.location.href = `vendors-form.html?returnTo=${encodeURIComponent(returnTo)}`;
-  }
-});
+function handleVendorAddSelected() {
+  if (!vendorSelect || vendorSelect.value !== "__new_vendor__") return;
+  vendorSelect.value = "";
+  const returnTo = editingPoId ? `purchase-order-form.html?id=${editingPoId}` : "purchase-order-form.html";
+  window.location.href = `vendors-form.html?returnTo=${encodeURIComponent(returnTo)}`;
+}
+
+vendorSelect?.addEventListener("change", handleVendorAddSelected);
+vendorSelect?.addEventListener("input", handleVendorAddSelected);
 
 typeSelect?.addEventListener("change", (e) => {
   if (e.target.value === "__new_type__") {
