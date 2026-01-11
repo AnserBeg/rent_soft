@@ -360,6 +360,32 @@ document.addEventListener("DOMContentLoaded", () => {
     sync();
   }
 
+  function mountNavScrollPersistence() {
+    const navLinks = sidebar.querySelector(".nav-links");
+    if (!navLinks) return;
+
+    const NAV_SCROLL_KEY = "rentSoft.navScrollTop";
+    const stored = Number(localStorage.getItem(NAV_SCROLL_KEY));
+    if (Number.isFinite(stored)) {
+      navLinks.scrollTop = stored;
+    }
+
+    let ticking = false;
+    const save = () => {
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(() => {
+        localStorage.setItem(NAV_SCROLL_KEY, String(navLinks.scrollTop || 0));
+        ticking = false;
+      });
+    };
+
+    navLinks.addEventListener("scroll", save, { passive: true });
+    window.addEventListener("beforeunload", () => {
+      localStorage.setItem(NAV_SCROLL_KEY, String(navLinks.scrollTop || 0));
+    });
+  }
+
   function getMobileTitle() {
     const raw = document.title || "";
     const cleaned = raw.replace(/^(?:Rent Soft|Aiven Rental)\s*-\s*/i, "").trim();
@@ -415,4 +441,5 @@ document.addEventListener("DOMContentLoaded", () => {
   mountNavGroupToggles();
   mountNavIcons();
   mountSidebarCollapse();
+  mountNavScrollPersistence();
 });

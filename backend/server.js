@@ -4668,6 +4668,9 @@ app.put(
 
     const normalizedStatus = normalizePurchaseOrderStatus(status);
     const expectedDate = String(expectedPossessionDate || "").trim();
+    const locationIdNum = locationId === "" || locationId === null || locationId === undefined ? null : Number(locationId);
+    const purchasePriceNum =
+      purchasePrice === "" || purchasePrice === null || purchasePrice === undefined ? null : Number(purchasePrice);
     if (!expectedDate || Number.isNaN(Date.parse(expectedDate))) {
       return res.status(400).json({ error: "expectedPossessionDate must be a valid date." });
     }
@@ -4740,9 +4743,9 @@ app.put(
         manufacturer,
         imageUrl,
         imageUrls: parseStringArray(imageUrls),
-        locationId: locationId ? Number(locationId) : null,
+        locationId: Number.isFinite(locationIdNum) ? locationIdNum : null,
         currentLocationId: currentLocationId ? Number(currentLocationId) : null,
-        purchasePrice: purchasePrice === "" || purchasePrice === null ? null : Number(purchasePrice),
+        purchasePrice: purchasePriceNum,
         notes,
         equipmentId: equipment?.id || null,
         closedAt: closedAt || new Date().toISOString(),
