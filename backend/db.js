@@ -10897,7 +10897,7 @@ async function createRentalOrder({
     await client.query("BEGIN");
     const settings = await getCompanySettings(companyId);
     const normalizedStatus = normalizeRentalOrderStatus(status);
-    const allowsInventory = allowsInventoryAssignment(normalizedStatus);
+    const demandOnly = isDemandOnlyStatus(normalizedStatus);
     const allowsInventory = allowsInventoryAssignment(normalizedStatus);
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
