@@ -2023,6 +2023,30 @@ a.ghost {
   color: #0f172a;
 }
 
+.timeline-bar.compact {
+  overflow: visible;
+}
+
+.timeline-bar.compact .timeline-bar-label {
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 2px 6px;
+  width: auto;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  border-radius: 999px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+  text-overflow: clip;
+  overflow: visible;
+}
+
+.timeline-bar.compact.compact-left .timeline-bar-label {
+  left: auto;
+  right: calc(100% + 6px);
+}
+
 .timeline-bar.status-requested {
   background: rgba(59, 130, 246, 0.20);
   border-color: rgba(59, 130, 246, 0.55);

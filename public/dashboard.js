@@ -2148,8 +2148,18 @@ function renderBar(b, endingDays) {
   const label = document.createElement("div");
   label.className = "timeline-bar-label";
   const suffix = b.qty && b.qty > 1 ? ` ×${b.qty}` : "";
-  label.textContent = `${docNumber(b)}${suffix}`;
+  const labelText = `${docNumber(b)}${suffix}`;
+  label.textContent = labelText;
   el.appendChild(label);
+  if (b.widthPx < 80) {
+    const approxLabelWidth = Math.min(240, labelText.length * 7 + 16);
+    const timelineWidth = rangeDays * COL_W;
+    classes.push("compact");
+    if (b.leftPx + b.widthPx + approxLabelWidth + 12 > timelineWidth) {
+      classes.push("compact-left");
+    }
+    el.className = classes.join(" ");
+  }
 
   if (b.durationDays >= 21) {
     const duration = document.createElement("div");
