@@ -673,7 +673,6 @@ function renderBenchStageTable(tableEl, rows) {
     <div class="table-row table-header">
       <span>Doc #</span>
       <span>Customer</span>
-      <span>PO / Legacy #</span>
       <span>Start</span>
       <span>End</span>
     </div>`;
@@ -685,7 +684,6 @@ function renderBenchStageTable(tableEl, rows) {
     div.innerHTML = `
       <span>${docNumber(row)}</span>
       <span>${row.customer_name || "--"}</span>
-      <span>${poOrLegacy(row)}</span>
       <span>${fmtDateTime(row.start_at)}</span>
       <span>${fmtDateTime(row.end_at)}</span>
     `;
