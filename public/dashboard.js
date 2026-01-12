@@ -85,6 +85,7 @@ const conflictBody = document.getElementById("conflict-body");
 const benchSearchInput = document.getElementById("bench-search");
 const benchNewRoBtn = document.getElementById("bench-new-ro");
 const benchEnding72Btn = document.getElementById("bench-ending-72h");
+const benchSortNearest = document.getElementById("bench-sort-nearest");
 
 const benchViewToggle = document.getElementById("bench-view-toggle");
 const benchViewTimelineBtn = document.getElementById("bench-view-timeline-btn");
@@ -138,6 +139,7 @@ let focusEndingOnly = false;
 let endingDays = DEFAULT_ENDING_DAYS;
 
 const BENCH_VIEW_STORAGE_KEY = "rentsoft.workbench.view";
+const BENCH_SORT_STORAGE_KEY = "rentsoft.workbench.timelineSortNearest";
 let benchActiveView = null; // "timeline" | "stages" | null
 let benchOrdersCache = [];
 let benchOrdersCacheKey = "";
@@ -516,6 +518,13 @@ function currentBenchViewPref() {
   return v === "stages" ? "stages" : "timeline";
 }
 
+function currentBenchSortPref() {
+  const v = String(safeStorageGet(BENCH_SORT_STORAGE_KEY) || "").toLowerCase();
+  if (["0", "false", "off"].includes(v)) return false;
+  if (["1", "true", "on"].includes(v)) return true;
+  return true;
+}
+
 function setBenchView(view, { persist = true, load = true } = {}) {
   if (!hasBenchStagesUI()) return;
   const next = view === "stages" ? "stages" : "timeline";
@@ -580,16 +589,10 @@ function parseDateMs(value) {
   return Number.isFinite(ms) ? ms : null;
 }
 
-function benchOrderDateSortKey(row, nowMs) {
-  const startMs = parseDateMs(row.start_at);
-  const endMs = parseDateMs(row.end_at);
-  const candidates = [];
-  if (Number.isFinite(endMs)) candidates.push({ ms: endMs, type: "end" });
-  if (Number.isFinite(startMs)) candidates.push({ ms: startMs, type: "start" });
+function bestDateCandidate(candidates, nowMs) {
   if (!candidates.length) {
     return { dist: Number.POSITIVE_INFINITY, ms: Number.POSITIVE_INFINITY, type: "end" };
   }
-
   let best = candidates[0];
   let bestDist = Math.abs(best.ms - nowMs);
   for (let i = 1; i < candidates.length; i++) {
@@ -615,6 +618,15 @@ function benchOrderDateSortKey(row, nowMs) {
   return { dist: bestDist, ms: best.ms, type: best.type };
 }
 
+function benchOrderDateSortKey(row, nowMs) {
+  const startMs = parseDateMs(row.start_at);
+  const endMs = parseDateMs(row.end_at);
+  const candidates = [];
+  if (Number.isFinite(endMs)) candidates.push({ ms: endMs, type: "end" });
+  if (Number.isFinite(startMs)) candidates.push({ ms: startMs, type: "start" });
+  return bestDateCandidate(candidates, nowMs);
+}
+
 function sortBenchOrderRows(rows) {
   const nowMs = Date.now();
   return [...rows].sort((a, b) => {
@@ -624,6 +636,29 @@ function sortBenchOrderRows(rows) {
     if (keyA.ms !== keyB.ms) return keyA.ms - keyB.ms;
     if (keyA.type !== keyB.type) return keyA.type === "start" ? -1 : 1;
     return docNumber(a).localeCompare(docNumber(b));
+  });
+}
+
+function timelineRowDateSortKey(row, nowMs) {
+  const candidates = [];
+  (row.bars || []).forEach((a) => {
+    const startMs = parseDateMs(a.start_at);
+    const endMs = parseDateMs(a.end_at);
+    if (Number.isFinite(startMs)) candidates.push({ ms: startMs, type: "start" });
+    if (Number.isFinite(endMs)) candidates.push({ ms: endMs, type: "end" });
+  });
+  return bestDateCandidate(candidates, nowMs);
+}
+
+function sortTimelineRows(rows) {
+  const nowMs = Date.now();
+  return [...rows].sort((a, b) => {
+    const keyA = timelineRowDateSortKey(a, nowMs);
+    const keyB = timelineRowDateSortKey(b, nowMs);
+    if (keyA.dist !== keyB.dist) return keyA.dist - keyB.dist;
+    if (keyA.ms !== keyB.ms) return keyA.ms - keyB.ms;
+    if (keyA.type !== keyB.type) return keyA.type === "start" ? -1 : 1;
+    return String(a.label || "").localeCompare(String(b.label || ""));
   });
 }
 
@@ -640,9 +675,6 @@ function renderBenchStageTable(tableEl, rows) {
       <span>Status</span>
       <span>Customer</span>
       <span>PO / Legacy #</span>
-      <span>Start</span>
-      <span>End</span>
-      <span>Total</span>
       <span></span>
     </div>`;
 
@@ -655,9 +687,6 @@ function renderBenchStageTable(tableEl, rows) {
       <span>${statusLabel(row.status)}</span>
       <span>${row.customer_name || "--"}</span>
       <span>${poOrLegacy(row)}</span>
-      <span>${fmtDateTime(row.start_at)}</span>
-      <span>${fmtDateTime(row.end_at)}</span>
-      <span>${fmtMoneyMaybe(row.total ?? row.order_total ?? null)}</span>
       <span style="justify-self:end;">
         <button class="ghost small" type="button" data-open>Open</button>
       </span>
@@ -1806,6 +1835,16 @@ async function loadRevenueDashboard() {
   await Promise.all([loadRevenueTimeSeries().catch(() => null), loadSalespersonDonut().catch(() => null)]);
 }
 
+function shouldSortTimelineByDate() {
+  if (!benchSortNearest) return currentBenchSortPref();
+  return Boolean(benchSortNearest.checked);
+}
+
+function applyTimelineSort(rows) {
+  if (!shouldSortTimelineByDate()) return rows;
+  return sortTimelineRows(rows);
+}
+
 function currentViewRows() {
   const groupBy = String(groupBySelect?.value || "unit");
   const assignments = currentAssignments();
@@ -1831,7 +1870,8 @@ function currentViewRows() {
       if (!row) return;
       row.bars.push({ ...a, qty: countQtyForLine(a.line_item_id) });
     });
-    return Array.from(byType.values()).sort((a, b) => a.label.localeCompare(b.label));
+    const rows = Array.from(byType.values()).sort((a, b) => a.label.localeCompare(b.label));
+    return applyTimelineSort(rows);
   }
 
   if (groupBy === "customer") {
@@ -1853,7 +1893,8 @@ function currentViewRows() {
       if (!row) return;
       row.bars.push({ ...a, qty: countQtyForOrder(a.order_id) });
     });
-    return Array.from(byCustomer.values()).sort((a, b) => a.label.localeCompare(b.label));
+    const rows = Array.from(byCustomer.values()).sort((a, b) => a.label.localeCompare(b.label));
+    return applyTimelineSort(rows);
   }
 
   if (groupBy === "location") {
@@ -1874,7 +1915,8 @@ function currentViewRows() {
       if (!row) return;
       row.bars.push({ ...a, qty: countQtyForOrder(a.order_id) });
     });
-    return Array.from(byLoc.values()).sort((a, b) => a.label.localeCompare(b.label));
+    const rows = Array.from(byLoc.values()).sort((a, b) => a.label.localeCompare(b.label));
+    return applyTimelineSort(rows);
   }
 
   // unit
@@ -1900,9 +1942,10 @@ function currentViewRows() {
     row.bars.push({ ...a, qty: 1 });
   });
   // Default: hide empty rows for scale.
-  return Array.from(byEquip.values())
+  const rows = Array.from(byEquip.values())
     .filter((r) => r.bars.length)
     .sort((a, b) => a.label.localeCompare(b.label));
+  return applyTimelineSort(rows);
 }
 
 function equipmentLabel(e) {
@@ -2551,6 +2594,10 @@ function init() {
     setBenchView(currentBenchViewPref(), { persist: false, load: false });
   }
 
+  if (benchSortNearest) {
+    benchSortNearest.checked = currentBenchSortPref();
+  }
+
   if (activeCompanyId) {
     window.RentSoft?.setCompanyId?.(activeCompanyId);
     companyMeta.textContent = `Using company #${activeCompanyId}`;
@@ -2591,6 +2638,11 @@ rangeDaysSelect?.addEventListener("change", () => {
 });
 
 groupBySelect?.addEventListener("change", () => renderTimeline());
+
+benchSortNearest?.addEventListener("change", () => {
+  safeStorageSet(BENCH_SORT_STORAGE_KEY, benchSortNearest.checked ? "1" : "0");
+  if (hasTimelineUI()) renderTimeline();
+});
 
 todayBtn?.addEventListener("click", () => {
   rangeStartDate = hasTimelineUI()
