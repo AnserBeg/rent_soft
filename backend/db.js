@@ -12428,6 +12428,7 @@ async function updateRentalOrder({
     await client.query("BEGIN");
     const settings = await getCompanySettings(companyId);
     const normalizedStatus = normalizeRentalOrderStatus(status);
+    const demandOnly = isDemandOnlyStatus(normalizedStatus);
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
