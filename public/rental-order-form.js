@@ -955,6 +955,16 @@ function isDemandOnlyStatus(status) {
   return s === "quote" || s === "quote_rejected" || s === "reservation" || s === "requested";
 }
 
+function isUnitSelectionLocked(status) {
+  const s = normalizeOrderStatus(status);
+  return s === "quote" || s === "quote_rejected" || s === "requested";
+}
+
+function isUnitSelectionRequired(status) {
+  const s = normalizeOrderStatus(status);
+  return s === "ordered" || s === "received" || s === "closed";
+}
+
 function statusLabel(status) {
   const s = normalizeOrderStatus(status);
   switch (s) {
@@ -1739,7 +1749,7 @@ async function persistStatus(nextStatus, { note = null } = {}) {
   if (previous === desired) return;
 
   draft.status = desired;
-  if (isDemandOnlyStatus(desired)) {
+  if (isUnitSelectionLocked(desired)) {
     (draft.lineItems || []).forEach((li) => {
       li.inventoryIds = [];
     });
@@ -2383,7 +2393,7 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn }) {
 
 function renderLineItems() {
   lineItemsEl.innerHTML = "";
-  const demandOnly = isDemandOnlyStatus(draft.status);
+  const lockUnits = isUnitSelectionLocked(draft.status);
   (draft.lineItems || []).forEach((li) => {
     const card = document.createElement("div");
     card.className = "line-item-card";
@@ -2417,7 +2427,7 @@ function renderLineItems() {
     const unitOptionsHtml = `${selectedUnavailable}<option value="">Select unit</option>${emptyHint}${unitOptions}`;
     const capacityLabel = Number.isFinite(li.capacityUnits) ? String(li.capacityUnits) : "--";
     const totalLabel = Number.isFinite(li.totalUnits) ? String(li.totalUnits) : "--";
-    const unitFieldHtml = demandOnly
+    const unitFieldHtml = lockUnits
       ? `
         <label>
           <div class="label-head">
@@ -2560,7 +2570,7 @@ async function refreshAvailabilityForLineItem(li) {
     li.capacityUnits = null;
     return;
   }
-  const demandOnly = isDemandOnlyStatus(draft.status);
+  const lockUnits = isUnitSelectionLocked(draft.status);
   const qs = new URLSearchParams({
     companyId: String(activeCompanyId),
     typeId: String(li.typeId),
@@ -2580,7 +2590,7 @@ async function refreshAvailabilityForLineItem(li) {
   li.demandUnits = Number.isFinite(adjustedDemandUnits) ? adjustedDemandUnits : null;
   li.capacityUnits =
     totalUnits === null ? null : Math.max(totalUnits - (Number.isFinite(adjustedDemandUnits) ? adjustedDemandUnits : 0), 0);
-  if (demandOnly) {
+  if (lockUnits) {
     li.inventoryIds = [];
     return;
   }
@@ -3550,7 +3560,8 @@ saveOrderBtn.addEventListener("click", async (e) => {
     setCompanyMeta("Add at least one line item with type and dates.");
     return;
   }
-  const demandOnly = isDemandOnlyStatus(draft.status);
+  const lockUnits = isUnitSelectionLocked(draft.status);
+  const requireUnits = isUnitSelectionRequired(draft.status);
   for (const li of validLines) {
     const s = new Date(li.startLocal);
     const en = new Date(li.endLocal);
@@ -3558,7 +3569,7 @@ saveOrderBtn.addEventListener("click", async (e) => {
       setCompanyMeta("Line item end time must be after start time.");
       return;
     }
-    if (!demandOnly) {
+    if (requireUnits) {
       const availableQty = (li.inventoryOptions || []).length;
       if (availableQty === 0) {
         setCompanyMeta("One or more line items have no available units for the selected dates.");
@@ -3606,7 +3617,7 @@ saveOrderBtn.addEventListener("click", async (e) => {
       returnedAt: li.returnedAt || null,
       rateBasis: normalizeRateBasis(li.rateBasis),
       rateAmount: numberOrNull(li.rateAmount),
-      inventoryIds: demandOnly ? [] : (li.inventoryIds || []),
+      inventoryIds: lockUnits ? [] : (li.inventoryIds || []),
       beforeNotes: li.beforeNotes || "",
       afterNotes: li.afterNotes || "",
       beforeImages: li.beforeImages || [],

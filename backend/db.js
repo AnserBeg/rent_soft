@@ -123,6 +123,11 @@ function isDemandOnlyStatus(status) {
   return normalized === "quote" || normalized === "quote_rejected" || normalized === "reservation" || normalized === "requested";
 }
 
+function allowsInventoryAssignment(status) {
+  const normalized = normalizeRentalOrderStatus(status);
+  return normalized !== "quote" && normalized !== "quote_rejected" && normalized !== "requested";
+}
+
 function formatDocNumber(prefix, year, seq, { yearDigits = 2, seqDigits = 4 } = {}) {
   const yearStr = yearDigits === 4 ? String(year).padStart(4, "0") : String(year).slice(-yearDigits).padStart(yearDigits, "0");
   const seqStr = String(seq).padStart(seqDigits, "0");
@@ -8522,7 +8527,8 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            ro.customer_po,
            c.company_name AS customer_name,
            ro.pickup_location_id,
-           pl.name AS pickup_location_name
+           pl.name AS pickup_location_name,
+           FALSE AS is_tbd
       FROM rental_order_line_inventory liv
       JOIN rental_order_line_items li ON li.id = liv.line_item_id
       JOIN rental_orders ro ON ro.id = li.rental_order_id
@@ -8530,7 +8536,35 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
       JOIN equipment_types et ON et.id = li.type_id
  LEFT JOIN locations pl ON pl.id = ro.pickup_location_id
      WHERE ${where.join(" AND ")}
-     ORDER BY li.start_at ASC, li.end_at ASC, ro.id ASC, li.id ASC, liv.equipment_id ASC
+
+    UNION ALL
+
+    SELECT NULL AS equipment_id,
+           li.id AS line_item_id,
+           li.type_id,
+           et.name AS type_name,
+           COALESCE(li.fulfilled_at, li.start_at) AS start_at,
+           COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
+           ro.id AS order_id,
+           ro.status,
+           ro.quote_number,
+           ro.ro_number,
+           ro.external_contract_number,
+           ro.customer_po,
+           c.company_name AS customer_name,
+           ro.pickup_location_id,
+           pl.name AS pickup_location_name,
+           TRUE AS is_tbd
+      FROM rental_order_line_items li
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+      JOIN customers c ON c.id = ro.customer_id
+      JOIN equipment_types et ON et.id = li.type_id
+ LEFT JOIN locations pl ON pl.id = ro.pickup_location_id
+     WHERE ${where.join(" AND ")}
+       AND NOT EXISTS (
+         SELECT 1 FROM rental_order_line_inventory liv2 WHERE liv2.line_item_id = li.id
+       )
+     ORDER BY start_at ASC, end_at ASC, order_id ASC, line_item_id ASC, equipment_id ASC
     `,
     params
   );
@@ -10863,7 +10897,8 @@ async function createRentalOrder({
     await client.query("BEGIN");
     const settings = await getCompanySettings(companyId);
     const normalizedStatus = normalizeRentalOrderStatus(status);
-    const demandOnly = isDemandOnlyStatus(normalizedStatus);
+    const allowsInventory = allowsInventoryAssignment(normalizedStatus);
+    const allowsInventory = allowsInventoryAssignment(normalizedStatus);
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
@@ -10924,7 +10959,7 @@ async function createRentalOrder({
       const returnedAt = fulfilledAt ? normalizeTimestamptz(item.returnedAt) || null : null;
       const pausePeriods = normalizePausePeriods(item.pausePeriods);
       const rawInventoryIds = Array.isArray(item.inventoryIds) ? item.inventoryIds : [];
-      const inventoryIds = demandOnly ? [] : rawInventoryIds;
+      const inventoryIds = allowsInventory ? rawInventoryIds : [];
       const qty = inventoryIds.length;
       const effectiveQty = qty || (demandOnly ? 1 : 0);
       const computedUnits = computeBillableUnits({
@@ -12429,6 +12464,7 @@ async function updateRentalOrder({
     const settings = await getCompanySettings(companyId);
     const normalizedStatus = normalizeRentalOrderStatus(status);
     const demandOnly = isDemandOnlyStatus(normalizedStatus);
+    const allowsInventory = allowsInventoryAssignment(normalizedStatus);
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
@@ -12517,7 +12553,7 @@ async function updateRentalOrder({
       const returnedAt = fulfilledAt ? normalizeTimestamptz(item.returnedAt) || null : null;
       const pausePeriods = normalizePausePeriods(item.pausePeriods);
       const rawInventoryIds = Array.isArray(item.inventoryIds) ? item.inventoryIds : [];
-      const inventoryIds = demandOnly ? [] : rawInventoryIds;
+      const inventoryIds = allowsInventory ? rawInventoryIds : [];
       const qty = inventoryIds.length;
       const effectiveQty = qty || (demandOnly ? 1 : 0);
       const billableUnits = computeBillableUnits({
@@ -12718,7 +12754,7 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
     roNumberOut = row.ro_number || null;
     statusOut = row.status || null;
 
-    if (demandOnly) {
+    if (!allowsInventory) {
       await client.query(
         `
         DELETE FROM rental_order_line_inventory

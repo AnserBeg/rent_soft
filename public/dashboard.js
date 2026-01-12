@@ -1932,16 +1932,34 @@ function currentViewRows() {
       bars: [],
     });
   });
+  const tbdByType = new Map();
   assignments.forEach((a) => {
-    const row = byEquip.get(String(a.equipment_id));
-    if (!row) return;
-    row.bars.push({ ...a, qty: 1 });
+    if (a.equipment_id) {
+      const row = byEquip.get(String(a.equipment_id));
+      if (!row) return;
+      row.bars.push({ ...a, qty: 1 });
+      return;
+    }
+    const typeKey = String(a.type_id || "unknown");
+    const typeName = a.type_name || "Unknown type";
+    if (!tbdByType.has(typeKey)) {
+      tbdByType.set(typeKey, {
+        key: `tbd-${typeKey}`,
+        label: `${typeName}: TBD`,
+        displayTitle: typeName,
+        displaySub: "Unit: TBD",
+        equipmentId: null,
+        bars: [],
+      });
+    }
+    const row = tbdByType.get(typeKey);
+    row.bars.push({ ...a, qty: 0, is_tbd: true });
   });
   // Default: hide empty rows for scale.
-  const rows = Array.from(byEquip.values())
-    .filter((r) => r.bars.length)
-    .sort((a, b) => a.label.localeCompare(b.label));
-  return applyTimelineSort(rows);
+  const rows = Array.from(byEquip.values()).filter((r) => r.bars.length);
+  const tbdRows = Array.from(tbdByType.values()).filter((r) => r.bars.length);
+  const merged = rows.concat(tbdRows).sort((a, b) => a.label.localeCompare(b.label));
+  return applyTimelineSort(merged);
 }
 
 function equipmentLabel(e) {
@@ -1957,7 +1975,9 @@ function countQtyForLine(lineItemId) {
   const id = String(lineItemId);
   let count = 0;
   rawAssignments.forEach((a) => {
-    if (String(a.line_item_id) === id) count++;
+    if (String(a.line_item_id) !== id) return;
+    if (!a.equipment_id) return;
+    count++;
   });
   return count;
 }
@@ -1966,7 +1986,9 @@ function countQtyForOrder(orderId) {
   const id = String(orderId);
   const set = new Set();
   rawAssignments.forEach((a) => {
-    if (String(a.order_id) === id) set.add(String(a.equipment_id));
+    if (String(a.order_id) !== id) return;
+    if (!a.equipment_id) return;
+    set.add(String(a.equipment_id));
   });
   return set.size;
 }
@@ -2085,7 +2107,7 @@ function renderBenchSummary() {
   });
 
   const uniqueOrders = new Set(assignments.map((a) => String(a.order_id))).size;
-  const uniqueUnits = new Set(assignments.map((a) => String(a.equipment_id))).size;
+  const uniqueUnits = new Set(assignments.filter((a) => a.equipment_id).map((a) => String(a.equipment_id))).size;
 
   if (benchKpiAssignments) {
     benchKpiAssignments.textContent = String(assignments.length);
@@ -2234,7 +2256,7 @@ function endingBadgeText(b, endingDays) {
 function showTooltip(e, b, endingDays) {
   if (!tooltip) return;
   const state = barStateFor(b, endingDays);
-  const equip = b.equipment_id ? equipmentLabelById.get(String(b.equipment_id)) : "";
+  const equip = b.equipment_id ? equipmentLabelById.get(String(b.equipment_id)) || `Unit #${b.equipment_id}` : "TBD";
   tooltip.innerHTML = `
     <div class="tt-title">${docNumber(b)} • ${statusLabel(b.status)}</div>
     <div class="tt-sub">Customer: ${b.customer_name || "--"}</div>
