@@ -575,6 +575,58 @@ function matchesOrderTokens(row, tokens) {
   return tokens.every((t) => hay.includes(t));
 }
 
+function parseDateMs(value) {
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function benchOrderDateSortKey(row, nowMs) {
+  const startMs = parseDateMs(row.start_at);
+  const endMs = parseDateMs(row.end_at);
+  const candidates = [];
+  if (Number.isFinite(endMs)) candidates.push({ ms: endMs, type: "end" });
+  if (Number.isFinite(startMs)) candidates.push({ ms: startMs, type: "start" });
+  if (!candidates.length) {
+    return { dist: Number.POSITIVE_INFINITY, ms: Number.POSITIVE_INFINITY, type: "end" };
+  }
+
+  let best = candidates[0];
+  let bestDist = Math.abs(best.ms - nowMs);
+  for (let i = 1; i < candidates.length; i++) {
+    const cand = candidates[i];
+    const dist = Math.abs(cand.ms - nowMs);
+    if (dist < bestDist) {
+      best = cand;
+      bestDist = dist;
+      continue;
+    }
+    if (dist === bestDist) {
+      if (cand.ms < best.ms) {
+        best = cand;
+        bestDist = dist;
+        continue;
+      }
+      if (cand.ms === best.ms && cand.type === "start" && best.type === "end") {
+        best = cand;
+        bestDist = dist;
+      }
+    }
+  }
+  return { dist: bestDist, ms: best.ms, type: best.type };
+}
+
+function sortBenchOrderRows(rows) {
+  const nowMs = Date.now();
+  return [...rows].sort((a, b) => {
+    const keyA = benchOrderDateSortKey(a, nowMs);
+    const keyB = benchOrderDateSortKey(b, nowMs);
+    if (keyA.dist !== keyB.dist) return keyA.dist - keyB.dist;
+    if (keyA.ms !== keyB.ms) return keyA.ms - keyB.ms;
+    if (keyA.type !== keyB.type) return keyA.type === "start" ? -1 : 1;
+    return docNumber(a).localeCompare(docNumber(b));
+  });
+}
+
 function renderBenchStageTable(tableEl, rows) {
   if (!tableEl) return;
   if (!rows || !rows.length) {
@@ -622,7 +674,7 @@ function renderBenchStages() {
     .filter((r) => matchesOrderTokens(r, tokens));
 
   const stageRows = (statuses) =>
-    filtered.filter((r) => statuses.includes(String(r.status || "").toLowerCase()));
+    sortBenchOrderRows(filtered.filter((r) => statuses.includes(String(r.status || "").toLowerCase())));
 
   const requestedRows = stageRows(["requested"]);
   const quoteRows = stageRows(["quote"]);
