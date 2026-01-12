@@ -672,10 +672,10 @@ function renderBenchStageTable(tableEl, rows) {
   tableEl.innerHTML = `
     <div class="table-row table-header">
       <span>Doc #</span>
-      <span>Status</span>
       <span>Customer</span>
       <span>PO / Legacy #</span>
-      <span></span>
+      <span>Start</span>
+      <span>End</span>
     </div>`;
 
   rows.forEach((row) => {
@@ -684,12 +684,10 @@ function renderBenchStageTable(tableEl, rows) {
     div.dataset.id = String(row.id || "");
     div.innerHTML = `
       <span>${docNumber(row)}</span>
-      <span>${statusLabel(row.status)}</span>
       <span>${row.customer_name || "--"}</span>
       <span>${poOrLegacy(row)}</span>
-      <span style="justify-self:end;">
-        <button class="ghost small" type="button" data-open>Open</button>
-      </span>
+      <span>${fmtDateTime(row.start_at)}</span>
+      <span>${fmtDateTime(row.end_at)}</span>
     `;
     tableEl.appendChild(div);
   });

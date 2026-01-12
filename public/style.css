@@ -1736,7 +1736,7 @@ a.ghost {
 }
 
 .bench-stage-table .table-row {
-  grid-template-columns: 1fr 1fr 1.6fr 1.1fr auto;
+  grid-template-columns: 1fr 1.8fr 1.2fr 1.1fr 1.1fr;
 }
 
 .bench-stage-empty {
