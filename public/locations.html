@@ -95,6 +95,12 @@
                     <span class="legend-item"><span class="legend-swatch overdue"></span>Overdue</span>
                     <span class="legend-item"><span class="legend-swatch not-rented"></span>Not rented</span>
                   </div>
+                  <label>Map view
+                    <select id="locations-map-style">
+                      <option value="street">Street</option>
+                      <option value="satellite">Satellite</option>
+                    </select>
+                  </label>
                   <label>Show
                     <select id="locations-map-mode">
                       <option value="units" selected>Units</option>
@@ -119,12 +125,18 @@
         <button class="ghost small" id="close-add-location" type="button">Close</button>
       </div>
       <form class="stack" id="add-location-form">
-        <div class="two-col">
+        <div class="three-col">
           <label>Search address
             <input id="add-location-address-search" placeholder="Start typing an address..." autocomplete="off" />
             <div id="add-location-address-suggestions" class="rs-autocomplete" hidden></div>
           </label>
           <label>Name <input name="name" required /></label>
+          <label>Map view
+            <select id="add-location-map-style">
+              <option value="street">Street</option>
+              <option value="satellite">Satellite</option>
+            </select>
+          </label>
         </div>
         <label>Street <input name="streetAddress" /></label>
         <div class="two-col">

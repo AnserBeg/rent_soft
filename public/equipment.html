@@ -227,13 +227,19 @@
         <button class="ghost small" id="close-current-location-picker" type="button">Close</button>
       </div>
       <div class="stack">
-        <div class="two-col">
+        <div class="three-col">
           <label>Search address
             <input id="current-location-picker-search" placeholder="Start typing an address..." autocomplete="off" />
             <div id="current-location-picker-suggestions" class="rs-autocomplete" hidden></div>
           </label>
           <label>Label/name
             <input id="current-location-picker-name" placeholder="Jobsite / customer / address label..." />
+          </label>
+          <label>Map view
+            <select id="current-location-picker-map-style">
+              <option value="street">Street</option>
+              <option value="satellite">Satellite</option>
+            </select>
           </label>
         </div>
         <div id="current-location-picker-map" class="map-picker"></div>

@@ -15,6 +15,7 @@ const mapShell = document.getElementById("locations-map-shell");
 const mapEl = document.getElementById("locations-map");
 const mapMeta = document.getElementById("map-meta");
 const mapModeSelect = document.getElementById("locations-map-mode");
+const mapStyleSelect = document.getElementById("locations-map-style");
 
 const openAdd = document.getElementById("open-add-location");
 const modal = document.getElementById("add-location-modal");
@@ -24,6 +25,7 @@ const submit = document.getElementById("add-location-submit");
 const meta = document.getElementById("add-location-meta");
 const addAddressSearchInput = document.getElementById("add-location-address-search");
 const addAddressSuggestions = document.getElementById("add-location-address-suggestions");
+const addMapStyleSelect = document.getElementById("add-location-map-style");
 const addMapEl = document.getElementById("add-location-map");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
@@ -50,10 +52,14 @@ let mapMode = (() => {
 
 let leafletMap = null;
 let leafletLayer = null;
+let mapStyle = "street";
+let mapLayers = {};
 
 let addLeafletMap = null;
 let addLeafletMarker = null;
 let addSelected = null;
+let addMapStyle = "street";
+let addMapLayers = {};
 const addAddressState = { debounceTimer: null, previewTimer: null, abort: null, seq: 0 };
 
 function escapeHtml(s) {
@@ -63,6 +69,59 @@ function escapeHtml(s) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+const MAP_TILE_SOURCES = {
+  street: {
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    },
+  },
+  satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri",
+    },
+  },
+};
+
+function normalizeMapStyle(value) {
+  return value === "satellite" ? "satellite" : "street";
+}
+
+function applyAddMapStyle(nextStyle) {
+  addMapStyle = normalizeMapStyle(nextStyle ?? addMapStyle);
+  if (addMapStyleSelect && addMapStyleSelect.value !== addMapStyle) {
+    addMapStyleSelect.value = addMapStyle;
+  }
+  if (!addLeafletMap || !window.L) return;
+  if (!addMapLayers[addMapStyle]) {
+    const cfg = MAP_TILE_SOURCES[addMapStyle];
+    addMapLayers[addMapStyle] = window.L.tileLayer(cfg.url, cfg.options);
+  }
+  Object.values(addMapLayers).forEach((layer) => {
+    if (addLeafletMap.hasLayer(layer)) addLeafletMap.removeLayer(layer);
+  });
+  addMapLayers[addMapStyle].addTo(addLeafletMap);
+}
+
+function applyMainMapStyle(nextStyle) {
+  mapStyle = normalizeMapStyle(nextStyle ?? mapStyle);
+  if (mapStyleSelect && mapStyleSelect.value !== mapStyle) {
+    mapStyleSelect.value = mapStyle;
+  }
+  if (!leafletMap || !window.L) return;
+  if (!mapLayers[mapStyle]) {
+    const cfg = MAP_TILE_SOURCES[mapStyle];
+    mapLayers[mapStyle] = window.L.tileLayer(cfg.url, cfg.options);
+  }
+  Object.values(mapLayers).forEach((layer) => {
+    if (leafletMap.hasLayer(layer)) leafletMap.removeLayer(layer);
+  });
+  mapLayers[mapStyle].addTo(leafletMap);
 }
 
 function formatAddress(loc) {
@@ -105,10 +164,7 @@ function ensureAddMap() {
   if (!window.L) return;
 
   addLeafletMap = window.L.map(addMapEl, { scrollWheelZoom: true });
-  window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  }).addTo(addLeafletMap);
+  applyAddMapStyle(addMapStyle);
   addLeafletMap.setView([20, 0], 2);
   setTimeout(() => addLeafletMap?.invalidateSize?.(), 50);
 }
@@ -178,10 +234,7 @@ function ensureMap() {
   }
 
   leafletMap = window.L.map(mapEl, { scrollWheelZoom: true });
-  window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  }).addTo(leafletMap);
+  applyMainMapStyle(mapStyle);
 
   leafletLayer = window.L.layerGroup().addTo(leafletMap);
   leafletMap.setView([20, 0], 2);
@@ -502,6 +555,16 @@ document.addEventListener("DOMContentLoaded", () => {
   viewTableBtn?.addEventListener("click", () => setView("table"));
   viewMapBtn?.addEventListener("click", () => setView("map"));
   setView(activeView);
+
+  if (mapStyleSelect) {
+    applyMainMapStyle(mapStyleSelect.value);
+    mapStyleSelect.addEventListener("change", () => applyMainMapStyle(mapStyleSelect.value));
+  }
+
+  if (addMapStyleSelect) {
+    applyAddMapStyle(addMapStyleSelect.value);
+    addMapStyleSelect.addEventListener("change", () => applyAddMapStyle(addMapStyleSelect.value));
+  }
 
   if (mapModeSelect) {
     mapModeSelect.value = mapMode === "locations" ? "locations" : "units";

@@ -43,6 +43,7 @@ const currentLocationPickerName = document.getElementById("current-location-pick
 const currentLocationPickerMapEl = document.getElementById("current-location-picker-map");
 const currentLocationPickerMeta = document.getElementById("current-location-picker-meta");
 const currentLocationPickerSuggestions = document.getElementById("current-location-picker-suggestions");
+const currentLocationPickerMapStyle = document.getElementById("current-location-picker-map-style");
 
 const equipmentLocationHistoryDetails = document.getElementById("equipment-location-history");
 const equipmentLocationHistoryList = document.getElementById("equipment-location-history-list");
@@ -84,6 +85,7 @@ let equipmentExtrasActiveTab = "location-history";
 
 let currentLocationPicker = {
   mode: "leaflet",
+  mapStyle: "street",
   google: {
     map: null,
     marker: null,
@@ -95,6 +97,7 @@ let currentLocationPicker = {
   leaflet: {
     map: null,
     marker: null,
+    layers: null,
     debounceTimer: null,
     searchBound: false,
   },
@@ -884,6 +887,65 @@ function hidePickerSuggestions() {
   currentLocationPickerSuggestions.replaceChildren();
 }
 
+const MAP_TILE_SOURCES = {
+  street: {
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    },
+  },
+  satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri",
+    },
+  },
+};
+
+function normalizeMapStyle(value) {
+  return value === "satellite" ? "satellite" : "street";
+}
+
+function applyLeafletPickerStyle(style) {
+  const map = currentLocationPicker.leaflet.map;
+  if (!map || !window.L) return;
+  const normalized = normalizeMapStyle(style ?? currentLocationPicker.mapStyle);
+  currentLocationPicker.mapStyle = normalized;
+  if (!currentLocationPicker.leaflet.layers) currentLocationPicker.leaflet.layers = {};
+  const layers = currentLocationPicker.leaflet.layers;
+  if (!layers[normalized]) {
+    const cfg = MAP_TILE_SOURCES[normalized];
+    layers[normalized] = window.L.tileLayer(cfg.url, cfg.options);
+  }
+  Object.values(layers).forEach((layer) => {
+    if (map.hasLayer(layer)) map.removeLayer(layer);
+  });
+  layers[normalized].addTo(map);
+}
+
+function applyGooglePickerStyle(style) {
+  const map = currentLocationPicker.google.map;
+  if (!map) return;
+  const normalized = normalizeMapStyle(style ?? currentLocationPicker.mapStyle);
+  currentLocationPicker.mapStyle = normalized;
+  map.setMapTypeId(normalized === "satellite" ? "satellite" : "roadmap");
+}
+
+function setCurrentLocationPickerMapStyle(style) {
+  const normalized = normalizeMapStyle(style ?? currentLocationPicker.mapStyle);
+  currentLocationPicker.mapStyle = normalized;
+  if (currentLocationPickerMapStyle && currentLocationPickerMapStyle.value !== normalized) {
+    currentLocationPickerMapStyle.value = normalized;
+  }
+  if (currentLocationPicker.mode === "google") {
+    applyGooglePickerStyle(normalized);
+  } else {
+    applyLeafletPickerStyle(normalized);
+  }
+}
+
 function loadGoogleMaps(apiKey) {
   if (!apiKey) return Promise.resolve(false);
   if (window.google?.maps?.Map) return Promise.resolve(true);
@@ -912,6 +974,7 @@ function resetPickerMapContainer() {
   } catch {}
   currentLocationPicker.leaflet.map = null;
   currentLocationPicker.leaflet.marker = null;
+  currentLocationPicker.leaflet.layers = null;
 
   currentLocationPicker.google.map = null;
   currentLocationPicker.google.marker = null;
@@ -929,10 +992,6 @@ function initLeafletPicker(center) {
   if (!currentLocationPickerMapEl || !window.L) throw new Error("Map library not available.");
   if (!currentLocationPicker.leaflet.map) {
     const map = window.L.map(currentLocationPickerMapEl, { scrollWheelZoom: true });
-    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    }).addTo(map);
     map.on("click", (e) => {
       const lat = e?.latlng?.lat;
       const lng = e?.latlng?.lng;
@@ -951,6 +1010,7 @@ function initLeafletPicker(center) {
     });
     currentLocationPicker.leaflet.map = map;
   }
+  applyLeafletPickerStyle(currentLocationPicker.mapStyle);
   const map = currentLocationPicker.leaflet.map;
   map.setView([center.lat, center.lng], 16);
   setTimeout(() => map.invalidateSize?.(), 50);
@@ -1028,9 +1088,11 @@ function initLeafletPicker(center) {
 function initGooglePicker(center) {
   if (!currentLocationPickerMapEl || !window.google?.maps) throw new Error("Google Maps not available.");
   if (!currentLocationPicker.google.map) {
+    const mapStyle = normalizeMapStyle(currentLocationPicker.mapStyle);
     const map = new window.google.maps.Map(currentLocationPickerMapEl, {
       center,
       zoom: 16,
+      mapTypeId: mapStyle === "satellite" ? "satellite" : "roadmap",
       mapTypeControl: false,
       streetViewControl: false,
       fullscreenControl: false,
@@ -1149,6 +1211,7 @@ function initGooglePicker(center) {
     currentLocationPicker.google.map = map;
   }
 
+  applyGooglePickerStyle(currentLocationPicker.mapStyle);
   currentLocationPicker.google.map.setCenter(center);
   currentLocationPicker.google.map.setZoom(16);
 }
@@ -1738,6 +1801,13 @@ closeCurrentLocationPickerBtn?.addEventListener("click", (e) => {
 currentLocationPickerModal?.addEventListener("click", (e) => {
   if (e.target === currentLocationPickerModal) closeCurrentLocationPickerModal();
 });
+
+if (currentLocationPickerMapStyle) {
+  setCurrentLocationPickerMapStyle(currentLocationPickerMapStyle.value);
+  currentLocationPickerMapStyle.addEventListener("change", () => {
+    setCurrentLocationPickerMapStyle(currentLocationPickerMapStyle.value);
+  });
+}
 
 equipmentTable?.addEventListener("click", (e) => {
   const sortEl = e.target.closest(".sort");

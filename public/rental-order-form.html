@@ -579,13 +579,19 @@
         <button class="ghost small" id="close-side-address-picker" type="button">Close</button>
       </div>
       <div class="stack">
-        <div class="two-col">
+        <div class="three-col">
           <label>Search address
             <input id="side-address-picker-search" placeholder="Start typing an address..." autocomplete="off" />
             <div id="side-address-picker-suggestions" class="rs-autocomplete" hidden></div>
           </label>
           <label>Site address
             <input id="side-address-picker-input" placeholder="Site address or label..." />
+          </label>
+          <label>Map view
+            <select id="side-address-picker-map-style">
+              <option value="street">Street</option>
+              <option value="satellite">Satellite</option>
+            </select>
           </label>
         </div>
         <div id="side-address-picker-map" class="map-picker"></div>

@@ -37,6 +37,7 @@ const siteAddressPickerInput = document.getElementById("site-address-picker-inpu
 const siteAddressPickerMapEl = document.getElementById("site-address-picker-map");
 const siteAddressPickerMeta = document.getElementById("site-address-picker-meta");
 const siteAddressPickerSuggestions = document.getElementById("site-address-picker-suggestions");
+const siteAddressPickerMapStyle = document.getElementById("site-address-picker-map-style");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let selectedUnit = null;
@@ -46,6 +47,7 @@ let equipmentId = initialEquipmentId;
 let orderId = initialOrderId;
 let siteAddressPicker = {
   mode: "leaflet",
+  mapStyle: "street",
   google: {
     map: null,
     marker: null,
@@ -57,6 +59,7 @@ let siteAddressPicker = {
   leaflet: {
     map: null,
     marker: null,
+    layers: null,
     debounceTimer: null,
     searchBound: false,
   },
@@ -335,6 +338,65 @@ function bindSiteAddressSearchMirror() {
   });
 }
 
+const MAP_TILE_SOURCES = {
+  street: {
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    },
+  },
+  satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri",
+    },
+  },
+};
+
+function normalizeMapStyle(value) {
+  return value === "satellite" ? "satellite" : "street";
+}
+
+function applyLeafletSiteAddressStyle(style) {
+  const map = siteAddressPicker.leaflet.map;
+  if (!map || !window.L) return;
+  const normalized = normalizeMapStyle(style ?? siteAddressPicker.mapStyle);
+  siteAddressPicker.mapStyle = normalized;
+  if (!siteAddressPicker.leaflet.layers) siteAddressPicker.leaflet.layers = {};
+  const layers = siteAddressPicker.leaflet.layers;
+  if (!layers[normalized]) {
+    const cfg = MAP_TILE_SOURCES[normalized];
+    layers[normalized] = window.L.tileLayer(cfg.url, cfg.options);
+  }
+  Object.values(layers).forEach((layer) => {
+    if (map.hasLayer(layer)) map.removeLayer(layer);
+  });
+  layers[normalized].addTo(map);
+}
+
+function applyGoogleSiteAddressStyle(style) {
+  const map = siteAddressPicker.google.map;
+  if (!map) return;
+  const normalized = normalizeMapStyle(style ?? siteAddressPicker.mapStyle);
+  siteAddressPicker.mapStyle = normalized;
+  map.setMapTypeId(normalized === "satellite" ? "satellite" : "roadmap");
+}
+
+function setSiteAddressPickerMapStyle(style) {
+  const normalized = normalizeMapStyle(style ?? siteAddressPicker.mapStyle);
+  siteAddressPicker.mapStyle = normalized;
+  if (siteAddressPickerMapStyle && siteAddressPickerMapStyle.value !== normalized) {
+    siteAddressPickerMapStyle.value = normalized;
+  }
+  if (siteAddressPicker.mode === "google") {
+    applyGoogleSiteAddressStyle(normalized);
+  } else {
+    applyLeafletSiteAddressStyle(normalized);
+  }
+}
+
 function loadGoogleMaps(apiKey) {
   if (!apiKey) return Promise.resolve(false);
   if (window.google?.maps?.Map) return Promise.resolve(true);
@@ -363,6 +425,7 @@ function resetSiteAddressPickerMapContainer() {
   } catch {}
   siteAddressPicker.leaflet.map = null;
   siteAddressPicker.leaflet.marker = null;
+  siteAddressPicker.leaflet.layers = null;
 
   siteAddressPicker.google.map = null;
   siteAddressPicker.google.marker = null;
@@ -378,9 +441,6 @@ function initLeafletSiteAddressPicker(center) {
   if (!siteAddressPickerMapEl || !window.L) throw new Error("Map library not available.");
   if (!siteAddressPicker.leaflet.map) {
     const map = window.L.map(siteAddressPickerMapEl, { scrollWheelZoom: true });
-    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    }).addTo(map);
     map.on("click", (e) => {
       const lat = e?.latlng?.lat;
       const lng = e?.latlng?.lng;
@@ -399,6 +459,7 @@ function initLeafletSiteAddressPicker(center) {
     });
     siteAddressPicker.leaflet.map = map;
   }
+  applyLeafletSiteAddressStyle(siteAddressPicker.mapStyle);
   const map = siteAddressPicker.leaflet.map;
   map.setView([center.lat, center.lng], 16);
   setTimeout(() => map.invalidateSize?.(), 50);
@@ -470,9 +531,11 @@ function initLeafletSiteAddressPicker(center) {
 function initGoogleSiteAddressPicker(center) {
   if (!siteAddressPickerMapEl || !window.google?.maps) throw new Error("Google Maps not available.");
   if (!siteAddressPicker.google.map) {
+    const mapStyle = normalizeMapStyle(siteAddressPicker.mapStyle);
     const map = new window.google.maps.Map(siteAddressPickerMapEl, {
       center,
       zoom: 16,
+      mapTypeId: mapStyle === "satellite" ? "satellite" : "roadmap",
       mapTypeControl: false,
       streetViewControl: false,
       fullscreenControl: false,
@@ -589,6 +652,7 @@ function initGoogleSiteAddressPicker(center) {
     siteAddressPicker.google.map = map;
   }
 
+  applyGoogleSiteAddressStyle(siteAddressPicker.mapStyle);
   siteAddressPicker.google.map.setCenter(center);
   siteAddressPicker.google.map.setZoom(16);
 }
@@ -978,6 +1042,13 @@ closeSiteAddressPickerBtn?.addEventListener("click", (e) => {
 siteAddressPickerModal?.addEventListener("click", (e) => {
   if (e.target === siteAddressPickerModal) closeSiteAddressPickerModal();
 });
+
+if (siteAddressPickerMapStyle) {
+  setSiteAddressPickerMapStyle(siteAddressPickerMapStyle.value);
+  siteAddressPickerMapStyle.addEventListener("change", () => {
+    setSiteAddressPickerMapStyle(siteAddressPickerMapStyle.value);
+  });
+}
 
 saveSiteAddressPickerBtn?.addEventListener("click", (e) => {
   e.preventDefault();

@@ -92,6 +92,7 @@ const sideAddressPickerInput = document.getElementById("side-address-picker-inpu
 const sideAddressPickerMapEl = document.getElementById("side-address-picker-map");
 const sideAddressPickerMeta = document.getElementById("side-address-picker-meta");
 const sideAddressPickerSuggestions = document.getElementById("side-address-picker-suggestions");
+const sideAddressPickerMapStyle = document.getElementById("side-address-picker-map-style");
 const coverageDayKeys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const coverageInputs = {
   mon: {
@@ -273,6 +274,7 @@ function applyRentalInfoConfig(config) {
 let rentalOrderInvoicesCache = [];
 let sideAddressPicker = {
   mode: "leaflet",
+  mapStyle: "street",
   google: {
     map: null,
     marker: null,
@@ -284,6 +286,7 @@ let sideAddressPicker = {
   leaflet: {
     map: null,
     marker: null,
+    layers: null,
     debounceTimer: null,
     searchBound: false,
   },
@@ -498,6 +501,65 @@ function bindSideAddressSearchMirror() {
   });
 }
 
+const MAP_TILE_SOURCES = {
+  street: {
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    },
+  },
+  satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri",
+    },
+  },
+};
+
+function normalizeMapStyle(value) {
+  return value === "satellite" ? "satellite" : "street";
+}
+
+function applyLeafletSideAddressStyle(style) {
+  const map = sideAddressPicker.leaflet.map;
+  if (!map || !window.L) return;
+  const normalized = normalizeMapStyle(style ?? sideAddressPicker.mapStyle);
+  sideAddressPicker.mapStyle = normalized;
+  if (!sideAddressPicker.leaflet.layers) sideAddressPicker.leaflet.layers = {};
+  const layers = sideAddressPicker.leaflet.layers;
+  if (!layers[normalized]) {
+    const cfg = MAP_TILE_SOURCES[normalized];
+    layers[normalized] = window.L.tileLayer(cfg.url, cfg.options);
+  }
+  Object.values(layers).forEach((layer) => {
+    if (map.hasLayer(layer)) map.removeLayer(layer);
+  });
+  layers[normalized].addTo(map);
+}
+
+function applyGoogleSideAddressStyle(style) {
+  const map = sideAddressPicker.google.map;
+  if (!map) return;
+  const normalized = normalizeMapStyle(style ?? sideAddressPicker.mapStyle);
+  sideAddressPicker.mapStyle = normalized;
+  map.setMapTypeId(normalized === "satellite" ? "satellite" : "roadmap");
+}
+
+function setSideAddressPickerMapStyle(style) {
+  const normalized = normalizeMapStyle(style ?? sideAddressPicker.mapStyle);
+  sideAddressPicker.mapStyle = normalized;
+  if (sideAddressPickerMapStyle && sideAddressPickerMapStyle.value !== normalized) {
+    sideAddressPickerMapStyle.value = normalized;
+  }
+  if (sideAddressPicker.mode === "google") {
+    applyGoogleSideAddressStyle(normalized);
+  } else {
+    applyLeafletSideAddressStyle(normalized);
+  }
+}
+
 function applySideAddressPickerDraftSelection() {
   const lat = Number(draft.siteAddressLat);
   const lng = Number(draft.siteAddressLng);
@@ -571,6 +633,7 @@ function resetSideAddressPickerMapContainer() {
   } catch {}
   sideAddressPicker.leaflet.map = null;
   sideAddressPicker.leaflet.marker = null;
+  sideAddressPicker.leaflet.layers = null;
 
   sideAddressPicker.google.map = null;
   sideAddressPicker.google.marker = null;
@@ -586,9 +649,6 @@ function initLeafletSideAddressPicker(center) {
   if (!sideAddressPickerMapEl || !window.L) throw new Error("Map library not available.");
   if (!sideAddressPicker.leaflet.map) {
     const map = window.L.map(sideAddressPickerMapEl, { scrollWheelZoom: true });
-    window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    }).addTo(map);
     map.on("click", (e) => {
       const lat = e?.latlng?.lat;
       const lng = e?.latlng?.lng;
@@ -607,6 +667,7 @@ function initLeafletSideAddressPicker(center) {
     });
     sideAddressPicker.leaflet.map = map;
   }
+  applyLeafletSideAddressStyle(sideAddressPicker.mapStyle);
   const map = sideAddressPicker.leaflet.map;
   map.setView([center.lat, center.lng], 16);
   setTimeout(() => map.invalidateSize?.(), 50);
@@ -678,9 +739,11 @@ function initLeafletSideAddressPicker(center) {
 function initGoogleSideAddressPicker(center) {
   if (!sideAddressPickerMapEl || !window.google?.maps) throw new Error("Google Maps not available.");
   if (!sideAddressPicker.google.map) {
+    const mapStyle = normalizeMapStyle(sideAddressPicker.mapStyle);
     const map = new window.google.maps.Map(sideAddressPickerMapEl, {
       center,
       zoom: 16,
+      mapTypeId: mapStyle === "satellite" ? "satellite" : "roadmap",
       mapTypeControl: false,
       streetViewControl: false,
       fullscreenControl: false,
@@ -797,6 +860,7 @@ function initGoogleSideAddressPicker(center) {
     sideAddressPicker.google.map = map;
   }
 
+  applyGoogleSideAddressStyle(sideAddressPicker.mapStyle);
   sideAddressPicker.google.map.setCenter(center);
   sideAddressPicker.google.map.setZoom(16);
 }
@@ -4308,6 +4372,13 @@ closeSideAddressPickerBtn?.addEventListener("click", (e) => {
 sideAddressPickerModal?.addEventListener("click", (e) => {
   if (e.target === sideAddressPickerModal) closeSideAddressPickerModal();
 });
+
+if (sideAddressPickerMapStyle) {
+  setSideAddressPickerMapStyle(sideAddressPickerMapStyle.value);
+  sideAddressPickerMapStyle.addEventListener("change", () => {
+    setSideAddressPickerMapStyle(sideAddressPickerMapStyle.value);
+  });
+}
 
 saveSideAddressPickerBtn?.addEventListener("click", (e) => {
   e.preventDefault();

@@ -18,6 +18,7 @@ const countryInput = document.getElementById("loc-country");
 const isBaseCheckbox = document.getElementById("loc-is-base");
 const addressSearchInput = document.getElementById("loc-address-search");
 const addressSuggestions = document.getElementById("loc-address-suggestions");
+const mapStyleSelect = document.getElementById("loc-map-style");
 const mapEl = document.getElementById("loc-map");
 const saveBtn = document.getElementById("save-location");
 const deleteBtn = document.getElementById("delete-location");
@@ -29,6 +30,8 @@ let typeStockRows = [];
 
 let leafletMap = null;
 let leafletMarker = null;
+let mapStyle = "street";
+let leafletLayers = {};
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -41,6 +44,43 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
+const MAP_TILE_SOURCES = {
+  street: {
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    },
+  },
+  satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri",
+    },
+  },
+};
+
+function normalizeMapStyle(value) {
+  return value === "satellite" ? "satellite" : "street";
+}
+
+function applyMapStyle(nextStyle) {
+  mapStyle = normalizeMapStyle(nextStyle ?? mapStyle);
+  if (mapStyleSelect && mapStyleSelect.value !== mapStyle) {
+    mapStyleSelect.value = mapStyle;
+  }
+  if (!leafletMap || !window.L) return;
+  if (!leafletLayers[mapStyle]) {
+    const cfg = MAP_TILE_SOURCES[mapStyle];
+    leafletLayers[mapStyle] = window.L.tileLayer(cfg.url, cfg.options);
+  }
+  Object.values(leafletLayers).forEach((layer) => {
+    if (leafletMap.hasLayer(layer)) leafletMap.removeLayer(layer);
+  });
+  leafletLayers[mapStyle].addTo(leafletMap);
+}
+
 function ensureMap() {
   if (!mapEl) return;
   if (leafletMap) {
@@ -50,12 +90,14 @@ function ensureMap() {
   if (!window.L) return;
 
   leafletMap = window.L.map(mapEl, { scrollWheelZoom: true });
-  window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  }).addTo(leafletMap);
+  applyMapStyle(mapStyle);
   leafletMap.setView([20, 0], 2);
   setTimeout(() => leafletMap?.invalidateSize?.(), 50);
+}
+
+if (mapStyleSelect) {
+  applyMapStyle(mapStyleSelect.value);
+  mapStyleSelect.addEventListener("change", () => applyMapStyle(mapStyleSelect.value));
 }
 
 function setMapPoint(lat, lng, zoom = 17) {
