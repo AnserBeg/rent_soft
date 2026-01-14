@@ -2546,40 +2546,40 @@ function renderLineItems() {
     const totalLabel = Number.isFinite(li.totalUnits) ? String(li.totalUnits) : "--";
     const bundleItems = Array.isArray(li.bundleItems) ? li.bundleItems : [];
     const equipmentById = new Map(equipmentCache.map((e) => [String(e.id), e]));
-    const bundleSummaryParts = [];
+    const bundleTypeSummaryParts = [];
+    const bundleModelParts = [];
     if (bundleItems.length) {
       const counts = new Map();
-      const modelsByType = new Map();
       bundleItems.forEach((item) => {
         const typeName = String(item.typeName || item.type_name || "").trim();
-        if (!typeName) return;
-        counts.set(typeName, (counts.get(typeName) || 0) + 1);
+        if (typeName) counts.set(typeName, (counts.get(typeName) || 0) + 1);
         let modelName = String(item.modelName || item.model_name || "").trim();
         if (!modelName && item.id) {
           const cached = equipmentById.get(String(item.id));
           modelName = cached?.model_name ? String(cached.model_name).trim() : "";
         }
-        if (modelName) {
-          if (!modelsByType.has(typeName)) modelsByType.set(typeName, new Set());
-          modelsByType.get(typeName).add(modelName);
-        }
+        if (modelName) bundleModelParts.push(modelName);
       });
       counts.forEach((qty, name) => {
-        const models = modelsByType.get(name);
-        const modelsText = models && models.size ? `: ${Array.from(models).join("; ")}` : "";
-        bundleSummaryParts.push(`${qty}x ${name}${modelsText}`);
+        bundleTypeSummaryParts.push(`${qty}x ${name}`);
       });
     }
-    const bundleItemText = bundleSummaryParts.length
-      ? bundleSummaryParts.join("; ")
+    const bundleTypeText = bundleTypeSummaryParts.length
+      ? bundleTypeSummaryParts.join("; ")
+      : "Bundle items will load after selection.";
+    const bundleModelText = bundleModelParts.length
+      ? bundleModelParts.join("; ")
       : "Bundle items will load after selection.";
     const bundleAvailabilityLabel =
       li.bundleAvailable === false ? "Unavailable" : li.bundleAvailable === true ? "Available" : "Checking";
     const bundleAvailabilitySuffix =
       bundleAvailabilityLabel === "Available" ? "" : ` (${bundleAvailabilityLabel})`;
 
-    const bundleHintHtml = li.bundleId
-      ? `<div class="hint">Bundle items: ${escapeHtml(bundleItemText)}${bundleAvailabilitySuffix}</div>`
+    const bundleHintTypeHtml = li.bundleId
+      ? `<div class="hint">Bundle items: ${escapeHtml(bundleTypeText)}${bundleAvailabilitySuffix}</div>`
+      : "";
+    const bundleHintUnitHtml = li.bundleId
+      ? `<div class="hint">Bundle items: ${escapeHtml(bundleModelText)}${bundleAvailabilitySuffix}</div>`
       : "";
     const unitFieldHtml = lockUnits
         ? `
@@ -2600,7 +2600,7 @@ function renderLineItems() {
             <select data-unit>
               ${unitOptionsHtml}
             </select>
-            ${bundleHintHtml}
+            ${bundleHintUnitHtml}
           </label>
         `;
 
@@ -2623,7 +2623,7 @@ function renderLineItems() {
                 <option value="">Select type</option>
                 ${typeOptions}
               </select>
-              ${bundleHintHtml}
+              ${bundleHintTypeHtml}
             </label>
           ${unitFieldHtml}
           <label>Duration (days/hours)
