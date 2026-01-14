@@ -2545,16 +2545,29 @@ function renderLineItems() {
     const capacityLabel = Number.isFinite(li.capacityUnits) ? String(li.capacityUnits) : "--";
     const totalLabel = Number.isFinite(li.totalUnits) ? String(li.totalUnits) : "--";
     const bundleItems = Array.isArray(li.bundleItems) ? li.bundleItems : [];
+    const equipmentById = new Map(equipmentCache.map((e) => [String(e.id), e]));
     const bundleSummaryParts = [];
     if (bundleItems.length) {
       const counts = new Map();
+      const modelsByType = new Map();
       bundleItems.forEach((item) => {
         const typeName = String(item.typeName || item.type_name || "").trim();
         if (!typeName) return;
         counts.set(typeName, (counts.get(typeName) || 0) + 1);
+        let modelName = String(item.modelName || item.model_name || "").trim();
+        if (!modelName && item.id) {
+          const cached = equipmentById.get(String(item.id));
+          modelName = cached?.model_name ? String(cached.model_name).trim() : "";
+        }
+        if (modelName) {
+          if (!modelsByType.has(typeName)) modelsByType.set(typeName, new Set());
+          modelsByType.get(typeName).add(modelName);
+        }
       });
       counts.forEach((qty, name) => {
-        bundleSummaryParts.push(`${qty}x ${name}`);
+        const models = modelsByType.get(name);
+        const modelsText = models && models.size ? `: ${Array.from(models).join("; ")}` : "";
+        bundleSummaryParts.push(`${qty}x ${name}${modelsText}`);
       });
     }
     const bundleItemText = bundleSummaryParts.length
