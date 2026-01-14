@@ -27,6 +27,54 @@ function docNumberFor(row) {
   return ro || quote || ext || (row?.order_id ? `#${row.order_id}` : "--");
 }
 
+function equipmentType(eq) {
+  const rawType = eq?.type_name || eq?.type || "";
+  const type = String(rawType).trim();
+  return type || "Equipment";
+}
+
+function equipmentModel(eq) {
+  return eq?.model_name ? String(eq.model_name).trim() : "";
+}
+
+function equipmentModelDisplay(eq) {
+  const model = equipmentModel(eq);
+  return model || "--";
+}
+
+function equipmentSortKey(eq) {
+  return `${equipmentType(eq)} ${equipmentModel(eq)}`.trim();
+}
+
+function normalizeSearchValue(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function matchesSearch(row, term) {
+  const eq = row.equipment || {};
+  const a = row.assignment || {};
+  const values = [
+    equipmentType(eq),
+    equipmentModel(eq),
+    eq.serial_number,
+    a.customer_name,
+    docNumberFor(a),
+    a.pickup_location_name,
+  ].filter(Boolean);
+
+  const loweredTerm = term.toLowerCase();
+  const normalizedTerm = normalizeSearchValue(term);
+
+  return values.some((value) => {
+    const raw = String(value).toLowerCase();
+    if (raw.includes(loweredTerm)) return true;
+    if (!normalizedTerm) return false;
+    return normalizeSearchValue(raw).includes(normalizedTerm);
+  });
+}
+
 function equipmentLabel(eq) {
   if (!eq) return "--";
   const serial = eq.serial_number ? String(eq.serial_number).trim() : "";
@@ -65,22 +113,7 @@ function applyFilters(rows) {
     filtered = filtered.filter((r) => isOverdue(r.assignment?.end_at));
   }
   if (searchTerm) {
-    const term = searchTerm.toLowerCase();
-    filtered = filtered.filter((r) => {
-      const eq = r.equipment || {};
-      const a = r.assignment || {};
-      return [
-        equipmentLabel(eq),
-        eq.serial_number,
-        eq.model_name,
-        eq.type_name,
-        a.customer_name,
-        docNumberFor(a),
-        a.pickup_location_name,
-      ]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(term));
-    });
+    filtered = filtered.filter((r) => matchesSearch(r, searchTerm));
   }
   return filtered;
 }
@@ -88,9 +121,9 @@ function applyFilters(rows) {
 function renderTable(rows) {
   dispatchTable.innerHTML = `
     <div class="table-row table-header">
-      <span>Unit</span>
+      <span>Equipment type</span>
+      <span>Model</span>
       <span>Customer</span>
-      <span>Order</span>
     </div>`;
 
   if (!rows.length) {
@@ -106,10 +139,12 @@ function renderTable(rows) {
     div.className = "table-row";
     div.dataset.id = row.assignment.equipment_id;
     div.dataset.orderId = row.assignment.order_id;
+    const type = equipmentType(row.equipment);
+    const model = equipmentModelDisplay(row.equipment);
     div.innerHTML = `
-      <span>${equipmentLabel(row.equipment)}</span>
+      <span>${type}</span>
+      <span>${model}</span>
       <span>${row.assignment.customer_name || "--"}</span>
-      <span>${docNumberFor(row.assignment)}</span>
     `;
     dispatchTable.appendChild(div);
   });
@@ -151,7 +186,7 @@ async function loadActiveUnits() {
         seen.add(key);
         return true;
       })
-      .sort((a, b) => equipmentLabel(a.equipment).localeCompare(equipmentLabel(b.equipment)));
+      .sort((a, b) => equipmentSortKey(a.equipment).localeCompare(equipmentSortKey(b.equipment)));
 
     if (companyMeta) {
       const session = window.RentSoft?.getSession?.();

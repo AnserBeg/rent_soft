@@ -3035,7 +3035,7 @@ a.ghost {
 }
 
 #dispatch-table .table-row {
-  grid-template-columns: minmax(240px, 2.2fr) minmax(220px, 1.8fr) minmax(140px, 1fr);
+  grid-template-columns: minmax(200px, 1.1fr) minmax(180px, 1.1fr) minmax(240px, 1.6fr);
 }
 
 #rental-order-invoices-table .table-row:not(.table-header) {
