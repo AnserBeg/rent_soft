@@ -1276,11 +1276,6 @@ function suggestedBundleRateAmount({ bundleId, basis }) {
   return bundle.dailyRate ?? null;
 }
 
-function bundlesForType(typeId) {
-  if (!typeId) return [];
-  return bundlesCache.filter((b) => String(b.primaryTypeId) === String(typeId));
-}
-
 function defaultRateBasisForType(typeId) {
   const type = typesCache.find((t) => String(t.id) === String(typeId));
   if (!type) return "daily";
@@ -2212,7 +2207,10 @@ function explodeLineItems(items) {
   const expanded = [];
   (items || []).forEach((li) => {
     if (li.bundleId) {
-      const next = { ...li, inventoryIds: [] };
+      const ids = Array.isArray(li.inventoryIds)
+        ? li.inventoryIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+        : [];
+      const next = { ...li, inventoryIds: ids.length ? [ids[0]] : [] };
       if (!next.tempId) next.tempId = uuid();
       expanded.push(next);
       return;
@@ -2516,21 +2514,20 @@ function renderLineItems() {
     const typeOptions = typesCache
       .map((t) => `<option value="${t.id}" ${String(t.id) === String(li.typeId || "") ? "selected" : ""}>${t.name}</option>`)
       .join("");
-    const bundleOptions = bundlesForType(li.typeId)
-      .map((b) => {
-        const selected = String(b.id) === String(li.bundleId || "") ? "selected" : "";
-        const count = Number.isFinite(Number(b.itemCount)) ? ` (${b.itemCount})` : "";
-        return `<option value="${b.id}" ${selected}>${escapeHtml(b.name)}${count}</option>`;
-      })
-      .join("");
-
     const availableUnits = Array.isArray(li.inventoryOptions) ? li.inventoryOptions : [];
     const selectedUnitId = (li.inventoryIds || []).map((id) => Number(id)).find((id) => Number.isFinite(id)) || null;
     const selectedUnit = selectedUnitId ? selectedInventoryDetails([selectedUnitId])[0] : null;
     const unitOptions = availableUnits
       .map((e) => {
         const selected = String(e.id) === String(selectedUnitId) ? "selected" : "";
-        return `<option value="${e.id}" ${selected}>${unitLabel(e)}</option>`;
+        const bundleParts = Array.isArray(e.bundle_items)
+          ? e.bundle_items
+              .map((item) => [item.serial_number, item.model_name].filter(Boolean).join(" "))
+              .filter(Boolean)
+          : [];
+        const bundleText = bundleParts.length ? ` (Bundle: ${bundleParts.join("; ")})` : "";
+        const bundleId = e.bundle_id ? ` data-bundle-id="${e.bundle_id}"` : "";
+        return `<option value="${e.id}"${bundleId} ${selected}>${unitLabel(e)}${bundleText}</option>`;
       })
       .join("");
     const selectedUnavailable =
@@ -2548,6 +2545,12 @@ function renderLineItems() {
           .filter(Boolean)
           .join(", ")
       : "Bundle items will load after selection.";
+    const bundleLabelText = bundleItems
+      .map((item) => [item.serialNumber, item.modelName].filter(Boolean).join(" "))
+      .filter(Boolean)
+      .join("; ");
+    const typeBundleLabel = bundleItems.length ? `Equipment type (${bundleLabelText})` : "Equipment type";
+    const safeTypeBundleLabel = escapeHtml(typeBundleLabel);
     const bundleAvailabilityLabel =
       li.bundleAvailable === false ? "Unavailable" : li.bundleAvailable === true ? "Available" : "Checking";
 
@@ -2597,16 +2600,10 @@ function renderLineItems() {
 
         <div class="stack">
           <div class="line-item-toprow">
-            <label>Equipment type
+            <label>${safeTypeBundleLabel}
               <select data-type>
                 <option value="">Select type</option>
                 ${typeOptions}
-              </select>
-            </label>
-            <label>Bundle (optional)
-              <select data-bundle ${li.typeId ? "" : "disabled"}>
-                <option value="">Select bundle</option>
-                ${bundleOptions}
               </select>
             </label>
           ${unitFieldHtml}
@@ -2703,30 +2700,6 @@ async function deleteUploadedFile(url) {
 async function refreshAvailabilityForLineItem(li) {
   const startAt = li.pickedUpAt || fromLocalInputValue(li.startLocal);
   const endAt = li.returnedAt || fromLocalInputValue(li.endLocal);
-  if (li.bundleId) {
-    if (!startAt || !endAt) {
-      li.bundleAvailable = null;
-      li.bundleItems = Array.isArray(li.bundleItems) ? li.bundleItems : [];
-      return;
-    }
-    const qs = new URLSearchParams({
-      companyId: String(activeCompanyId),
-      bundleId: String(li.bundleId),
-      startAt,
-      endAt,
-    });
-    if (editingOrderId) qs.set("excludeOrderId", String(editingOrderId));
-    const res = await fetch(`/api/rental-orders/availability?${qs.toString()}`);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Unable to check bundle availability");
-    li.bundleAvailable = data.bundleAvailable === true;
-    li.bundleItems = Array.isArray(data.bundleItems) ? data.bundleItems : [];
-    li.inventoryOptions = [];
-    li.totalUnits = null;
-    li.demandUnits = null;
-    li.capacityUnits = null;
-    return;
-  }
   if (!li.typeId || !startAt || !endAt) {
     li.inventoryOptions = [];
     li.totalUnits = null;
@@ -2762,6 +2735,21 @@ async function refreshAvailabilityForLineItem(li) {
   li.inventoryIds = (li.inventoryIds || []).map((x) => Number(x)).filter((id) => availableIds.has(id));
   ensureSingleUnitSelection(li);
   autoSelectUnitForLineItem(li);
+
+  if (li.bundleId) {
+    const qs = new URLSearchParams({
+      companyId: String(activeCompanyId),
+      bundleId: String(li.bundleId),
+      startAt,
+      endAt,
+    });
+    if (editingOrderId) qs.set("excludeOrderId", String(editingOrderId));
+    const res = await fetch(`/api/rental-orders/availability?${qs.toString()}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to check bundle availability");
+    li.bundleAvailable = data.bundleAvailable === true;
+    li.bundleItems = Array.isArray(data.bundleItems) ? data.bundleItems : [];
+  }
 }
 
 function computeDraftDemandForRange(typeId, startAt, endAt) {
@@ -3085,7 +3073,7 @@ async function loadOrder() {
     rateBasis: normalizeRateBasis(li.rateBasis) || "daily",
     rateAmount: li.rateAmount === null || li.rateAmount === undefined ? null : Number(li.rateAmount),
     rateManual: true,
-    inventoryIds: li.bundleId ? [] : (li.inventoryIds || []),
+    inventoryIds: li.inventoryIds || [],
     inventoryOptions: [],
     beforeNotes: li.beforeNotes || "",
     afterNotes: li.afterNotes || "",
@@ -3628,30 +3616,6 @@ lineItemsEl.addEventListener("change", async (e) => {
   const li = draft.lineItems.find((x) => x.tempId === card.dataset.tempId);
   if (!li) return;
 
-  if (e.target.matches("[data-bundle]")) {
-    li.bundleId = e.target.value ? Number(e.target.value) : null;
-    li.inventoryIds = [];
-    li.inventoryOptions = [];
-    li.bundleItems = [];
-    li.bundleAvailable = null;
-    if (li.bundleId) {
-      const bundle = findBundle(li.bundleId);
-      li.typeId = bundle?.primaryTypeId || null;
-      li.rateBasis = defaultRateBasisForBundle(bundle);
-      li.rateManual = false;
-      li.rateAmount = suggestedBundleRateAmount({ bundleId: li.bundleId, basis: li.rateBasis });
-    } else if (li.typeId) {
-      li.rateBasis = defaultRateBasisForType(li.typeId);
-      if (!li.rateManual) {
-        li.rateAmount = suggestedRateAmount({ customerId: draft.customerId, typeId: li.typeId, basis: li.rateBasis });
-      }
-    }
-    await refreshAvailabilityForAllLineItems({ onError: (err) => setCompanyMeta(err.message) });
-    renderLineItems();
-    scheduleDraftSave();
-    return;
-  }
-
   if (e.target.matches("[data-type]")) {
     li.typeId = e.target.value ? Number(e.target.value) : null;
     li.inventoryIds = [];
@@ -3696,6 +3660,26 @@ lineItemsEl.addEventListener("change", async (e) => {
   if (e.target.matches("[data-unit]")) {
     const nextId = e.target.value ? Number(e.target.value) : null;
     li.inventoryIds = nextId ? [nextId] : [];
+    const selected = e.target.selectedOptions?.[0];
+    const nextBundleId = selected?.dataset?.bundleId ? Number(selected.dataset.bundleId) : null;
+    if (nextBundleId) {
+      li.bundleId = nextBundleId;
+      li.bundleItems = [];
+      li.bundleAvailable = null;
+      li.rateManual = false;
+      const bundle = findBundle(nextBundleId);
+      li.rateBasis = defaultRateBasisForBundle(bundle);
+      li.rateAmount = suggestedBundleRateAmount({ bundleId: nextBundleId, basis: li.rateBasis });
+    } else {
+      li.bundleId = null;
+      li.bundleItems = [];
+      li.bundleAvailable = null;
+      if (li.typeId && !li.rateManual) {
+        li.rateBasis = defaultRateBasisForType(li.typeId);
+        li.rateAmount = suggestedRateAmount({ customerId: draft.customerId, typeId: li.typeId, basis: li.rateBasis });
+      }
+    }
+    await refreshAvailabilityForLineItem(li).catch(() => {});
     renderLineItems();
     scheduleDraftSave();
   }

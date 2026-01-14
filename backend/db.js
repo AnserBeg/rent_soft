@@ -13476,14 +13476,27 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
            e.serial_number,
            e.condition,
            e.location_id,
-           l.name AS location
-          ,eb.id AS bundle_id
-          ,eb.name AS bundle_name
+           l.name AS location,
+           eb.id AS bundle_id,
+           eb.name AS bundle_name,
+           COALESCE(bi.bundle_items, '[]'::jsonb) AS bundle_items
      FROM equipment e
  LEFT JOIN locations l ON l.id = e.location_id
  LEFT JOIN equipment_types et ON et.id = e.type_id
  LEFT JOIN equipment_bundle_items ebi ON ebi.equipment_id = e.id
  LEFT JOIN equipment_bundles eb ON eb.id = ebi.bundle_id
+ LEFT JOIN LATERAL (
+        SELECT jsonb_agg(
+                 jsonb_build_object(
+                   'serial_number', e2.serial_number,
+                   'model_name', e2.model_name
+                 )
+                 ORDER BY e2.serial_number
+               ) AS bundle_items
+          FROM equipment_bundle_items bi2
+          JOIN equipment e2 ON e2.id = bi2.equipment_id
+         WHERE bi2.bundle_id = eb.id
+      ) bi ON TRUE
      WHERE e.company_id = $1
        AND e.type_id = $2
        AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
