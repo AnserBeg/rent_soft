@@ -13490,16 +13490,20 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
       LEFT JOIN LATERAL (
         SELECT jsonb_agg(
                  jsonb_build_object(
-                   'type_name', et2.name,
-                   'qty', COUNT(*)::int
+                   'type_name', type_name,
+                   'qty', qty
                  )
-                 ORDER BY et2.name
+                 ORDER BY type_name
                ) AS bundle_items
-          FROM equipment_bundle_items bi2
-          JOIN equipment e2 ON e2.id = bi2.equipment_id
-          JOIN equipment_types et2 ON et2.id = e2.type_id
-         WHERE bi2.bundle_id = eb.id
-         GROUP BY bi2.bundle_id
+          FROM (
+            SELECT COALESCE(et2.name, e2.type) AS type_name,
+                   COUNT(*)::int AS qty
+              FROM equipment_bundle_items bi2
+              JOIN equipment e2 ON e2.id = bi2.equipment_id
+         LEFT JOIN equipment_types et2 ON et2.id = e2.type_id
+             WHERE bi2.bundle_id = eb.id
+             GROUP BY COALESCE(et2.name, e2.type)
+          ) bundle_counts
       ) bi ON TRUE
      WHERE e.company_id = $1
        AND (
