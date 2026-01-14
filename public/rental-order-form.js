@@ -2110,8 +2110,7 @@ function unitLabel(inv) {
   const base = inv?.location ? String(inv.location) : "Unknown";
   const current = inv?.current_location ? String(inv.current_location) : "";
   const location = current && current !== base ? `${base} (${current})` : base;
-  const bundle = inv?.bundle_name ? ` (Bundle: ${inv.bundle_name})` : "";
-  return `${model} - ${location}${bundle}`;
+  return `${model} - ${location}`;
 }
 
 function workOrdersStorageKey(companyId) {
@@ -2524,7 +2523,12 @@ function renderLineItems() {
         const selected = String(e.id) === String(selectedUnitId) ? "selected" : "";
         const bundleParts = Array.isArray(e.bundle_items)
           ? e.bundle_items
-              .map((item) => [item.serial_number, item.model_name].filter(Boolean).join(" "))
+              .map((item) => {
+                const qty = Number(item.qty || item.count || 0);
+                const name = String(item.type_name || item.typeName || "").trim();
+                if (!name) return null;
+                return `${qty || 1}x ${name}`;
+              })
               .filter(Boolean)
           : [];
         const bundleText = bundleParts.length ? ` (Bundle: ${bundleParts.join("; ")})` : "";
@@ -2541,18 +2545,21 @@ function renderLineItems() {
     const capacityLabel = Number.isFinite(li.capacityUnits) ? String(li.capacityUnits) : "--";
     const totalLabel = Number.isFinite(li.totalUnits) ? String(li.totalUnits) : "--";
     const bundleItems = Array.isArray(li.bundleItems) ? li.bundleItems : [];
-    const bundleItemText = bundleItems.length
-      ? bundleItems
-          .map((item) => String(item.modelName || "").trim())
-          .filter(Boolean)
-          .join("; ")
+    const bundleSummaryParts = [];
+    if (bundleItems.length) {
+      const counts = new Map();
+      bundleItems.forEach((item) => {
+        const typeName = String(item.typeName || item.type_name || "").trim();
+        if (!typeName) return;
+        counts.set(typeName, (counts.get(typeName) || 0) + 1);
+      });
+      counts.forEach((qty, name) => {
+        bundleSummaryParts.push(`${qty}x ${name}`);
+      });
+    }
+    const bundleItemText = bundleSummaryParts.length
+      ? bundleSummaryParts.join("; ")
       : "Bundle items will load after selection.";
-    const bundleLabelText = bundleItems
-      .map((item) => String(item.modelName || "").trim())
-      .filter(Boolean)
-      .join("; ");
-    const typeBundleLabel = bundleItems.length ? `Equipment type (${bundleLabelText})` : "Equipment type";
-    const safeTypeBundleLabel = escapeHtml(typeBundleLabel);
     const bundleAvailabilityLabel =
       li.bundleAvailable === false ? "Unavailable" : li.bundleAvailable === true ? "Available" : "Checking";
 
@@ -2596,7 +2603,7 @@ function renderLineItems() {
 
         <div class="stack">
           <div class="line-item-toprow">
-            <label>${safeTypeBundleLabel}
+            <label>Equipment type
               <select data-type>
                 <option value="">Select type</option>
                 ${typeOptions}
