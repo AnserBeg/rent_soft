@@ -2107,9 +2107,11 @@ function selectedInventoryDetails(ids) {
 
 function unitLabel(inv) {
   const model = inv?.model_name || "Unit";
-  const serial = inv?.serial_number || (inv?.id ? `#${inv.id}` : "#");
+  const base = inv?.location ? String(inv.location) : "Unknown";
+  const current = inv?.current_location ? String(inv.current_location) : "";
+  const location = current && current !== base ? `${base} (${current})` : base;
   const bundle = inv?.bundle_name ? ` (Bundle: ${inv.bundle_name})` : "";
-  return `${model} - ${serial}${bundle}`;
+  return `${model} - ${location}${bundle}`;
 }
 
 function workOrdersStorageKey(companyId) {
@@ -2541,12 +2543,12 @@ function renderLineItems() {
     const bundleItems = Array.isArray(li.bundleItems) ? li.bundleItems : [];
     const bundleItemText = bundleItems.length
       ? bundleItems
-          .map((item) => [item.serialNumber, item.modelName].filter(Boolean).join(" "))
+          .map((item) => String(item.modelName || "").trim())
           .filter(Boolean)
           .join("; ")
       : "Bundle items will load after selection.";
     const bundleLabelText = bundleItems
-      .map((item) => [item.serialNumber, item.modelName].filter(Boolean).join(" "))
+      .map((item) => String(item.modelName || "").trim())
       .filter(Boolean)
       .join("; ");
     const typeBundleLabel = bundleItems.length ? `Equipment type (${bundleLabelText})` : "Equipment type";
@@ -2599,6 +2601,7 @@ function renderLineItems() {
                 <option value="">Select type</option>
                 ${typeOptions}
               </select>
+              ${bundleHintHtml}
             </label>
           ${unitFieldHtml}
           <label>Duration (days/hours)
