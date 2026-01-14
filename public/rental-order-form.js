@@ -140,6 +140,8 @@ const feeTotalModalEl = document.getElementById("fee-total-modal");
 const orderSubtotalEl = document.getElementById("order-subtotal");
 const orderGstEl = document.getElementById("order-gst");
 const orderTotalEl = document.getElementById("order-total");
+const ratePeriodTotalsEl = document.getElementById("rate-period-totals");
+const ratePeriodTotalsBodyEl = document.getElementById("rate-period-totals-body");
 
 const feesModal = document.getElementById("fees-modal");
 const closeFeesModalBtn = document.getElementById("close-fees-modal");
@@ -1946,9 +1948,63 @@ function updateFeeTotals() {
   updateOrderTotals();
 }
 
+function rateBasisLabel(basis) {
+  switch (basis) {
+    case "daily":
+      return "Daily";
+    case "weekly":
+      return "Weekly";
+    case "monthly":
+      return "Monthly";
+    default:
+      return "Rate";
+  }
+}
+
+function updateRatePeriodTotals(periodTotals, periodUnits) {
+  if (!ratePeriodTotalsEl || !ratePeriodTotalsBodyEl) return;
+  const basisOrder = ["daily", "weekly", "monthly"];
+  const activeBases = basisOrder.filter((basis) => (periodTotals.get(basis) || 0) > 0);
+  const hasMultipleBases = activeBases.length > 1;
+  const hasMultipleUnits = activeBases.some((basis) => (periodUnits.get(basis) || 0) > 1);
+  const shouldShow = activeBases.length > 0 && (hasMultipleBases || hasMultipleUnits);
+
+  if (!shouldShow) {
+    ratePeriodTotalsEl.style.display = "none";
+    ratePeriodTotalsBodyEl.innerHTML = "";
+    return;
+  }
+
+  ratePeriodTotalsEl.style.display = "block";
+  ratePeriodTotalsBodyEl.innerHTML = activeBases
+    .map((basis) => {
+      const subtotal = periodTotals.get(basis) || 0;
+      const gst = subtotal * 0.05;
+      const total = subtotal + gst;
+      const label = rateBasisLabel(basis);
+      return `
+        <div class="totals-row">
+          <span class="hint">${label} subtotal</span>
+          <strong>${fmtMoney(subtotal)}</strong>
+        </div>
+        <div class="totals-row">
+          <span class="hint">${label} GST (5%)</span>
+          <strong>${fmtMoney(gst)}</strong>
+        </div>
+        <div class="totals-row">
+          <span class="hint">${label} total</span>
+          <strong>${fmtMoney(total)}</strong>
+        </div>
+      `;
+    })
+    .join("");
+}
+
 function updateOrderTotals() {
   if (!orderSubtotalEl || !orderGstEl || !orderTotalEl) return;
   const feesTotal = (draft.fees || []).reduce((sum, f) => sum + moneyNumber(f.amount), 0);
+  const periodTotals = new Map();
+  const periodUnits = new Map();
   const lineSubtotal = (draft.lineItems || []).reduce((sum, li) => {
     const { startLocal, endLocal } = effectiveLineItemLocalPeriod(li);
     const calc = computeLineAmount({
@@ -1958,7 +2014,14 @@ function updateOrderTotals() {
       rateAmount: li.rateAmount,
       qty: lineItemQty(li),
     });
+    const basis = normalizeRateBasis(li.rateBasis);
     if (!calc || !Number.isFinite(calc.lineAmount)) return sum;
+    if (basis) {
+      periodTotals.set(basis, (periodTotals.get(basis) || 0) + calc.lineAmount);
+      if (Number.isFinite(calc.billableUnits)) {
+        periodUnits.set(basis, (periodUnits.get(basis) || 0) + calc.billableUnits);
+      }
+    }
     return sum + calc.lineAmount;
   }, 0);
 
@@ -1968,6 +2031,7 @@ function updateOrderTotals() {
   orderSubtotalEl.textContent = fmtMoney(subtotal);
   orderGstEl.textContent = fmtMoney(gst);
   orderTotalEl.textContent = fmtMoney(total);
+  updateRatePeriodTotals(periodTotals, periodUnits);
 }
 
 function renderFees() {
