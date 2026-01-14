@@ -13500,6 +13500,25 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
      WHERE e.company_id = $1
        AND e.type_id = $2
        AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
+       AND (
+         ebi.bundle_id IS NULL
+         OR NOT EXISTS (
+           SELECT 1
+             FROM equipment_bundle_items bi2
+             JOIN rental_order_line_inventory liv ON liv.equipment_id = bi2.equipment_id
+             JOIN rental_order_line_items li ON li.id = liv.line_item_id
+             JOIN rental_orders ro ON ro.id = li.rental_order_id
+            WHERE bi2.bundle_id = ebi.bundle_id
+              AND ro.company_id = $1
+              AND ro.status IN ('requested', 'reservation', 'ordered')
+              ${excludeSql}
+              AND tstzrange(
+                COALESCE(li.fulfilled_at, li.start_at),
+                COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
+                '[)'
+              ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
+         )
+       )
        AND NOT EXISTS (
          SELECT 1
            FROM rental_order_line_inventory liv

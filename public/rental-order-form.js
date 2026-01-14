@@ -2543,7 +2543,7 @@ function renderLineItems() {
       ? bundleItems
           .map((item) => [item.serialNumber, item.modelName].filter(Boolean).join(" "))
           .filter(Boolean)
-          .join(", ")
+          .join("; ")
       : "Bundle items will load after selection.";
     const bundleLabelText = bundleItems
       .map((item) => [item.serialNumber, item.modelName].filter(Boolean).join(" "))
@@ -2554,17 +2554,10 @@ function renderLineItems() {
     const bundleAvailabilityLabel =
       li.bundleAvailable === false ? "Unavailable" : li.bundleAvailable === true ? "Available" : "Checking";
 
-    const unitFieldHtml = li.bundleId
-      ? `
-        <label>
-          <div class="label-head">
-            <span>Bundle items</span>
-            <span class="hint">${bundleAvailabilityLabel}</span>
-          </div>
-          <textarea class="compact-textarea" rows="2" readonly>${escapeHtml(bundleItemText)}</textarea>
-        </label>
-      `
-      : lockUnits
+    const bundleHintHtml = li.bundleId
+      ? `<div class="hint">Bundle items: ${escapeHtml(bundleItemText)} (${bundleAvailabilityLabel})</div>`
+      : "";
+    const unitFieldHtml = lockUnits
         ? `
           <label>
             <div class="label-head">
@@ -2583,6 +2576,7 @@ function renderLineItems() {
             <select data-unit>
               ${unitOptionsHtml}
             </select>
+            ${bundleHintHtml}
           </label>
         `;
 
