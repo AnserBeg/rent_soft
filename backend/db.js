@@ -13498,7 +13498,19 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
          WHERE bi2.bundle_id = eb.id
       ) bi ON TRUE
      WHERE e.company_id = $1
-       AND e.type_id = $2
+       AND (
+         e.type_id = $2
+         OR (
+           ebi.bundle_id IS NOT NULL
+           AND EXISTS (
+             SELECT 1
+               FROM equipment_bundle_items bi3
+               JOIN equipment e3 ON e3.id = bi3.equipment_id
+              WHERE bi3.bundle_id = ebi.bundle_id
+                AND e3.type_id = $2
+           )
+         )
+       )
        AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
        AND (
          ebi.bundle_id IS NULL
