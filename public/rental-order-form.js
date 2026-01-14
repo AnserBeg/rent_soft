@@ -2725,12 +2725,10 @@ async function refreshAvailabilityForLineItem(li) {
   li.inventoryOptions = data.available || [];
   const totalUnits = Number.isFinite(Number(data.totalUnits)) ? Number(data.totalUnits) : null;
   const demandUnits = Number.isFinite(Number(data.demandUnits)) ? Number(data.demandUnits) : 0;
-  const localDemandUnits = computeDraftDemandForRange(li.typeId, startAt, endAt);
-  const adjustedDemandUnits = demandUnits + localDemandUnits;
   li.totalUnits = totalUnits;
-  li.demandUnits = Number.isFinite(adjustedDemandUnits) ? adjustedDemandUnits : null;
+  li.demandUnits = Number.isFinite(demandUnits) ? demandUnits : null;
   li.capacityUnits =
-    totalUnits === null ? null : Math.max(totalUnits - (Number.isFinite(adjustedDemandUnits) ? adjustedDemandUnits : 0), 0);
+    totalUnits === null ? null : Math.max(totalUnits - (Number.isFinite(demandUnits) ? demandUnits : 0), 0);
   if (lockUnits) {
     li.inventoryIds = [];
     return;
@@ -2754,22 +2752,6 @@ async function refreshAvailabilityForLineItem(li) {
     li.bundleAvailable = data.bundleAvailable === true;
     li.bundleItems = Array.isArray(data.bundleItems) ? data.bundleItems : [];
   }
-}
-
-function computeDraftDemandForRange(typeId, startAt, endAt) {
-  if (!typeId) return 0;
-  const base = normalizeRangeMs(startAt, endAt);
-  if (!base) return 0;
-  let demand = 0;
-  (draft.lineItems || []).forEach((li) => {
-    if (!li?.typeId || String(li.typeId) !== String(typeId)) return;
-    const range = normalizeLineItemRangeMs(li);
-    if (!range) return;
-    if (range.startMs < base.endMs && range.endMs > base.startMs) {
-      demand += lineItemQty(li);
-    }
-  });
-  return demand;
 }
 
 function normalizeRangeMs(startAt, endAt) {
