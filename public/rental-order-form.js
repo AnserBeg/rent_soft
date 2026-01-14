@@ -1276,6 +1276,11 @@ function suggestedBundleRateAmount({ bundleId, basis }) {
   return bundle.dailyRate ?? null;
 }
 
+function bundlesForType(typeId) {
+  if (!typeId) return [];
+  return bundlesCache.filter((b) => String(b.primaryTypeId) === String(typeId));
+}
+
 function defaultRateBasisForType(typeId) {
   const type = typesCache.find((t) => String(t.id) === String(typeId));
   if (!type) return "daily";
@@ -2108,7 +2113,8 @@ function selectedInventoryDetails(ids) {
 function unitLabel(inv) {
   const model = inv?.model_name || "Unit";
   const serial = inv?.serial_number || (inv?.id ? `#${inv.id}` : "#");
-  return `${model} - ${serial}`;
+  const bundle = inv?.bundle_name ? ` (Bundle: ${inv.bundle_name})` : "";
+  return `${model} - ${serial}${bundle}`;
 }
 
 function workOrdersStorageKey(companyId) {
@@ -2507,11 +2513,10 @@ function renderLineItems() {
       pauseLabel || (li.returnedAt ? "Returned" : li.pickedUpAt ? "Return pending" : "Awaiting pickup/delivery");
     const actualButtonLabel = "Actual period";
 
-    const isBundle = Number.isFinite(Number(li.bundleId));
     const typeOptions = typesCache
       .map((t) => `<option value="${t.id}" ${String(t.id) === String(li.typeId || "") ? "selected" : ""}>${t.name}</option>`)
       .join("");
-    const bundleOptions = bundlesCache
+    const bundleOptions = bundlesForType(li.typeId)
       .map((b) => {
         const selected = String(b.id) === String(li.bundleId || "") ? "selected" : "";
         const count = Number.isFinite(Number(b.itemCount)) ? ` (${b.itemCount})` : "";
@@ -2546,7 +2551,7 @@ function renderLineItems() {
     const bundleAvailabilityLabel =
       li.bundleAvailable === false ? "Unavailable" : li.bundleAvailable === true ? "Available" : "Checking";
 
-    const unitFieldHtml = isBundle
+    const unitFieldHtml = li.bundleId
       ? `
         <label>
           <div class="label-head">
@@ -2592,31 +2597,18 @@ function renderLineItems() {
 
         <div class="stack">
           <div class="line-item-toprow">
-            <label>Item kind
-              <select data-item-kind>
-                <option value="single" ${isBundle ? "" : "selected"}>Single asset</option>
-                <option value="bundle" ${isBundle ? "selected" : ""}>Bundle</option>
+            <label>Equipment type
+              <select data-type>
+                <option value="">Select type</option>
+                ${typeOptions}
               </select>
             </label>
-            ${
-              isBundle
-                ? `
-                  <label>Bundle
-                    <select data-bundle>
-                      <option value="">Select bundle</option>
-                      ${bundleOptions}
-                    </select>
-                  </label>
-                `
-                : `
-                  <label>Equipment type
-                    <select data-type>
-                      <option value="">Select type</option>
-                      ${typeOptions}
-                    </select>
-                  </label>
-                `
-            }
+            <label>Bundle (optional)
+              <select data-bundle ${li.typeId ? "" : "disabled"}>
+                <option value="">Select bundle</option>
+                ${bundleOptions}
+              </select>
+            </label>
           ${unitFieldHtml}
           <label>Duration (days/hours)
             <input data-duration value="${formatDurationForDisplay(startLocal, endLocal)}" />
@@ -3636,29 +3628,8 @@ lineItemsEl.addEventListener("change", async (e) => {
   const li = draft.lineItems.find((x) => x.tempId === card.dataset.tempId);
   if (!li) return;
 
-  if (e.target.matches("[data-item-kind]")) {
-    const nextKind = e.target.value === "bundle" ? "bundle" : "single";
-    if (nextKind === "bundle") {
-      li.bundleId = null;
-      li.typeId = null;
-      li.inventoryIds = [];
-      li.inventoryOptions = [];
-      li.bundleItems = [];
-      li.bundleAvailable = null;
-    } else {
-      li.bundleId = null;
-      li.bundleItems = [];
-      li.bundleAvailable = null;
-    }
-    await refreshAvailabilityForAllLineItems({ onError: (err) => setCompanyMeta(err.message) });
-    renderLineItems();
-    scheduleDraftSave();
-    return;
-  }
-
   if (e.target.matches("[data-bundle]")) {
     li.bundleId = e.target.value ? Number(e.target.value) : null;
-    li.typeId = null;
     li.inventoryIds = [];
     li.inventoryOptions = [];
     li.bundleItems = [];
@@ -3669,6 +3640,11 @@ lineItemsEl.addEventListener("change", async (e) => {
       li.rateBasis = defaultRateBasisForBundle(bundle);
       li.rateManual = false;
       li.rateAmount = suggestedBundleRateAmount({ bundleId: li.bundleId, basis: li.rateBasis });
+    } else if (li.typeId) {
+      li.rateBasis = defaultRateBasisForType(li.typeId);
+      if (!li.rateManual) {
+        li.rateAmount = suggestedRateAmount({ customerId: draft.customerId, typeId: li.typeId, basis: li.rateBasis });
+      }
     }
     await refreshAvailabilityForAllLineItems({ onError: (err) => setCompanyMeta(err.message) });
     renderLineItems();
@@ -3679,6 +3655,9 @@ lineItemsEl.addEventListener("change", async (e) => {
   if (e.target.matches("[data-type]")) {
     li.typeId = e.target.value ? Number(e.target.value) : null;
     li.inventoryIds = [];
+    li.bundleId = null;
+    li.bundleItems = [];
+    li.bundleAvailable = null;
     li.rateBasis = li.typeId ? defaultRateBasisForType(li.typeId) : "daily";
     li.rateManual = false;
     li.rateAmount = li.typeId ? suggestedRateAmount({ customerId: draft.customerId, typeId: li.typeId, basis: li.rateBasis }) : null;

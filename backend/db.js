@@ -13477,9 +13477,13 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
            e.condition,
            e.location_id,
            l.name AS location
+          ,eb.id AS bundle_id
+          ,eb.name AS bundle_name
      FROM equipment e
  LEFT JOIN locations l ON l.id = e.location_id
  LEFT JOIN equipment_types et ON et.id = e.type_id
+ LEFT JOIN equipment_bundle_items ebi ON ebi.equipment_id = e.id
+ LEFT JOIN equipment_bundles eb ON eb.id = ebi.bundle_id
      WHERE e.company_id = $1
        AND e.type_id = $2
        AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
