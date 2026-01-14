@@ -4202,7 +4202,7 @@ body.drawer-open {
 .guard-note-images {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(480px, 1fr));
 }
 
 .guard-note-images a {
@@ -4215,7 +4215,7 @@ body.drawer-open {
 
 .guard-note-images img {
   width: 100%;
-  height: 96px;
+  height: 480px;
   object-fit: cover;
   display: block;
 }
