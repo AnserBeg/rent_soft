@@ -2562,9 +2562,11 @@ function renderLineItems() {
       : "Bundle items will load after selection.";
     const bundleAvailabilityLabel =
       li.bundleAvailable === false ? "Unavailable" : li.bundleAvailable === true ? "Available" : "Checking";
+    const bundleAvailabilitySuffix =
+      bundleAvailabilityLabel === "Available" ? "" : ` (${bundleAvailabilityLabel})`;
 
     const bundleHintHtml = li.bundleId
-      ? `<div class="hint">Bundle items: ${escapeHtml(bundleItemText)} (${bundleAvailabilityLabel})</div>`
+      ? `<div class="hint">Bundle items: ${escapeHtml(bundleItemText)}${bundleAvailabilitySuffix}</div>`
       : "";
     const unitFieldHtml = lockUnits
         ? `
