@@ -121,11 +121,18 @@
                 </div>
                 <div class="dispatch-detail-section">
                   <div class="dispatch-detail-title">Guard Notes</div>
-                  <textarea id="guard-notes" class="guard-notes" placeholder="Add guard notes for this unit..."></textarea>
-                  <div class="inline-actions">
-                    <button class="ghost small" id="guard-notes-clear" type="button">Clear</button>
-                    <button class="primary" id="guard-notes-save" type="button">Save Notes</button>
-                    <span class="hint" id="guard-notes-status"></span>
+                  <div class="guard-notes-list" id="guard-notes-list"></div>
+                  <p class="guard-notes-empty" id="guard-notes-empty">No guard notes yet.</p>
+                  <div class="guard-notes-composer">
+                    <label class="guard-notes-label" for="guard-notes-input">Add note</label>
+                    <textarea id="guard-notes-input" class="guard-notes-input" placeholder="Type a note and press Enter (Shift+Enter for a new line)..."></textarea>
+                    <div class="guard-notes-actions">
+                      <label class="ghost small" for="guard-notes-images">Add photos</label>
+                      <input id="guard-notes-images" class="guard-notes-images" type="file" accept="image/*" multiple hidden />
+                      <button class="ghost small" id="guard-notes-clear" type="button">Clear notes</button>
+                      <span class="hint" id="guard-notes-status"></span>
+                    </div>
+                    <div class="guard-notes-previews" id="guard-notes-previews"></div>
                   </div>
                 </div>
               </div>

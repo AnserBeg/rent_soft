@@ -23,8 +23,11 @@ const detailWrap = document.getElementById("dispatch-detail");
 const unitDetails = document.getElementById("unit-details");
 const orderDetails = document.getElementById("order-details");
 const lineItemDetails = document.getElementById("line-item-details");
-const guardNotes = document.getElementById("guard-notes");
-const guardNotesSave = document.getElementById("guard-notes-save");
+const guardNotesList = document.getElementById("guard-notes-list");
+const guardNotesEmpty = document.getElementById("guard-notes-empty");
+const guardNotesInput = document.getElementById("guard-notes-input");
+const guardNotesImages = document.getElementById("guard-notes-images");
+const guardNotesPreviews = document.getElementById("guard-notes-previews");
 const guardNotesClear = document.getElementById("guard-notes-clear");
 const guardNotesStatus = document.getElementById("guard-notes-status");
 const openSiteAddressPickerBtn = document.getElementById("open-site-address-picker");
@@ -67,6 +70,10 @@ let siteAddressPicker = {
 };
 let siteAddressInputBound = false;
 let rentalInfoFields = null;
+let guardNotesState = [];
+let guardNotesPendingImages = [];
+let guardNotesUploadsInFlight = 0;
+let guardNotesUploadToken = 0;
 
 function fmtDate(value, withTime = false) {
   if (!value) return "--";
@@ -815,23 +822,272 @@ function guardNotesKey(row) {
   return `rentSoft.dispatch.guardNotes.${equipmentIdValue}.${orderIdValue}`;
 }
 
-function loadGuardNotes(row) {
-  if (!guardNotes) return;
+function makeGuardNoteId(prefix = "note") {
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${prefix}-${Date.now()}-${rand}`;
+}
+
+function getGuardNotesUserName() {
+  const session = window.RentSoft?.getSession?.();
+  const user = session?.user || {};
+  const candidates = [user.name, user.full_name, user.fullName, user.email];
+  const value = candidates.find((entry) => String(entry || "").trim());
+  return value ? String(value).trim() : "Unknown user";
+}
+
+function normalizeGuardNoteImages(value) {
+  const list = Array.isArray(value) ? value : [];
+  return list
+    .map((img) => {
+      if (!img) return null;
+      if (typeof img === "string") {
+        return { id: makeGuardNoteId("img"), name: "Photo", type: "", size: null, url: img };
+      }
+      if (typeof img !== "object") return null;
+      const url = img.url || img.dataUrl || img.src || "";
+      if (!url) return null;
+      return {
+        id: img.id || makeGuardNoteId("img"),
+        name: String(img.name || "Photo"),
+        type: img.type ? String(img.type) : "",
+        size: Number.isFinite(img.size) ? img.size : null,
+        url: String(url),
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeGuardNotesList(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  const normalized = [];
+  list.forEach((item) => {
+    if (!item || typeof item !== "object") return;
+    const noteText = String(item.note || item.text || "").trim();
+    const images = normalizeGuardNoteImages(item.images || item.photos || []);
+    if (!noteText && images.length === 0) return;
+    normalized.push({
+      id: item.id || makeGuardNoteId(),
+      userName: String(item.userName || item.user_name || "Unknown user"),
+      createdAt: item.createdAt || item.created_at || null,
+      note: noteText,
+      images,
+    });
+  });
+  return normalized;
+}
+
+function readGuardNotesFromStorage(key) {
+  const raw = localStorage.getItem(key);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return normalizeGuardNotesList(parsed);
+  } catch {
+    const legacy = String(raw || "").trim();
+    if (!legacy) return [];
+    return [
+      {
+        id: makeGuardNoteId(),
+        userName: "Imported note",
+        createdAt: null,
+        note: legacy,
+        images: [],
+      },
+    ];
+  }
+}
+
+function renderGuardNoteImages(images) {
+  const list = Array.isArray(images) ? images : [];
+  if (!list.length) return "";
+  const tiles = list
+    .map((img) => {
+      const url = escapeHtml(img.url || "");
+      if (!url) return "";
+      const label = escapeHtml(img.name || "Photo");
+      return `
+        <a href="${url}" target="_blank" rel="noopener">
+          <img src="${url}" alt="${label}" loading="lazy" />
+        </a>
+      `;
+    })
+    .join("");
+  return tiles ? `<div class="guard-note-images">${tiles}</div>` : "";
+}
+
+function renderGuardNotesList(notes) {
+  if (!guardNotesList) return;
+  guardNotesList.replaceChildren();
+  const list = Array.isArray(notes) ? notes : [];
+  if (guardNotesEmpty) guardNotesEmpty.hidden = list.length > 0;
+  list.forEach((note) => {
+    const row = document.createElement("div");
+    row.className = "note-row";
+    const name = escapeHtml(note.userName || "Unknown user");
+    const when = fmtDate(note.createdAt, true);
+    const text = escapeHtml(note.note || "").replaceAll("\n", "<br />");
+    row.innerHTML = `
+      <div class="note-meta">${name} | ${when}</div>
+      ${text ? `<div>${text}</div>` : ""}
+      ${renderGuardNoteImages(note.images)}
+    `;
+    guardNotesList.appendChild(row);
+  });
+}
+
+function renderGuardNotesPreviews() {
+  if (!guardNotesPreviews) return;
+  guardNotesPreviews.replaceChildren();
+  guardNotesPreviews.hidden = guardNotesPendingImages.length === 0;
+  guardNotesPendingImages.forEach((img) => {
+    const tile = document.createElement("div");
+    tile.className = "guard-notes-preview";
+    tile.innerHTML = `
+      <img src="${escapeHtml(img.url || "")}" alt="${escapeHtml(img.name || "Selected photo")}" loading="lazy" />
+      <button class="ghost tiny" type="button" data-remove-image="${img.id}">Remove</button>
+    `;
+    guardNotesPreviews.appendChild(tile);
+  });
+}
+
+function persistGuardNotes(row, notes) {
   const key = guardNotesKey(row);
-  guardNotes.value = localStorage.getItem(key) || "";
+  try {
+    if (!notes.length) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, JSON.stringify(notes));
+    }
+    return true;
+  } catch (err) {
+    if (guardNotesStatus) {
+      const msg = err?.message || "Unable to save guard notes.";
+      guardNotesStatus.textContent = msg;
+    }
+    return false;
+  }
+}
+
+function guardNoteUploadPrefix() {
+  if (!activeCompanyId) return "";
+  return `/uploads/company-${activeCompanyId}/`;
+}
+
+async function uploadGuardNoteImage(file) {
+  if (!activeCompanyId) throw new Error("No active company session.");
+  if (!file || !String(file.type || "").startsWith("image/")) {
+    throw new Error("Only image uploads are allowed.");
+  }
+  const body = new FormData();
+  body.append("companyId", String(activeCompanyId));
+  body.append("image", file);
+  const res = await fetch("/api/uploads/image", { method: "POST", body });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to upload image.");
+  if (!data.url) throw new Error("Upload did not return an image url.");
+  return {
+    id: makeGuardNoteId("img"),
+    name: file.name || "Photo",
+    type: file.type || "",
+    size: Number.isFinite(file.size) ? file.size : null,
+    url: data.url,
+  };
+}
+
+async function deleteGuardNoteImage(url) {
+  if (!activeCompanyId || !url) return;
+  const prefix = guardNoteUploadPrefix();
+  if (!prefix || !String(url).startsWith(prefix)) return;
+  try {
+    await fetch("/api/uploads/image", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyId: activeCompanyId, url }),
+    });
+  } catch {
+    // ignore delete failures
+  }
+}
+
+function collectGuardNoteImageUrls(notes) {
+  const urls = [];
+  (notes || []).forEach((note) => {
+    (note?.images || []).forEach((img) => {
+      if (img?.url) urls.push(String(img.url));
+    });
+  });
+  return urls;
+}
+
+function loadGuardNotes(row) {
+  guardNotesState = [];
+  guardNotesPendingImages = [];
+  guardNotesUploadsInFlight = 0;
+  guardNotesUploadToken += 1;
+  if (guardNotesInput) guardNotesInput.value = "";
+  renderGuardNotesPreviews();
+  if (!row) {
+    renderGuardNotesList([]);
+    if (guardNotesStatus) guardNotesStatus.textContent = "";
+    return;
+  }
+  const key = guardNotesKey(row);
+  guardNotesState = readGuardNotesFromStorage(key);
+  renderGuardNotesList(guardNotesState);
   if (guardNotesStatus) guardNotesStatus.textContent = "";
 }
 
-function saveGuardNotes(row) {
-  if (!guardNotes) return;
-  const key = guardNotesKey(row);
-  const text = guardNotes.value.trim();
-  if (text) {
-    localStorage.setItem(key, text);
-    if (guardNotesStatus) guardNotesStatus.textContent = `Saved locally at ${new Date().toLocaleTimeString()}`;
-  } else {
-    localStorage.removeItem(key);
-    if (guardNotesStatus) guardNotesStatus.textContent = "Notes cleared.";
+async function clearGuardNotes(row) {
+  if (!row) return;
+  const urls = collectGuardNoteImageUrls(guardNotesState).concat(collectGuardNoteImageUrls([{ images: guardNotesPendingImages }]));
+  const uniqueUrls = Array.from(new Set(urls));
+  guardNotesState = [];
+  guardNotesPendingImages = [];
+  guardNotesUploadsInFlight = 0;
+  guardNotesUploadToken += 1;
+  if (guardNotesInput) guardNotesInput.value = "";
+  renderGuardNotesList([]);
+  renderGuardNotesPreviews();
+  const ok = persistGuardNotes(row, []);
+  if (ok && guardNotesStatus) guardNotesStatus.textContent = "Notes cleared.";
+  if (uniqueUrls.length) {
+    await Promise.allSettled(uniqueUrls.map((url) => deleteGuardNoteImage(url)));
+  }
+}
+
+function submitGuardNote() {
+  if (!selectedUnit) {
+    if (guardNotesStatus) guardNotesStatus.textContent = "Select a unit to add guard notes.";
+    return;
+  }
+  if (guardNotesUploadsInFlight > 0) {
+    if (guardNotesStatus) guardNotesStatus.textContent = "Wait for image uploads to finish.";
+    return;
+  }
+  const text = String(guardNotesInput?.value || "").trim();
+  const images = guardNotesPendingImages.map((img) => ({ ...img }));
+  if (!text && images.length === 0) {
+    if (guardNotesStatus) guardNotesStatus.textContent = "Enter a note or attach photos.";
+    return;
+  }
+
+  const userName = getGuardNotesUserName();
+  const next = guardNotesState.concat({
+    id: makeGuardNoteId(),
+    userName,
+    createdAt: new Date().toISOString(),
+    note: text,
+    images,
+  });
+
+  if (!persistGuardNotes(selectedUnit, next)) return;
+  guardNotesState = next;
+  guardNotesPendingImages = [];
+  if (guardNotesInput) guardNotesInput.value = "";
+  renderGuardNotesPreviews();
+  renderGuardNotesList(guardNotesState);
+  if (guardNotesStatus) {
+    guardNotesStatus.textContent = `Added ${userName} at ${new Date().toLocaleTimeString()}`;
   }
 }
 
@@ -1016,15 +1272,69 @@ async function loadDetail() {
 
 refreshBtn?.addEventListener("click", () => loadDetail());
 
-guardNotesSave?.addEventListener("click", () => {
-  if (!selectedUnit) return;
-  saveGuardNotes(selectedUnit);
+guardNotesInput?.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+  e.preventDefault();
+  submitGuardNote();
+});
+
+guardNotesImages?.addEventListener("change", async (e) => {
+  const files = Array.from(e.target?.files || []);
+  if (!files.length) return;
+  if (!activeCompanyId) {
+    if (guardNotesStatus) guardNotesStatus.textContent = "No active company session.";
+    guardNotesImages.value = "";
+    return;
+  }
+  const token = guardNotesUploadToken;
+  guardNotesUploadsInFlight += files.length;
+  if (guardNotesStatus) guardNotesStatus.textContent = `Uploading ${files.length} image${files.length === 1 ? "" : "s"}...`;
+  const results = await Promise.allSettled(files.map((file) => uploadGuardNoteImage(file)));
+  const uploaded = [];
+  const failures = [];
+  results.forEach((result) => {
+    if (result.status === "fulfilled") {
+      uploaded.push(result.value);
+    } else {
+      failures.push(result.reason);
+    }
+  });
+  guardNotesUploadsInFlight = Math.max(0, guardNotesUploadsInFlight - files.length);
+  if (token !== guardNotesUploadToken) {
+    await Promise.allSettled(uploaded.map((img) => deleteGuardNoteImage(img.url)));
+    guardNotesImages.value = "";
+    return;
+  }
+  if (uploaded.length) {
+    guardNotesPendingImages = guardNotesPendingImages.concat(uploaded);
+    renderGuardNotesPreviews();
+  }
+  if (guardNotesStatus) {
+    if (failures.length) {
+      const msg = failures[0]?.message || "Some uploads failed.";
+      guardNotesStatus.textContent = msg;
+    } else {
+      guardNotesStatus.textContent = uploaded.length ? "Images ready." : "No images uploaded.";
+    }
+  }
+  guardNotesImages.value = "";
+});
+
+guardNotesPreviews?.addEventListener("click", (e) => {
+  const btn = e.target?.closest?.("[data-remove-image]");
+  const id = btn?.dataset?.removeImage;
+  if (!id) return;
+  const removing = guardNotesPendingImages.find((img) => img.id === id);
+  guardNotesPendingImages = guardNotesPendingImages.filter((img) => img.id !== id);
+  renderGuardNotesPreviews();
+  if (removing?.url) {
+    deleteGuardNoteImage(removing.url);
+  }
 });
 
 guardNotesClear?.addEventListener("click", () => {
-  if (!guardNotes) return;
-  guardNotes.value = "";
-  if (selectedUnit) saveGuardNotes(selectedUnit);
+  if (!selectedUnit) return;
+  clearGuardNotes(selectedUnit);
 });
 
 openSiteAddressPickerBtn?.addEventListener("click", (e) => {
