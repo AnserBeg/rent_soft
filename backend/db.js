@@ -13506,6 +13506,7 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
           ) bundle_counts
       ) bi ON TRUE
      WHERE e.company_id = $1
+       AND (ebi.bundle_id IS NULL OR e.id = eb.primary_equipment_id)
        AND (
          e.type_id = $2
          OR (
