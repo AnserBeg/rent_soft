@@ -1961,12 +1961,12 @@ function rateBasisLabel(basis) {
   }
 }
 
-function updateRatePeriodTotals(periodTotals, periodUnits) {
+function updateRatePeriodTotals(periodSummaries) {
   if (!ratePeriodTotalsEl || !ratePeriodTotalsBodyEl) return;
   const basisOrder = ["daily", "weekly", "monthly"];
-  const activeBases = basisOrder.filter((basis) => (periodTotals.get(basis) || 0) > 0);
+  const activeBases = basisOrder.filter((basis) => (periodSummaries.get(basis)?.totalAmount || 0) > 0);
   const hasMultipleBases = activeBases.length > 1;
-  const hasMultipleUnits = activeBases.some((basis) => (periodUnits.get(basis) || 0) > 1);
+  const hasMultipleUnits = activeBases.some((basis) => (periodSummaries.get(basis)?.unitCount || 0) > 1);
   const shouldShow = activeBases.length > 0 && (hasMultipleBases || hasMultipleUnits);
 
   if (!shouldShow) {
@@ -1978,21 +1978,23 @@ function updateRatePeriodTotals(periodTotals, periodUnits) {
   ratePeriodTotalsEl.style.display = "block";
   ratePeriodTotalsBodyEl.innerHTML = activeBases
     .map((basis) => {
-      const subtotal = periodTotals.get(basis) || 0;
+      const summary = periodSummaries.get(basis) || {};
+      const subtotal = Number.isFinite(summary.periodSubtotal) ? summary.periodSubtotal : 0;
       const gst = subtotal * 0.05;
       const total = subtotal + gst;
       const label = rateBasisLabel(basis);
+      const unitSuffix = basis === "daily" ? "per day" : basis === "weekly" ? "per week" : "per month";
       return `
         <div class="totals-row">
-          <span class="hint">${label} subtotal</span>
+          <span class="hint">${label} subtotal (${unitSuffix})</span>
           <strong>${fmtMoney(subtotal)}</strong>
         </div>
         <div class="totals-row">
-          <span class="hint">${label} GST (5%)</span>
+          <span class="hint">${label} GST (5%) (${unitSuffix})</span>
           <strong>${fmtMoney(gst)}</strong>
         </div>
         <div class="totals-row">
-          <span class="hint">${label} total</span>
+          <span class="hint">${label} total (${unitSuffix})</span>
           <strong>${fmtMoney(total)}</strong>
         </div>
       `;
@@ -2003,8 +2005,7 @@ function updateRatePeriodTotals(periodTotals, periodUnits) {
 function updateOrderTotals() {
   if (!orderSubtotalEl || !orderGstEl || !orderTotalEl) return;
   const feesTotal = (draft.fees || []).reduce((sum, f) => sum + moneyNumber(f.amount), 0);
-  const periodTotals = new Map();
-  const periodUnits = new Map();
+  const periodSummaries = new Map();
   const lineSubtotal = (draft.lineItems || []).reduce((sum, li) => {
     const { startLocal, endLocal } = effectiveLineItemLocalPeriod(li);
     const calc = computeLineAmount({
@@ -2017,10 +2018,20 @@ function updateOrderTotals() {
     const basis = normalizeRateBasis(li.rateBasis);
     if (!calc || !Number.isFinite(calc.lineAmount)) return sum;
     if (basis) {
-      periodTotals.set(basis, (periodTotals.get(basis) || 0) + calc.lineAmount);
+      const summary = periodSummaries.get(basis) || { totalAmount: 0, unitCount: 0, periodSubtotal: 0 };
+      summary.totalAmount += calc.lineAmount;
       if (Number.isFinite(calc.billableUnits)) {
-        periodUnits.set(basis, (periodUnits.get(basis) || 0) + calc.billableUnits);
+        summary.unitCount += calc.billableUnits;
       }
+      const qty = lineItemQty(li);
+      const perPeriod =
+        Number.isFinite(Number(li.rateAmount)) && Number.isFinite(qty) && qty > 0
+          ? Number(li.rateAmount) * qty
+          : Number.isFinite(calc.billableUnits) && calc.billableUnits > 0
+            ? calc.lineAmount / calc.billableUnits
+            : 0;
+      summary.periodSubtotal += Number.isFinite(perPeriod) ? perPeriod : 0;
+      periodSummaries.set(basis, summary);
     }
     return sum + calc.lineAmount;
   }, 0);
@@ -2031,7 +2042,7 @@ function updateOrderTotals() {
   orderSubtotalEl.textContent = fmtMoney(subtotal);
   orderGstEl.textContent = fmtMoney(gst);
   orderTotalEl.textContent = fmtMoney(total);
-  updateRatePeriodTotals(periodTotals, periodUnits);
+  updateRatePeriodTotals(periodSummaries);
 }
 
 function renderFees() {
