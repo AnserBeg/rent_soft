@@ -3764,6 +3764,47 @@ body.drawer-open {
   margin-top: 10px;
 }
 
+.pricing-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.pricing-mini-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: #fff;
+  display: grid;
+  gap: 10px;
+}
+
+.pricing-mini-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pricing-mini-headline {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
+
+.pricing-mini-breakdown .totals-row {
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+@media (max-width: 900px) {
+  .pricing-summary-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .details-panel {
   border: 1px solid var(--border);
   background: #f9fbff;

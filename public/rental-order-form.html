@@ -184,19 +184,30 @@
                 <h2>Pricing summary</h2>
               </div>
             </div>
-            <div class="stack" style="gap: 16px;">
-              <div class="stack" style="gap: 6px;">
-                <div class="inline">
+            <div class="pricing-summary-grid">
+              <div class="pricing-mini-card">
+                <div class="pricing-mini-title">
                   <strong id="pricing-recurring-label">Per month (recurring)</strong>
                 </div>
-                <div class="stack" id="pricing-recurring-body" style="gap: 0;"></div>
+                <div class="pricing-mini-headline" id="pricing-recurring-headline">$0.00 / month</div>
+                <div class="pricing-mini-breakdown">
+                  <div class="totals-row">
+                    <span class="hint">Subtotal</span>
+                    <strong id="pricing-recurring-subtotal">$0.00</strong>
+                  </div>
+                  <div class="totals-row">
+                    <span class="hint">GST (5%)</span>
+                    <strong id="pricing-recurring-gst">$0.00</strong>
+                  </div>
+                </div>
               </div>
-              <div class="stack" style="gap: 6px;">
-                <div class="inline">
+              <div class="pricing-mini-card">
+                <div class="pricing-mini-title">
                   <strong id="pricing-contract-label">For this contract</strong>
                   <span class="hint" id="pricing-contract-duration"></span>
                 </div>
-                <div class="stack" style="gap: 0;">
+                <div class="pricing-mini-headline" id="pricing-contract-headline">$0.00 total</div>
+                <div class="pricing-mini-breakdown">
                   <div class="totals-row">
                     <span class="hint">Subtotal</span>
                     <strong id="pricing-contract-subtotal">$0.00</strong>
@@ -205,16 +216,12 @@
                     <span class="hint">GST (5%)</span>
                     <strong id="pricing-contract-gst">$0.00</strong>
                   </div>
-                  <div class="totals-row">
-                    <span class="hint">Total</span>
-                    <strong id="pricing-contract-total">$0.00</strong>
-                  </div>
                 </div>
-                <p class="hint" id="pricing-contract-helper" style="margin: 0;">
-                  Billed monthly; first/last invoice may be prorated based on actual dates.
-                </p>
               </div>
             </div>
+            <p class="hint" id="pricing-contract-helper" style="margin: 0;">
+              Billed monthly; first/last invoice may be prorated based on actual dates.
+            </p>
           </section>
 
           <section class="card wide">
