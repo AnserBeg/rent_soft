@@ -58,6 +58,18 @@ const openEquipmentLocationHistoryBtn = document.getElementById("open-equipment-
 const openEquipmentWorkOrdersBtn = document.getElementById("open-equipment-work-orders");
 const equipmentWorkOrdersTable = document.getElementById("equipment-work-orders-table");
 const equipmentWorkOrdersMeta = document.getElementById("equipment-work-orders-meta");
+const equipmentBundleLabel = document.getElementById("equipment-bundle-label");
+const openBundleModalBtn = document.getElementById("open-bundle-modal");
+const bundleModal = document.getElementById("bundle-modal");
+const closeBundleModalBtn = document.getElementById("close-bundle-modal");
+const bundleForm = document.getElementById("bundle-form");
+const bundleNameInput = document.getElementById("bundle-name");
+const bundlePrimarySelect = document.getElementById("bundle-primary");
+const bundleItemsList = document.getElementById("bundle-items-list");
+const bundleDailyRateInput = document.getElementById("bundle-daily-rate");
+const bundleWeeklyRateInput = document.getElementById("bundle-weekly-rate");
+const bundleMonthlyRateInput = document.getElementById("bundle-monthly-rate");
+const deleteBundleBtn = document.getElementById("delete-bundle");
 
 const pageParams = new URLSearchParams(window.location.search);
 const filterTypeId = pageParams.get("typeId");
@@ -82,6 +94,9 @@ let fallbackEquipmentImageUrls = [];
 let equipmentHistoryLoadedForId = null;
 let equipmentWorkOrdersLoadedForId = null;
 let equipmentExtrasActiveTab = "location-history";
+let bundlesCache = [];
+let editingBundleId = null;
+let bundleSeedEquipmentId = null;
 
 let currentLocationPicker = {
   mode: "leaflet",
@@ -191,6 +206,7 @@ function setCompany(id, detail) {
     loadLocations();
     loadEquipment();
     loadTypes();
+    loadBundles();
   } else {
     locationSelect.innerHTML = `<option value="">Select a location</option><option value="__new__">+ Add new location...</option>`;
     if (currentLocationSelect) {
@@ -246,6 +262,7 @@ function renderEquipmentTable(rows) {
       <span class="sort ${sortField === "type" ? "active" : ""}" data-sort="type">Type ${indicator("type")}</span>
       <span class="sort ${sortField === "model_name" ? "active" : ""}" data-sort="model_name">Model ${indicator("model_name")}</span>
       <span class="sort ${sortField === "serial_number" ? "active" : ""}" data-sort="serial_number">Serial # ${indicator("serial_number")}</span>
+      <span>Bundle</span>
       <span class="sort ${sortField === "condition" ? "active" : ""}" data-sort="condition">Condition ${indicator("condition")}</span>
       <span class="sort ${sortField === "manufacturer" ? "active" : ""}" data-sort="manufacturer">Manufacturer ${indicator("manufacturer")}</span>
       <span class="sort ${sortField === "location" ? "active" : ""}" data-sort="location">Base ${indicator("location")}</span>
@@ -274,6 +291,7 @@ function renderEquipmentTable(rows) {
         ${!isReturnInspection && isOutOfService ? `<span class="badge out-of-service" style="margin-left:6px;">Out of service</span>` : ""}
       </span>
       <span>${row.serial_number}</span>
+      <span>${row.bundle_name || "--"}</span>
       <span><span class="badge ${badge}">${row.condition}</span></span>
       <span>${row.manufacturer || "--"}</span>
       <span>${baseLocation}</span>
@@ -373,6 +391,7 @@ function renderEquipmentCards(rows) {
     const needsCurrent = row.needs_current_location_update === true;
     details.innerHTML = `
       <div><span class="equipment-card-k">Serial</span><span class="equipment-card-v">${row.serial_number || "--"}</span></div>
+      <div><span class="equipment-card-k">Bundle</span><span class="equipment-card-v">${row.bundle_name || "--"}</span></div>
       <div><span class="equipment-card-k">Base</span><span class="equipment-card-v">${row.location || "--"}</span></div>
       <div><span class="equipment-card-k">Current</span><span class="equipment-card-v">${row.current_location || "--"}${needsCurrent ? ` <span class="badge damage">Needs current</span>` : ""}</span></div>
     `;
@@ -473,6 +492,18 @@ async function loadEquipment() {
   }
 }
 
+async function loadBundles() {
+  if (!activeCompanyId) return;
+  try {
+    const res = await fetch(`/api/equipment-bundles?companyId=${activeCompanyId}`);
+    if (!res.ok) throw new Error("Unable to fetch bundles");
+    const data = await res.json();
+    bundlesCache = data.bundles || [];
+  } catch (err) {
+    companyMeta.textContent = err.message;
+  }
+}
+
 function applyFilters() {
   let rows = [...equipmentCache];
   if (filterLocationId) {
@@ -494,6 +525,7 @@ function applyFilters() {
         r.manufacturer,
         r.location,
         r.current_location,
+        r.bundle_name,
         r.notes,
       ]
         .filter(Boolean)
@@ -1687,6 +1719,7 @@ function openEquipmentModal() {
   if (equipmentModal?.classList.contains("modal")) equipmentModal.classList.add("show");
   setEquipmentAiStatus("");
   syncEquipmentAiTools();
+  setBundleControls(null);
 }
 
 function closeEquipmentModal() {
@@ -1708,6 +1741,120 @@ function closeEquipmentModal() {
     equipmentLocationHistoryDetails.open = false;
   }
   resetEquipmentExtrasPanels();
+  setBundleControls(null);
+}
+
+function setBundleControls(item) {
+  if (!equipmentBundleLabel) return;
+  if (!item || !item.id) {
+    equipmentBundleLabel.textContent = "Save this asset before bundling.";
+    if (openBundleModalBtn) openBundleModalBtn.disabled = true;
+    return;
+  }
+  const label = item.bundle_name ? `Bundle: ${item.bundle_name}` : "Not in a bundle";
+  equipmentBundleLabel.textContent = label;
+  if (openBundleModalBtn) openBundleModalBtn.disabled = false;
+}
+
+function getSelectedBundleItemIds() {
+  if (!bundleItemsList) return [];
+  return Array.from(bundleItemsList.querySelectorAll('input[type="checkbox"]'))
+    .filter((input) => input.checked)
+    .map((input) => Number(input.value))
+    .filter((v) => Number.isFinite(v));
+}
+
+function syncBundlePrimaryOptions(selectedIds, currentPrimaryId = null) {
+  if (!bundlePrimarySelect) return;
+  bundlePrimarySelect.innerHTML = "";
+  if (!selectedIds.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "Select equipment";
+    bundlePrimarySelect.appendChild(opt);
+    return;
+  }
+  selectedIds.forEach((id) => {
+    const eq = equipmentCache.find((e) => String(e.id) === String(id));
+    if (!eq) return;
+    const opt = document.createElement("option");
+    opt.value = String(id);
+    opt.textContent = `${eq.serial_number || eq.model_name || "Equipment"}${eq.model_name ? ` - ${eq.model_name}` : ""}`;
+    bundlePrimarySelect.appendChild(opt);
+  });
+  const preferred = selectedIds.includes(Number(currentPrimaryId)) ? String(currentPrimaryId) : String(selectedIds[0]);
+  bundlePrimarySelect.value = preferred;
+}
+
+function renderBundleItemsSelector(selectedIds, currentBundleId) {
+  if (!bundleItemsList) return;
+  bundleItemsList.replaceChildren();
+  const sorted = [...equipmentCache].sort((a, b) => String(a.serial_number || "").localeCompare(String(b.serial_number || "")));
+  sorted.forEach((eq) => {
+    const inOtherBundle =
+      eq.bundle_id && String(eq.bundle_id) !== String(currentBundleId || "");
+    const row = document.createElement("label");
+    row.className = "check-row";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = String(eq.id);
+    input.checked = selectedIds.includes(Number(eq.id));
+    input.disabled = inOtherBundle;
+    const labelText = `${eq.serial_number || eq.model_name || "Equipment"}${eq.model_name ? ` - ${eq.model_name}` : ""}`;
+    const detail = inOtherBundle && eq.bundle_name ? ` (in ${eq.bundle_name})` : "";
+    row.appendChild(input);
+    row.appendChild(document.createTextNode(labelText + detail));
+    bundleItemsList.appendChild(row);
+  });
+}
+
+async function loadBundleDetail(bundleId) {
+  const res = await fetch(`/api/equipment-bundles/${bundleId}?companyId=${activeCompanyId}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load bundle.");
+  return data;
+}
+
+async function openBundleModal({ seedEquipmentId = null } = {}) {
+  if (!activeCompanyId) {
+    companyMeta.textContent = "Select or create a company first.";
+    return;
+  }
+  if (!bundleModal || !bundleForm) return;
+  bundleSeedEquipmentId = seedEquipmentId;
+  const seed = seedEquipmentId
+    ? equipmentCache.find((eq) => String(eq.id) === String(seedEquipmentId))
+    : null;
+  let bundle = null;
+  editingBundleId = null;
+  if (seed?.bundle_id) {
+    bundle = await loadBundleDetail(seed.bundle_id);
+    editingBundleId = Number(bundle.id);
+  }
+
+  const selectedIds = bundle?.items?.length
+    ? bundle.items.map((item) => Number(item.id)).filter((v) => Number.isFinite(v))
+    : seedEquipmentId
+      ? [Number(seedEquipmentId)]
+      : [];
+  const nameValue = bundle?.name || "";
+  if (bundleNameInput) bundleNameInput.value = nameValue;
+  if (bundleDailyRateInput) bundleDailyRateInput.value = bundle?.dailyRate ?? "";
+  if (bundleWeeklyRateInput) bundleWeeklyRateInput.value = bundle?.weeklyRate ?? "";
+  if (bundleMonthlyRateInput) bundleMonthlyRateInput.value = bundle?.monthlyRate ?? "";
+  renderBundleItemsSelector(selectedIds, editingBundleId);
+  syncBundlePrimaryOptions(selectedIds, bundle?.primaryEquipmentId || seedEquipmentId || null);
+  if (deleteBundleBtn) deleteBundleBtn.style.display = editingBundleId ? "inline-flex" : "none";
+
+  bundleModal.classList.add("show");
+}
+
+function closeBundleModal() {
+  bundleModal?.classList.remove("show");
+  if (bundleForm) bundleForm.reset();
+  if (bundleItemsList) bundleItemsList.replaceChildren();
+  editingBundleId = null;
+  bundleSeedEquipmentId = null;
 }
 
 function openEquipmentImageModal() {
@@ -1749,6 +1896,95 @@ closeEquipmentImageModalBtn?.addEventListener("click", (e) => {
 
 equipmentImageModal?.addEventListener("click", (e) => {
   if (e.target === equipmentImageModal) closeEquipmentImageModal();
+});
+
+openBundleModalBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!editingEquipmentId) return;
+  try {
+    await openBundleModal({ seedEquipmentId: editingEquipmentId });
+  } catch (err) {
+    companyMeta.textContent = err?.message || String(err);
+  }
+});
+
+closeBundleModalBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  closeBundleModal();
+});
+
+bundleModal?.addEventListener("click", (e) => {
+  if (e.target === bundleModal) closeBundleModal();
+});
+
+bundleItemsList?.addEventListener("change", () => {
+  const selectedIds = getSelectedBundleItemIds();
+  const currentPrimary = bundlePrimarySelect?.value ? Number(bundlePrimarySelect.value) : null;
+  syncBundlePrimaryOptions(selectedIds, currentPrimary);
+});
+
+bundleForm?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  const selectedIds = getSelectedBundleItemIds();
+  if (!selectedIds.length) {
+    companyMeta.textContent = "Select at least one asset for the bundle.";
+    return;
+  }
+  const payload = {
+    companyId: activeCompanyId,
+    name: bundleNameInput?.value || "",
+    primaryEquipmentId: bundlePrimarySelect?.value ? Number(bundlePrimarySelect.value) : selectedIds[0],
+    equipmentIds: selectedIds,
+    dailyRate: bundleDailyRateInput?.value || null,
+    weeklyRate: bundleWeeklyRateInput?.value || null,
+    monthlyRate: bundleMonthlyRateInput?.value || null,
+  };
+  try {
+    const res = await fetch(editingBundleId ? `/api/equipment-bundles/${editingBundleId}` : "/api/equipment-bundles", {
+      method: editingBundleId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to save bundle.");
+    await loadBundles();
+    await loadEquipment();
+    if (editingEquipmentId) {
+      const item = equipmentCache.find((eq) => String(eq.id) === String(editingEquipmentId));
+      if (item) setBundleControls(item);
+    }
+    closeBundleModal();
+    companyMeta.textContent = "Bundle saved.";
+  } catch (err) {
+    companyMeta.textContent = err?.message || String(err);
+  }
+});
+
+deleteBundleBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!editingBundleId || !activeCompanyId) return;
+  try {
+    const res = await fetch(`/api/equipment-bundles/${editingBundleId}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyId: activeCompanyId }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || "Unable to delete bundle.");
+    }
+    await loadBundles();
+    await loadEquipment();
+    if (editingEquipmentId) {
+      const item = equipmentCache.find((eq) => String(eq.id) === String(editingEquipmentId));
+      if (item) setBundleControls(item);
+    }
+    closeBundleModal();
+    companyMeta.textContent = "Bundle deleted.";
+  } catch (err) {
+    companyMeta.textContent = err?.message || String(err);
+  }
 });
 
 openEquipmentLocationHistoryBtn?.addEventListener("click", (e) => {
@@ -1906,6 +2142,7 @@ function startEditEquipment(item) {
     equipmentExtrasSubtitle.textContent = label ? `Unit: ${label}` : "";
   }
 
+  setBundleControls(item);
   if (equipmentFormTitle) equipmentFormTitle.textContent = "Edit equipment";
 }
 

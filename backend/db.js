@@ -503,6 +503,35 @@ async function ensureTables() {
     await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS current_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL;`);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS equipment_bundles (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        primary_equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
+        daily_rate NUMERIC(12, 2),
+        weekly_rate NUMERIC(12, 2),
+        monthly_rate NUMERIC(12, 2),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(company_id, name)
+      );
+    `);
+    await client.query(`ALTER TABLE equipment_bundles ADD COLUMN IF NOT EXISTS primary_equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE equipment_bundles ADD COLUMN IF NOT EXISTS daily_rate NUMERIC(12, 2);`);
+    await client.query(`ALTER TABLE equipment_bundles ADD COLUMN IF NOT EXISTS weekly_rate NUMERIC(12, 2);`);
+    await client.query(`ALTER TABLE equipment_bundles ADD COLUMN IF NOT EXISTS monthly_rate NUMERIC(12, 2);`);
+    await client.query(`ALTER TABLE equipment_bundles ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS equipment_bundle_items (
+        bundle_id INTEGER NOT NULL REFERENCES equipment_bundles(id) ON DELETE CASCADE,
+        equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+        PRIMARY KEY (bundle_id, equipment_id),
+        UNIQUE (equipment_id)
+      );
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS purchase_orders (
         id SERIAL PRIMARY KEY,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -696,8 +725,10 @@ async function ensureTables() {
     await client.query(`ALTER TABLE rental_order_line_items ADD COLUMN IF NOT EXISTS line_amount NUMERIC(12, 2);`);
     await client.query(`ALTER TABLE rental_order_line_items ADD COLUMN IF NOT EXISTS fulfilled_at TIMESTAMPTZ;`);
     await client.query(`ALTER TABLE rental_order_line_items ADD COLUMN IF NOT EXISTS returned_at TIMESTAMPTZ;`);
+    await client.query(`ALTER TABLE rental_order_line_items ADD COLUMN IF NOT EXISTS bundle_id INTEGER REFERENCES equipment_bundles(id) ON DELETE SET NULL;`);
     await client.query(`CREATE INDEX IF NOT EXISTS rental_order_line_items_order_id_idx ON rental_order_line_items (rental_order_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS rental_order_line_items_type_id_idx ON rental_order_line_items (type_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS rental_order_line_items_bundle_id_idx ON rental_order_line_items (bundle_id);`);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS rental_order_line_inventory (
@@ -4150,6 +4181,9 @@ async function listEquipment(companyId) {
            cl.longitude AS current_location_longitude,
            e.type_id,
            e.notes,
+           eb.id AS bundle_id,
+           eb.name AS bundle_name,
+           eb.primary_equipment_id AS bundle_primary_equipment_id,
            CASE
              WHEN COALESCE(av.has_overdue, FALSE) THEN 'Overdue'
              WHEN COALESCE(av.has_ordered, FALSE) THEN 'Rented out'
@@ -4169,6 +4203,8 @@ async function listEquipment(companyId) {
     LEFT JOIN locations l ON e.location_id = l.id
     LEFT JOIN locations cl ON e.current_location_id = cl.id
     LEFT JOIN equipment_types et ON e.type_id = et.id
+    LEFT JOIN equipment_bundle_items ebi ON ebi.equipment_id = e.id
+    LEFT JOIN equipment_bundles eb ON eb.id = ebi.bundle_id
     LEFT JOIN LATERAL (
       SELECT
         BOOL_OR(
@@ -4307,6 +4343,16 @@ async function updateEquipment({
 async function deleteEquipment({ id, companyId }) {
   await pool.query(`DELETE FROM rental_order_line_inventory WHERE equipment_id = $1`, [id]);
   await pool.query(`DELETE FROM equipment WHERE id = $1 AND company_id = $2`, [id, companyId]);
+  await pool.query(
+    `
+    DELETE FROM equipment_bundles b
+     WHERE b.company_id = $1
+       AND NOT EXISTS (
+         SELECT 1 FROM equipment_bundle_items bi WHERE bi.bundle_id = b.id
+       )
+    `,
+    [companyId]
+  );
 }
 
 async function purgeEquipmentForCompany({ companyId }) {
@@ -4327,6 +4373,237 @@ async function purgeEquipmentForCompany({ companyId }) {
     await pool.query("ROLLBACK");
     throw err;
   }
+}
+
+function normalizeEquipmentIds(input) {
+  const ids = Array.isArray(input) ? input.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : [];
+  return Array.from(new Set(ids));
+}
+
+async function listEquipmentBundles(companyId) {
+  const result = await pool.query(
+    `
+    SELECT b.id,
+           b.name,
+           b.primary_equipment_id,
+           b.daily_rate,
+           b.weekly_rate,
+           b.monthly_rate,
+           pe.type_id AS primary_type_id,
+           et.name AS primary_type_name,
+           et.daily_rate AS type_daily_rate,
+           et.weekly_rate AS type_weekly_rate,
+           et.monthly_rate AS type_monthly_rate,
+           COUNT(bi.equipment_id) AS item_count
+      FROM equipment_bundles b
+ LEFT JOIN equipment pe ON pe.id = b.primary_equipment_id
+ LEFT JOIN equipment_types et ON et.id = pe.type_id
+ LEFT JOIN equipment_bundle_items bi ON bi.bundle_id = b.id
+     WHERE b.company_id = $1
+     GROUP BY b.id, pe.type_id, et.name, et.daily_rate, et.weekly_rate, et.monthly_rate
+     ORDER BY b.name ASC
+    `,
+    [companyId]
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    primaryEquipmentId: row.primary_equipment_id === null ? null : Number(row.primary_equipment_id),
+    primaryTypeId: row.primary_type_id === null || row.primary_type_id === undefined ? null : Number(row.primary_type_id),
+    primaryTypeName: row.primary_type_name || null,
+    dailyRate: row.daily_rate === null || row.daily_rate === undefined ? (row.type_daily_rate ?? null) : Number(row.daily_rate),
+    weeklyRate: row.weekly_rate === null || row.weekly_rate === undefined ? (row.type_weekly_rate ?? null) : Number(row.weekly_rate),
+    monthlyRate: row.monthly_rate === null || row.monthly_rate === undefined ? (row.type_monthly_rate ?? null) : Number(row.monthly_rate),
+    itemCount: Number(row.item_count || 0),
+  }));
+}
+
+async function getEquipmentBundle({ companyId, id }) {
+  const headerRes = await pool.query(
+    `
+    SELECT b.id,
+           b.name,
+           b.primary_equipment_id,
+           b.daily_rate,
+           b.weekly_rate,
+           b.monthly_rate,
+           pe.type_id AS primary_type_id,
+           et.name AS primary_type_name,
+           et.daily_rate AS type_daily_rate,
+           et.weekly_rate AS type_weekly_rate,
+           et.monthly_rate AS type_monthly_rate
+      FROM equipment_bundles b
+ LEFT JOIN equipment pe ON pe.id = b.primary_equipment_id
+ LEFT JOIN equipment_types et ON et.id = pe.type_id
+     WHERE b.company_id = $1 AND b.id = $2
+     LIMIT 1
+    `,
+    [companyId, id]
+  );
+  const bundle = headerRes.rows[0];
+  if (!bundle) return null;
+
+  const itemsRes = await pool.query(
+    `
+    SELECT e.id,
+           e.serial_number,
+           e.model_name,
+           e.type_id,
+           COALESCE(et.name, e.type) AS type_name
+      FROM equipment_bundle_items bi
+      JOIN equipment e ON e.id = bi.equipment_id
+ LEFT JOIN equipment_types et ON et.id = e.type_id
+     WHERE bi.bundle_id = $1
+     ORDER BY e.serial_number
+    `,
+    [id]
+  );
+
+  return {
+    id: bundle.id,
+    name: bundle.name,
+    primaryEquipmentId: bundle.primary_equipment_id === null ? null : Number(bundle.primary_equipment_id),
+    primaryTypeId: bundle.primary_type_id === null || bundle.primary_type_id === undefined ? null : Number(bundle.primary_type_id),
+    primaryTypeName: bundle.primary_type_name || null,
+    dailyRate: bundle.daily_rate === null || bundle.daily_rate === undefined ? (bundle.type_daily_rate ?? null) : Number(bundle.daily_rate),
+    weeklyRate: bundle.weekly_rate === null || bundle.weekly_rate === undefined ? (bundle.type_weekly_rate ?? null) : Number(bundle.weekly_rate),
+    monthlyRate: bundle.monthly_rate === null || bundle.monthly_rate === undefined ? (bundle.type_monthly_rate ?? null) : Number(bundle.monthly_rate),
+    items: itemsRes.rows.map((row) => ({
+      id: row.id,
+      serialNumber: row.serial_number || "",
+      modelName: row.model_name || "",
+      typeId: row.type_id === null || row.type_id === undefined ? null : Number(row.type_id),
+      typeName: row.type_name || "",
+    })),
+  };
+}
+
+async function createEquipmentBundle({
+  companyId,
+  name,
+  primaryEquipmentId,
+  equipmentIds,
+  dailyRate = null,
+  weeklyRate = null,
+  monthlyRate = null,
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const ids = normalizeEquipmentIds(equipmentIds);
+    if (!ids.length) throw new Error("Bundle must include at least one equipment.");
+    const primaryId = Number(primaryEquipmentId);
+    const effectivePrimaryId = ids.includes(primaryId) ? primaryId : ids[0];
+
+    const ownedRes = await client.query(
+      `SELECT id FROM equipment WHERE company_id = $1 AND id = ANY($2::int[])`,
+      [companyId, ids]
+    );
+    if (ownedRes.rows.length !== ids.length) throw new Error("One or more equipment items are missing.");
+
+    const conflictRes = await client.query(
+      `SELECT equipment_id FROM equipment_bundle_items WHERE equipment_id = ANY($1::int[])`,
+      [ids]
+    );
+    if (conflictRes.rows.length) throw new Error("One or more equipment items already belong to another bundle.");
+
+    const headerRes = await client.query(
+      `
+      INSERT INTO equipment_bundles
+        (company_id, name, primary_equipment_id, daily_rate, weekly_rate, monthly_rate, created_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,NOW(),NOW())
+      RETURNING id
+      `,
+      [companyId, String(name || "").trim(), effectivePrimaryId, dailyRate, weeklyRate, monthlyRate]
+    );
+    const bundleId = Number(headerRes.rows[0].id);
+
+    for (const equipmentId of ids) {
+      await client.query(
+        `INSERT INTO equipment_bundle_items (bundle_id, equipment_id) VALUES ($1,$2)`,
+        [bundleId, equipmentId]
+      );
+    }
+
+    await client.query("COMMIT");
+    return { id: bundleId };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function updateEquipmentBundle({
+  id,
+  companyId,
+  name,
+  primaryEquipmentId,
+  equipmentIds,
+  dailyRate = null,
+  weeklyRate = null,
+  monthlyRate = null,
+}) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const ids = normalizeEquipmentIds(equipmentIds);
+    if (!ids.length) throw new Error("Bundle must include at least one equipment.");
+    const primaryId = Number(primaryEquipmentId);
+    const effectivePrimaryId = ids.includes(primaryId) ? primaryId : ids[0];
+
+    const ownedRes = await client.query(
+      `SELECT id FROM equipment WHERE company_id = $1 AND id = ANY($2::int[])`,
+      [companyId, ids]
+    );
+    if (ownedRes.rows.length !== ids.length) throw new Error("One or more equipment items are missing.");
+
+    const conflictRes = await client.query(
+      `SELECT equipment_id FROM equipment_bundle_items WHERE equipment_id = ANY($1::int[]) AND bundle_id <> $2`,
+      [ids, id]
+    );
+    if (conflictRes.rows.length) throw new Error("One or more equipment items already belong to another bundle.");
+
+    const updateRes = await client.query(
+      `
+      UPDATE equipment_bundles
+         SET name = $1,
+             primary_equipment_id = $2,
+             daily_rate = $3,
+             weekly_rate = $4,
+             monthly_rate = $5,
+             updated_at = NOW()
+       WHERE id = $6 AND company_id = $7
+       RETURNING id
+      `,
+      [String(name || "").trim(), effectivePrimaryId, dailyRate, weeklyRate, monthlyRate, id, companyId]
+    );
+    if (!updateRes.rows[0]) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+
+    await client.query(`DELETE FROM equipment_bundle_items WHERE bundle_id = $1`, [id]);
+    for (const equipmentId of ids) {
+      await client.query(
+        `INSERT INTO equipment_bundle_items (bundle_id, equipment_id) VALUES ($1,$2)`,
+        [id, equipmentId]
+      );
+    }
+
+    await client.query("COMMIT");
+    return { id: Number(id) };
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function deleteEquipmentBundle({ id, companyId }) {
+  await pool.query(`DELETE FROM equipment_bundles WHERE id = $1 AND company_id = $2`, [id, companyId]);
 }
 
 async function listVendors(companyId) {
@@ -10766,10 +11043,12 @@ async function getRentalOrder({ companyId, id }) {
     SELECT li.id, li.type_id, et.name AS type_name, li.start_at, li.end_at,
            li.fulfilled_at, li.returned_at,
            li.rate_basis, li.rate_amount, li.billable_units, li.line_amount,
+           li.bundle_id, b.name AS bundle_name,
            cond.before_notes, cond.after_notes, cond.before_images, cond.after_images,
            cond.pause_periods, cond.ai_report_markdown, cond.ai_report_generated_at
       FROM rental_order_line_items li
       JOIN equipment_types et ON et.id = li.type_id
+ LEFT JOIN equipment_bundles b ON b.id = li.bundle_id
  LEFT JOIN rental_order_line_conditions cond ON cond.line_item_id = li.id
      WHERE li.rental_order_id = $1
      ORDER BY li.id
@@ -10788,6 +11067,9 @@ async function getRentalOrder({ companyId, id }) {
     rateAmount: r.rate_amount === null || r.rate_amount === undefined ? null : Number(r.rate_amount),
     billableUnits: r.billable_units === null || r.billable_units === undefined ? null : Number(r.billable_units),
     lineAmount: r.line_amount === null || r.line_amount === undefined ? null : Number(r.line_amount),
+    bundleId: r.bundle_id === null || r.bundle_id === undefined ? null : Number(r.bundle_id),
+    bundleName: r.bundle_name || null,
+    bundleItems: [],
     inventoryIds: [],
     inventoryDetails: [],
     beforeNotes: r.before_notes || "",
@@ -10829,6 +11111,40 @@ async function getRentalOrder({ companyId, id }) {
       location: r.location || "",
     });
   });
+
+  const bundleIds = Array.from(new Set(lineItems.map((li) => li.bundleId).filter((id) => Number.isFinite(id))));
+  if (bundleIds.length) {
+    const bundleItemsRes = await pool.query(
+      `
+      SELECT bi.bundle_id,
+             e.id,
+             e.serial_number,
+             e.model_name,
+             COALESCE(et.name, e.type) AS type_name
+        FROM equipment_bundle_items bi
+        JOIN equipment e ON e.id = bi.equipment_id
+   LEFT JOIN equipment_types et ON et.id = e.type_id
+       WHERE bi.bundle_id = ANY($1::int[])
+       ORDER BY bi.bundle_id, e.serial_number
+      `,
+      [bundleIds]
+    );
+    const bundleMap = new Map();
+    bundleItemsRes.rows.forEach((row) => {
+      const key = String(row.bundle_id);
+      if (!bundleMap.has(key)) bundleMap.set(key, []);
+      bundleMap.get(key).push({
+        id: row.id,
+        serialNumber: row.serial_number || "",
+        modelName: row.model_name || "",
+        typeName: row.type_name || "",
+      });
+    });
+    lineItems.forEach((li) => {
+      if (!li.bundleId) return;
+      li.bundleItems = bundleMap.get(String(li.bundleId)) || [];
+    });
+  }
 
   const feesRes = await pool.query(
     `
@@ -10906,6 +11222,37 @@ async function createRentalOrder({
     const quoteNumber = isQuoteStatus(normalizedStatus) ? await nextDocumentNumber(client, companyId, "QO", effectiveDate) : null;
     const roNumber = !isQuoteStatus(normalizedStatus) ? await nextDocumentNumber(client, companyId, "RO", effectiveDate) : null;
     const createdIso = normalizeTimestamptz(createdAt) || null;
+    const bundleCache = new Map();
+    const getBundleData = async (bundleId) => {
+      const key = String(bundleId);
+      if (bundleCache.has(key)) return bundleCache.get(key);
+      const headerRes = await client.query(
+        `
+        SELECT b.id,
+               b.primary_equipment_id,
+               pe.type_id AS primary_type_id
+          FROM equipment_bundles b
+     LEFT JOIN equipment pe ON pe.id = b.primary_equipment_id
+         WHERE b.company_id = $1 AND b.id = $2
+         LIMIT 1
+        `,
+        [companyId, bundleId]
+      );
+      const row = headerRes.rows[0];
+      if (!row) throw new Error("Bundle not found.");
+      const itemsRes = await client.query(
+        `SELECT equipment_id FROM equipment_bundle_items WHERE bundle_id = $1 ORDER BY equipment_id`,
+        [bundleId]
+      );
+      const data = {
+        id: Number(row.id),
+        primaryEquipmentId: row.primary_equipment_id === null ? null : Number(row.primary_equipment_id),
+        primaryTypeId: row.primary_type_id === null || row.primary_type_id === undefined ? null : Number(row.primary_type_id),
+        equipmentIds: itemsRes.rows.map((r) => Number(r.equipment_id)).filter((v) => Number.isFinite(v)),
+      };
+      bundleCache.set(key, data);
+      return data;
+    };
     const headerRes = await client.query(
       `
       INSERT INTO rental_orders
@@ -10944,7 +11291,10 @@ async function createRentalOrder({
     for (const item of lineItems || []) {
       const startAt = normalizeTimestamptz(item.startAt);
       const endAt = normalizeTimestamptz(item.endAt);
-      if (!item.typeId || !startAt || !endAt) continue;
+      const bundleId = item.bundleId ? Number(item.bundleId) : null;
+      const bundleData = Number.isFinite(bundleId) ? await getBundleData(bundleId) : null;
+      const effectiveTypeId = bundleData?.primaryTypeId || item.typeId;
+      if (!effectiveTypeId || !startAt || !endAt) continue;
       const rateBasis = normalizeRateBasis(item.rateBasis);
       const rateAmount = item.rateAmount === "" || item.rateAmount === null || item.rateAmount === undefined ? null : Number(item.rateAmount);
       const billableUnitsOverride =
@@ -10959,9 +11309,16 @@ async function createRentalOrder({
       const returnedAt = fulfilledAt ? normalizeTimestamptz(item.returnedAt) || null : null;
       const pausePeriods = normalizePausePeriods(item.pausePeriods);
       const rawInventoryIds = Array.isArray(item.inventoryIds) ? item.inventoryIds : [];
-      const inventoryIds = allowsInventory ? rawInventoryIds : [];
-      const qty = inventoryIds.length;
-      const effectiveQty = qty || (demandOnly ? 1 : 0);
+      const inventoryIds = allowsInventory
+        ? bundleData
+          ? bundleData.equipmentIds
+          : rawInventoryIds
+        : [];
+      if (bundleData && allowsInventory && !inventoryIds.length) {
+        throw new Error("Bundle has no equipment assigned.");
+      }
+      const qty = bundleData ? 1 : inventoryIds.length;
+      const effectiveQty = bundleData ? 1 : (qty || (demandOnly ? 1 : 0));
       const computedUnits = computeBillableUnits({
         startAt,
         endAt,
@@ -10979,11 +11336,12 @@ async function createRentalOrder({
             ? Number((rateAmount * billableUnits * effectiveQty).toFixed(2))
             : null;
       const liRes = await client.query(
-        `INSERT INTO rental_order_line_items (rental_order_id, type_id, start_at, end_at, fulfilled_at, returned_at, rate_basis, rate_amount, billable_units, line_amount)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+        `INSERT INTO rental_order_line_items (rental_order_id, type_id, bundle_id, start_at, end_at, fulfilled_at, returned_at, rate_basis, rate_amount, billable_units, line_amount)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
         [
           orderId,
-          item.typeId,
+          effectiveTypeId,
+          bundleData ? bundleData.id : null,
           startAt,
           endAt,
           fulfilledAt,
@@ -12468,6 +12826,37 @@ async function updateRentalOrder({
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
+    const bundleCache = new Map();
+    const getBundleData = async (bundleId) => {
+      const key = String(bundleId);
+      if (bundleCache.has(key)) return bundleCache.get(key);
+      const headerRes = await client.query(
+        `
+        SELECT b.id,
+               b.primary_equipment_id,
+               pe.type_id AS primary_type_id
+          FROM equipment_bundles b
+     LEFT JOIN equipment pe ON pe.id = b.primary_equipment_id
+         WHERE b.company_id = $1 AND b.id = $2
+         LIMIT 1
+        `,
+        [companyId, bundleId]
+      );
+      const row = headerRes.rows[0];
+      if (!row) throw new Error("Bundle not found.");
+      const itemsRes = await client.query(
+        `SELECT equipment_id FROM equipment_bundle_items WHERE bundle_id = $1 ORDER BY equipment_id`,
+        [bundleId]
+      );
+      const data = {
+        id: Number(row.id),
+        primaryEquipmentId: row.primary_equipment_id === null ? null : Number(row.primary_equipment_id),
+        primaryTypeId: row.primary_type_id === null || row.primary_type_id === undefined ? null : Number(row.primary_type_id),
+        equipmentIds: itemsRes.rows.map((r) => Number(r.equipment_id)).filter((v) => Number.isFinite(v)),
+      };
+      bundleCache.set(key, data);
+      return data;
+    };
     const existingRes = await client.query(
       `SELECT quote_number, ro_number, status, customer_id, pickup_location_id, salesperson_id, fulfillment_method
          FROM rental_orders
@@ -12546,16 +12935,26 @@ async function updateRentalOrder({
     for (const item of lineItems || []) {
       const startAt = normalizeTimestamptz(item.startAt);
       const endAt = normalizeTimestamptz(item.endAt);
-      if (!item.typeId || !startAt || !endAt) continue;
+      const bundleId = item.bundleId ? Number(item.bundleId) : null;
+      const bundleData = Number.isFinite(bundleId) ? await getBundleData(bundleId) : null;
+      const effectiveTypeId = bundleData?.primaryTypeId || item.typeId;
+      if (!effectiveTypeId || !startAt || !endAt) continue;
       const rateBasis = normalizeRateBasis(item.rateBasis);
       const rateAmount = item.rateAmount === "" || item.rateAmount === null || item.rateAmount === undefined ? null : Number(item.rateAmount);
       const fulfilledAt = normalizeTimestamptz(item.fulfilledAt) || null;
       const returnedAt = fulfilledAt ? normalizeTimestamptz(item.returnedAt) || null : null;
       const pausePeriods = normalizePausePeriods(item.pausePeriods);
       const rawInventoryIds = Array.isArray(item.inventoryIds) ? item.inventoryIds : [];
-      const inventoryIds = allowsInventory ? rawInventoryIds : [];
-      const qty = inventoryIds.length;
-      const effectiveQty = qty || (demandOnly ? 1 : 0);
+      const inventoryIds = allowsInventory
+        ? bundleData
+          ? bundleData.equipmentIds
+          : rawInventoryIds
+        : [];
+      if (bundleData && allowsInventory && !inventoryIds.length) {
+        throw new Error("Bundle has no equipment assigned.");
+      }
+      const qty = bundleData ? 1 : inventoryIds.length;
+      const effectiveQty = bundleData ? 1 : (qty || (demandOnly ? 1 : 0));
       const billableUnits = computeBillableUnits({
         startAt,
         endAt,
@@ -12569,11 +12968,12 @@ async function updateRentalOrder({
           ? Number((rateAmount * billableUnits * effectiveQty).toFixed(2))
           : null;
       const liRes = await client.query(
-        `INSERT INTO rental_order_line_items (rental_order_id, type_id, start_at, end_at, fulfilled_at, returned_at, rate_basis, rate_amount, billable_units, line_amount)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+        `INSERT INTO rental_order_line_items (rental_order_id, type_id, bundle_id, start_at, end_at, fulfilled_at, returned_at, rate_basis, rate_amount, billable_units, line_amount)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
         [
           id,
-          item.typeId,
+          effectiveTypeId,
+          bundleData ? bundleData.id : null,
           startAt,
           endAt,
           fulfilledAt,
@@ -13105,6 +13505,64 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
   return result.rows;
 }
 
+async function getBundleAvailability({ companyId, bundleId, startAt, endAt, excludeOrderId }) {
+  const start = normalizeTimestamptz(startAt);
+  const end = normalizeTimestamptz(endAt);
+  if (!start || !end) return { available: false, items: [] };
+
+  const itemsRes = await pool.query(
+    `
+    SELECT e.id,
+           e.serial_number,
+           e.model_name,
+           COALESCE(et.name, e.type) AS type_name
+      FROM equipment_bundle_items bi
+      JOIN equipment e ON e.id = bi.equipment_id
+ LEFT JOIN equipment_types et ON et.id = e.type_id
+     WHERE bi.bundle_id = $1
+       AND e.company_id = $2
+     ORDER BY e.serial_number
+    `,
+    [bundleId, companyId]
+  );
+  const items = itemsRes.rows.map((row) => ({
+    id: row.id,
+    serialNumber: row.serial_number || "",
+    modelName: row.model_name || "",
+    typeName: row.type_name || "",
+  }));
+  if (!items.length) return { available: false, items };
+
+  const equipmentIds = items.map((row) => row.id);
+  const params = [companyId, equipmentIds, start, end];
+  let excludeSql = "";
+  if (excludeOrderId) {
+    params.push(excludeOrderId);
+    excludeSql = "AND ro.id <> $5";
+  }
+
+  const conflictRes = await pool.query(
+    `
+    SELECT COUNT(*)::int AS conflicts
+      FROM rental_order_line_inventory liv
+      JOIN rental_order_line_items li ON li.id = liv.line_item_id
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+     WHERE liv.equipment_id = ANY($2::int[])
+       AND ro.company_id = $1
+       AND ro.status IN ('requested', 'reservation', 'ordered')
+       ${excludeSql}
+       AND tstzrange(
+         COALESCE(li.fulfilled_at, li.start_at),
+         COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
+         '[)'
+       ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
+    `,
+    params
+  );
+  const conflicts = Number(conflictRes.rows?.[0]?.conflicts || 0);
+  return { available: conflicts === 0, items };
+}
+
 async function getTypeDemandAvailability({ companyId, typeId, startAt, endAt, excludeOrderId }) {
   const start = normalizeTimestamptz(startAt);
   const end = normalizeTimestamptz(endAt);
@@ -13120,7 +13578,11 @@ async function getTypeDemandAvailability({ companyId, typeId, startAt, endAt, ex
   const demandRes = await pool.query(
     `
     SELECT li.id,
-           CASE WHEN COUNT(liv.equipment_id) > 0 THEN COUNT(liv.equipment_id) ELSE 1 END AS qty
+           CASE
+             WHEN li.bundle_id IS NOT NULL THEN 1
+             WHEN COUNT(liv.equipment_id) > 0 THEN COUNT(liv.equipment_id)
+             ELSE 1
+           END AS qty
       FROM rental_order_line_items li
       JOIN rental_orders ro ON ro.id = li.rental_order_id
  LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
@@ -14641,6 +15103,11 @@ module.exports = {
   updateEquipment,
   deleteEquipment,
   purgeEquipmentForCompany,
+  listEquipmentBundles,
+  getEquipmentBundle,
+  createEquipmentBundle,
+  updateEquipmentBundle,
+  deleteEquipmentBundle,
   listCategories,
   createCategory,
   listTypes,
@@ -14697,6 +15164,7 @@ module.exports = {
   getCustomerStorefrontExtras,
   listRentalOrderAudits,
   listAvailableInventory,
+  getBundleAvailability,
   getTypeDemandAvailability,
   listStorefrontListings,
   createStorefrontCustomer,

@@ -3648,6 +3648,15 @@ body.drawer-open {
   margin-top: 2px;
 }
 
+.bundle-panel {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: #f8fafc;
+  display: grid;
+  gap: 8px;
+}
+
 .thumb-row {
   display: flex;
   flex-wrap: wrap;

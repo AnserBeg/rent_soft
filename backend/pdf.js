@@ -542,23 +542,30 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
     const y = doc.y;
     const fill = idx % 2 === 0 ? "#f8fafc" : "#ffffff";
     drawBox(doc, { x: tableX, y, w: tableW, h: 44, border: "#e2e8f0", fill });
-    doc.fillColor("#111").font("Helvetica-Bold").fontSize(9).text(li.typeName || "Item", tableX + 8, y + 6, { width: outW - 16 });
+    const title = li.bundleName ? `Bundle: ${li.bundleName}` : li.typeName || "Item";
+    doc.fillColor("#111").font("Helvetica-Bold").fontSize(9).text(title, tableX + 8, y + 6, { width: outW - 16 });
 
     const rate = li.rateAmount === null || li.rateAmount === undefined ? "--" : fmtMoney(li.rateAmount);
-    const qty = Array.isArray(li.inventoryIds) && li.inventoryIds.length
-      ? li.inventoryIds.length
-      : isDemandOnlyStatus(order?.status)
-        ? 1
-        : 0;
+    const qty = li.bundleId
+      ? 1
+      : Array.isArray(li.inventoryIds) && li.inventoryIds.length
+        ? li.inventoryIds.length
+        : isDemandOnlyStatus(order?.status)
+          ? 1
+          : 0;
     const lineTotal = li.lineAmount === null || li.lineAmount === undefined ? "--" : fmtMoney(li.lineAmount);
     doc.fillColor("#111").font("Helvetica").fontSize(9);
     doc.text(rate, tableX + outW, y + 6, { width: rateW, align: "right" });
     doc.text(String(qty), tableX + outW + rateW, y + 6, { width: qtyW, align: "right" });
     doc.text(lineTotal, tableX + outW + rateW + qtyW, y + 6, { width: totW - 8, align: "right" });
 
-    const inv = Array.isArray(li.inventoryDetails) ? li.inventoryDetails : [];
+    const inv = Array.isArray(li.bundleItems) && li.bundleItems.length
+      ? li.bundleItems
+      : Array.isArray(li.inventoryDetails)
+        ? li.inventoryDetails
+        : [];
     const invText = inv
-      .map((it) => [safeText(it.serial_number), safeText(it.model_name)].filter(Boolean).join(" "))
+      .map((it) => [safeText(it.serialNumber || it.serial_number), safeText(it.modelName || it.model_name)].filter(Boolean).join(" "))
       .filter(Boolean)
       .slice(0, 6)
       .join(", ");

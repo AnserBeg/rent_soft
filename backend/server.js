@@ -43,6 +43,11 @@ const {
   updateEquipment,
   deleteEquipment,
   purgeEquipmentForCompany,
+  listEquipmentBundles,
+  getEquipmentBundle,
+  createEquipmentBundle,
+  updateEquipmentBundle,
+  deleteEquipmentBundle,
   listCategories,
   createCategory,
   listTypes,
@@ -95,6 +100,7 @@ const {
   deleteCustomerDocument,
   getCustomerStorefrontExtras,
   listAvailableInventory,
+  getBundleAvailability,
   getTypeDemandAvailability,
   listStorefrontListings,
   createStorefrontCustomer,
@@ -3601,9 +3607,19 @@ app.post(
 app.get(
   "/api/rental-orders/availability",
   asyncHandler(async (req, res) => {
-    const { companyId, typeId, startAt, endAt, excludeOrderId } = req.query;
-    if (!companyId || !typeId || !startAt || !endAt) {
-      return res.status(400).json({ error: "companyId, typeId, startAt, and endAt are required." });
+    const { companyId, typeId, bundleId, startAt, endAt, excludeOrderId } = req.query;
+    if (!companyId || !startAt || !endAt || (!typeId && !bundleId)) {
+      return res.status(400).json({ error: "companyId, startAt, endAt, and (typeId or bundleId) are required." });
+    }
+    if (bundleId) {
+      const bundle = await getBundleAvailability({
+        companyId: Number(companyId),
+        bundleId: Number(bundleId),
+        startAt,
+        endAt,
+        excludeOrderId: excludeOrderId ? Number(excludeOrderId) : null,
+      });
+      return res.json({ bundleAvailable: bundle.available, bundleItems: bundle.items });
     }
     const available = await listAvailableInventory({
       companyId,
@@ -4763,6 +4779,100 @@ app.delete(
     const { companyId } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     await deletePurchaseOrder({ id, companyId });
+    res.status(204).end();
+  })
+);
+
+app.get(
+  "/api/equipment-bundles",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.query;
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const bundles = await listEquipmentBundles(Number(companyId));
+    res.json({ bundles });
+  })
+);
+
+app.get(
+  "/api/equipment-bundles/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.query;
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const bundle = await getEquipmentBundle({ companyId: Number(companyId), id: Number(id) });
+    if (!bundle) return res.status(404).json({ error: "Bundle not found." });
+    res.json(bundle);
+  })
+);
+
+app.post(
+  "/api/equipment-bundles",
+  asyncHandler(async (req, res) => {
+    const { companyId, name, primaryEquipmentId, equipmentIds, dailyRate, weeklyRate, monthlyRate } = req.body || {};
+    if (!companyId || !String(name || "").trim()) {
+      return res.status(400).json({ error: "companyId and name are required." });
+    }
+    const result = await createEquipmentBundle({
+      companyId: Number(companyId),
+      name: String(name || "").trim(),
+      primaryEquipmentId: primaryEquipmentId ? Number(primaryEquipmentId) : null,
+      equipmentIds,
+      dailyRate:
+        dailyRate === "" || dailyRate === null || dailyRate === undefined || !Number.isFinite(Number(dailyRate))
+          ? null
+          : Number(dailyRate),
+      weeklyRate:
+        weeklyRate === "" || weeklyRate === null || weeklyRate === undefined || !Number.isFinite(Number(weeklyRate))
+          ? null
+          : Number(weeklyRate),
+      monthlyRate:
+        monthlyRate === "" || monthlyRate === null || monthlyRate === undefined || !Number.isFinite(Number(monthlyRate))
+          ? null
+          : Number(monthlyRate),
+    });
+    res.status(201).json(result);
+  })
+);
+
+app.put(
+  "/api/equipment-bundles/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId, name, primaryEquipmentId, equipmentIds, dailyRate, weeklyRate, monthlyRate } = req.body || {};
+    if (!companyId || !String(name || "").trim()) {
+      return res.status(400).json({ error: "companyId and name are required." });
+    }
+    const result = await updateEquipmentBundle({
+      id: Number(id),
+      companyId: Number(companyId),
+      name: String(name || "").trim(),
+      primaryEquipmentId: primaryEquipmentId ? Number(primaryEquipmentId) : null,
+      equipmentIds,
+      dailyRate:
+        dailyRate === "" || dailyRate === null || dailyRate === undefined || !Number.isFinite(Number(dailyRate))
+          ? null
+          : Number(dailyRate),
+      weeklyRate:
+        weeklyRate === "" || weeklyRate === null || weeklyRate === undefined || !Number.isFinite(Number(weeklyRate))
+          ? null
+          : Number(weeklyRate),
+      monthlyRate:
+        monthlyRate === "" || monthlyRate === null || monthlyRate === undefined || !Number.isFinite(Number(monthlyRate))
+          ? null
+          : Number(monthlyRate),
+    });
+    if (!result) return res.status(404).json({ error: "Bundle not found." });
+    res.json(result);
+  })
+);
+
+app.delete(
+  "/api/equipment-bundles/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    await deleteEquipmentBundle({ id: Number(id), companyId: Number(companyId) });
     res.status(204).end();
   })
 );
