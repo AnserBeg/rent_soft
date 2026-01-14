@@ -3658,6 +3658,29 @@ body.drawer-open {
   gap: 8px;
 }
 
+.save-banner {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  background: #ecfdf3;
+  border: 1px solid #86efac;
+  color: #14532d;
+  padding: 10px 14px;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  font-size: 14px;
+  z-index: 1200;
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  pointer-events: none;
+}
+
+.save-banner.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .thumb-row {
   display: flex;
   flex-wrap: wrap;

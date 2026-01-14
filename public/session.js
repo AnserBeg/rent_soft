@@ -96,6 +96,43 @@
     btn.addEventListener("click", () => logout({ redirectTo }));
   }
 
+  let saveBannerTimer = null;
+  function showSaveBanner(message = "Saved successfully.") {
+    let banner = document.getElementById("save-banner");
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "save-banner";
+      banner.className = "save-banner";
+      document.body.appendChild(banner);
+    }
+    banner.textContent = message;
+    banner.classList.add("show");
+    if (saveBannerTimer) clearTimeout(saveBannerTimer);
+    saveBannerTimer = setTimeout(() => {
+      banner.classList.remove("show");
+    }, 2200);
+  }
+
+  const nativeFetch = window.fetch?.bind(window);
+  if (nativeFetch) {
+    window.fetch = async (input, init = {}) => {
+      const req = input instanceof Request ? input : null;
+      const method = String((init && init.method) || (req && req.method) || "GET").toUpperCase();
+      const url = String((req && req.url) || input || "");
+      const res = await nativeFetch(input, init);
+      if (
+        res.ok &&
+        (method === "POST" || method === "PUT" || method === "PATCH") &&
+        url.includes("/api/") &&
+        !url.includes("/api/uploads") &&
+        !url.includes("/api/logout")
+      ) {
+        showSaveBanner();
+      }
+      return res;
+    };
+  }
+
   window.RentSoft = {
     getSession,
     setSession,
@@ -106,6 +143,7 @@
     requireAuth,
     refreshSession,
     mountLogoutButton,
+    showSaveBanner,
   };
 })();
 

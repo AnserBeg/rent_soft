@@ -3837,7 +3837,6 @@ saveOrderBtn.addEventListener("click", async (e) => {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to save rental order");
-    setCompanyMeta(editingOrderId ? "Rental order updated." : "Rental order created.");
     if (data?.quoteNumber !== undefined) draft.quoteNumber = data.quoteNumber || null;
     if (data?.roNumber !== undefined) draft.roNumber = data.roNumber || null;
     if (!editingOrderId && data?.id) {

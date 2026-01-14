@@ -148,6 +148,7 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+
 function setPendingSelectValue(selectEl, value) {
   if (!selectEl) return;
   const normalized = value === null || value === undefined || value === "" ? "" : String(value);
@@ -1639,7 +1640,6 @@ equipmentForm.addEventListener("submit", async (e) => {
     setEquipmentImageUrls([]);
     clearDeleteImageUrls();
     renderEquipmentImages();
-    companyMeta.textContent = editingEquipmentId ? "Equipment updated." : "Equipment added.";
     if (!isEquipmentFormPage) closeEquipmentModal();
     for (const url of deleteAfterSave) {
       await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
@@ -1955,7 +1955,6 @@ bundleForm?.addEventListener("submit", async (e) => {
       if (item) setBundleControls(item);
     }
     closeBundleModal();
-    companyMeta.textContent = "Bundle saved.";
   } catch (err) {
     companyMeta.textContent = err?.message || String(err);
   }
@@ -1981,7 +1980,6 @@ deleteBundleBtn?.addEventListener("click", async (e) => {
       if (item) setBundleControls(item);
     }
     closeBundleModal();
-    companyMeta.textContent = "Bundle deleted.";
   } catch (err) {
     companyMeta.textContent = err?.message || String(err);
   }
