@@ -137,11 +137,13 @@ const openFeesBtn = document.getElementById("open-fees");
 const feesEl = document.getElementById("fees");
 const feeTotalInlineEl = document.getElementById("fee-total-inline");
 const feeTotalModalEl = document.getElementById("fee-total-modal");
-const orderSubtotalEl = document.getElementById("order-subtotal");
-const orderGstEl = document.getElementById("order-gst");
-const orderTotalEl = document.getElementById("order-total");
-const ratePeriodTotalsEl = document.getElementById("rate-period-totals");
-const ratePeriodTotalsBodyEl = document.getElementById("rate-period-totals-body");
+const pricingRecurringLabelEl = document.getElementById("pricing-recurring-label");
+const pricingRecurringBodyEl = document.getElementById("pricing-recurring-body");
+const pricingContractLabelEl = document.getElementById("pricing-contract-label");
+const pricingContractDurationEl = document.getElementById("pricing-contract-duration");
+const pricingContractSubtotalEl = document.getElementById("pricing-contract-subtotal");
+const pricingContractGstEl = document.getElementById("pricing-contract-gst");
+const pricingContractTotalEl = document.getElementById("pricing-contract-total");
 
 const feesModal = document.getElementById("fees-modal");
 const closeFeesModalBtn = document.getElementById("close-fees-modal");
@@ -1961,49 +1963,148 @@ function rateBasisLabel(basis) {
   }
 }
 
-function updateRatePeriodTotals(periodSummaries) {
-  if (!ratePeriodTotalsEl || !ratePeriodTotalsBodyEl) return;
-  const basisOrder = ["daily", "weekly", "monthly"];
-  const activeBases = basisOrder.filter((basis) => (periodSummaries.get(basis)?.totalAmount || 0) > 0);
-  const hasMultipleBases = activeBases.length > 1;
-  const hasMultipleUnits = activeBases.some((basis) => (periodSummaries.get(basis)?.unitCount || 0) > 1);
-  const shouldShow = activeBases.length > 0 && (hasMultipleBases || hasMultipleUnits);
+function rateBasisRecurringLabel(basis) {
+  switch (basis) {
+    case "daily":
+      return "Per day (recurring)";
+    case "weekly":
+      return "Per week (recurring)";
+    case "monthly":
+      return "Per month (recurring)";
+    default:
+      return "Recurring (per period)";
+  }
+}
 
-  if (!shouldShow) {
-    ratePeriodTotalsEl.style.display = "none";
-    ratePeriodTotalsBodyEl.innerHTML = "";
+function rateBasisUnitSuffix(basis) {
+  switch (basis) {
+    case "daily":
+      return "day";
+    case "weekly":
+      return "week";
+    case "monthly":
+      return "month";
+    default:
+      return "period";
+  }
+}
+
+function contractDurationText(lineItems) {
+  let earliest = null;
+  let latest = null;
+  (lineItems || []).forEach((li) => {
+    const { startLocal, endLocal } = effectiveLineItemLocalPeriod(li);
+    const startAt = fromLocalInputValue(startLocal);
+    const endAt = fromLocalInputValue(endLocal);
+    if (!startAt || !endAt) return;
+    const startMs = Date.parse(startAt);
+    const endMs = Date.parse(endAt);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return;
+    if (earliest === null || startMs < earliest) earliest = startMs;
+    if (latest === null || endMs > latest) latest = endMs;
+  });
+  if (earliest === null || latest === null) return "";
+  const dayMs = 24 * 60 * 60 * 1000;
+  const days = Math.round((latest - earliest) / dayMs);
+  if (!Number.isFinite(days) || days <= 0) return "";
+  const startAt = new Date(earliest).toISOString();
+  const endAt = new Date(latest).toISOString();
+  const months = computeMonthlyUnits({
+    startAt,
+    endAt,
+    prorationMethod: monthlyProrationMethod,
+    roundingMode: "none",
+    roundingGranularity: "unit",
+    timeZone: billingTimeZone,
+  });
+  const monthsText = Number.isFinite(months) ? ` ~ ${months.toFixed(2)} months` : "";
+  return `(${days} days${monthsText})`;
+}
+
+function updatePricingSummary({ periodSummaries, lineItems, contractSubtotal, contractGst, contractTotal }) {
+  if (
+    !pricingRecurringLabelEl ||
+    !pricingRecurringBodyEl ||
+    !pricingContractSubtotalEl ||
+    !pricingContractGstEl ||
+    !pricingContractTotalEl
+  ) {
     return;
   }
+  const basisOrder = ["daily", "weekly", "monthly"];
+  const activeBases = basisOrder.filter((basis) => (periodSummaries.get(basis)?.totalAmount || 0) > 0);
+  if (activeBases.length === 1) {
+    const basis = activeBases[0];
+    const summary = periodSummaries.get(basis) || {};
+    const subtotal = Number.isFinite(summary.periodSubtotal) ? summary.periodSubtotal : 0;
+    const gst = subtotal * 0.05;
+    const total = subtotal + gst;
+    pricingRecurringLabelEl.textContent = rateBasisRecurringLabel(basis);
+    pricingRecurringBodyEl.innerHTML = `
+      <div class="totals-row">
+        <span class="hint">Subtotal</span>
+        <strong>${fmtMoney(subtotal)}</strong>
+      </div>
+      <div class="totals-row">
+        <span class="hint">GST (5%)</span>
+        <strong>${fmtMoney(gst)}</strong>
+      </div>
+      <div class="totals-row">
+        <span class="hint">Total / ${rateBasisUnitSuffix(basis)}</span>
+        <strong>${fmtMoney(total)}</strong>
+      </div>
+    `;
+  } else if (activeBases.length > 1) {
+    pricingRecurringLabelEl.textContent = "Recurring (per period)";
+    pricingRecurringBodyEl.innerHTML = activeBases
+      .map((basis) => {
+        const summary = periodSummaries.get(basis) || {};
+        const subtotal = Number.isFinite(summary.periodSubtotal) ? summary.periodSubtotal : 0;
+        const gst = subtotal * 0.05;
+        const total = subtotal + gst;
+        const label = rateBasisLabel(basis);
+        return `
+          <div class="totals-row">
+            <span class="hint">${label} subtotal</span>
+            <strong>${fmtMoney(subtotal)}</strong>
+          </div>
+          <div class="totals-row">
+            <span class="hint">${label} GST (5%)</span>
+            <strong>${fmtMoney(gst)}</strong>
+          </div>
+          <div class="totals-row">
+            <span class="hint">${label} total</span>
+            <strong>${fmtMoney(total)}</strong>
+          </div>
+        `;
+      })
+      .join("");
+  } else {
+    pricingRecurringLabelEl.textContent = "Recurring (per period)";
+    pricingRecurringBodyEl.innerHTML = `
+      <div class="totals-row">
+        <span class="hint">Subtotal</span>
+        <strong>${fmtMoney(0)}</strong>
+      </div>
+      <div class="totals-row">
+        <span class="hint">GST (5%)</span>
+        <strong>${fmtMoney(0)}</strong>
+      </div>
+      <div class="totals-row">
+        <span class="hint">Total / period</span>
+        <strong>${fmtMoney(0)}</strong>
+      </div>
+    `;
+  }
 
-  ratePeriodTotalsEl.style.display = "block";
-  ratePeriodTotalsBodyEl.innerHTML = activeBases
-    .map((basis) => {
-      const summary = periodSummaries.get(basis) || {};
-      const subtotal = Number.isFinite(summary.periodSubtotal) ? summary.periodSubtotal : 0;
-      const gst = subtotal * 0.05;
-      const total = subtotal + gst;
-      const label = rateBasisLabel(basis);
-      const unitSuffix = basis === "daily" ? "per day" : basis === "weekly" ? "per week" : "per month";
-      return `
-        <div class="totals-row">
-          <span class="hint">${label} subtotal (${unitSuffix})</span>
-          <strong>${fmtMoney(subtotal)}</strong>
-        </div>
-        <div class="totals-row">
-          <span class="hint">${label} GST (5%) (${unitSuffix})</span>
-          <strong>${fmtMoney(gst)}</strong>
-        </div>
-        <div class="totals-row">
-          <span class="hint">${label} total (${unitSuffix})</span>
-          <strong>${fmtMoney(total)}</strong>
-        </div>
-      `;
-    })
-    .join("");
+  if (pricingContractLabelEl) pricingContractLabelEl.textContent = "For this contract";
+  if (pricingContractDurationEl) pricingContractDurationEl.textContent = contractDurationText(lineItems);
+  pricingContractSubtotalEl.textContent = fmtMoney(contractSubtotal);
+  pricingContractGstEl.textContent = fmtMoney(contractGst);
+  pricingContractTotalEl.textContent = fmtMoney(contractTotal);
 }
 
 function updateOrderTotals() {
-  if (!orderSubtotalEl || !orderGstEl || !orderTotalEl) return;
   const feesTotal = (draft.fees || []).reduce((sum, f) => sum + moneyNumber(f.amount), 0);
   const periodSummaries = new Map();
   const lineSubtotal = (draft.lineItems || []).reduce((sum, li) => {
@@ -2039,10 +2140,13 @@ function updateOrderTotals() {
   const subtotal = lineSubtotal + feesTotal;
   const gst = subtotal * 0.05;
   const total = subtotal + gst;
-  orderSubtotalEl.textContent = fmtMoney(subtotal);
-  orderGstEl.textContent = fmtMoney(gst);
-  orderTotalEl.textContent = fmtMoney(total);
-  updateRatePeriodTotals(periodSummaries);
+  updatePricingSummary({
+    periodSummaries,
+    lineItems: draft.lineItems || [],
+    contractSubtotal: subtotal,
+    contractGst: gst,
+    contractTotal: total,
+  });
 }
 
 function renderFees() {
