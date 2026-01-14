@@ -74,6 +74,8 @@ let guardNotesState = [];
 let guardNotesPendingImages = [];
 let guardNotesUploadsInFlight = 0;
 let guardNotesUploadToken = 0;
+let guardNotesEditing = null;
+let guardNotesEditingToken = 0;
 
 function fmtDate(value, withTime = false) {
   if (!value) return "--";
@@ -857,6 +859,19 @@ function normalizeGuardNoteImages(value) {
     .filter(Boolean);
 }
 
+function cloneGuardNoteImage(image) {
+  if (!image || typeof image !== "object") return null;
+  const url = image.url ? String(image.url) : "";
+  if (!url) return null;
+  return {
+    id: image.id || makeGuardNoteId("img"),
+    name: String(image.name || "Photo"),
+    type: image.type ? String(image.type) : "",
+    size: Number.isFinite(image.size) ? image.size : null,
+    url,
+  };
+}
+
 function normalizeGuardNotesList(raw) {
   const list = Array.isArray(raw) ? raw : [];
   const normalized = [];
@@ -915,6 +930,64 @@ function renderGuardNoteImages(images) {
   return tiles ? `<div class="guard-note-images">${tiles}</div>` : "";
 }
 
+function renderGuardNoteEditImages(images, noteId) {
+  const list = Array.isArray(images) ? images : [];
+  if (!list.length) return "";
+  const tiles = list
+    .map((img) => {
+      const url = escapeHtml(img.url || "");
+      if (!url) return "";
+      const label = escapeHtml(img.name || "Photo");
+      const imgId = escapeHtml(img.id || "");
+      return `
+        <div class="guard-note-edit-tile">
+          <img src="${url}" alt="${label}" loading="lazy" />
+          <button class="ghost tiny" type="button" data-remove-note-image="${escapeHtml(noteId)}" data-image-id="${imgId}">
+            Remove
+          </button>
+        </div>
+      `;
+    })
+    .join("");
+  return tiles ? `<div class="guard-note-edit-images">${tiles}</div>` : "";
+}
+
+function renderGuardNoteView(note) {
+  const name = escapeHtml(note.userName || "Unknown user");
+  const when = fmtDate(note.createdAt, true);
+  const text = escapeHtml(note.note || "").replaceAll("\n", "<br />");
+  return `
+    <div class="note-meta note-meta-row">
+      <span>${name} | ${when}</span>
+      <button class="ghost tiny" type="button" data-edit-note="${escapeHtml(note.id)}">Edit</button>
+    </div>
+    ${text ? `<div>${text}</div>` : ""}
+    ${renderGuardNoteImages(note.images)}
+  `;
+}
+
+function renderGuardNoteEditor(note, editing) {
+  const name = escapeHtml(note.userName || "Unknown user");
+  const when = fmtDate(note.createdAt, true);
+  const noteText = escapeHtml(editing.noteText || "");
+  const noteId = escapeHtml(note.id);
+  return `
+    <div class="note-meta note-meta-row">
+      <span>${name} | ${when}</span>
+      <span class="pill">Editing</span>
+    </div>
+    <textarea class="guard-note-edit-input" data-note-edit-input="${noteId}">${noteText}</textarea>
+    ${renderGuardNoteEditImages(editing.images, note.id)}
+    <div class="guard-note-edit-actions">
+      <label class="ghost tiny" for="guard-note-images-${noteId}">Add photos</label>
+      <input id="guard-note-images-${noteId}" data-note-image-input="${noteId}" type="file" accept="image/*" multiple hidden />
+      <button class="primary small" type="button" data-save-note="${noteId}">Save</button>
+      <button class="ghost small" type="button" data-cancel-note="${noteId}">Cancel</button>
+      <span class="hint" data-edit-status="${noteId}"></span>
+    </div>
+  `;
+}
+
 function renderGuardNotesList(notes) {
   if (!guardNotesList) return;
   guardNotesList.replaceChildren();
@@ -923,14 +996,9 @@ function renderGuardNotesList(notes) {
   list.forEach((note) => {
     const row = document.createElement("div");
     row.className = "note-row";
-    const name = escapeHtml(note.userName || "Unknown user");
-    const when = fmtDate(note.createdAt, true);
-    const text = escapeHtml(note.note || "").replaceAll("\n", "<br />");
-    row.innerHTML = `
-      <div class="note-meta">${name} | ${when}</div>
-      ${text ? `<div>${text}</div>` : ""}
-      ${renderGuardNoteImages(note.images)}
-    `;
+    row.dataset.noteId = note.id;
+    const isEditing = guardNotesEditing && guardNotesEditing.id === note.id;
+    row.innerHTML = isEditing ? renderGuardNoteEditor(note, guardNotesEditing) : renderGuardNoteView(note);
     guardNotesList.appendChild(row);
   });
 }
@@ -1024,6 +1092,8 @@ function loadGuardNotes(row) {
   guardNotesPendingImages = [];
   guardNotesUploadsInFlight = 0;
   guardNotesUploadToken += 1;
+  guardNotesEditing = null;
+  guardNotesEditingToken += 1;
   if (guardNotesInput) guardNotesInput.value = "";
   renderGuardNotesPreviews();
   if (!row) {
@@ -1045,6 +1115,8 @@ async function clearGuardNotes(row) {
   guardNotesPendingImages = [];
   guardNotesUploadsInFlight = 0;
   guardNotesUploadToken += 1;
+  guardNotesEditing = null;
+  guardNotesEditingToken += 1;
   if (guardNotesInput) guardNotesInput.value = "";
   renderGuardNotesList([]);
   renderGuardNotesPreviews();
@@ -1088,6 +1160,78 @@ function submitGuardNote() {
   renderGuardNotesList(guardNotesState);
   if (guardNotesStatus) {
     guardNotesStatus.textContent = `Added ${userName} at ${new Date().toLocaleTimeString()}`;
+  }
+}
+
+function setGuardNoteEditStatus(noteId, message) {
+  if (!guardNotesList) return;
+  const el = guardNotesList.querySelector(`[data-edit-status="${noteId}"]`);
+  if (!el) return;
+  el.textContent = message || "";
+}
+
+function startGuardNoteEdit(noteId) {
+  const target = guardNotesState.find((n) => String(n.id) === String(noteId));
+  if (!target) return;
+  if (guardNotesEditing && guardNotesEditing.id !== target.id) {
+    cancelGuardNoteEdit();
+  }
+  const images = (target.images || []).map(cloneGuardNoteImage).filter(Boolean);
+  guardNotesEditing = {
+    id: target.id,
+    noteText: target.note || "",
+    images,
+    newUploadIds: new Set(),
+    removedUrls: new Set(),
+    uploadsInFlight: 0,
+    uploadToken: ++guardNotesEditingToken,
+  };
+  renderGuardNotesList(guardNotesState);
+}
+
+function cancelGuardNoteEdit() {
+  if (!guardNotesEditing) return;
+  const toDelete = guardNotesEditing.images
+    .filter((img) => guardNotesEditing.newUploadIds.has(img.id))
+    .map((img) => img.url)
+    .filter(Boolean);
+  guardNotesEditing = null;
+  guardNotesEditingToken += 1;
+  renderGuardNotesList(guardNotesState);
+  if (toDelete.length) {
+    Promise.allSettled(toDelete.map((url) => deleteGuardNoteImage(url)));
+  }
+}
+
+function saveGuardNoteEdit(noteId) {
+  if (!guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
+  if (guardNotesEditing.uploadsInFlight > 0) {
+    setGuardNoteEditStatus(noteId, "Wait for image uploads to finish.");
+    return;
+  }
+  const text = String(guardNotesEditing.noteText || "").trim();
+  const images = guardNotesEditing.images.map(cloneGuardNoteImage).filter(Boolean);
+  if (!text && images.length === 0) {
+    setGuardNoteEditStatus(noteId, "Note cannot be empty.");
+    return;
+  }
+
+  const next = guardNotesState.map((note) => {
+    if (String(note.id) !== String(noteId)) return note;
+    return { ...note, note: text, images };
+  });
+  if (!persistGuardNotes(selectedUnit, next)) return;
+  guardNotesState = next;
+
+  const removed = Array.from(guardNotesEditing.removedUrls || []);
+  guardNotesEditing = null;
+  guardNotesEditingToken += 1;
+  renderGuardNotesList(guardNotesState);
+  if (removed.length) {
+    Promise.allSettled(removed.map((url) => deleteGuardNoteImage(url)));
+  }
+  if (guardNotesStatus) {
+    guardNotesStatus.textContent = `Note updated at ${new Date().toLocaleTimeString()}`;
   }
 }
 
@@ -1276,6 +1420,93 @@ guardNotesInput?.addEventListener("keydown", (e) => {
   if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
   e.preventDefault();
   submitGuardNote();
+});
+
+guardNotesList?.addEventListener("click", (e) => {
+  const editBtn = e.target?.closest?.("[data-edit-note]");
+  if (editBtn) {
+    startGuardNoteEdit(editBtn.dataset.editNote);
+    return;
+  }
+  const saveBtn = e.target?.closest?.("[data-save-note]");
+  if (saveBtn) {
+    saveGuardNoteEdit(saveBtn.dataset.saveNote);
+    return;
+  }
+  const cancelBtn = e.target?.closest?.("[data-cancel-note]");
+  if (cancelBtn) {
+    cancelGuardNoteEdit();
+    return;
+  }
+  const removeBtn = e.target?.closest?.("[data-remove-note-image]");
+  if (removeBtn) {
+    const noteId = removeBtn.dataset.removeNoteImage;
+    const imageId = removeBtn.dataset.imageId;
+    if (!guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
+    const removing = guardNotesEditing.images.find((img) => String(img.id) === String(imageId));
+    guardNotesEditing.images = guardNotesEditing.images.filter((img) => String(img.id) !== String(imageId));
+    if (removing?.id && guardNotesEditing.newUploadIds.has(removing.id)) {
+      guardNotesEditing.newUploadIds.delete(removing.id);
+      if (removing.url) deleteGuardNoteImage(removing.url);
+    } else if (removing?.url) {
+      guardNotesEditing.removedUrls.add(removing.url);
+    }
+    renderGuardNotesList(guardNotesState);
+    setGuardNoteEditStatus(noteId, "Image removed.");
+  }
+});
+
+guardNotesList?.addEventListener("input", (e) => {
+  const noteId = e.target?.dataset?.noteEditInput;
+  if (!noteId) return;
+  if (!guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
+  guardNotesEditing.noteText = e.target.value || "";
+});
+
+guardNotesList?.addEventListener("change", async (e) => {
+  const noteId = e.target?.dataset?.noteImageInput;
+  if (!noteId) return;
+  if (!guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
+  const files = Array.from(e.target?.files || []);
+  if (!files.length) return;
+  if (!activeCompanyId) {
+    setGuardNoteEditStatus(noteId, "No active company session.");
+    e.target.value = "";
+    return;
+  }
+  const token = guardNotesEditing.uploadToken;
+  guardNotesEditing.uploadsInFlight += files.length;
+  setGuardNoteEditStatus(noteId, `Uploading ${files.length} image${files.length === 1 ? "" : "s"}...`);
+  const results = await Promise.allSettled(files.map((file) => uploadGuardNoteImage(file)));
+  const uploaded = [];
+  const failures = [];
+  results.forEach((result) => {
+    if (result.status === "fulfilled") {
+      uploaded.push(result.value);
+    } else {
+      failures.push(result.reason);
+    }
+  });
+  guardNotesEditing.uploadsInFlight = Math.max(0, guardNotesEditing.uploadsInFlight - files.length);
+  if (!guardNotesEditing || guardNotesEditing.uploadToken !== token) {
+    await Promise.allSettled(uploaded.map((img) => deleteGuardNoteImage(img.url)));
+    e.target.value = "";
+    return;
+  }
+  if (uploaded.length) {
+    uploaded.forEach((img) => {
+      guardNotesEditing.images.push(img);
+      guardNotesEditing.newUploadIds.add(img.id);
+    });
+    renderGuardNotesList(guardNotesState);
+  }
+  if (failures.length) {
+    const msg = failures[0]?.message || "Some uploads failed.";
+    setGuardNoteEditStatus(noteId, msg);
+  } else {
+    setGuardNoteEditStatus(noteId, uploaded.length ? "Images added." : "No images uploaded.");
+  }
+  e.target.value = "";
 });
 
 guardNotesImages?.addEventListener("change", async (e) => {
