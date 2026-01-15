@@ -143,6 +143,7 @@ const {
   deleteQboConnection,
   listQboDocumentsForRentalOrder,
   listQboDocumentsUnassigned,
+  listQboDocuments,
   listRentalOrdersWithOutItems,
   countOutItemsForOrder,
 } = require("./db");
@@ -2866,13 +2867,15 @@ app.get(
 app.get(
   "/api/qbo/authorize",
   asyncHandler(async (req, res) => {
-    const { companyId } = req.query || {};
+    const { companyId, redirect } = req.query || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     const config = getQboConfig();
     if (!config.clientId || !config.redirectUri) {
       return res.status(400).json({ error: "QBO_CLIENT_ID and QBO_REDIRECT_URI are required." });
     }
-    const state = Buffer.from(JSON.stringify({ companyId, ts: Date.now() })).toString("base64url");
+    const state = Buffer.from(
+      JSON.stringify({ companyId, ts: Date.now(), redirect: redirect ? String(redirect) : null })
+    ).toString("base64url");
     const url = buildAuthUrl({
       clientId: config.clientId,
       redirectUri: config.redirectUri,
@@ -2889,10 +2892,12 @@ app.get(
     const { code, realmId, state } = req.query || {};
     if (!code || !realmId) return res.status(400).send("Missing code or realmId.");
     let companyId = null;
+    let redirectTo = null;
     if (state) {
       try {
         const parsed = JSON.parse(Buffer.from(String(state), "base64url").toString("utf8"));
         if (parsed?.companyId) companyId = Number(parsed.companyId);
+        if (parsed?.redirect) redirectTo = String(parsed.redirect);
       } catch {
         companyId = null;
       }
@@ -2922,7 +2927,7 @@ app.get(
       tokenType: token.token_type,
     });
 
-    res.redirect("/settings.html?qbo=connected");
+    res.redirect(redirectTo || "/settings.html?qbo=connected");
   })
 );
 
@@ -3031,6 +3036,30 @@ app.get(
       companyId: Number(companyId),
       limit,
       offset,
+    });
+    res.json({ documents: docs });
+  })
+);
+
+app.get(
+  "/api/qbo/documents",
+  asyncHandler(async (req, res) => {
+    const { companyId, limit, offset, assigned, search } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const assignedFlag =
+      assigned === undefined || assigned === null || assigned === ""
+        ? null
+        : String(assigned).toLowerCase() === "true" || String(assigned).toLowerCase() === "assigned"
+          ? true
+          : String(assigned).toLowerCase() === "false" || String(assigned).toLowerCase() === "unassigned"
+            ? false
+            : null;
+    const docs = await listQboDocuments({
+      companyId: Number(companyId),
+      limit,
+      offset,
+      assigned: assignedFlag,
+      search,
     });
     res.json({ documents: docs });
   })

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Aiven Rental - Rental Order History</title>
+  <title>Aiven Rental - Invoices</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="no-top-headers">
@@ -20,8 +20,8 @@
           <div class="nav-group">
             <div class="nav-group-title">Operations</div>
             <a class="nav-link" href="rental-quotes.html">Quotes</a>
-            <a class="nav-link active" href="rental-orders.html">Rental Orders</a>
-            <a class="nav-link" href="invoices.html">Invoices</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link active" href="invoices.html">Invoices</a>
           </div>
           <div class="nav-group">
             <div class="nav-group-title">Repairs</div>
@@ -64,25 +64,75 @@
             </div>
           </div>
         </header>
+        <header class="hero">
+          <div>
+            <p class="eyebrow">Operations</p>
+            <h1>Invoices</h1>
+            <p class="lede">Connect QuickBooks Online and review all draft invoices and credits synced from QBO.</p>
+          </div>
+          <div class="hero-badge">
+            <span>Draft-only</span>
+            <span>Read-only sync</span>
+            <span>Unassigned</span>
+          </div>
+        </header>
+
         <main class="grid">
+          <section class="card company-context-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Context</p>
+                <h2>Company</h2>
+              </div>
+            </div>
+            <p class="hint" id="company-meta">Loading your company...</p>
+          </section>
+
           <section class="card wide">
             <div class="card-header">
               <div>
-                <h2>Order edit history</h2>
+                <h2>QuickBooks Online</h2>
+                <p class="hint" style="margin:6px 0 0;">Connect to QBO to view draft-only invoices and credits.</p>
               </div>
               <div class="inline-actions">
-                <a class="ghost small" id="back-to-order" href="rental-orders.html">Back</a>
+                <button class="primary" id="qbo-connect" type="button">Connect</button>
+                <button class="ghost danger" id="qbo-disconnect" type="button" disabled>Disconnect</button>
+              </div>
+            </div>
+            <div class="stack">
+              <p class="hint" id="qbo-status">Checking QBO connection...</p>
+              <p class="hint" id="qbo-hint" style="margin:0;"></p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>All invoices & credits</h2>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost" id="qbo-sync">Sync QBO</button>
+                <button class="ghost" id="refresh">Refresh</button>
               </div>
             </div>
 
             <div class="table-shell">
               <div class="table-head">
-                <p class="hint" id="page-meta">Loading…</p>
+                <div class="inline-actions" style="flex-wrap:wrap;">
+                  <label>Assignment
+                    <select id="assigned-filter">
+                      <option value="">All</option>
+                      <option value="assigned">Assigned to RO</option>
+                      <option value="unassigned">Unassigned</option>
+                    </select>
+                  </label>
+                </div>
                 <div class="inline">
-                  <input id="search" class="search-input" placeholder="Search history..." />
+                  <input id="search" class="search-input" placeholder="Search doc #, RO, or status..." />
                 </div>
               </div>
-              <div class="table" id="rental-order-history-table"></div>
+              <div class="table" id="invoices-table"></div>
+              <p class="hint" id="invoices-hint" style="margin:10px 0 0;"></p>
             </div>
           </section>
         </main>
@@ -90,25 +140,7 @@
     </div>
   </div>
 
-  <div class="modal" id="audit-modal">
-    <div class="modal-content wide">
-      <div class="modal-header">
-        <div>
-          <h3 style="margin:0;">Audit details</h3>
-          <p class="hint" id="audit-modal-meta" style="margin:6px 0 0;"></p>
-        </div>
-        <button class="ghost small" id="close-audit-modal" type="button">Close</button>
-      </div>
-      <pre id="audit-json" style="margin:0; white-space:pre-wrap;"></pre>
-    </div>
-  </div>
-
   <script src="session.js"></script>
-  <script src="rental-order-history.js"></script>
+  <script src="invoices.js"></script>
 </body>
 </html>
-
-
-
-
-

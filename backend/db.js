@@ -11188,6 +11188,41 @@ async function listQboDocumentsUnassigned({ companyId, limit = 50, offset = 0 } 
   return res.rows || [];
 }
 
+async function listQboDocuments({ companyId, assigned = null, search = null, limit = 50, offset = 0 } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const lim = Math.max(1, Math.min(200, Number(limit) || 50));
+  const off = Math.max(0, Number(offset) || 0);
+  const filters = ["d.company_id = $1"];
+  const params = [cid];
+
+  if (assigned === true) filters.push("d.rental_order_id IS NOT NULL");
+  if (assigned === false) filters.push("d.rental_order_id IS NULL");
+
+  if (search) {
+    params.push(`%${String(search).trim()}%`);
+    const idx = params.length;
+    filters.push(
+      `(d.doc_number ILIKE $${idx} OR d.qbo_entity_id ILIKE $${idx} OR d.customer_ref ILIKE $${idx} OR d.status ILIKE $${idx} OR ro.ro_number ILIKE $${idx})`
+    );
+  }
+
+  params.push(lim, off);
+  const res = await pool.query(
+    `
+    SELECT d.*,
+           ro.ro_number
+      FROM qbo_documents d
+ LEFT JOIN rental_orders ro ON ro.id = d.rental_order_id
+     WHERE ${filters.join(" AND ")}
+     ORDER BY d.txn_date DESC NULLS LAST, d.created_at DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}
+    `,
+    params
+  );
+  return res.rows || [];
+}
+
 async function listRentalOrdersWithOutItems({ companyId } = {}) {
   const cid = Number(companyId);
   if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
@@ -11534,6 +11569,7 @@ module.exports = {
   markQboDocumentRemoved,
   listQboDocumentsForRentalOrder,
   listQboDocumentsUnassigned,
+  listQboDocuments,
   listRentalOrdersWithOutItems,
   countOutItemsForOrder,
   getRentalOrderQboContext,

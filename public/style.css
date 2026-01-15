@@ -2958,6 +2958,10 @@ a.ghost {
   grid-template-columns: 64px 2fr 1.2fr 1fr 1fr 1fr 0.8fr;
 }
 
+#invoices-table .table-row {
+  grid-template-columns: 0.9fr 1.2fr 1.2fr 0.9fr 0.9fr 0.9fr 0.9fr;
+}
+
 #pricing-table .table-row {
   grid-template-columns: minmax(220px, 1.8fr) repeat(3, minmax(120px, 1fr)) auto;
 }
