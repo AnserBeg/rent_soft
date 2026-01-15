@@ -29,6 +29,16 @@ const logoPreview = document.getElementById("logo-preview");
 const removeLogoBtn = document.getElementById("remove-logo");
 const logoHint = document.getElementById("logo-hint");
 
+const qboStatus = document.getElementById("qbo-status");
+const qboConnectBtn = document.getElementById("qbo-connect");
+const qboDisconnectBtn = document.getElementById("qbo-disconnect");
+const qboEnabledToggle = document.getElementById("qbo-enabled");
+const qboBillingDayInput = document.getElementById("qbo-billing-day");
+const qboAdjustmentPolicySelect = document.getElementById("qbo-adjustment-policy");
+const qboIncomeAccountsInput = document.getElementById("qbo-income-accounts");
+const qboHint = document.getElementById("qbo-hint");
+const saveQboSettingsBtn = document.getElementById("save-qbo-settings");
+
 const saveEmailSettingsBtn = document.getElementById("save-email-settings");
 const testEmailSettingsBtn = document.getElementById("test-email-settings");
 const emailEnabledToggle = document.getElementById("email-enabled");
@@ -53,6 +63,7 @@ let storefrontRequirementsLoaded = false;
 let rentalInfoFieldsLoaded = false;
 let userModeLoaded = false;
 let emailSettingsLoaded = false;
+let qboSettingsLoaded = false;
 
 const storefrontRequirementOptions = [
   { key: "businessName", label: "Business name" },
@@ -250,6 +261,11 @@ function setCompanyInfoHint(message) {
   companyInfoHint.textContent = String(message || "");
 }
 
+function setQboHint(message) {
+  if (!qboHint) return;
+  qboHint.textContent = String(message || "");
+}
+
 function setCustomerModeHint(message) {
   if (!customerModeHint) return;
   customerModeHint.textContent = String(message || "");
@@ -267,6 +283,36 @@ function renderLogoPreview(url) {
     }
   }
   if (removeLogoBtn) removeLogoBtn.disabled = !currentLogoUrl;
+}
+
+function parseIncomeAccountIds(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
+  return String(value)
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+function setQboSettingsFields(settings) {
+  if (!settings) return;
+  if (qboEnabledToggle) qboEnabledToggle.checked = settings.qbo_enabled === true;
+  if (qboBillingDayInput) qboBillingDayInput.value = settings.qbo_billing_day ? String(settings.qbo_billing_day) : "1";
+  if (qboAdjustmentPolicySelect) qboAdjustmentPolicySelect.value = settings.qbo_adjustment_policy || "credit_memo";
+  if (qboIncomeAccountsInput) {
+    const ids = Array.isArray(settings.qbo_income_account_ids) ? settings.qbo_income_account_ids : [];
+    qboIncomeAccountsInput.value = ids.join(", ");
+  }
+}
+
+function qboSettingsPayload() {
+  return {
+    companyId: activeCompanyId,
+    qboEnabled: qboEnabledToggle?.checked === true,
+    qboBillingDay: qboBillingDayInput?.value ? Number(qboBillingDayInput.value) : null,
+    qboAdjustmentPolicy: qboAdjustmentPolicySelect?.value || "credit_memo",
+    qboIncomeAccountIds: parseIncomeAccountIds(qboIncomeAccountsInput?.value || ""),
+  };
 }
 
 async function uploadLogo({ file }) {
@@ -495,6 +541,37 @@ async function loadSettings() {
   renderRentalInfoFields(data.settings?.rental_info_fields || null);
   rentalInfoFieldsLoaded = true;
   if (saveRentalInfoFieldsBtn) saveRentalInfoFieldsBtn.disabled = false;
+  setQboSettingsFields(data.settings || null);
+  qboSettingsLoaded = true;
+  if (saveQboSettingsBtn) saveQboSettingsBtn.disabled = false;
+}
+
+async function loadQboStatus() {
+  if (!activeCompanyId) return;
+  const res = await fetch(`/api/qbo/status?companyId=${encodeURIComponent(String(activeCompanyId))}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load QBO status");
+  if (qboStatus) {
+    qboStatus.textContent = data.connected
+      ? `Connected to QBO (realm ${data.realmId || "unknown"}).`
+      : "Not connected to QuickBooks Online.";
+  }
+  if (qboDisconnectBtn) qboDisconnectBtn.disabled = !data.connected;
+  return data;
+}
+
+async function saveQboSettings() {
+  if (!activeCompanyId) return;
+  const payload = qboSettingsPayload();
+  const res = await fetch("/api/company-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to save QBO settings");
+  setQboSettingsFields(data.settings);
+  return data.settings;
 }
 
 async function loadUserMode() {
@@ -658,6 +735,50 @@ saveCustomerModeBtn?.addEventListener("click", async () => {
   }
 });
 
+saveQboSettingsBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  setQboHint("Saving...");
+  saveQboSettingsBtn.disabled = true;
+  try {
+    await saveQboSettings();
+    setQboHint("QBO settings saved.");
+  } catch (err) {
+    setQboHint(err?.message ? String(err.message) : "Unable to save QBO settings.");
+  } finally {
+    saveQboSettingsBtn.disabled = !qboSettingsLoaded;
+  }
+});
+
+qboConnectBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  window.location.href = `/api/qbo/authorize?companyId=${encodeURIComponent(String(activeCompanyId))}`;
+});
+
+qboDisconnectBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  setQboHint("Disconnecting...");
+  qboDisconnectBtn.disabled = true;
+  try {
+    const res = await fetch("/api/qbo/disconnect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyId: activeCompanyId }),
+    });
+    if (!res.ok && res.status !== 204) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || "Unable to disconnect QBO");
+    }
+    await loadQboStatus();
+    setQboHint("QBO disconnected.");
+  } catch (err) {
+    setQboHint(err?.message ? String(err.message) : "Unable to disconnect QBO.");
+    qboDisconnectBtn.disabled = false;
+  }
+});
+
 emailProviderSelect?.addEventListener("change", () => applyEmailProviderPreset(emailProviderSelect.value));
 
 saveEmailSettingsBtn?.addEventListener("click", async (e) => {
@@ -696,11 +817,14 @@ if (activeCompanyId) {
   const session = window.RentSoft?.getSession?.();
   const companyName = session?.company?.name ? String(session.company.name) : null;
   companyMeta.textContent = companyName ? `${companyName} (Company #${activeCompanyId})` : `Company #${activeCompanyId}`;
+  const qboParam = new URLSearchParams(window.location.search).get("qbo");
+  if (qboParam === "connected") setQboHint("QuickBooks connected.");
   loadSettings().catch((err) => (companyMeta.textContent = err.message));
   loadCompanyProfile().catch((err) => setCompanyInfoHint(err.message));
   loadUserMode().catch((err) => setCustomerModeHint(err.message));
   setEmailControlsEnabled(false);
   loadEmailSettings().catch((err) => setEmailSettingsHint(err.message));
+  loadQboStatus().catch((err) => setQboHint(err.message));
 } else {
   companyMeta.textContent = "Log in to view settings.";
 }

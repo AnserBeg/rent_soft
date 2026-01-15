@@ -270,6 +270,7 @@ async function ensureTables() {
         daily_rate NUMERIC(12, 2),
         weekly_rate NUMERIC(12, 2),
         monthly_rate NUMERIC(12, 2),
+        qbo_item_id TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(company_id, name)
       );
@@ -279,6 +280,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE equipment_types ADD COLUMN IF NOT EXISTS daily_rate NUMERIC(12, 2);`);
     await client.query(`ALTER TABLE equipment_types ADD COLUMN IF NOT EXISTS weekly_rate NUMERIC(12, 2);`);
     await client.query(`ALTER TABLE equipment_types ADD COLUMN IF NOT EXISTS monthly_rate NUMERIC(12, 2);`);
+    await client.query(`ALTER TABLE equipment_types ADD COLUMN IF NOT EXISTS qbo_item_id TEXT;`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS sales_people (
         id SERIAL PRIMARY KEY,
@@ -308,6 +310,7 @@ async function ensureTables() {
         postal_code TEXT,
         email TEXT,
         phone TEXT,
+        qbo_customer_id TEXT,
         contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
         accounting_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
         can_charge_deposit BOOLEAN NOT NULL DEFAULT FALSE,
@@ -326,6 +329,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS postal_code TEXT;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS email TEXT;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS phone TEXT;`);
+    await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS qbo_customer_id TEXT;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS accounting_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS can_charge_deposit BOOLEAN NOT NULL DEFAULT FALSE;`);
@@ -813,6 +817,10 @@ async function ensureTables() {
         monthly_proration_method TEXT NOT NULL DEFAULT 'hours',
         billing_timezone TEXT NOT NULL DEFAULT 'UTC',
         logo_url TEXT,
+        qbo_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        qbo_billing_day INTEGER NOT NULL DEFAULT 1,
+        qbo_adjustment_policy TEXT NOT NULL DEFAULT 'credit_memo',
+        qbo_income_account_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
         tax_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         default_tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0,
         tax_registration_number TEXT,
@@ -842,6 +850,10 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS monthly_proration_method TEXT NOT NULL DEFAULT 'hours';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS billing_timezone TEXT NOT NULL DEFAULT 'UTC';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_billing_day INTEGER NOT NULL DEFAULT 1;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_adjustment_policy TEXT NOT NULL DEFAULT 'credit_memo';`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_income_account_ids JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS default_tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS tax_registration_number TEXT;`);
@@ -865,6 +877,69 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
     await client.query(`UPDATE company_settings SET billing_rounding_granularity = 'unit' WHERE billing_rounding_granularity IS NULL;`);
     await client.query(`UPDATE company_settings SET monthly_proration_method = 'hours' WHERE monthly_proration_method IS NULL;`);
+    await client.query(`UPDATE company_settings SET qbo_billing_day = 1 WHERE qbo_billing_day IS NULL;`);
+    await client.query(`UPDATE company_settings SET qbo_adjustment_policy = 'credit_memo' WHERE qbo_adjustment_policy IS NULL;`);
+    await client.query(`UPDATE company_settings SET qbo_income_account_ids = '[]'::jsonb WHERE qbo_income_account_ids IS NULL;`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS qbo_connections (
+        company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+        realm_id TEXT NOT NULL,
+        access_token TEXT NOT NULL,
+        refresh_token TEXT NOT NULL,
+        access_token_expires_at TIMESTAMPTZ,
+        refresh_token_expires_at TIMESTAMPTZ,
+        scope TEXT,
+        token_type TEXT,
+        connected_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS qbo_documents (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        rental_order_id INTEGER REFERENCES rental_orders(id) ON DELETE SET NULL,
+        qbo_entity_type TEXT NOT NULL,
+        qbo_entity_id TEXT NOT NULL,
+        doc_number TEXT,
+        billing_period TEXT,
+        txn_date DATE,
+        due_date DATE,
+        total_amount NUMERIC(12, 2),
+        balance NUMERIC(12, 2),
+        currency_code TEXT,
+        status TEXT,
+        customer_ref TEXT,
+        source TEXT NOT NULL DEFAULT 'qbo',
+        is_voided BOOLEAN NOT NULL DEFAULT FALSE,
+        is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
+        last_updated_at TIMESTAMPTZ,
+        last_synced_at TIMESTAMPTZ DEFAULT NOW(),
+        raw JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS qbo_documents_unique_idx ON qbo_documents (company_id, qbo_entity_type, qbo_entity_id);`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS qbo_documents_ro_idx ON qbo_documents (company_id, rental_order_id);`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS qbo_documents_period_idx ON qbo_documents (company_id, billing_period);`
+    );
+    await client.query(`DROP INDEX IF EXISTS qbo_documents_period_unique;`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS qbo_sync_state (
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        entity_name TEXT NOT NULL,
+        last_cdc_timestamp TIMESTAMPTZ,
+        PRIMARY KEY (company_id, entity_name)
+      );
+    `);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS doc_sequences (
@@ -1769,6 +1844,7 @@ async function listTypes(companyId) {
     `SELECT et.id, et.name, et.description, et.terms, et.category_id,
             COALESCE(NULLIF(et.image_urls, '[]'::jsonb)->>0, et.image_url) AS image_url,
             et.image_urls,
+            et.qbo_item_id,
             et.daily_rate, et.weekly_rate, et.monthly_rate,
             ec.name AS category
      FROM equipment_types et
@@ -1794,14 +1870,26 @@ async function listTypeStats(companyId) {
   return result.rows;
 }
 
-async function createType({ companyId, name, categoryId, imageUrl, imageUrls, description, terms, dailyRate, weeklyRate, monthlyRate }) {
+async function createType({
+  companyId,
+  name,
+  categoryId,
+  imageUrl,
+  imageUrls,
+  description,
+  terms,
+  dailyRate,
+  weeklyRate,
+  monthlyRate,
+  qboItemId,
+}) {
   const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean).map(String) : [];
   const primaryUrl = urls[0] || imageUrl || null;
   const result = await pool.query(
-    `INSERT INTO equipment_types (company_id, name, category_id, image_url, image_urls, description, terms, daily_rate, weekly_rate, monthly_rate)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO equipment_types (company_id, name, category_id, image_url, image_urls, description, terms, daily_rate, weekly_rate, monthly_rate, qbo_item_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      ON CONFLICT (company_id, name) DO NOTHING
-     RETURNING id, name, category_id, image_url, image_urls, description, terms, daily_rate, weekly_rate, monthly_rate`,
+     RETURNING id, name, category_id, image_url, image_urls, description, terms, daily_rate, weekly_rate, monthly_rate, qbo_item_id`,
     [
       companyId,
       name,
@@ -1813,20 +1901,34 @@ async function createType({ companyId, name, categoryId, imageUrl, imageUrls, de
       dailyRate || null,
       weeklyRate || null,
       monthlyRate || null,
+      qboItemId ? String(qboItemId).trim() : null,
     ]
   );
   return result.rows[0];
 }
 
-async function updateType({ id, companyId, name, categoryId, imageUrl, imageUrls, description, terms, dailyRate, weeklyRate, monthlyRate }) {
+async function updateType({
+  id,
+  companyId,
+  name,
+  categoryId,
+  imageUrl,
+  imageUrls,
+  description,
+  terms,
+  dailyRate,
+  weeklyRate,
+  monthlyRate,
+  qboItemId,
+}) {
   const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean).map(String) : [];
   const primaryUrl = urls[0] || imageUrl || null;
   const result = await pool.query(
     `UPDATE equipment_types
      SET name = $1, category_id = $2, image_url = $3, image_urls = $4, description = $5, terms = $6,
-         daily_rate = $7, weekly_rate = $8, monthly_rate = $9
-     WHERE id = $10 AND company_id = $11
-     RETURNING id, name, category_id, image_url, image_urls, description, terms, daily_rate, weekly_rate, monthly_rate`,
+         daily_rate = $7, weekly_rate = $8, monthly_rate = $9, qbo_item_id = $10
+     WHERE id = $11 AND company_id = $12
+     RETURNING id, name, category_id, image_url, image_urls, description, terms, daily_rate, weekly_rate, monthly_rate, qbo_item_id`,
     [
       name,
       categoryId || null,
@@ -1837,6 +1939,7 @@ async function updateType({ id, companyId, name, categoryId, imageUrl, imageUrls
       dailyRate || null,
       weeklyRate || null,
       monthlyRate || null,
+      qboItemId ? String(qboItemId).trim() : null,
       id,
       companyId,
     ]
@@ -2620,6 +2723,7 @@ async function listCustomers(companyId) {
             c.postal_code,
             c.email,
             c.phone,
+            c.qbo_customer_id,
             c.contacts,
             c.accounting_contacts,
             c.can_charge_deposit,
@@ -2824,6 +2928,7 @@ async function createCustomer({
   postalCode,
   email,
   phone,
+  qboCustomerId,
   canChargeDeposit,
   salesPersonId,
   followUpDate,
@@ -2841,9 +2946,9 @@ async function createCustomer({
   const primaryPhone = normalizeContactField(primary.phone) || normalizeContactField(phone);
   const finalCompanyName = parent?.company_name || companyName;
   const result = await pool.query(
-    `INSERT INTO customers (company_id, parent_customer_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id`,
+    `INSERT INTO customers (company_id, parent_customer_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id`,
     [
       companyId,
       parent?.id || null,
@@ -2856,6 +2961,7 @@ async function createCustomer({
       postalCode,
       primaryEmail,
       primaryPhone,
+      qboCustomerId ? String(qboCustomerId).trim() : null,
       JSON.stringify(contactList),
       JSON.stringify(accountingContactList),
       isBranch ? false : !!canChargeDeposit,
@@ -2880,6 +2986,7 @@ async function updateCustomer({
   postalCode,
   email,
   phone,
+  qboCustomerId,
   canChargeDeposit,
   salesPersonId,
   followUpDate,
@@ -2912,14 +3019,15 @@ async function updateCustomer({
          postal_code = $8,
          email = $9,
          phone = $10,
-         contacts = $11,
-         accounting_contacts = $12,
-         can_charge_deposit = $13,
-         sales_person_id = $14,
-         follow_up_date = $15,
-         notes = $16
-     WHERE id = $17 AND company_id = $18
-     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id`,
+         qbo_customer_id = $11,
+         contacts = $12,
+         accounting_contacts = $13,
+         can_charge_deposit = $14,
+         sales_person_id = $15,
+         follow_up_date = $16,
+         notes = $17
+     WHERE id = $18 AND company_id = $19
+     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id`,
     [
       parent?.id || null,
       finalCompanyName,
@@ -2931,6 +3039,7 @@ async function updateCustomer({
       postalCode,
       primaryEmail,
       primaryPhone,
+      qboCustomerId ? String(qboCustomerId).trim() : null,
       JSON.stringify(contactList),
       JSON.stringify(accountingContactList),
       isBranch ? false : !!canChargeDeposit,
@@ -3591,6 +3700,31 @@ function normalizeMonthlyProrationMethod(value) {
   return "hours";
 }
 
+function normalizeQboAdjustmentPolicy(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "next_invoice" || v === "next-invoice") return "next_invoice";
+  return "credit_memo";
+}
+
+function normalizeQboBillingDay(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 1;
+  return Math.min(28, Math.max(1, Math.floor(num)));
+}
+
+function normalizeQboIncomeAccountIds(value) {
+  let raw = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = raw.split(",").map((v) => v.trim());
+    }
+  }
+  if (!Array.isArray(raw)) return [];
+  return raw.map((v) => String(v || "").trim()).filter(Boolean);
+}
+
 function normalizeRateBasis(value) {
   const v = String(value || "").toLowerCase();
   if (v === "daily" || v === "weekly" || v === "monthly") return v;
@@ -3846,6 +3980,10 @@ async function getCompanySettings(companyId) {
             monthly_proration_method,
             billing_timezone,
             logo_url,
+            qbo_enabled,
+            qbo_billing_day,
+            qbo_adjustment_policy,
+            qbo_income_account_ids,
             tax_enabled,
             default_tax_rate,
             tax_registration_number,
@@ -3867,6 +4005,10 @@ async function getCompanySettings(companyId) {
       monthly_proration_method: normalizeMonthlyProrationMethod(res.rows[0].monthly_proration_method),
       billing_timezone: normalizeBillingTimeZone(res.rows[0].billing_timezone),
       logo_url: res.rows[0].logo_url || null,
+      qbo_enabled: res.rows[0].qbo_enabled === true,
+      qbo_billing_day: normalizeQboBillingDay(res.rows[0].qbo_billing_day),
+      qbo_adjustment_policy: normalizeQboAdjustmentPolicy(res.rows[0].qbo_adjustment_policy),
+      qbo_income_account_ids: normalizeQboIncomeAccountIds(res.rows[0].qbo_income_account_ids),
       tax_enabled: res.rows[0].tax_enabled === true,
       default_tax_rate: Number(res.rows[0].default_tax_rate || 0),
       tax_registration_number: res.rows[0].tax_registration_number || null,
@@ -3884,6 +4026,10 @@ async function getCompanySettings(companyId) {
     monthly_proration_method: "hours",
     billing_timezone: "UTC",
     logo_url: null,
+    qbo_enabled: false,
+    qbo_billing_day: 1,
+    qbo_adjustment_policy: "credit_memo",
+    qbo_income_account_ids: [],
     tax_enabled: false,
     default_tax_rate: 0,
     tax_registration_number: null,
@@ -4058,6 +4204,10 @@ async function upsertCompanySettings({
   logoUrl = undefined,
   requiredStorefrontCustomerFields = undefined,
   rentalInfoFields = undefined,
+  qboEnabled = null,
+  qboBillingDay = null,
+  qboAdjustmentPolicy = null,
+  qboIncomeAccountIds = undefined,
 }) {
   const current = await getCompanySettings(companyId);
   const nextMode =
@@ -4105,23 +4255,40 @@ async function upsertCompanySettings({
   const nextRentalInfoFields = normalizeRentalInfoFields(
     rentalInfoFields === undefined ? current.rental_info_fields : rentalInfoFields
   );
+  const nextQboEnabled =
+    qboEnabled === null || qboEnabled === undefined ? current.qbo_enabled === true : qboEnabled === true;
+  const nextQboBillingDay =
+    qboBillingDay === null || qboBillingDay === undefined
+      ? normalizeQboBillingDay(current.qbo_billing_day)
+      : normalizeQboBillingDay(qboBillingDay);
+  const nextQboAdjustment =
+    qboAdjustmentPolicy === null || qboAdjustmentPolicy === undefined
+      ? normalizeQboAdjustmentPolicy(current.qbo_adjustment_policy)
+      : normalizeQboAdjustmentPolicy(qboAdjustmentPolicy);
+  const nextQboIncomeAccounts = normalizeQboIncomeAccountIds(
+    qboIncomeAccountIds === undefined ? current.qbo_income_account_ids : qboIncomeAccountIds
+  );
   const res = await pool.query(
     `
     INSERT INTO company_settings
-      (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, logo_url, required_storefront_customer_fields, rental_info_fields)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb)
+      (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb)
     ON CONFLICT (company_id)
     DO UPDATE SET billing_rounding_mode = EXCLUDED.billing_rounding_mode,
                   billing_rounding_granularity = EXCLUDED.billing_rounding_granularity,
                   monthly_proration_method = EXCLUDED.monthly_proration_method,
                   billing_timezone = EXCLUDED.billing_timezone,
+                  logo_url = EXCLUDED.logo_url,
+                  qbo_enabled = EXCLUDED.qbo_enabled,
+                  qbo_billing_day = EXCLUDED.qbo_billing_day,
+                  qbo_adjustment_policy = EXCLUDED.qbo_adjustment_policy,
+                  qbo_income_account_ids = EXCLUDED.qbo_income_account_ids,
                   tax_enabled = EXCLUDED.tax_enabled,
                   default_tax_rate = EXCLUDED.default_tax_rate,
                   tax_registration_number = EXCLUDED.tax_registration_number,
                   tax_inclusive_pricing = EXCLUDED.tax_inclusive_pricing,
                   auto_apply_customer_credit = EXCLUDED.auto_apply_customer_credit,
                   auto_work_order_on_return = EXCLUDED.auto_work_order_on_return,
-                  logo_url = EXCLUDED.logo_url,
                   required_storefront_customer_fields = EXCLUDED.required_storefront_customer_fields,
                   rental_info_fields = EXCLUDED.rental_info_fields,
                   updated_at = NOW()
@@ -4130,13 +4297,17 @@ async function upsertCompanySettings({
               billing_rounding_granularity,
               monthly_proration_method,
               billing_timezone,
+              logo_url,
+              qbo_enabled,
+              qbo_billing_day,
+              qbo_adjustment_policy,
+              qbo_income_account_ids,
               tax_enabled,
               default_tax_rate,
               tax_registration_number,
               tax_inclusive_pricing,
               auto_apply_customer_credit,
               auto_work_order_on_return,
-              logo_url,
               required_storefront_customer_fields,
               rental_info_fields
     `,
@@ -4146,13 +4317,17 @@ async function upsertCompanySettings({
       nextGranularity,
       nextProrationMethod,
       nextTimeZone,
+      nextLogo,
+      nextQboEnabled,
+      nextQboBillingDay,
+      nextQboAdjustment,
+      JSON.stringify(nextQboIncomeAccounts),
       nextTaxEnabled,
       nextTaxRate,
       nextTaxRegistration,
       nextTaxInclusive,
       nextAutoApplyCustomerCredit,
       nextAutoWorkOrderOnReturn,
-      nextLogo,
       JSON.stringify(nextRequired),
       JSON.stringify(nextRentalInfoFields),
     ]
@@ -10803,6 +10978,444 @@ async function findInternalCustomerIdByEmail({ companyId, email } = {}) {
   return Number(row.id);
 }
 
+async function getQboConnection({ companyId } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const res = await pool.query(
+    `
+    SELECT company_id,
+           realm_id,
+           access_token,
+           refresh_token,
+           access_token_expires_at,
+           refresh_token_expires_at,
+           scope,
+           token_type,
+           connected_at,
+           updated_at
+      FROM qbo_connections
+     WHERE company_id = $1
+     LIMIT 1
+    `,
+    [cid]
+  );
+  return res.rows[0] || null;
+}
+
+async function findCompanyIdByQboRealmId({ realmId } = {}) {
+  const raw = String(realmId || "").trim();
+  if (!raw) return null;
+  const res = await pool.query(
+    `SELECT company_id FROM qbo_connections WHERE realm_id = $1 LIMIT 1`,
+    [raw]
+  );
+  const row = res.rows?.[0] || null;
+  if (!row?.company_id) return null;
+  return Number(row.company_id);
+}
+
+async function upsertQboConnection({
+  companyId,
+  realmId,
+  accessToken,
+  refreshToken,
+  accessTokenExpiresAt = null,
+  refreshTokenExpiresAt = null,
+  scope = null,
+  tokenType = null,
+} = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const res = await pool.query(
+    `
+    INSERT INTO qbo_connections
+      (company_id, realm_id, access_token, refresh_token, access_token_expires_at, refresh_token_expires_at, scope, token_type)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (company_id)
+    DO UPDATE SET realm_id = EXCLUDED.realm_id,
+                  access_token = EXCLUDED.access_token,
+                  refresh_token = EXCLUDED.refresh_token,
+                  access_token_expires_at = EXCLUDED.access_token_expires_at,
+                  refresh_token_expires_at = EXCLUDED.refresh_token_expires_at,
+                  scope = EXCLUDED.scope,
+                  token_type = EXCLUDED.token_type,
+                  updated_at = NOW()
+    RETURNING company_id, realm_id, access_token, refresh_token, access_token_expires_at, refresh_token_expires_at, scope, token_type, connected_at, updated_at
+    `,
+    [
+      cid,
+      String(realmId || "").trim(),
+      String(accessToken || "").trim(),
+      String(refreshToken || "").trim(),
+      accessTokenExpiresAt ? normalizeTimestamptz(accessTokenExpiresAt) : null,
+      refreshTokenExpiresAt ? normalizeTimestamptz(refreshTokenExpiresAt) : null,
+      scope ? String(scope) : null,
+      tokenType ? String(tokenType) : null,
+    ]
+  );
+  return res.rows[0] || null;
+}
+
+async function deleteQboConnection({ companyId } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  await pool.query(`DELETE FROM qbo_connections WHERE company_id = $1`, [cid]);
+}
+
+async function upsertQboDocument({
+  companyId,
+  rentalOrderId = null,
+  entityType,
+  entityId,
+  docNumber = null,
+  billingPeriod = null,
+  txnDate = null,
+  dueDate = null,
+  totalAmount = null,
+  balance = null,
+  currencyCode = null,
+  status = null,
+  customerRef = null,
+  source = "qbo",
+  isVoided = false,
+  isDeleted = false,
+  lastUpdatedAt = null,
+  raw = {},
+} = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const res = await pool.query(
+    `
+    INSERT INTO qbo_documents
+      (company_id, rental_order_id, qbo_entity_type, qbo_entity_id, doc_number, billing_period, txn_date, due_date, total_amount, balance, currency_code, status, customer_ref, source, is_voided, is_deleted, last_updated_at, last_synced_at, raw)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW(), $18::jsonb)
+    ON CONFLICT (company_id, qbo_entity_type, qbo_entity_id)
+    DO UPDATE SET rental_order_id = EXCLUDED.rental_order_id,
+                  doc_number = EXCLUDED.doc_number,
+                  billing_period = EXCLUDED.billing_period,
+                  txn_date = EXCLUDED.txn_date,
+                  due_date = EXCLUDED.due_date,
+                  total_amount = EXCLUDED.total_amount,
+                  balance = EXCLUDED.balance,
+                  currency_code = EXCLUDED.currency_code,
+                  status = EXCLUDED.status,
+                  customer_ref = EXCLUDED.customer_ref,
+                  source = EXCLUDED.source,
+                  is_voided = EXCLUDED.is_voided,
+                  is_deleted = EXCLUDED.is_deleted,
+                  last_updated_at = EXCLUDED.last_updated_at,
+                  last_synced_at = NOW(),
+                  raw = EXCLUDED.raw
+    RETURNING *
+    `,
+    [
+      cid,
+      rentalOrderId ? Number(rentalOrderId) : null,
+      String(entityType || "").trim(),
+      String(entityId || "").trim(),
+      docNumber ? String(docNumber) : null,
+      billingPeriod ? String(billingPeriod) : null,
+      txnDate ? String(txnDate) : null,
+      dueDate ? String(dueDate) : null,
+      Number.isFinite(Number(totalAmount)) ? Number(totalAmount) : null,
+      Number.isFinite(Number(balance)) ? Number(balance) : null,
+      currencyCode ? String(currencyCode) : null,
+      status ? String(status) : null,
+      customerRef ? String(customerRef) : null,
+      source ? String(source) : "qbo",
+      isVoided === true,
+      isDeleted === true,
+      lastUpdatedAt ? normalizeTimestamptz(lastUpdatedAt) : null,
+      JSON.stringify(raw || {}),
+    ]
+  );
+  return res.rows[0] || null;
+}
+
+async function markQboDocumentRemoved({
+  companyId,
+  entityType,
+  entityId,
+  isVoided = false,
+  isDeleted = false,
+} = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  await pool.query(
+    `
+    UPDATE qbo_documents
+       SET is_voided = $4,
+           is_deleted = $5,
+           last_synced_at = NOW()
+     WHERE company_id = $1 AND qbo_entity_type = $2 AND qbo_entity_id = $3
+    `,
+    [cid, String(entityType || ""), String(entityId || ""), isVoided === true, isDeleted === true]
+  );
+}
+
+async function listQboDocumentsForRentalOrder({ companyId, orderId } = {}) {
+  const cid = Number(companyId);
+  const oid = Number(orderId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(oid) || oid <= 0) throw new Error("orderId is required.");
+  const res = await pool.query(
+    `
+    SELECT *
+      FROM qbo_documents
+     WHERE company_id = $1 AND rental_order_id = $2
+     ORDER BY txn_date DESC NULLS LAST, created_at DESC
+    `,
+    [cid, oid]
+  );
+  return res.rows || [];
+}
+
+async function listQboDocumentsUnassigned({ companyId, limit = 50, offset = 0 } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const lim = Math.max(1, Math.min(200, Number(limit) || 50));
+  const off = Math.max(0, Number(offset) || 0);
+  const res = await pool.query(
+    `
+    SELECT *
+      FROM qbo_documents
+     WHERE company_id = $1 AND rental_order_id IS NULL
+     ORDER BY txn_date DESC NULLS LAST, created_at DESC
+     LIMIT $2 OFFSET $3
+    `,
+    [cid, lim, off]
+  );
+  return res.rows || [];
+}
+
+async function listRentalOrdersWithOutItems({ companyId } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const res = await pool.query(
+    `
+    SELECT DISTINCT ro.id
+      FROM rental_orders ro
+      JOIN rental_order_line_items li ON li.rental_order_id = ro.id
+     WHERE ro.company_id = $1
+       AND ro.status IN ('ordered','received')
+       AND li.fulfilled_at IS NOT NULL
+       AND li.returned_at IS NULL
+     ORDER BY ro.id
+    `,
+    [cid]
+  );
+  return (res.rows || []).map((r) => Number(r.id)).filter((n) => Number.isFinite(n));
+}
+
+async function countOutItemsForOrder({ companyId, orderId } = {}) {
+  const cid = Number(companyId);
+  const oid = Number(orderId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(oid) || oid <= 0) throw new Error("orderId is required.");
+  const res = await pool.query(
+    `
+    SELECT COUNT(*) AS count
+      FROM rental_order_line_items
+     WHERE rental_order_id = $1
+       AND fulfilled_at IS NOT NULL
+       AND returned_at IS NULL
+    `,
+    [oid]
+  );
+  const count = Number(res.rows?.[0]?.count || 0);
+  return Number.isFinite(count) ? count : 0;
+}
+
+async function getRentalOrderQboContext({ companyId, orderId } = {}) {
+  const cid = Number(companyId);
+  const oid = Number(orderId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(oid) || oid <= 0) throw new Error("orderId is required.");
+  const res = await pool.query(
+    `
+    SELECT ro.id,
+           ro.ro_number,
+           ro.quote_number,
+           ro.status,
+           ro.customer_id,
+           c.company_name AS customer_name,
+           c.qbo_customer_id
+      FROM rental_orders ro
+      JOIN customers c ON c.id = ro.customer_id
+     WHERE ro.company_id = $1 AND ro.id = $2
+     LIMIT 1
+    `,
+    [cid, oid]
+  );
+  const row = res.rows?.[0] || null;
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    roNumber: row.ro_number || null,
+    quoteNumber: row.quote_number || null,
+    status: row.status || null,
+    customerId: Number(row.customer_id),
+    customerName: row.customer_name || null,
+    qboCustomerId: row.qbo_customer_id || null,
+  };
+}
+
+async function buildRentalOrderBillingLines({
+  companyId,
+  orderId,
+  periodStart,
+  periodEnd,
+  lineItemIds = null,
+  ignoreReturnedAt = false,
+} = {}) {
+  const cid = Number(companyId);
+  const oid = Number(orderId);
+  const startIso = normalizeTimestamptz(periodStart);
+  const endIso = normalizeTimestamptz(periodEnd);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(oid) || oid <= 0) throw new Error("orderId is required.");
+  if (!startIso || !endIso) throw new Error("periodStart and periodEnd are required.");
+  if (Date.parse(endIso) <= Date.parse(startIso)) return [];
+
+  const settings = await getCompanySettings(cid);
+  const idList =
+    Array.isArray(lineItemIds) && lineItemIds.length
+      ? Array.from(new Set(lineItemIds.map((n) => Number(n)).filter((n) => Number.isFinite(n))))
+      : null;
+
+  const params = [oid];
+  const filters = ["li.rental_order_id = $1"];
+  if (idList && idList.length) {
+    params.push(idList);
+    filters.push(`li.id = ANY($${params.length}::int[])`);
+  }
+
+  const res = await pool.query(
+    `
+    SELECT li.id,
+           li.type_id,
+           et.name AS type_name,
+           et.qbo_item_id,
+           li.rate_basis,
+           li.rate_amount,
+           et.daily_rate,
+           et.weekly_rate,
+           et.monthly_rate,
+           li.bundle_id,
+           li.start_at,
+           li.end_at,
+           li.fulfilled_at,
+           li.returned_at,
+           cond.pause_periods,
+           (SELECT COUNT(*) FROM rental_order_line_inventory liv WHERE liv.line_item_id = li.id) AS qty
+      FROM rental_order_line_items li
+      JOIN equipment_types et ON et.id = li.type_id
+ LEFT JOIN rental_order_line_conditions cond ON cond.line_item_id = li.id
+     WHERE ${filters.join(" AND ")} AND li.fulfilled_at IS NOT NULL
+     ORDER BY li.id
+    `,
+    params
+  );
+
+  const lines = [];
+  for (const row of res.rows || []) {
+    const fulfilledAt = row.fulfilled_at || row.start_at;
+    const returnedAt = ignoreReturnedAt ? row.end_at : row.returned_at || row.end_at;
+    const chargeStart = new Date(Math.max(Date.parse(startIso), Date.parse(fulfilledAt))).toISOString();
+    const chargeEnd = new Date(Math.min(Date.parse(endIso), Date.parse(returnedAt))).toISOString();
+    if (Date.parse(chargeEnd) <= Date.parse(chargeStart)) continue;
+
+    const rateBasis = normalizeRateBasis(row.rate_basis);
+    const rateAmount =
+      row.rate_amount === null || row.rate_amount === undefined
+        ? rateBasis === "daily"
+          ? row.daily_rate
+          : rateBasis === "weekly"
+            ? row.weekly_rate
+            : row.monthly_rate
+        : row.rate_amount;
+    const pausePeriods = Array.isArray(row.pause_periods) ? row.pause_periods : [];
+    const units = computeBillableUnits({
+      startAt: chargeStart,
+      endAt: chargeEnd,
+      rateBasis,
+      roundingMode: settings.billing_rounding_mode,
+      roundingGranularity: settings.billing_rounding_granularity,
+      monthlyProrationMethod: settings.monthly_proration_method,
+      pausePeriods,
+    });
+    if (!Number.isFinite(Number(units)) || units <= 0) continue;
+
+    const qty = row.bundle_id ? 1 : Math.max(1, Number(row.qty || 0));
+    const rateValue = rateAmount === null || rateAmount === undefined ? null : Number(rateAmount);
+    if (!Number.isFinite(rateValue) || rateValue <= 0) continue;
+
+    const amount = Number((rateValue * units * qty).toFixed(2));
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+
+    lines.push({
+      lineItemId: Number(row.id),
+      typeId: Number(row.type_id),
+      typeName: row.type_name || "Rental",
+      qboItemId: row.qbo_item_id || null,
+      rateBasis,
+      rateAmount: rateValue,
+      quantity: qty,
+      units: Number(units),
+      amount,
+      chargeStart,
+      chargeEnd,
+    });
+  }
+
+  return lines;
+}
+
+async function upsertQboSyncState({ companyId, entityName, lastCdcTimestamp } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const res = await pool.query(
+    `
+    INSERT INTO qbo_sync_state (company_id, entity_name, last_cdc_timestamp)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (company_id, entity_name)
+    DO UPDATE SET last_cdc_timestamp = EXCLUDED.last_cdc_timestamp
+    RETURNING company_id, entity_name, last_cdc_timestamp
+    `,
+    [cid, String(entityName || "").trim(), lastCdcTimestamp ? normalizeTimestamptz(lastCdcTimestamp) : null]
+  );
+  return res.rows[0] || null;
+}
+
+async function getQboSyncState({ companyId, entityName } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const res = await pool.query(
+    `
+    SELECT company_id, entity_name, last_cdc_timestamp
+      FROM qbo_sync_state
+     WHERE company_id = $1 AND entity_name = $2
+     LIMIT 1
+    `,
+    [cid, String(entityName || "").trim()]
+  );
+  return res.rows[0] || null;
+}
+
+async function findRentalOrderIdByRoNumber({ companyId, roNumber } = {}) {
+  const cid = Number(companyId);
+  const raw = String(roNumber || "").trim();
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!raw) return null;
+  const res = await pool.query(
+    `SELECT id FROM rental_orders WHERE company_id = $1 AND ro_number = $2 LIMIT 1`,
+    [cid, raw]
+  );
+  const row = res.rows?.[0] || null;
+  if (!row?.id) return null;
+  return Number(row.id);
+}
+
 module.exports = {
   pool,
   ensureTables,
@@ -10913,6 +11526,21 @@ module.exports = {
   listCustomerOrdersForInternalCustomer,
   listCustomerCompaniesByEmail,
   findInternalCustomerIdByEmail,
+  getQboConnection,
+  findCompanyIdByQboRealmId,
+  upsertQboConnection,
+  deleteQboConnection,
+  upsertQboDocument,
+  markQboDocumentRemoved,
+  listQboDocumentsForRentalOrder,
+  listQboDocumentsUnassigned,
+  listRentalOrdersWithOutItems,
+  countOutItemsForOrder,
+  getRentalOrderQboContext,
+  buildRentalOrderBillingLines,
+  upsertQboSyncState,
+  getQboSyncState,
+  findRentalOrderIdByRoNumber,
   rescheduleLineItemEnd,
   setLineItemPickedUp,
   setLineItemReturned,

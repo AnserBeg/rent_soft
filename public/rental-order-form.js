@@ -35,6 +35,9 @@ const statusPill = document.getElementById("status-pill");
 const orderNumberPill = document.getElementById("order-number-pill");
 const downloadOrderPdfBtn = document.getElementById("download-order-pdf");
 const openHistoryBtn = document.getElementById("open-history");
+const qboDocumentsList = document.getElementById("qbo-documents-list");
+const qboDocumentsHint = document.getElementById("qbo-documents-hint");
+const qboSyncNowBtn = document.getElementById("qbo-sync-now");
 
 function setCompanyMeta(message) {
   if (!companyMeta) return;
@@ -1710,6 +1713,52 @@ function fmtDate(value) {
   return d.toISOString().slice(0, 10);
 }
 
+function renderQboDocuments(docs) {
+  if (!qboDocumentsList) return;
+  qboDocumentsList.innerHTML = "";
+  const items = Array.isArray(docs) ? docs : [];
+  if (!items.length) {
+    if (qboDocumentsHint) qboDocumentsHint.textContent = "No QuickBooks documents linked to this order yet.";
+    return;
+  }
+  if (qboDocumentsHint) qboDocumentsHint.textContent = "";
+
+  items.forEach((doc) => {
+    const row = document.createElement("div");
+    row.className = "attachment-row";
+    row.style.gridTemplateColumns = "1.4fr 0.9fr 0.9fr auto";
+    const status = doc.is_deleted ? "deleted" : doc.is_voided ? "voided" : doc.status || "draft";
+    const label = doc.qbo_entity_type === "CreditMemo" ? "Credit memo" : "Invoice";
+    row.innerHTML = `
+      <div>
+        <strong>${label}</strong>
+        <div class="hint">${doc.doc_number || doc.qbo_entity_id || "Unknown"}</div>
+      </div>
+      <div class="hint">${status}</div>
+      <div class="hint">${fmtDate(doc.txn_date)}</div>
+      <div><strong>${fmtMoneyNullable(doc.total_amount)}</strong></div>
+    `;
+    qboDocumentsList.appendChild(row);
+  });
+}
+
+async function loadQboDocuments() {
+  if (!activeCompanyId || !editingOrderId) return;
+  if (qboDocumentsHint) qboDocumentsHint.textContent = "Loading QBO documents...";
+  try {
+    const res = await fetch(
+      `/api/qbo/rental-orders/${encodeURIComponent(String(editingOrderId))}/documents?companyId=${encodeURIComponent(
+        String(activeCompanyId)
+      )}`
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load QBO documents");
+    renderQboDocuments(data.documents || []);
+  } catch (err) {
+    if (qboDocumentsHint) qboDocumentsHint.textContent = err?.message ? String(err.message) : "Unable to load QBO documents.";
+  }
+}
+
 function draftKey() {
   return activeCompanyId ? `ro-draft-${activeCompanyId}` : "ro-draft";
 }
@@ -3271,6 +3320,7 @@ async function loadOrder() {
     await refreshAvailabilityForLineItem(li).catch(() => {});
   }
   renderLineItems();
+  await loadQboDocuments();
 }
 
 function openSalesModal() {
@@ -3892,6 +3942,27 @@ saveOrderBtn.addEventListener("click", async (e) => {
     }
   } catch (err) {
     setCompanyMeta(err.message);
+  }
+});
+
+qboSyncNowBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  if (qboDocumentsHint) qboDocumentsHint.textContent = "Syncing QBO...";
+  try {
+    const res = await fetch("/api/qbo/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyId: activeCompanyId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to sync QBO");
+    await loadQboDocuments();
+    if (qboDocumentsHint) qboDocumentsHint.textContent = "QBO sync complete.";
+  } catch (err) {
+    if (qboDocumentsHint) {
+      qboDocumentsHint.textContent = err?.message ? String(err.message) : "Unable to sync QBO.";
+    }
   }
 });
 

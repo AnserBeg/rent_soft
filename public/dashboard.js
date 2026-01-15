@@ -7,6 +7,7 @@ const rangeStartInput = document.getElementById("range-start");
 const rangeDaysSelect = document.getElementById("range-days");
 const groupBySelect = document.getElementById("group-by");
 const todayBtn = document.getElementById("today");
+const qboIncomeTotal = document.getElementById("qbo-income-total");
 
 const statusReservation = document.getElementById("status-reservation");
 const statusRequested = document.getElementById("status-requested");
@@ -824,6 +825,31 @@ async function loadRevenueTimeSeries() {
       },
     },
   });
+}
+
+async function loadQboIncomeTotal() {
+  if (!activeCompanyId || !qboIncomeTotal) return;
+  const start = rangeStartDate.toISOString().slice(0, 10);
+  const end = new Date(rangeStartDate.getTime() + rangeDays * DAY_MS).toISOString().slice(0, 10);
+  qboIncomeTotal.textContent = "QBO income: ...";
+  try {
+    const qs = new URLSearchParams({
+      companyId: String(activeCompanyId),
+      start,
+      end,
+    });
+    const res = await fetch(`/api/qbo/income?${qs.toString()}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load QBO income");
+    const total = Number(data.total || 0);
+    if (Number.isFinite(total)) {
+      qboIncomeTotal.textContent = `QBO income: $${total.toFixed(2)}`;
+    } else {
+      qboIncomeTotal.textContent = "QBO income: --";
+    }
+  } catch {
+    qboIncomeTotal.textContent = "QBO income: --";
+  }
 }
 
 async function loadSalespersonDonut() {
@@ -1828,7 +1854,11 @@ function initShortfallUI() {
 
 async function loadRevenueDashboard() {
   if (!hasRevenueUI()) return;
-  await Promise.all([loadRevenueTimeSeries().catch(() => null), loadSalespersonDonut().catch(() => null)]);
+  await Promise.all([
+    loadRevenueTimeSeries().catch(() => null),
+    loadSalespersonDonut().catch(() => null),
+    loadQboIncomeTotal().catch(() => null),
+  ]);
 }
 
 function shouldSortTimelineByDate() {

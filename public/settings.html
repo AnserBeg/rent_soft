@@ -176,6 +176,45 @@
           <section class="card wide">
             <div class="card-header">
               <div>
+                <h2>QuickBooks Online</h2>
+                <p class="hint" style="margin:6px 0 0;">Draft-only invoices/credits with read-only sync back.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="qbo-connect" type="button">Connect</button>
+                <button class="ghost danger" id="qbo-disconnect" type="button" disabled>Disconnect</button>
+              </div>
+            </div>
+
+            <div class="stack">
+              <p class="hint" id="qbo-status">Checking QBO connection...</p>
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="qbo-enabled" type="checkbox" />
+                <span>Enable QBO draft billing</span>
+              </label>
+              <div class="three-col">
+                <label>Billing day
+                  <input id="qbo-billing-day" type="number" min="1" max="28" placeholder="1" />
+                </label>
+                <label>Adjustment policy
+                  <select id="qbo-adjustment-policy">
+                    <option value="credit_memo">Draft credit memo on return</option>
+                    <option value="next_invoice">Adjust next invoice only</option>
+                  </select>
+                </label>
+                <label>Income account IDs
+                  <input id="qbo-income-accounts" placeholder="123,456" />
+                </label>
+              </div>
+              <div class="inline-actions" style="justify-content:flex-start;">
+                <button class="primary" id="save-qbo-settings" type="button" disabled>Save QBO settings</button>
+              </div>
+              <p class="hint" id="qbo-hint" style="margin:0;"></p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
                 <h2>Email (SMTP)</h2>
                 <p class="hint" style="margin:6px 0 0;">Send request confirmations and status updates to customers.</p>
               </div>

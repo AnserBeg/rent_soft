@@ -14,6 +14,7 @@ const customerKindSelect = document.getElementById("customer-kind");
 const parentCustomerRow = document.getElementById("parent-customer-row");
 const parentCustomerSelect = document.getElementById("parent-customer-select");
 const companyNameInput = customerForm?.querySelector('input[name="companyName"]');
+const qboCustomerIdInput = customerForm?.querySelector('input[name="qboCustomerId"]');
 const salesSelect = document.getElementById("sales-select");
 const pricingTypeSelect = document.getElementById("pricing-type-select");
 const pricingDaily = document.getElementById("pricing-daily");
@@ -529,6 +530,7 @@ async function loadCustomer() {
     customerForm.region.value = customer.region || "";
     customerForm.country.value = customer.country || "";
     customerForm.postalCode.value = customer.postal_code || "";
+    if (qboCustomerIdInput) qboCustomerIdInput.value = customer.qbo_customer_id || "";
     customerForm.notes.value = customer.notes || "";
     if (canChargeDepositInput) canChargeDepositInput.checked = !!customer.can_charge_deposit;
     customerForm.followUpDate.value = customer.follow_up_date ? customer.follow_up_date.split("T")[0] : "";

@@ -137,10 +137,30 @@ const {
   getSalespersonClosedTransactionsTimeSeries,
   getLocationClosedTransactionsTimeSeries,
   getLocationTypeStockSummary,
+  getQboConnection,
+  findCompanyIdByQboRealmId,
+  upsertQboConnection,
+  deleteQboConnection,
+  listQboDocumentsForRentalOrder,
+  listQboDocumentsUnassigned,
+  listRentalOrdersWithOutItems,
+  countOutItemsForOrder,
 } = require("./db");
 
 const { streamOrderPdf, buildOrderPdfBuffer, streamOrdersReportPdf } = require("./pdf");
 const { sendCompanyEmail, requestSubmittedEmail, statusUpdatedEmail } = require("./mailer");
+const {
+  getQboConfig,
+  buildAuthUrl,
+  exchangeAuthCode,
+  createPickupDraftInvoice,
+  createMonthlyDraftInvoice,
+  createReturnCreditMemo,
+  handleWebhookEvent,
+  runCdcSync,
+  getIncomeTotals,
+} = require("./qboService");
+const { verifyWebhookSignature, computeExpiryTimestamp } = require("./qbo");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -151,7 +171,13 @@ const defaultUploadRoot = path.join(publicRoot, "uploads");
 const uploadRoot = process.env.UPLOAD_ROOT ? path.resolve(process.env.UPLOAD_ROOT) : defaultUploadRoot;
 
 app.use(cors());
-app.use(express.json());
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      if (buf && buf.length) req.rawBody = buf.toString("utf8");
+    },
+  })
+);
 app.use((req, res, next) => {
   if (req.method !== "GET" && req.method !== "HEAD") return next();
 
@@ -691,6 +717,8 @@ app.use(
     if (apiPath === "/api/companies" && req.method === "POST") return next();
     if (apiPath.startsWith("/api/customers")) return next();
     if (apiPath.startsWith("/api/storefront")) return next();
+    if (apiPath === "/api/qbo/callback") return next();
+    if (apiPath === "/api/qbo/webhooks") return next();
 
     await requireCompanyUserAuth(req, res, next);
   })
@@ -2157,7 +2185,19 @@ app.get(
 app.post(
   "/api/equipment-types",
   asyncHandler(async (req, res) => {
-    const { companyId, name, categoryId, imageUrl, imageUrls, description, terms, dailyRate, weeklyRate, monthlyRate } = req.body;
+    const {
+      companyId,
+      name,
+      categoryId,
+      imageUrl,
+      imageUrls,
+      description,
+      terms,
+      dailyRate,
+      weeklyRate,
+      monthlyRate,
+      qboItemId,
+    } = req.body;
     if (!companyId || !name) return res.status(400).json({ error: "companyId and name are required." });
     const type = await createType({
       companyId,
@@ -2170,6 +2210,7 @@ app.post(
       dailyRate,
       weeklyRate,
       monthlyRate,
+      qboItemId,
     });
     if (!type) return res.status(200).json({ message: "Equipment type already exists." });
     res.status(201).json(type);
@@ -2180,7 +2221,19 @@ app.put(
   "/api/equipment-types/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { companyId, name, categoryId, imageUrl, imageUrls, description, terms, dailyRate, weeklyRate, monthlyRate } = req.body;
+    const {
+      companyId,
+      name,
+      categoryId,
+      imageUrl,
+      imageUrls,
+      description,
+      terms,
+      dailyRate,
+      weeklyRate,
+      monthlyRate,
+      qboItemId,
+    } = req.body;
     if (!companyId || !name) return res.status(400).json({ error: "companyId and name are required." });
     const updated = await updateType({
       id,
@@ -2194,6 +2247,7 @@ app.put(
       dailyRate,
       weeklyRate,
       monthlyRate,
+      qboItemId,
     });
     if (!updated) return res.status(404).json({ error: "Type not found" });
     res.json(updated);
@@ -2362,6 +2416,7 @@ app.post(
       postalCode,
       email,
       phone,
+      qboCustomerId,
       contacts,
       accountingContacts,
       canChargeDeposit,
@@ -2382,6 +2437,7 @@ app.post(
         postalCode,
         email,
         phone,
+        qboCustomerId,
         contacts,
         accountingContacts,
         canChargeDeposit: canChargeDeposit === true || canChargeDeposit === "true" || canChargeDeposit === "on",
@@ -2413,6 +2469,7 @@ app.put(
       postalCode,
       email,
       phone,
+      qboCustomerId,
       contacts,
       accountingContacts,
       canChargeDeposit,
@@ -2434,6 +2491,7 @@ app.put(
         postalCode,
         email,
         phone,
+        qboCustomerId,
         contacts,
         accountingContacts,
         canChargeDeposit: canChargeDeposit === true || canChargeDeposit === "true" || canChargeDeposit === "on",
@@ -2753,6 +2811,10 @@ app.put(
           logoUrl,
           requiredStorefrontCustomerFields,
           rentalInfoFields,
+          qboEnabled,
+          qboBillingDay,
+          qboAdjustmentPolicy,
+          qboIncomeAccountIds,
         } = req.body;
       if (!companyId) return res.status(400).json({ error: "companyId is required." });
       const settings = await upsertCompanySettings({
@@ -2770,8 +2832,207 @@ app.put(
           logoUrl,
           requiredStorefrontCustomerFields,
           rentalInfoFields,
+          qboEnabled: qboEnabled ?? null,
+          qboBillingDay: qboBillingDay ?? null,
+          qboAdjustmentPolicy: qboAdjustmentPolicy ?? null,
+          qboIncomeAccountIds: qboIncomeAccountIds ?? undefined,
         });
     res.json({ settings });
+  })
+);
+
+app.get(
+  "/api/qbo/status",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const settings = await getCompanySettings(companyId);
+    const connection = await getQboConnection({ companyId: Number(companyId) });
+    res.json({
+      connected: !!connection,
+      realmId: connection?.realm_id || null,
+      accessTokenExpiresAt: connection?.access_token_expires_at || null,
+      refreshTokenExpiresAt: connection?.refresh_token_expires_at || null,
+      settings: {
+        qbo_enabled: settings.qbo_enabled,
+        qbo_billing_day: settings.qbo_billing_day,
+        qbo_adjustment_policy: settings.qbo_adjustment_policy,
+        qbo_income_account_ids: settings.qbo_income_account_ids,
+      },
+    });
+  })
+);
+
+app.get(
+  "/api/qbo/authorize",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const config = getQboConfig();
+    if (!config.clientId || !config.redirectUri) {
+      return res.status(400).json({ error: "QBO_CLIENT_ID and QBO_REDIRECT_URI are required." });
+    }
+    const state = Buffer.from(JSON.stringify({ companyId, ts: Date.now() })).toString("base64url");
+    const url = buildAuthUrl({
+      clientId: config.clientId,
+      redirectUri: config.redirectUri,
+      state,
+      scopes: ["com.intuit.quickbooks.accounting"],
+    });
+    res.redirect(url);
+  })
+);
+
+app.get(
+  "/api/qbo/callback",
+  asyncHandler(async (req, res) => {
+    const { code, realmId, state } = req.query || {};
+    if (!code || !realmId) return res.status(400).send("Missing code or realmId.");
+    let companyId = null;
+    if (state) {
+      try {
+        const parsed = JSON.parse(Buffer.from(String(state), "base64url").toString("utf8"));
+        if (parsed?.companyId) companyId = Number(parsed.companyId);
+      } catch {
+        companyId = null;
+      }
+    }
+    if (!companyId) return res.status(400).send("Missing company context.");
+
+    const config = getQboConfig();
+    if (!config.clientId || !config.clientSecret || !config.redirectUri) {
+      return res.status(400).send("QBO credentials are not configured.");
+    }
+
+    const token = await exchangeAuthCode({
+      code: String(code),
+      redirectUri: config.redirectUri,
+      clientId: config.clientId,
+      clientSecret: config.clientSecret,
+    });
+
+    await upsertQboConnection({
+      companyId,
+      realmId: String(realmId),
+      accessToken: token.access_token,
+      refreshToken: token.refresh_token,
+      accessTokenExpiresAt: computeExpiryTimestamp(token.expires_in),
+      refreshTokenExpiresAt: computeExpiryTimestamp(token.x_refresh_token_expires_in),
+      scope: token.scope,
+      tokenType: token.token_type,
+    });
+
+    res.redirect("/settings.html?qbo=connected");
+  })
+);
+
+app.post(
+  "/api/qbo/disconnect",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    await deleteQboConnection({ companyId: Number(companyId) });
+    res.status(204).end();
+  })
+);
+
+app.post(
+  "/api/qbo/webhooks",
+  asyncHandler(async (req, res) => {
+    const verifierToken = String(process.env.QBO_WEBHOOK_VERIFIER_TOKEN || "").trim();
+    const signature = String(req.headers["intuit-signature"] || "").trim();
+    const rawBody = req.rawBody || "";
+    if (verifierToken) {
+      const ok = verifyWebhookSignature({ payload: rawBody, signature, verifierToken });
+      if (!ok) return res.status(401).send("Invalid webhook signature.");
+    }
+
+    const payload = req.body || {};
+    const events = Array.isArray(payload.eventNotifications) ? payload.eventNotifications : [];
+    for (const event of events) {
+      const realm = event?.realmId || event?.realmID || payload?.realmId || null;
+      if (!realm) continue;
+      const companyId = await findCompanyIdByQboRealmId({ realmId: realm });
+      if (!companyId) continue;
+      const entities = event?.dataChangeEvent?.entities || [];
+      for (const entity of entities) {
+        const name = entity?.name;
+        if (!name || !["Invoice", "CreditMemo"].includes(name)) continue;
+        const id = entity?.id;
+        const operation = entity?.operation;
+        if (!id) continue;
+        await handleWebhookEvent({ companyId, entityType: name, entityId: id, operation });
+      }
+    }
+    res.status(200).send("ok");
+  })
+);
+
+app.post(
+  "/api/qbo/sync",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const docs = await runCdcSync({ companyId: Number(companyId) });
+    res.json({ documents: docs });
+  })
+);
+
+app.get(
+  "/api/qbo/income",
+  asyncHandler(async (req, res) => {
+    const { companyId, start, end } = req.query || {};
+    if (!companyId || !start || !end) {
+      return res.status(400).json({ error: "companyId, start, and end are required." });
+    }
+    const data = await getIncomeTotals({ companyId: Number(companyId), startDate: start, endDate: end });
+    res.json(data);
+  })
+);
+
+app.post(
+  "/api/qbo/billing/run",
+  asyncHandler(async (req, res) => {
+    const { companyId, asOf } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const settings = await getCompanySettings(companyId);
+    if (!settings?.qbo_enabled) return res.status(200).json({ ok: true, skipped: "qbo_disabled" });
+    const orderIds = await listRentalOrdersWithOutItems({ companyId: Number(companyId) });
+    const results = [];
+    for (const orderId of orderIds) {
+      try {
+        const invoice = await createMonthlyDraftInvoice({ companyId: Number(companyId), orderId, asOf });
+        results.push({ orderId, result: invoice });
+      } catch (err) {
+        results.push({ orderId, error: err?.message ? String(err.message) : "QBO billing failed." });
+      }
+    }
+    res.json({ ok: true, results });
+  })
+);
+
+app.get(
+  "/api/qbo/rental-orders/:id/documents",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const docs = await listQboDocumentsForRentalOrder({ companyId: Number(companyId), orderId: Number(id) });
+    res.json({ documents: docs });
+  })
+);
+
+app.get(
+  "/api/qbo/documents/unassigned",
+  asyncHandler(async (req, res) => {
+    const { companyId, limit, offset } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const docs = await listQboDocumentsUnassigned({
+      companyId: Number(companyId),
+      limit,
+      offset,
+    });
+    res.json({ documents: docs });
   })
 );
 
@@ -3100,7 +3361,23 @@ app.put(
       actorEmail: actorEmail || null,
     });
     if (!result.ok) return res.status(409).json(result);
-    res.json(result);
+    let qbo = null;
+    if (pickedUp) {
+      const settings = await getCompanySettings(companyId).catch(() => null);
+      if (settings?.qbo_enabled) {
+        try {
+          qbo = await createPickupDraftInvoice({
+            companyId: Number(companyId),
+            orderId: result.orderId,
+            lineItemId: Number(id),
+            pickedUpAt: result.pickedUpAt || normalizedPickedUpAt || new Date().toISOString(),
+          });
+        } catch (err) {
+          qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
+        }
+      }
+    }
+    res.json({ ...result, qbo });
   })
 );
 
@@ -3128,7 +3405,23 @@ app.put(
       actorEmail: actorEmail || null,
     });
     if (!result.ok) return res.status(409).json(result);
-    res.json(result);
+    let qbo = null;
+    if (returned) {
+      const settings = await getCompanySettings(companyId).catch(() => null);
+      if (settings?.qbo_enabled && settings?.qbo_adjustment_policy === "credit_memo") {
+        try {
+          qbo = await createReturnCreditMemo({
+            companyId: Number(companyId),
+            orderId: result.orderId,
+            lineItemId: Number(id),
+            returnedAt: result.returnedAt || normalizedReturnedAt || new Date().toISOString(),
+          });
+        } catch (err) {
+          qbo = { ok: false, error: err?.message ? String(err.message) : "QBO credit memo failed." };
+        }
+      }
+    }
+    res.json({ ...result, qbo });
   })
 );
 

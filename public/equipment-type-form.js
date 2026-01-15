@@ -409,6 +409,7 @@ async function loadType() {
   typeForm.dailyRate.value = item.daily_rate || "";
   typeForm.weeklyRate.value = item.weekly_rate || "";
   typeForm.monthlyRate.value = item.monthly_rate || "";
+  if (typeForm.qboItemId) typeForm.qboItemId.value = item.qbo_item_id || "";
   await loadStockSeries().catch(() => null);
 }
 
