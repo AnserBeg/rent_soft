@@ -1413,6 +1413,7 @@ app.post(
         deliveryInstructions,
         criticalAreas,
         generalNotes,
+        generalNotesImages,
         emergencyContacts,
         siteContacts,
         coverageHours,
@@ -1444,6 +1445,7 @@ app.post(
           deliveryInstructions,
           criticalAreas,
           generalNotes,
+          generalNotesImages,
           emergencyContacts,
           siteContacts,
           coverageHours,
@@ -4047,7 +4049,7 @@ app.post(
   "/api/rental-orders/:id/attachments",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { companyId, fileName, mime, sizeBytes, url, actorName, actorEmail } = req.body;
+    const { companyId, fileName, mime, sizeBytes, url, category, actorName, actorEmail } = req.body;
     if (!companyId || !fileName || !url) {
       return res.status(400).json({ error: "companyId, fileName, and url are required." });
     }
@@ -4058,6 +4060,7 @@ app.post(
       mime,
       sizeBytes,
       url,
+      category: category || null,
       actorName,
       actorEmail,
     });

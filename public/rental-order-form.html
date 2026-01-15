@@ -249,6 +249,12 @@
                   <label>General notes
                     <textarea id="general-notes"></textarea>
                   </label>
+                  <div class="inline-actions" style="justify-content:flex-start; margin-top:8px;">
+                    <label class="ghost small" for="general-notes-images">Add photos</label>
+                    <input id="general-notes-images" type="file" accept="image/*" multiple hidden />
+                    <span class="hint" id="general-notes-images-status"></span>
+                  </div>
+                  <div class="guard-notes-previews" id="general-notes-previews"></div>
                 </div>
                 <div class="contact-block" data-rental-info-field="emergencyContacts">
                   <div class="contact-header">

@@ -75,6 +75,9 @@ const specialInstructions = document.getElementById("special-instructions");
 const siteAddressInput = document.getElementById("site-address");
 const criticalAreasInput = document.getElementById("critical-areas");
 const generalNotesInput = document.getElementById("general-notes");
+const generalNotesImagesInput = document.getElementById("general-notes-images");
+const generalNotesImagesStatus = document.getElementById("general-notes-images-status");
+const generalNotesPreviews = document.getElementById("general-notes-previews");
 const rentalInfoFieldContainers = {
   siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
   criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
@@ -327,6 +330,9 @@ let draft = {
   fees: [],
   isOverdue: false,
 };
+
+let generalNotesImages = [];
+let generalNotesUploadsInFlight = 0;
 
 function resetDraftForNew() {
   draft = {
@@ -2169,25 +2175,84 @@ function renderNotes(notes) {
   }
 }
 
+function setGeneralNotesStatus(message) {
+  if (!generalNotesImagesStatus) return;
+  generalNotesImagesStatus.textContent = String(message || "");
+}
+
+function normalizeGeneralNotesAttachments(list) {
+  const rows = Array.isArray(list) ? list : [];
+  return rows
+    .filter((a) => String(a?.category || "") === "general_notes" && a?.url)
+    .map((a) => ({
+      id: a.id,
+      name: a.file_name || a.fileName || "Photo",
+      mime: a.mime || "",
+      sizeBytes: a.size_bytes ?? a.sizeBytes ?? null,
+      url: a.url,
+    }));
+}
+
+function renderGeneralNotesImages() {
+  if (!generalNotesPreviews) return;
+  generalNotesPreviews.replaceChildren();
+  generalNotesPreviews.hidden = generalNotesImages.length === 0;
+  generalNotesImages.forEach((img) => {
+    const tile = document.createElement("div");
+    tile.className = "guard-notes-preview";
+    tile.innerHTML = `
+      <img src="${escapeHtml(img.url || "")}" alt="${escapeHtml(img.name || "General notes photo")}" loading="lazy" />
+      <button class="ghost tiny" type="button" data-remove-general-notes="${escapeHtml(String(img.id || ""))}">Remove</button>
+    `;
+    generalNotesPreviews.appendChild(tile);
+  });
+}
+
 function renderAttachments(list) {
   attachmentsList.innerHTML = "";
-  (list || []).forEach((a) => {
+  const filtered = (list || []).filter((a) => String(a?.category || "") !== "general_notes");
+  filtered.forEach((a) => {
     const div = document.createElement("div");
     div.className = "attachment-row";
     div.dataset.attachmentId = a.id;
     div.innerHTML = `
       <a href="${a.url}" target="_blank" rel="noopener">${a.file_name}</a>
-      <span class="hint">${a.mime || ""}${a.size_bytes ? ` • ${Math.round(a.size_bytes / 1024)} KB` : ""}</span>
+      <span class="hint">${a.mime || ""}${a.size_bytes ? ` - ${Math.round(a.size_bytes / 1024)} KB` : ""}</span>
       <button class="ghost small danger" data-remove-attachment="${a.id}" data-url="${a.url}">Remove</button>
     `;
     attachmentsList.appendChild(div);
   });
 
-  const count = Array.isArray(list) ? list.length : 0;
+  const count = Array.isArray(list) ? filtered.length : 0;
   if (extrasFilesBadge) {
     extrasFilesBadge.textContent = String(count);
     extrasFilesBadge.style.display = count > 0 ? "inline-flex" : "none";
   }
+}
+
+
+async function createGeneralNotesAttachment({ url, fileName, mime, sizeBytes }) {
+  if (!editingOrderId) throw new Error("Save the RO first to enable uploads.");
+  const session = window.RentSoft?.getSession?.();
+  const actorName = session?.user?.name ? String(session.user.name) : null;
+  const actorEmail = session?.user?.email ? String(session.user.email) : null;
+  const res = await fetch(`/api/rental-orders/${editingOrderId}/attachments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyId: activeCompanyId,
+      fileName,
+      mime,
+      sizeBytes,
+      url,
+      category: "general_notes",
+      actorName,
+      actorEmail,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to save general notes image.");
+  return data;
 }
 
 function renderCustomerDetails() {
@@ -3241,6 +3306,8 @@ async function loadOrder() {
   renderCustomerDetails();
   renderNotes(data.notes || []);
   renderAttachments(data.attachments || []);
+  generalNotesImages = normalizeGeneralNotesAttachments(data.attachments || []);
+  renderGeneralNotesImages();
   setPickupPreview();
   syncTermsBadgeFromInputs();
   updateModeLabels();
@@ -4083,6 +4150,10 @@ function setExtrasTab(tab) {
     if (saveNoteBtn) saveNoteBtn.disabled = !editingOrderId;
     if (attachmentHint) attachmentHint.textContent = editingOrderId ? "" : "Save the RO first to enable uploads.";
     if (uploadAttachmentBtn) uploadAttachmentBtn.disabled = !editingOrderId;
+    if (generalNotesImagesStatus) {
+      generalNotesImagesStatus.textContent = editingOrderId ? "" : "Save the RO first to enable uploads.";
+    }
+    if (generalNotesImagesInput) generalNotesImagesInput.disabled = !editingOrderId;
   }
 
 function openExtrasDrawer(tab) {
@@ -4173,6 +4244,90 @@ saveNoteBtn?.addEventListener("click", async (e) => {
     renderNotes(detail.notes || []);
   } catch (err) {
     if (noteHint) noteHint.textContent = err.message;
+  }
+});
+
+generalNotesImagesInput?.addEventListener("change", async (e) => {
+  const files = Array.from(e.target?.files || []);
+  if (!files.length) return;
+  if (!editingOrderId) {
+    setGeneralNotesStatus("Save the RO first to enable uploads.");
+    if (generalNotesImagesInput) generalNotesImagesInput.value = "";
+    return;
+  }
+  if (!activeCompanyId) {
+    setGeneralNotesStatus("Select a company to upload images.");
+    if (generalNotesImagesInput) generalNotesImagesInput.value = "";
+    return;
+  }
+
+  generalNotesUploadsInFlight += files.length;
+  setGeneralNotesStatus(`Uploading ${files.length} image${files.length === 1 ? "" : "s"}...`);
+
+  const results = await Promise.allSettled(
+    files.map(async (file) => {
+      if (!String(file?.type || "").startsWith("image/")) {
+        throw new Error("Only image uploads are allowed.");
+      }
+      const url = await uploadImage({ file });
+      try {
+        return await createGeneralNotesAttachment({
+          url,
+          fileName: file.name || "Photo",
+          mime: file.type || "",
+          sizeBytes: Number.isFinite(file.size) ? file.size : null,
+        });
+      } catch (err) {
+        await deleteUploadedImage(url).catch(() => {});
+        throw err;
+      }
+    })
+  );
+
+  const uploaded = [];
+  const failures = [];
+  results.forEach((result) => {
+    if (result.status === "fulfilled") uploaded.push(result.value);
+    else failures.push(result.reason);
+  });
+
+  generalNotesUploadsInFlight = Math.max(0, generalNotesUploadsInFlight - files.length);
+  if (uploaded.length) {
+    generalNotesImages = generalNotesImages.concat(normalizeGeneralNotesAttachments(uploaded));
+    renderGeneralNotesImages();
+  }
+
+  if (failures.length) {
+    setGeneralNotesStatus(failures[0]?.message || "Some uploads failed.");
+  } else {
+    setGeneralNotesStatus(uploaded.length ? "Images added." : "No images uploaded.");
+  }
+
+  if (generalNotesImagesInput) generalNotesImagesInput.value = "";
+});
+
+generalNotesPreviews?.addEventListener("click", async (e) => {
+  const btn = e.target?.closest?.("[data-remove-general-notes]");
+  if (!btn) return;
+  const id = btn.getAttribute("data-remove-general-notes");
+  if (!id || !editingOrderId) return;
+  const target = generalNotesImages.find((img) => String(img.id) === String(id));
+  if (!target) return;
+  try {
+    const session = window.RentSoft?.getSession?.();
+    const actorName = session?.user?.name ? String(session.user.name) : null;
+    const actorEmail = session?.user?.email ? String(session.user.email) : null;
+    await deleteUploadedImage(target.url).catch(() => {});
+    await fetch(`/api/rental-orders/${editingOrderId}/attachments/${id}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyId: activeCompanyId, actorName, actorEmail }),
+    });
+    generalNotesImages = generalNotesImages.filter((img) => String(img.id) !== String(id));
+    renderGeneralNotesImages();
+    setGeneralNotesStatus("Image removed.");
+  } catch (err) {
+    setGeneralNotesStatus(err?.message || "Unable to remove image.");
   }
 });
 

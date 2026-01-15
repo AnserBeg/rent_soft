@@ -123,6 +123,12 @@
                   General notes
                   <textarea id="reserve-general-notes" required></textarea>
                 </label>
+                <div class="inline-actions" style="justify-content:flex-start; margin-top:8px;">
+                  <label class="ghost small" for="reserve-general-notes-images">Add photos</label>
+                  <input id="reserve-general-notes-images" type="file" accept="image/*" multiple hidden />
+                  <span class="hint" id="reserve-general-notes-status"></span>
+                </div>
+                <div class="guard-notes-previews" id="reserve-general-notes-previews"></div>
               </div>
               <div class="contact-block" data-rental-info-field="emergencyContacts">
                 <div class="contact-header">

@@ -84,6 +84,35 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+function makeImageId(prefix = "img") {
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${prefix}-${Date.now()}-${rand}`;
+}
+
+async function uploadImage({ companyId, file }) {
+  if (!companyId) throw new Error("companyId is required.");
+  if (!file || !String(file.type || "").startsWith("image/")) {
+    throw new Error("Only image uploads are allowed.");
+  }
+  const body = new FormData();
+  body.append("companyId", String(companyId));
+  body.append("image", file);
+  const res = await fetch("/api/uploads/image", { method: "POST", body });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to upload image.");
+  if (!data.url) throw new Error("Upload did not return an image url.");
+  return data.url;
+}
+
+async function deleteImage({ companyId, url }) {
+  if (!companyId || !url) return;
+  await fetch("/api/uploads/image", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId, url }),
+  });
+}
+
 function renderRates(listing) {
   const bits = [];
   const daily = formatMoney(listing?.dailyRate);
@@ -151,6 +180,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const topbarAccountActions = $("storefront-account-actions");
   const reserveCriticalAreas = $("reserve-critical-areas");
   const reserveGeneralNotes = $("reserve-general-notes");
+  const reserveGeneralNotesImagesInput = $("reserve-general-notes-images");
+  const reserveGeneralNotesStatus = $("reserve-general-notes-status");
+  const reserveGeneralNotesPreviews = $("reserve-general-notes-previews");
   const reserveSiteAddress = $("reserve-site-address");
     const rentalInfoFieldContainers = {
       siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
@@ -212,6 +244,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let pendingWelcome = false;
   let pendingAutoOpen = null;
   let activeRentalInfoConfig = null;
+  let reserveGeneralNotesImages = [];
+  let reserveGeneralNotesUploadsInFlight = 0;
 
   const DEFAULT_RENTAL_INFO_FIELDS = {
     siteAddress: { enabled: true, required: false },
@@ -271,6 +305,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (reserveGeneralNotes) {
       reserveGeneralNotes.required =
         activeRentalInfoConfig?.generalNotes?.enabled && activeRentalInfoConfig?.generalNotes?.required;
+    }
+    if (activeRentalInfoConfig?.generalNotes?.enabled === false) {
+      clearReserveGeneralNotesImages({ deleteUploads: true });
     }
   }
 
@@ -382,6 +419,41 @@ document.addEventListener("DOMContentLoaded", () => {
     setContactRows(reserveEmergencyContactsList, []);
     setContactRows(reserveSiteContactsList, []);
     resetCoverageInputs();
+    clearReserveGeneralNotesImages({ deleteUploads: true });
+  }
+
+  function setReserveGeneralNotesStatus(message) {
+    if (!reserveGeneralNotesStatus) return;
+    reserveGeneralNotesStatus.textContent = String(message || "");
+  }
+
+  function renderReserveGeneralNotesPreviews() {
+    if (!reserveGeneralNotesPreviews) return;
+    reserveGeneralNotesPreviews.replaceChildren();
+    reserveGeneralNotesPreviews.hidden = reserveGeneralNotesImages.length === 0;
+    reserveGeneralNotesImages.forEach((img) => {
+      const tile = document.createElement("div");
+      tile.className = "guard-notes-preview";
+      tile.innerHTML = `
+        <img src="${escapeHtml(img.url || "")}" alt="${escapeHtml(img.fileName || "General notes photo")}" loading="lazy" />
+        <button class="ghost tiny" type="button" data-remove-reserve-image="${escapeHtml(String(img.id || ""))}">Remove</button>
+      `;
+      reserveGeneralNotesPreviews.appendChild(tile);
+    });
+  }
+
+  async function clearReserveGeneralNotesImages({ deleteUploads = false } = {}) {
+    if (deleteUploads && reserveGeneralNotesImages.length) {
+      const companyId = activeListing?.company?.id || Number(reserveForm?.companyId?.value);
+      if (companyId) {
+        const urls = reserveGeneralNotesImages.map((img) => img.url).filter(Boolean);
+        await Promise.allSettled(urls.map((url) => deleteImage({ companyId, url })));
+      }
+    }
+    reserveGeneralNotesImages = [];
+    reserveGeneralNotesUploadsInFlight = 0;
+    renderReserveGeneralNotesPreviews();
+    setReserveGeneralNotesStatus("");
   }
 
   function readUrlParams() {
@@ -588,11 +660,69 @@ document.addEventListener("DOMContentLoaded", () => {
     updateContactRemoveButtons(reserveSiteContactsList);
   });
 
+  reserveGeneralNotesImagesInput?.addEventListener("change", async (e) => {
+    const files = Array.from(e.target?.files || []);
+    if (!files.length) return;
+    const companyId = activeListing?.company?.id || Number(reserveForm?.companyId?.value);
+    if (!companyId) {
+      setReserveGeneralNotesStatus("Select a company first.");
+      if (reserveGeneralNotesImagesInput) reserveGeneralNotesImagesInput.value = "";
+      return;
+    }
+    reserveGeneralNotesUploadsInFlight += files.length;
+    setReserveGeneralNotesStatus(`Uploading ${files.length} image${files.length === 1 ? "" : "s"}...`);
+    const results = await Promise.allSettled(
+      files.map(async (file) => {
+        const url = await uploadImage({ companyId, file });
+        return {
+          id: makeImageId("reserve"),
+          url,
+          fileName: file.name || "Photo",
+          mime: file.type || "",
+          sizeBytes: Number.isFinite(file.size) ? file.size : null,
+        };
+      })
+    );
+    const uploaded = [];
+    const failures = [];
+    results.forEach((result) => {
+      if (result.status === "fulfilled") uploaded.push(result.value);
+      else failures.push(result.reason);
+    });
+    reserveGeneralNotesUploadsInFlight = Math.max(0, reserveGeneralNotesUploadsInFlight - files.length);
+    if (uploaded.length) {
+      reserveGeneralNotesImages = reserveGeneralNotesImages.concat(uploaded);
+      renderReserveGeneralNotesPreviews();
+    }
+    if (failures.length) {
+      setReserveGeneralNotesStatus(failures[0]?.message || "Some uploads failed.");
+    } else {
+      setReserveGeneralNotesStatus(uploaded.length ? "Images added." : "No images uploaded.");
+    }
+    if (reserveGeneralNotesImagesInput) reserveGeneralNotesImagesInput.value = "";
+  });
+
+  reserveGeneralNotesPreviews?.addEventListener("click", async (e) => {
+    const btn = e.target?.closest?.("[data-remove-reserve-image]");
+    if (!btn) return;
+    const id = btn.getAttribute("data-remove-reserve-image");
+    if (!id) return;
+    const companyId = activeListing?.company?.id || Number(reserveForm?.companyId?.value);
+    const target = reserveGeneralNotesImages.find((img) => String(img.id) === String(id));
+    reserveGeneralNotesImages = reserveGeneralNotesImages.filter((img) => String(img.id) !== String(id));
+    renderReserveGeneralNotesPreviews();
+    if (companyId && target?.url) {
+      await deleteImage({ companyId, url: target.url }).catch(() => {});
+    }
+    setReserveGeneralNotesStatus("Image removed.");
+  });
+
   function closeReserveModal() {
     if (!reserveModal) return;
     reserveModal.classList.remove("show");
     reserveModal.setAttribute("aria-hidden", "true");
     document.body.classList.remove("drawer-open");
+    clearReserveGeneralNotesImages({ deleteUploads: true });
     activeListing = null;
     replaceUrl({ reserveCompanyId: null, reserveTypeId: null });
   }
@@ -735,6 +865,10 @@ document.addEventListener("DOMContentLoaded", () => {
       setMeta(reserveMeta, "General notes are required.");
       return;
     }
+    if (reserveGeneralNotesUploadsInFlight > 0) {
+      setMeta(reserveMeta, "Wait for image uploads to finish.");
+      return;
+    }
 
     const emergencyCheck = isFieldEnabled("emergencyContacts")
       ? validateContacts(reserveEmergencyContactsList, "Emergency contacts", { required: isFieldRequired("emergencyContacts") })
@@ -771,6 +905,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isFieldEnabled("siteAddress") && siteAddress) payload.siteAddress = siteAddress;
     if (isFieldEnabled("criticalAreas") && criticalAreas) payload.criticalAreas = criticalAreas;
     if (isFieldEnabled("generalNotes") && generalNotes) payload.generalNotes = generalNotes;
+    if (isFieldEnabled("generalNotes") && reserveGeneralNotesImages.length) {
+      payload.generalNotesImages = reserveGeneralNotesImages.map((img) => ({
+        url: img.url,
+        fileName: img.fileName,
+        mime: img.mime || null,
+        sizeBytes: img.sizeBytes ?? null,
+      }));
+    }
     if (isFieldEnabled("emergencyContacts") && emergencyCheck.contacts.length) payload.emergencyContacts = emergencyCheck.contacts;
     if (isFieldEnabled("siteContacts") && siteCheck.contacts.length) payload.siteContacts = siteCheck.contacts;
     if (isFieldEnabled("coverageHours") && Object.keys(coverageCheck.coverageHours).length)
@@ -806,6 +948,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const customer = window.CustomerAccount?.getCustomer?.() || null;
       const email = customer?.email ? String(customer.email) : "your email";
       setMeta(reserveMeta, `${ref} confirmed. The rental company will follow up at ${email}.`);
+      clearReserveGeneralNotesImages({ deleteUploads: false });
       await loadListings();
     } catch (err) {
       setMeta(reserveMeta, err?.message ? String(err.message) : "Reservation failed.");

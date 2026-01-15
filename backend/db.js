@@ -784,9 +784,11 @@ async function ensureTables() {
         mime TEXT,
         size_bytes INTEGER,
         url TEXT NOT NULL,
+        category TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    await client.query(`ALTER TABLE rental_order_attachments ADD COLUMN IF NOT EXISTS category TEXT;`);
     await client.query(`CREATE INDEX IF NOT EXISTS rental_order_attachments_order_id_idx ON rental_order_attachments (rental_order_id);`);
 
     await client.query(`
@@ -5081,6 +5083,35 @@ function normalizeCoverageHours(value) {
     normalized[day] = { start, end };
   });
   return normalized;
+}
+
+function normalizeOrderAttachments({ companyId, attachments, category = null } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) return [];
+  const list = Array.isArray(attachments) ? attachments : [];
+  const prefix = `/uploads/company-${cid}/`;
+  return list
+    .map((entry) => {
+      if (!entry) return null;
+      const url = String(entry.url || entry.src || "").trim();
+      if (!url || !url.startsWith(prefix)) return null;
+      const fileName = String(entry.fileName || entry.name || "General notes image").trim() || "General notes image";
+      const mime = entry.mime ? String(entry.mime) : entry.type ? String(entry.type) : null;
+      const sizeBytes =
+        entry.sizeBytes === null || entry.sizeBytes === undefined
+          ? entry.size === null || entry.size === undefined
+            ? null
+            : Number(entry.size)
+          : Number(entry.sizeBytes);
+      return {
+        fileName,
+        mime: mime || null,
+        sizeBytes: Number.isFinite(sizeBytes) ? sizeBytes : null,
+        url,
+        category: category || null,
+      };
+    })
+    .filter(Boolean);
 }
 
 function normalizeCustomerId(value) {
@@ -11169,7 +11200,7 @@ async function getRentalOrder({ companyId, id }) {
     [id]
   );
   const attachmentsRes = await pool.query(
-    `SELECT id, file_name, mime, size_bytes, url, created_at FROM rental_order_attachments WHERE rental_order_id = $1 ORDER BY created_at`,
+    `SELECT id, file_name, mime, size_bytes, url, category, created_at FROM rental_order_attachments WHERE rental_order_id = $1 ORDER BY created_at`,
     [id]
   );
 
@@ -13281,16 +13312,26 @@ async function addRentalOrderNote({ companyId, orderId, userName, note }) {
   return created;
 }
 
-async function addRentalOrderAttachment({ companyId, orderId, fileName, mime, sizeBytes, url, actorName, actorEmail }) {
+async function addRentalOrderAttachment({
+  companyId,
+  orderId,
+  fileName,
+  mime,
+  sizeBytes,
+  url,
+  category = null,
+  actorName,
+  actorEmail,
+}) {
   const result = await pool.query(
     `
-    INSERT INTO rental_order_attachments (rental_order_id, file_name, mime, size_bytes, url)
-    SELECT ro.id, $1, $2, $3, $4
+    INSERT INTO rental_order_attachments (rental_order_id, file_name, mime, size_bytes, url, category)
+    SELECT ro.id, $1, $2, $3, $4, $5
       FROM rental_orders ro
-     WHERE ro.id = $5 AND ro.company_id = $6
-     RETURNING id, file_name, mime, size_bytes, url, created_at
+     WHERE ro.id = $6 AND ro.company_id = $7
+     RETURNING id, file_name, mime, size_bytes, url, category, created_at
     `,
-    [fileName, mime || null, sizeBytes || null, url, orderId, companyId]
+    [fileName, mime || null, sizeBytes || null, url, category, orderId, companyId]
   );
   const created = result.rows[0];
   if (created) {
@@ -13301,7 +13342,7 @@ async function addRentalOrderAttachment({ companyId, orderId, fileName, mime, si
       actorEmail: actorEmail || null,
       action: "attachment_add",
       summary: "Added an attachment.",
-      changes: { fileName, mime: mime || null, sizeBytes: sizeBytes || null, url },
+      changes: { fileName, mime: mime || null, sizeBytes: sizeBytes || null, url, category },
     });
   }
   return created;
@@ -14803,6 +14844,7 @@ async function createStorefrontReservation({
   deliveryInstructions,
   criticalAreas,
   generalNotes,
+  generalNotesImages,
   emergencyContacts,
   siteContacts,
   coverageHours,
@@ -14963,6 +15005,13 @@ async function createStorefrontReservation({
   const dropoffAddress = fulfillmentMethod === "dropoff" ? String(deliveryAddress || "").trim() || null : null;
   const combinedGeneralNotes = generalNotesValue || null;
   const logisticsInstructions = String(deliveryInstructions || "").trim() || null;
+  const normalizedGeneralNotesImages = useRentalInfoField("generalNotes")
+    ? normalizeOrderAttachments({
+        companyId: cid,
+        attachments: generalNotesImages,
+        category: "general_notes",
+      })
+    : [];
 
   const order = await createRentalOrder({
     companyId: cid,
@@ -14987,6 +15036,20 @@ async function createStorefrontReservation({
       rateAmount: rateAmount !== null && Number.isFinite(rateAmount) ? rateAmount : null,
     })),
   });
+
+  for (const img of normalizedGeneralNotesImages) {
+    await addRentalOrderAttachment({
+      companyId: cid,
+      orderId: order.id,
+      fileName: img.fileName,
+      mime: img.mime,
+      sizeBytes: img.sizeBytes,
+      url: img.url,
+      category: img.category,
+      actorName: customer.name,
+      actorEmail: customer.email,
+    });
+  }
 
   const docs = customer?.documents && typeof customer.documents === "object" ? customer.documents : {};
   for (const [key, doc] of Object.entries(docs)) {

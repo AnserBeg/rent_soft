@@ -5,6 +5,9 @@
   const siteAddressId = "rs-site-address";
   const criticalAreasId = "rs-critical-areas";
   const generalNotesId = "rs-general-notes";
+  const generalNotesImagesInputId = "rs-general-notes-images";
+  const generalNotesImagesPreviewsId = "rs-general-notes-previews";
+  const generalNotesImagesStatusId = "rs-general-notes-status";
   const deliveryInstructionsId = "rs-delivery-instructions";
 
   const DEFAULT_RENTAL_INFO_FIELDS = {
@@ -19,6 +22,8 @@
   const rentalInfoByCompanyId = new Map();
   const rentalInfoByCompanyName = new Map();
   let currentRentalInfoConfig = normalizeRentalInfoFields(null);
+  let generalNotesPendingFiles = [];
+  let generalNotesUploadsInFlight = 0;
 
   const coverageDays = [
     { key: "mon", label: "Mon" },
@@ -109,6 +114,9 @@
     if (generalNotesInput) {
       generalNotesInput.required =
         currentRentalInfoConfig?.generalNotes?.enabled && currentRentalInfoConfig?.generalNotes?.required;
+    }
+    if (currentRentalInfoConfig?.generalNotes?.enabled === false) {
+      clearGeneralNotesPendingFiles();
     }
   }
 
@@ -203,6 +211,14 @@
             General notes
             <textarea id="${generalNotesId}" class="mt-1 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all" rows="3" required></textarea>
           </label>
+          <div class="mt-2 flex flex-wrap items-center gap-3">
+            <label class="text-xs font-bold text-brand-accent hover:text-yellow-600 cursor-pointer" for="${generalNotesImagesInputId}">
+              Add photos
+            </label>
+            <input id="${generalNotesImagesInputId}" type="file" accept="image/*" multiple class="hidden" />
+            <span id="${generalNotesImagesStatusId}" class="text-xs text-slate-400"></span>
+          </div>
+          <div id="${generalNotesImagesPreviewsId}" class="mt-2 grid grid-cols-2 md:grid-cols-4 gap-2"></div>
         </div>
         <div class="space-y-2" data-rental-info-field="emergencyContacts">
           <div class="flex items-center justify-between">
@@ -294,6 +310,54 @@
     return section;
   }
 
+  function bindGeneralNotesImageHandlers(section) {
+    if (!section || section.dataset.generalNotesImagesBound === "true") return;
+    const input = section.querySelector(`#${generalNotesImagesInputId}`);
+    const previews = section.querySelector(`#${generalNotesImagesPreviewsId}`);
+    if (!input || !previews) return;
+    section.dataset.generalNotesImagesBound = "true";
+
+    input.addEventListener("change", () => {
+      const files = Array.from(input.files || []);
+      if (!files.length) return;
+      let invalid = false;
+      files.forEach((file) => {
+        if (!String(file?.type || "").startsWith("image/")) {
+          invalid = true;
+          return;
+        }
+        const previewUrl = URL.createObjectURL(file);
+        generalNotesPendingFiles.push({ id: makeImageId("note"), file, previewUrl });
+      });
+      if (invalid) {
+        setGeneralNotesImageStatus("Only image uploads are allowed.");
+      }
+      renderGeneralNotesImagePreviews();
+      input.value = "";
+    });
+
+    previews.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const id = target.dataset.removeGeneralNotesImage;
+      if (!id) return;
+      const idx = generalNotesPendingFiles.findIndex((entry) => String(entry.id) === String(id));
+      if (idx < 0) return;
+      const [removed] = generalNotesPendingFiles.splice(idx, 1);
+      if (removed?.previewUrl) {
+        try {
+          URL.revokeObjectURL(removed.previewUrl);
+        } catch {
+          // ignore
+        }
+      }
+      renderGeneralNotesImagePreviews();
+      setGeneralNotesImageStatus("Image removed.");
+    });
+
+    renderGeneralNotesImagePreviews();
+  }
+
   function insertRentalInfoSection() {
     const form = findRequestForm();
     if (!form) return;
@@ -301,6 +365,7 @@
     const existing = form.querySelector(`#${sectionId}`);
     if (existing) {
       applyRentalInfoConfig(existing, resolveRentalInfoConfig(form));
+      bindGeneralNotesImageHandlers(existing);
       return;
     }
     const fulfillmentCard = findFulfillmentCard(form);
@@ -310,10 +375,114 @@
     ensureContactRows(section.querySelector(`#${emergencyListId}`), "emergency");
     ensureContactRows(section.querySelector(`#${siteListId}`), "site");
     applyRentalInfoConfig(section, resolveRentalInfoConfig(form));
+    bindGeneralNotesImageHandlers(section);
   }
 
   function normalizeValue(value) {
     return String(value ?? "").trim();
+  }
+
+  function makeImageId(prefix = "img") {
+    const rand = Math.random().toString(36).slice(2, 8);
+    return `${prefix}-${Date.now()}-${rand}`;
+  }
+
+  function setGeneralNotesImageStatus(message) {
+    const el = document.getElementById(generalNotesImagesStatusId);
+    if (!el) return;
+    el.textContent = String(message || "");
+  }
+
+  function renderGeneralNotesImagePreviews() {
+    const wrap = document.getElementById(generalNotesImagesPreviewsId);
+    if (!wrap) return;
+    wrap.replaceChildren();
+    wrap.style.display = generalNotesPendingFiles.length ? "" : "none";
+    generalNotesPendingFiles.forEach((item) => {
+      const tile = document.createElement("div");
+      tile.className = "relative border border-gray-200 rounded-lg overflow-hidden bg-white";
+      const img = document.createElement("img");
+      img.src = item.previewUrl;
+      img.alt = item.file?.name || "General notes photo";
+      img.className = "block w-full h-24 object-cover";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "absolute top-2 right-2 text-xs font-bold text-red-600 bg-white/90 px-2 py-1 rounded";
+      button.textContent = "Remove";
+      button.dataset.removeGeneralNotesImage = item.id;
+      tile.appendChild(img);
+      tile.appendChild(button);
+      wrap.appendChild(tile);
+    });
+  }
+
+  function clearGeneralNotesPendingFiles() {
+    generalNotesPendingFiles.forEach((item) => {
+      if (item.previewUrl) {
+        try {
+          URL.revokeObjectURL(item.previewUrl);
+        } catch {
+          // ignore
+        }
+      }
+    });
+    generalNotesPendingFiles = [];
+    generalNotesUploadsInFlight = 0;
+    renderGeneralNotesImagePreviews();
+    setGeneralNotesImageStatus("");
+  }
+
+  async function uploadGeneralNotesImages(companyId) {
+    const cid = Number(companyId);
+    if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+    if (!generalNotesPendingFiles.length) return [];
+    generalNotesUploadsInFlight += generalNotesPendingFiles.length;
+    setGeneralNotesImageStatus(`Uploading ${generalNotesPendingFiles.length} image${generalNotesPendingFiles.length === 1 ? "" : "s"}...`);
+    const results = await Promise.allSettled(
+      generalNotesPendingFiles.map(async (item) => {
+        const file = item.file;
+        if (!file || !String(file.type || "").startsWith("image/")) {
+          throw new Error("Only image uploads are allowed.");
+        }
+        const body = new FormData();
+        body.append("companyId", String(cid));
+        body.append("image", file);
+        const res = await fetch("/api/uploads/image", { method: "POST", body });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Unable to upload image.");
+        if (!data.url) throw new Error("Upload did not return an image url.");
+        return {
+          url: data.url,
+          fileName: file.name || "Photo",
+          mime: file.type || "",
+          sizeBytes: Number.isFinite(file.size) ? file.size : null,
+        };
+      })
+    );
+
+    const uploaded = [];
+    const failures = [];
+    results.forEach((result) => {
+      if (result.status === "fulfilled") uploaded.push(result.value);
+      else failures.push(result.reason);
+    });
+    generalNotesUploadsInFlight = Math.max(0, generalNotesUploadsInFlight - generalNotesPendingFiles.length);
+    if (failures.length) {
+      const msg = failures[0]?.message || "Some uploads failed.";
+      setGeneralNotesImageStatus(msg);
+      await Promise.allSettled(
+        uploaded.map((img) =>
+          fetch("/api/uploads/image", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ companyId: cid, url: img.url }),
+          })
+        )
+      );
+      throw new Error(msg);
+    }
+    setGeneralNotesImageStatus(uploaded.length ? "Images ready." : "No images uploaded.");
+    return uploaded;
   }
 
   function collectContacts(list) {
@@ -377,8 +546,8 @@
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     let nextInit = init;
+    const url = typeof input === "string" ? input : input?.url;
     try {
-      const url = typeof input === "string" ? input : input?.url;
       if (url && url.includes("/api/storefront/reservations") && nextInit && typeof nextInit.body === "string") {
         const data = JSON.parse(nextInit.body);
         const rentalInfo = readRentalInfo();
@@ -387,7 +556,30 @@
         }
         const deliveryInstructions = readDeliveryInstructions();
         if (deliveryInstructions) data.deliveryInstructions = deliveryInstructions;
+        const companyId = Number(data.companyId);
+        let uploadedImages = [];
+        if (generalNotesPendingFiles.length && currentRentalInfoConfig?.generalNotes?.enabled !== false) {
+          uploadedImages = await uploadGeneralNotesImages(companyId);
+          if (uploadedImages.length) data.generalNotesImages = uploadedImages;
+        }
         nextInit = { ...nextInit, body: JSON.stringify(data) };
+        const response = await originalFetch(input, nextInit);
+        if (uploadedImages.length) {
+          if (response.ok) {
+            clearGeneralNotesPendingFiles();
+          } else if (companyId) {
+            await Promise.allSettled(
+              uploadedImages.map((img) =>
+                fetch("/api/uploads/image", {
+                  method: "DELETE",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ companyId, url: img.url }),
+                })
+              )
+            );
+          }
+        }
+        return response;
       }
       const response = await originalFetch(input, nextInit);
       if (url && url.includes("/api/storefront/listings")) {
@@ -398,7 +590,8 @@
           .catch(() => {});
       }
       return response;
-    } catch {
+    } catch (err) {
+      if (url && url.includes("/api/storefront/reservations")) throw err;
       return originalFetch(input, nextInit);
     }
   };

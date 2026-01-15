@@ -216,6 +216,24 @@ function detailItem(label, value) {
   `;
 }
 
+function generalNotesImagesFromDetail(detail) {
+  const list = Array.isArray(detail?.attachments) ? detail.attachments : [];
+  return list.filter((img) => String(img?.category || "") === "general_notes" && img?.url);
+}
+
+function renderGeneralNotesImages(images) {
+  const rows = Array.isArray(images) ? images : [];
+  if (!rows.length) return "";
+  const tiles = rows
+    .map((img) => {
+      const url = escapeHtml(img.url || "");
+      const name = escapeHtml(img.file_name || img.fileName || "General notes image");
+      return `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="${name}" loading="lazy" /></a>`;
+    })
+    .join("");
+  return `<div class="general-notes-images">${tiles}</div>`;
+}
+
 function escapeHtml(s) {
   return String(s || "")
     .replaceAll("&", "&amp;")
@@ -791,7 +809,12 @@ function renderOrderDetail(row, detail) {
   const coverageHours = order.coverage_hours || order.coverageHours || {};
   const siteAddress = order.site_address || order.siteAddress || "--";
   const criticalAreas = order.critical_areas || order.criticalAreas || "--";
-  const generalNotes = order.general_notes || order.generalNotes || "--";
+  const generalNotes = order.general_notes || order.generalNotes || "";
+  const generalNotesImages = generalNotesImagesFromDetail(detail);
+  const generalNotesText = generalNotes ? escapeHtml(generalNotes).replaceAll("\n", "<br />") : "--";
+  const generalNotesValue = generalNotesImages.length
+    ? `${generalNotesText}<div class="general-notes-media">${renderGeneralNotesImages(generalNotesImages)}</div>`
+    : generalNotesText;
 
   const orderDetailItems = [];
   if (isRentalInfoEnabled("siteContacts")) {
@@ -813,7 +836,7 @@ function renderOrderDetail(row, detail) {
     lineDetailItems.push(detailItem("Critical areas on site", criticalAreas || "--"));
   }
   if (isRentalInfoEnabled("generalNotes")) {
-    lineDetailItems.push(detailItem("General notes", generalNotes || "--"));
+    lineDetailItems.push(detailItem("General notes", generalNotesValue));
   }
   lineItemDetails.innerHTML = lineDetailItems.join("");
 }

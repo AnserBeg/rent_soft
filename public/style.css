@@ -4227,6 +4227,31 @@ body.drawer-open {
   display: block;
 }
 
+.general-notes-media {
+  margin-top: 8px;
+}
+
+.general-notes-images {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+}
+
+.general-notes-images a {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  display: block;
+  background: #f8fafc;
+}
+
+.general-notes-images img {
+  width: 100%;
+  height: 160px;
+  object-fit: cover;
+  display: block;
+}
+
 .guard-note-edit-input {
   min-height: 80px;
   resize: vertical;

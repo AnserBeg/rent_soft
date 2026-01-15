@@ -286,6 +286,7 @@ CREATE TABLE IF NOT EXISTS rental_order_attachments (
   mime TEXT,
   size_bytes INTEGER,
   url TEXT NOT NULL,
+  category TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
