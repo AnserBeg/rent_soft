@@ -142,22 +142,8 @@ function statusUpdatedEmail({ order, companyName, prevStatus, note }) {
   return { subject, text };
 }
 
-function invoiceEmail({ invoice, companyName, message }) {
-  const inv = invoice || {};
-  const invNo = String(inv.invoiceNumber || "").trim() || (inv.id ? `#${inv.id}` : "Invoice");
-  const subject = `${companyName || "Aiven Rental"}: Invoice ${invNo}`;
-  const note = String(message || "").trim();
-  const noteBlock = note ? `\n\nMessage:\n${note}` : "";
-  const due = inv.dueDate ? new Date(inv.dueDate).toISOString().slice(0, 10) : null;
-  const balance = Number.isFinite(Number(inv.balance)) ? Number(inv.balance).toFixed(2) : null;
-  const detailsLine = due || balance ? `\n\nDue: ${due || "--"}\nBalance: ${balance ? `$${balance}` : "--"}` : "";
-  const text = `Your invoice is attached.${detailsLine}${noteBlock}\n\nIf you have questions, reply to this email.`;
-  return { subject, text };
-}
-
 module.exports = {
   sendCompanyEmail,
   requestSubmittedEmail,
   statusUpdatedEmail,
-  invoiceEmail,
 };

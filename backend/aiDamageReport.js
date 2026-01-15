@@ -72,7 +72,7 @@ FORMATTING:
 - Start with a short Summary.
 - Use a table for specific issues found with columns: Location/Part, Before, After, Change, Severity, Recommended action.
 - Use bolding for emphasis on critical new damages.
-- Be objective and suitable for an invoice/claim dispute.
+- Be objective and suitable for a claim dispute.
 ${contextBlock}${notesBlock}
 Please process the inputs in the order provided below.
   `.trim();
@@ -136,4 +136,3 @@ module.exports = {
   readImageAsInlinePart,
   generateDamageReportMarkdown,
 };
-

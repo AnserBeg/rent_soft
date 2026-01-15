@@ -5,20 +5,6 @@ const canActAsCustomerToggle = document.getElementById("can-act-as-customer");
 const saveCustomerModeBtn = document.getElementById("save-customer-mode");
 const customerModeHint = document.getElementById("customer-mode-hint");
 
-const roundingSelect = document.getElementById("billing-rounding-mode");
-const roundingGranularitySelect = document.getElementById("billing-rounding-granularity");
-const monthlyProrationSelect = document.getElementById("monthly-proration-method");
-const saveBtn = document.getElementById("save-settings");
-const defaultPaymentTermsSelect = document.getElementById("default-payment-terms");
-const invoiceAutoRunSelect = document.getElementById("invoice-auto-run");
-const invoiceAutoModeSelect = document.getElementById("invoice-auto-mode");
-const billingTimeZoneInput = document.getElementById("billing-timezone");
-const invoiceDateModeSelect = document.getElementById("invoice-date-mode");
-const autoWorkOrderToggle = document.getElementById("auto-work-order-on-return");
-const taxEnabledToggle = document.getElementById("tax-enabled");
-const defaultTaxRateInput = document.getElementById("default-tax-rate");
-const taxRegistrationNumberInput = document.getElementById("tax-registration-number");
-const taxInclusiveToggle = document.getElementById("tax-inclusive-pricing");
 
 const storefrontRequirementsContainer = document.getElementById("storefront-requirements");
 const storefrontRequirementsHint = document.getElementById("storefront-requirements-hint");
@@ -58,7 +44,6 @@ const emailFromAddressInput = document.getElementById("email-from-address");
 const emailTestToInput = document.getElementById("email-test-to");
 const emailNotifyRequestToggle = document.getElementById("email-notify-request");
 const emailNotifyStatusToggle = document.getElementById("email-notify-status");
-const emailNotifyInvoicesToggle = document.getElementById("email-notify-invoices");
 const emailSettingsHint = document.getElementById("email-settings-hint");
 
 let activeCompanyId = window.RentSoft?.getCompanyId?.() ? Number(window.RentSoft.getCompanyId()) : null;
@@ -270,39 +255,6 @@ function setCustomerModeHint(message) {
   customerModeHint.textContent = String(message || "");
 }
 
-function formatTaxRate(rate) {
-  const n = Number(rate);
-  if (!Number.isFinite(n)) return "";
-  const display = n > 1 ? n : n * 100;
-  return String(Number(display.toFixed(2)));
-}
-
-function parseTaxRateInput(value) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return 0;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function normalizeRoundingMode(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  if (raw === "prorate" || raw === "none") return "none";
-  if (raw === "ceil" || raw === "floor" || raw === "nearest") return raw;
-  return "ceil";
-}
-
-function normalizeRoundingGranularity(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  if (raw === "hour" || raw === "day" || raw === "unit") return raw;
-  return "unit";
-}
-
-function normalizeMonthlyProrationMethod(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  if (raw === "days" || raw === "hours") return raw;
-  return "hours";
-}
-
 function renderLogoPreview(url) {
   currentLogoUrl = url ? String(url) : null;
   if (logoPreview) {
@@ -391,7 +343,6 @@ function setEmailControlsEnabled(enabled) {
     emailTestToInput,
     emailNotifyRequestToggle,
     emailNotifyStatusToggle,
-    emailNotifyInvoicesToggle,
     saveEmailSettingsBtn,
     testEmailSettingsBtn,
   ]
@@ -441,7 +392,6 @@ function emailSettingsPayload() {
     fromAddress: String(emailFromAddressInput?.value || "").trim(),
     notifyRequestSubmit: emailNotifyRequestToggle?.checked === true,
     notifyStatusUpdates: emailNotifyStatusToggle?.checked === true,
-    notifyInvoices: emailNotifyInvoicesToggle?.checked === true,
   };
 }
 
@@ -459,7 +409,6 @@ function setEmailSettingsFields(settings) {
   if (emailFromAddressInput) emailFromAddressInput.value = settings.email_from_address || "";
   if (emailNotifyRequestToggle) emailNotifyRequestToggle.checked = settings.email_notify_request_submit !== false;
   if (emailNotifyStatusToggle) emailNotifyStatusToggle.checked = settings.email_notify_status_updates !== false;
-  if (emailNotifyInvoicesToggle) emailNotifyInvoicesToggle.checked = settings.email_notify_invoices === true;
 
   const hasPass = settings.has_smtp_pass === true;
   if (emailPassInput) {
@@ -539,70 +488,6 @@ async function loadSettings() {
   const res = await fetch(`/api/company-settings?companyId=${activeCompanyId}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to load settings");
-  const mode = normalizeRoundingMode(data.settings?.billing_rounding_mode || "ceil");
-  const roundingGranularity = normalizeRoundingGranularity(data.settings?.billing_rounding_granularity || "unit");
-  const monthlyProrationMethod = normalizeMonthlyProrationMethod(data.settings?.monthly_proration_method || "hours");
-  const billingTimeZone = data.settings?.billing_timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  const invoiceDateMode = data.settings?.invoice_date_mode || "generation";
-  const terms = Number(data.settings?.default_payment_terms_days || 30);
-  const invoiceAutoRun = data.settings?.invoice_auto_run || "off";
-  const invoiceAutoMode = data.settings?.invoice_auto_mode || "auto";
-  const autoWorkOrderOnReturn = data.settings?.auto_work_order_on_return === true;
-  const taxEnabled = data.settings?.tax_enabled === true;
-  const defaultTaxRate = Number(data.settings?.default_tax_rate || 0);
-  const taxRegistrationNumber = data.settings?.tax_registration_number || "";
-  const taxInclusive = data.settings?.tax_inclusive_pricing === true;
-  roundingSelect.value = mode;
-  roundingSelect.disabled = false;
-  if (roundingGranularitySelect) {
-    roundingGranularitySelect.value = roundingGranularity;
-    roundingGranularitySelect.disabled = false;
-  }
-  if (monthlyProrationSelect) {
-    monthlyProrationSelect.value = monthlyProrationMethod;
-    monthlyProrationSelect.disabled = false;
-  }
-  if (invoiceAutoRunSelect) {
-    invoiceAutoRunSelect.value = String(invoiceAutoRun);
-    invoiceAutoRunSelect.disabled = false;
-  }
-  if (invoiceAutoModeSelect) {
-    invoiceAutoModeSelect.value = String(invoiceAutoMode);
-    invoiceAutoModeSelect.disabled = false;
-  }
-  if (billingTimeZoneInput) {
-    billingTimeZoneInput.value = billingTimeZone;
-    billingTimeZoneInput.disabled = false;
-  }
-  if (invoiceDateModeSelect) {
-    invoiceDateModeSelect.value = invoiceDateMode;
-    invoiceDateModeSelect.disabled = false;
-  }
-  if (defaultPaymentTermsSelect) {
-    defaultPaymentTermsSelect.value = terms === 60 ? "60" : "30";
-    defaultPaymentTermsSelect.disabled = false;
-  }
-    if (autoWorkOrderToggle) {
-      autoWorkOrderToggle.checked = autoWorkOrderOnReturn;
-      autoWorkOrderToggle.disabled = false;
-    }
-    if (taxEnabledToggle) {
-      taxEnabledToggle.checked = taxEnabled;
-      taxEnabledToggle.disabled = false;
-    }
-    if (defaultTaxRateInput) {
-      defaultTaxRateInput.value = formatTaxRate(defaultTaxRate);
-      defaultTaxRateInput.disabled = false;
-    }
-    if (taxRegistrationNumberInput) {
-      taxRegistrationNumberInput.value = taxRegistrationNumber;
-      taxRegistrationNumberInput.disabled = false;
-    }
-    if (taxInclusiveToggle) {
-      taxInclusiveToggle.checked = taxInclusive;
-      taxInclusiveToggle.disabled = false;
-    }
-  saveBtn.disabled = false;
   renderLogoPreview(data.settings?.logo_url || null);
   renderStorefrontRequirements(data.settings?.required_storefront_customer_fields || []);
   storefrontRequirementsLoaded = true;
@@ -646,38 +531,6 @@ async function saveUserMode() {
   setCustomerModeHint(data?.user?.canActAsCustomer ? "Customer mode enabled." : "Customer mode disabled.");
   return data?.user || null;
 }
-
-saveBtn.addEventListener("click", async (e) => {
-  e.preventDefault();
-  if (!activeCompanyId) return;
-  try {
-    const res = await fetch("/api/company-settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          companyId: activeCompanyId,
-          billingRoundingMode: roundingSelect.value,
-          billingRoundingGranularity: roundingGranularitySelect?.value || "unit",
-          monthlyProrationMethod: monthlyProrationSelect?.value || "hours",
-          invoiceAutoRun: invoiceAutoRunSelect?.value || "off",
-          invoiceAutoMode: invoiceAutoModeSelect?.value || "auto",
-          billingTimeZone: billingTimeZoneInput ? String(billingTimeZoneInput.value || "").trim() : null,
-          invoiceDateMode: invoiceDateModeSelect ? String(invoiceDateModeSelect.value || "generation") : null,
-          defaultPaymentTermsDays: defaultPaymentTermsSelect?.value ? Number(defaultPaymentTermsSelect.value) : 30,
-          taxEnabled: taxEnabledToggle?.checked === true,
-          defaultTaxRate: defaultTaxRateInput ? parseTaxRateInput(defaultTaxRateInput.value) : null,
-          taxRegistrationNumber: taxRegistrationNumberInput ? String(taxRegistrationNumberInput.value || "").trim() : null,
-          taxInclusivePricing: taxInclusiveToggle?.checked === true,
-          autoWorkOrderOnReturn: autoWorkOrderToggle?.checked === true,
-        }),
-      });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Unable to save settings");
-    companyMeta.textContent = "Settings saved.";
-  } catch (err) {
-    companyMeta.textContent = err.message;
-  }
-});
 
 saveStorefrontRequirementsBtn?.addEventListener("click", async (e) => {
   e.preventDefault();

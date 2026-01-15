@@ -311,7 +311,6 @@ async function ensureTables() {
         contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
         accounting_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
         can_charge_deposit BOOLEAN NOT NULL DEFAULT FALSE,
-        payment_terms_days INTEGER,
         sales_person_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL,
         follow_up_date DATE,
         notes TEXT,
@@ -330,7 +329,6 @@ async function ensureTables() {
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS accounting_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS can_charge_deposit BOOLEAN NOT NULL DEFAULT FALSE;`);
-    await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS payment_terms_days INTEGER;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS sales_person_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS follow_up_date DATE;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS notes TEXT;`);
@@ -814,11 +812,7 @@ async function ensureTables() {
         billing_rounding_granularity TEXT NOT NULL DEFAULT 'unit',
         monthly_proration_method TEXT NOT NULL DEFAULT 'hours',
         billing_timezone TEXT NOT NULL DEFAULT 'UTC',
-        invoice_date_mode TEXT NOT NULL DEFAULT 'generation',
-        default_payment_terms_days INTEGER NOT NULL DEFAULT 30,
         logo_url TEXT,
-        invoice_auto_run TEXT NOT NULL DEFAULT 'off',
-        invoice_auto_mode TEXT NOT NULL DEFAULT 'auto',
         tax_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         default_tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0,
         tax_registration_number TEXT,
@@ -839,7 +833,6 @@ async function ensureTables() {
         email_from_address TEXT,
         email_notify_request_submit BOOLEAN NOT NULL DEFAULT TRUE,
         email_notify_status_updates BOOLEAN NOT NULL DEFAULT TRUE,
-        email_notify_invoices BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
@@ -848,11 +841,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS billing_rounding_granularity TEXT NOT NULL DEFAULT 'unit';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS monthly_proration_method TEXT NOT NULL DEFAULT 'hours';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS billing_timezone TEXT NOT NULL DEFAULT 'UTC';`);
-    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS invoice_date_mode TEXT NOT NULL DEFAULT 'generation';`);
-    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS default_payment_terms_days INTEGER NOT NULL DEFAULT 30;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
-    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS invoice_auto_run TEXT NOT NULL DEFAULT 'off';`);
-    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS invoice_auto_mode TEXT NOT NULL DEFAULT 'auto';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS default_tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS tax_registration_number TEXT;`);
@@ -873,9 +862,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_from_address TEXT;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_notify_request_submit BOOLEAN NOT NULL DEFAULT TRUE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_notify_status_updates BOOLEAN NOT NULL DEFAULT TRUE;`);
-    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_notify_invoices BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
-    await client.query(`UPDATE company_settings SET invoice_date_mode = 'generation' WHERE invoice_date_mode IS NULL;`);
     await client.query(`UPDATE company_settings SET billing_rounding_granularity = 'unit' WHERE billing_rounding_granularity IS NULL;`);
     await client.query(`UPDATE company_settings SET monthly_proration_method = 'hours' WHERE monthly_proration_method IS NULL;`);
 
@@ -889,271 +876,6 @@ async function ensureTables() {
       );
     `);
 
-    // Invoices / Accounts Receivable
-      await client.query(`
-      CREATE TABLE IF NOT EXISTS invoices (
-        id SERIAL PRIMARY KEY,
-        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-        invoice_number TEXT NOT NULL,
-        customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
-        rental_order_id INTEGER REFERENCES rental_orders(id) ON DELETE SET NULL,
-        applies_to_invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
-        status TEXT NOT NULL DEFAULT 'draft',
-        document_type TEXT NOT NULL DEFAULT 'invoice',
-        invoice_date DATE NOT NULL DEFAULT CURRENT_DATE,
-        issue_date DATE NOT NULL DEFAULT CURRENT_DATE,
-        due_date DATE,
-        service_period_start TIMESTAMPTZ,
-        service_period_end TIMESTAMPTZ,
-        period_start TIMESTAMPTZ,
-        period_end TIMESTAMPTZ,
-        billing_reason TEXT,
-        general_notes TEXT,
-        notes TEXT,
-        void_reason TEXT,
-        voided_at TIMESTAMPTZ,
-        voided_by TEXT,
-        email_sent_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        updated_at TIMESTAMPTZ DEFAULT NOW()
-      );
-    `);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS invoice_date DATE;`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS applies_to_invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL;`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS notes TEXT;`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS void_reason TEXT;`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ;`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS voided_by TEXT;`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS billing_reason TEXT;`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS general_notes TEXT;`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS email_sent_at TIMESTAMPTZ;`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS document_type TEXT NOT NULL DEFAULT 'invoice';`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS service_period_start TIMESTAMPTZ;`);
-    await client.query(`ALTER TABLE invoices ADD COLUMN IF NOT EXISTS service_period_end TIMESTAMPTZ;`);
-    await client.query(`UPDATE invoices SET invoice_date = issue_date WHERE invoice_date IS NULL;`);
-    await client.query(`ALTER TABLE invoices ALTER COLUMN invoice_date SET DEFAULT CURRENT_DATE;`);
-    await client.query(`ALTER TABLE invoices ALTER COLUMN invoice_date SET NOT NULL;`);
-    await client.query(`UPDATE invoices SET service_period_start = period_start WHERE service_period_start IS NULL AND period_start IS NOT NULL;`);
-    await client.query(`UPDATE invoices SET service_period_end = period_end WHERE service_period_end IS NULL AND period_end IS NOT NULL;`);
-    await client.query(`CREATE INDEX IF NOT EXISTS invoices_company_idx ON invoices (company_id);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS invoices_customer_idx ON invoices (company_id, customer_id);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS invoices_rental_order_idx ON invoices (company_id, rental_order_id);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS invoices_applies_to_idx ON invoices (company_id, applies_to_invoice_id);`);
-    await client.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS invoices_company_number_uniq ON invoices (company_id, invoice_number);`
-    );
-    await client.query(
-      `DROP INDEX IF EXISTS invoices_company_ro_period_uniq;`
-    );
-    await client.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS invoices_company_ro_period_reason_doc_uniq
-       ON invoices (company_id, rental_order_id, period_start, period_end, billing_reason, document_type)
-       WHERE rental_order_id IS NOT NULL AND period_start IS NOT NULL AND period_end IS NOT NULL;`
-    );
-    await client.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS invoices_company_ro_service_period_reason_doc_uniq
-       ON invoices (company_id, rental_order_id, service_period_start, service_period_end, billing_reason, document_type)
-       WHERE rental_order_id IS NOT NULL AND service_period_start IS NOT NULL AND service_period_end IS NOT NULL;`
-    );
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS billing_runs (
-        id SERIAL PRIMARY KEY,
-        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-        run_month DATE NOT NULL,
-        status TEXT NOT NULL DEFAULT 'running',
-        started_at TIMESTAMPTZ DEFAULT NOW(),
-        completed_at TIMESTAMPTZ
-      );
-    `);
-    await client.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS billing_runs_company_month_uniq ON billing_runs (company_id, run_month);`
-    );
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS invoice_line_items (
-        id SERIAL PRIMARY KEY,
-        invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
-        description TEXT NOT NULL,
-        quantity NUMERIC(12, 4) NOT NULL DEFAULT 1,
-        unit_price NUMERIC(12, 2) NOT NULL DEFAULT 0,
-        amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
-        is_taxable BOOLEAN NOT NULL DEFAULT TRUE,
-        tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0,
-        tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
-        tax_inclusive BOOLEAN NOT NULL DEFAULT FALSE,
-        sort_order INTEGER NOT NULL DEFAULT 0,
-        origin_key TEXT,
-        line_item_id INTEGER REFERENCES rental_order_line_items(id) ON DELETE SET NULL,
-        coverage_start TIMESTAMPTZ,
-        coverage_end TIMESTAMPTZ,
-        billing_reason TEXT
-      );
-    `);
-    await client.query(
-      `ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS fee_id INTEGER REFERENCES rental_order_fees(id) ON DELETE SET NULL;`
-    );
-    await client.query(`ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS line_item_id INTEGER REFERENCES rental_order_line_items(id) ON DELETE SET NULL;`);
-    await client.query(`ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS coverage_start TIMESTAMPTZ;`);
-    await client.query(`ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS coverage_end TIMESTAMPTZ;`);
-    await client.query(`ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS billing_reason TEXT;`);
-    await client.query(`ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS origin_key TEXT;`);
-    await client.query(`ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS is_taxable BOOLEAN NOT NULL DEFAULT TRUE;`);
-    await client.query(`ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0;`);
-    await client.query(`ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(12, 2) NOT NULL DEFAULT 0;`);
-    await client.query(`ALTER TABLE invoice_line_items ADD COLUMN IF NOT EXISTS tax_inclusive BOOLEAN NOT NULL DEFAULT FALSE;`);
-    await client.query(`CREATE INDEX IF NOT EXISTS invoice_line_items_invoice_idx ON invoice_line_items (invoice_id);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS invoice_line_items_fee_idx ON invoice_line_items (fee_id);`);
-    await client.query(`CREATE INDEX IF NOT EXISTS invoice_line_items_line_idx ON invoice_line_items (line_item_id);`);
-    await client.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS invoice_line_items_origin_key_uniq
-       ON invoice_line_items (invoice_id, origin_key);`
-    );
-    await client.query(`
-      UPDATE invoice_line_items ili
-         SET fee_id = f.id
-        FROM invoices i
-        JOIN rental_order_fees f ON f.rental_order_id = i.rental_order_id
-       WHERE ili.invoice_id = i.id
-         AND ili.fee_id IS NULL
-         AND ili.description = f.name
-         AND ili.quantity = 1
-         AND ili.unit_price = f.amount
-         AND ili.amount = f.amount
-    `);
-    await client.query(`
-      CREATE OR REPLACE FUNCTION enforce_invoice_line_items_draft()
-      RETURNS TRIGGER AS $$
-      DECLARE
-        inv_status TEXT;
-        inv_id INTEGER;
-      BEGIN
-        inv_id := COALESCE(NEW.invoice_id, OLD.invoice_id);
-        SELECT status INTO inv_status FROM invoices WHERE id = inv_id;
-        IF inv_status IS NULL THEN
-          RAISE EXCEPTION 'Invoice not found for line item update.';
-        END IF;
-        IF inv_status <> 'draft' THEN
-          RAISE EXCEPTION 'Invoice is locked for edits.';
-        END IF;
-        RETURN COALESCE(NEW, OLD);
-      END;
-      $$ LANGUAGE plpgsql;
-    `);
-    await client.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_trigger WHERE tgname = 'invoice_line_items_draft_lock'
-        ) THEN
-          CREATE TRIGGER invoice_line_items_draft_lock
-          BEFORE INSERT OR UPDATE OR DELETE ON invoice_line_items
-          FOR EACH ROW
-          EXECUTE FUNCTION enforce_invoice_line_items_draft();
-        END IF;
-      END $$;
-    `);
-
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS invoice_payments (
-          id SERIAL PRIMARY KEY,
-          invoice_id INTEGER REFERENCES invoices(id) ON DELETE CASCADE,
-          customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
-          paid_at TIMESTAMPTZ DEFAULT NOW(),
-          amount NUMERIC(12, 2) NOT NULL,
-          method TEXT,
-          reference TEXT,
-          note TEXT,
-          reverses_payment_id INTEGER REFERENCES invoice_payments(id) ON DELETE SET NULL,
-          reversal_reason TEXT,
-          is_deposit BOOLEAN NOT NULL DEFAULT FALSE,
-          created_at TIMESTAMPTZ DEFAULT NOW()
-        );
-      `);
-      await client.query(
-        `ALTER TABLE invoice_payments ADD COLUMN IF NOT EXISTS customer_id INTEGER REFERENCES customers(id) ON DELETE RESTRICT;`
-      );
-        await client.query(`ALTER TABLE invoice_payments ALTER COLUMN invoice_id DROP NOT NULL;`);
-        await client.query(`ALTER TABLE invoice_payments ADD COLUMN IF NOT EXISTS reverses_payment_id INTEGER REFERENCES invoice_payments(id) ON DELETE SET NULL;`);
-        await client.query(`ALTER TABLE invoice_payments ADD COLUMN IF NOT EXISTS reversal_reason TEXT;`);
-        await client.query(`ALTER TABLE invoice_payments ADD COLUMN IF NOT EXISTS is_deposit BOOLEAN NOT NULL DEFAULT FALSE;`);
-      await client.query(`
-        UPDATE invoice_payments p
-           SET customer_id = i.customer_id
-          FROM invoices i
-         WHERE p.invoice_id = i.id
-           AND p.customer_id IS NULL;
-      `);
-      await client.query(`ALTER TABLE invoice_payments ALTER COLUMN customer_id SET NOT NULL;`);
-      await client.query(`CREATE INDEX IF NOT EXISTS invoice_payments_invoice_idx ON invoice_payments (invoice_id);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS invoice_payments_customer_idx ON invoice_payments (customer_id);`);
-      await client.query(
-        `CREATE UNIQUE INDEX IF NOT EXISTS invoice_payments_reverses_uniq ON invoice_payments (reverses_payment_id) WHERE reverses_payment_id IS NOT NULL;`
-      );
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS invoice_payment_allocations (
-          id SERIAL PRIMARY KEY,
-          payment_id INTEGER NOT NULL REFERENCES invoice_payments(id) ON DELETE CASCADE,
-          invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
-          amount NUMERIC(12, 2) NOT NULL,
-          created_at TIMESTAMPTZ DEFAULT NOW()
-        );
-      `);
-      await client.query(
-        `CREATE INDEX IF NOT EXISTS invoice_payment_allocations_invoice_idx ON invoice_payment_allocations (invoice_id);`
-      );
-      await client.query(
-        `CREATE INDEX IF NOT EXISTS invoice_payment_allocations_payment_idx ON invoice_payment_allocations (payment_id);`
-      );
-      await client.query(`
-          WITH totals AS (
-            SELECT invoice_id,
-                   COALESCE(SUM(amount - CASE WHEN tax_inclusive THEN tax_amount ELSE 0 END), 0)
-                     + COALESCE(SUM(tax_amount), 0) AS total_amount
-              FROM invoice_line_items
-             GROUP BY invoice_id
-          ),
-        payment_rows AS (
-          SELECT p.id AS payment_id,
-                 p.invoice_id,
-                 p.amount,
-                 COALESCE(t.total_amount, 0) AS total_amount,
-                 SUM(p.amount) OVER (
-                   PARTITION BY p.invoice_id
-                   ORDER BY p.paid_at ASC NULLS LAST, p.id ASC
-                 ) AS running_paid
-            FROM invoice_payments p
-       LEFT JOIN totals t ON t.invoice_id = p.invoice_id
-       LEFT JOIN invoice_payment_allocations a
-              ON a.payment_id = p.id AND a.invoice_id = p.invoice_id
-           WHERE p.invoice_id IS NOT NULL
-             AND a.id IS NULL
-        )
-        INSERT INTO invoice_payment_allocations (payment_id, invoice_id, amount)
-        SELECT payment_id,
-               invoice_id,
-               GREATEST(LEAST(amount, total_amount - (running_paid - amount)), 0) AS alloc_amount
-          FROM payment_rows
-         WHERE total_amount > 0
-           AND GREATEST(LEAST(amount, total_amount - (running_paid - amount)), 0) > 0;
-      `);
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS invoice_versions (
-        id SERIAL PRIMARY KEY,
-        invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
-        version_number INTEGER NOT NULL,
-        snapshot JSONB NOT NULL,
-        pdf_bytes BYTEA NOT NULL,
-        pdf_filename TEXT NOT NULL,
-        sent_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      );
-    `);
-    await client.query(`CREATE INDEX IF NOT EXISTS invoice_versions_invoice_idx ON invoice_versions (invoice_id);`);
-    await client.query(
-      `CREATE UNIQUE INDEX IF NOT EXISTS invoice_versions_invoice_version_uniq ON invoice_versions (invoice_id, version_number);`
-    );
     await client.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS rental_orders_quote_number_uniq ON rental_orders (company_id, quote_number) WHERE quote_number IS NOT NULL;`
     );
@@ -1169,33 +891,6 @@ async function ensureTables() {
     throw err;
   } finally {
     client.release();
-  }
-}
-
-function normalizeInvoiceStatus(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  switch (raw) {
-    case "draft":
-    case "sent":
-    case "paid":
-    case "void":
-      return raw;
-    default:
-      return "draft";
-  }
-}
-
-function normalizeInvoiceDocumentType(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  switch (raw) {
-    case "credit_memo":
-    case "credit":
-      return "credit_memo";
-    case "debit_memo":
-    case "debit":
-      return "debit_memo";
-    default:
-      return "invoice";
   }
 }
 
@@ -1275,15 +970,6 @@ function formatDateInTimeZone(value, timeZone) {
   const m = String(parts.month).padStart(2, "0");
   const day = String(parts.day).padStart(2, "0");
   return `${y}-${m}-${day}`;
-}
-
-function resolveInvoiceDate({ servicePeriodStart = null, timeZone = null, invoiceDateMode = null } = {}) {
-  const mode = normalizeInvoiceDateMode(invoiceDateMode);
-  if (mode === "period_start") {
-    const fromPeriod = formatDateInTimeZone(servicePeriodStart, timeZone) || isoDate(servicePeriodStart);
-    if (fromPeriod) return fromPeriod;
-  }
-  return formatDateInTimeZone(new Date(), timeZone) || isoDate(new Date());
 }
 
 function getTimeZoneOffsetMs(date, timeZone) {
@@ -1466,1578 +1152,6 @@ function computeLineItemTax({ amount, isTaxable, taxRate, taxConfig }) {
   };
 }
 
-function computeInvoiceTotalsFromLineItems(items) {
-  const rows = Array.isArray(items) ? items : [];
-  let subtotal = 0;
-  let taxTotal = 0;
-  rows.forEach((row) => {
-    const amount = Number(row.amount ?? row?.amount ?? 0);
-    const taxAmount = Number(row.tax_amount ?? row.taxAmount ?? 0);
-    const taxInclusive = row.tax_inclusive ?? row.taxInclusive;
-    if (!Number.isFinite(amount)) return;
-    subtotal += amount - (taxInclusive ? (Number.isFinite(taxAmount) ? taxAmount : 0) : 0);
-    taxTotal += Number.isFinite(taxAmount) ? taxAmount : 0;
-  });
-  const subtotalFixed = toMoney(subtotal);
-  const taxFixed = toMoney(taxTotal);
-  return {
-    subtotal: subtotalFixed,
-    taxTotal: taxFixed,
-    total: toMoney(subtotalFixed + taxFixed),
-  };
-}
-
-function deriveInvoiceArStatus({ status, balance, paid, customerCredit } = {}) {
-  const normalized = normalizeInvoiceStatus(status);
-  if (normalized === "void" || normalized === "draft") return normalized;
-  const bal = Number(balance);
-  const paidAmount = Number(paid);
-  const creditAmount = Number(customerCredit);
-  if (Number.isFinite(bal) && bal < 0) return "credit";
-  if (Number.isFinite(creditAmount) && creditAmount > 0) return "credit";
-  if (Number.isFinite(bal) && bal <= 0) return "paid";
-  if (Number.isFinite(paidAmount) && paidAmount > 0 && Number.isFinite(bal) && bal > 0) return "partial";
-  return "open";
-}
-
-async function listInvoices(companyId, { customerId = null, rentalOrderId = null, status = null } = {}) {
-  const params = [companyId];
-  const where = ["i.company_id = $1"];
-  if (customerId) {
-    params.push(Number(customerId));
-    where.push(`i.customer_id = $${params.length}`);
-  }
-  if (rentalOrderId) {
-    params.push(Number(rentalOrderId));
-    where.push(`i.rental_order_id = $${params.length}`);
-  }
-  if (status) {
-    params.push(normalizeInvoiceStatus(status));
-    where.push(`i.status = $${params.length}`);
-  }
-
-  const res = await pool.query(
-    `
-      WITH totals AS (
-        SELECT invoice_id,
-               COALESCE(SUM(amount - CASE WHEN tax_inclusive THEN tax_amount ELSE 0 END), 0) AS subtotal_amount,
-               COALESCE(SUM(tax_amount), 0) AS tax_total,
-               COALESCE(SUM(amount - CASE WHEN tax_inclusive THEN tax_amount ELSE 0 END), 0)
-                 + COALESCE(SUM(tax_amount), 0) AS total_amount
-          FROM invoice_line_items
-         GROUP BY invoice_id
-      ),
-      paid AS (
-        SELECT invoice_id, COALESCE(SUM(amount), 0) AS paid_amount
-          FROM invoice_payment_allocations
-         GROUP BY invoice_id
-      ),
-      customer_credit AS (
-        SELECT credit_rows.customer_id,
-               COALESCE(SUM(credit_rows.amount - credit_rows.allocated_amount), 0) AS credit
-          FROM (
-            SELECT p.id,
-                   p.customer_id,
-                   p.amount,
-                   COALESCE(SUM(a.amount), 0) AS allocated_amount
-              FROM invoice_payments p
-              JOIN customers c ON c.id = p.customer_id
-         LEFT JOIN invoice_payment_allocations a ON a.payment_id = p.id
-             WHERE c.company_id = $1
-               AND p.is_deposit IS NOT TRUE
-             GROUP BY p.id, p.customer_id, p.amount
-          ) credit_rows
-         GROUP BY credit_rows.customer_id
-      )
-      SELECT i.id,
-             i.invoice_number,
-             i.status,
-             i.document_type,
-             i.invoice_date,
-             i.issue_date,
-             i.due_date,
-             i.service_period_start,
-             i.service_period_end,
-             i.period_start,
-             i.period_end,
-             i.billing_reason,
-             i.general_notes,
-             i.applies_to_invoice_id,
-             i.rental_order_id,
-             i.customer_id,
-             c.company_name AS customer_name,
-             ro.ro_number,
-           ro.quote_number,
-           ro.status AS rental_order_status,
-             COALESCE(totals.subtotal_amount, 0) AS subtotal,
-             COALESCE(totals.tax_total, 0) AS tax_total,
-             COALESCE(totals.total_amount, 0) AS total,
-             COALESCE(paid.paid_amount, 0) AS paid,
-             COALESCE(totals.total_amount, 0) - COALESCE(paid.paid_amount, 0) AS balance,
-             COALESCE(cc.credit, 0) AS customer_credit,
-             i.email_sent_at,
-             i.created_at,
-             i.updated_at
-      FROM invoices i
-      JOIN customers c ON c.id = i.customer_id
- LEFT JOIN rental_orders ro ON ro.id = i.rental_order_id
- LEFT JOIN totals ON totals.invoice_id = i.id
- LEFT JOIN paid ON paid.invoice_id = i.id
- LEFT JOIN customer_credit cc ON cc.customer_id = i.customer_id
-     WHERE ${where.join(" AND ")}
-      ORDER BY COALESCE(i.invoice_date, i.issue_date) DESC NULLS LAST, i.id DESC
-     `,
-    params
-  );
-
-  return res.rows.map((r) => {
-    const invoiceDate = r.invoice_date || r.issue_date || null;
-    const servicePeriodStart = r.service_period_start || r.period_start || null;
-    const servicePeriodEnd = r.service_period_end || r.period_end || null;
-    const paidAmount = Number(r.paid || 0);
-    const balance = Number(r.balance || 0);
-    const customerCredit = toMoney(Math.max(0, Number(r.customer_credit || 0)));
-    return {
-      id: Number(r.id),
-      invoiceNumber: r.invoice_number,
-      status: r.status,
-      arStatus: deriveInvoiceArStatus({
-        status: r.status,
-        balance,
-        paid: paidAmount,
-        customerCredit,
-      }),
-      documentType: r.document_type || "invoice",
-      invoiceDate,
-      issueDate: invoiceDate,
-      dueDate: r.due_date,
-      servicePeriodStart,
-      servicePeriodEnd,
-      periodStart: servicePeriodStart,
-      periodEnd: servicePeriodEnd,
-      billingReason: r.billing_reason || null,
-      generalNotes: r.general_notes || "",
-      appliesToInvoiceId: r.applies_to_invoice_id === null ? null : Number(r.applies_to_invoice_id),
-      rentalOrderId: r.rental_order_id === null ? null : Number(r.rental_order_id),
-      rentalOrderNumber: r.ro_number || r.quote_number || null,
-      rentalOrderStatus: r.rental_order_status || null,
-      customerId: Number(r.customer_id),
-      customerName: r.customer_name,
-      subtotal: Number(r.subtotal || 0),
-      taxTotal: Number(r.tax_total || 0),
-      total: Number(r.total || 0),
-      paid: paidAmount,
-      balance,
-      customerCredit,
-      emailSentAt: r.email_sent_at || null,
-      emailSent: Boolean(r.email_sent_at),
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    };
-  });
-}
-
-async function getInvoice({ companyId, id }) {
-  const headerRes = await pool.query(
-    `
-    SELECT i.*,
-           c.company_name AS customer_name,
-           c.contact_name AS customer_contact_name,
-           c.street_address AS customer_street_address,
-           c.city AS customer_city,
-             c.region AS customer_region,
-             c.country AS customer_country,
-             c.postal_code AS customer_postal_code,
-             c.email AS customer_email,
-             c.phone AS customer_phone,
-             c.accounting_contacts AS customer_accounting_contacts,
-             CASE
-               WHEN c.parent_customer_id IS NOT NULL THEN p.payment_terms_days
-               ELSE c.payment_terms_days
-             END AS customer_payment_terms_days,
-           ai.invoice_number AS applies_to_invoice_number,
-           ai.status AS applies_to_invoice_status,
-           ro.ro_number AS rental_order_number,
-           ro.quote_number AS quote_number
-      FROM invoices i
-      JOIN customers c ON c.id = i.customer_id
- LEFT JOIN customers p ON p.id = c.parent_customer_id
- LEFT JOIN invoices ai ON ai.id = i.applies_to_invoice_id
- LEFT JOIN rental_orders ro ON ro.id = i.rental_order_id
-     WHERE i.company_id = $1 AND i.id = $2
-     LIMIT 1
-    `,
-    [companyId, id]
-  );
-  const invoice = headerRes.rows[0];
-  if (!invoice) return null;
-
-    const itemsRes = await pool.query(
-      `
-      SELECT id,
-             description,
-             quantity,
-             unit_price,
-             amount,
-             is_taxable,
-             tax_rate,
-             tax_amount,
-             tax_inclusive,
-             sort_order,
-             fee_id,
-             line_item_id,
-             coverage_start,
-             coverage_end,
-             billing_reason
-        FROM invoice_line_items
-       WHERE invoice_id = $1
-       ORDER BY sort_order ASC, id ASC
-      `,
-      [invoice.id]
-    );
-
-    const paymentsRes = await pool.query(
-      `
-        SELECT a.id AS allocation_id,
-               a.amount AS allocated_amount,
-               a.created_at AS allocation_created_at,
-               p.id AS payment_id,
-               p.amount AS payment_amount,
-               p.paid_at,
-               p.method,
-               p.reference,
-               p.note,
-               p.reverses_payment_id,
-               p.reversal_reason,
-               p.is_deposit,
-               rev.id AS reversed_payment_id,
-               p.created_at
-        FROM invoice_payment_allocations a
-        JOIN invoice_payments p ON p.id = a.payment_id
-   LEFT JOIN invoice_payments rev ON rev.reverses_payment_id = p.id
-       WHERE a.invoice_id = $1
-       ORDER BY p.paid_at ASC NULLS LAST, a.id ASC
-      `,
-      [invoice.id]
-    );
-
-    const totals = computeInvoiceTotalsFromLineItems(itemsRes.rows);
-    const paid = paymentsRes.rows.reduce((sum, row) => sum + Number(row.allocated_amount || 0), 0);
-    const paidAmount = toMoney(paid);
-    const creditRes = await pool.query(
-      `
-      WITH payment_totals AS (
-        SELECT p.id,
-               p.amount,
-               COALESCE(SUM(a.amount), 0) AS allocated_amount
-          FROM invoice_payments p
-     LEFT JOIN invoice_payment_allocations a ON a.payment_id = p.id
-          JOIN customers c ON c.id = p.customer_id
-         WHERE c.company_id = $1 AND c.id = $2
-           AND p.is_deposit IS NOT TRUE
-         GROUP BY p.id, p.amount
-      )
-      SELECT COALESCE(SUM(amount - allocated_amount), 0) AS credit
-        FROM payment_totals
-      `,
-      [companyId, invoice.customer_id]
-    );
-    const customerCredit = toMoney(Math.max(0, Number(creditRes.rows[0]?.credit || 0)));
-    const depositRes = await pool.query(
-      `
-      WITH payment_totals AS (
-        SELECT p.id,
-               p.amount,
-               COALESCE(SUM(a.amount), 0) AS allocated_amount
-          FROM invoice_payments p
-     LEFT JOIN invoice_payment_allocations a ON a.payment_id = p.id
-          JOIN customers c ON c.id = p.customer_id
-         WHERE c.company_id = $1 AND c.id = $2
-           AND p.is_deposit IS TRUE
-         GROUP BY p.id, p.amount
-      )
-      SELECT COALESCE(SUM(amount - allocated_amount), 0) AS deposit
-        FROM payment_totals
-      `,
-      [companyId, invoice.customer_id]
-    );
-    const customerDeposit = toMoney(Math.max(0, Number(depositRes.rows[0]?.deposit || 0)));
-    const balance = toMoney(totals.total - paid);
-    const hasReversal = paymentsRes.rows.some((row) => row.reverses_payment_id !== null && row.reverses_payment_id !== undefined);
-    const hasRefund = paymentsRes.rows.some(
-      (row) =>
-        Number(row.payment_amount || 0) < 0 &&
-        (row.reverses_payment_id === null || row.reverses_payment_id === undefined)
-    );
-    const arTags = [];
-    if (hasReversal) arTags.push("reversed");
-    if (hasRefund) arTags.push("refunded");
-    const arStatus = deriveInvoiceArStatus({
-      status: invoice.status,
-      balance,
-      paid: paidAmount,
-      customerCredit,
-    });
-
-  const invoiceDate = invoice.invoice_date || invoice.issue_date || null;
-  const servicePeriodStart = invoice.service_period_start || invoice.period_start || null;
-  const servicePeriodEnd = invoice.service_period_end || invoice.period_end || null;
-
-  return {
-    invoice: {
-      id: Number(invoice.id),
-      invoiceNumber: invoice.invoice_number,
-      status: invoice.status,
-      documentType: invoice.document_type || "invoice",
-      arStatus,
-      arTags,
-      invoiceDate,
-      issueDate: invoiceDate,
-      dueDate: invoice.due_date,
-      servicePeriodStart,
-      servicePeriodEnd,
-      periodStart: servicePeriodStart,
-      periodEnd: servicePeriodEnd,
-      billingReason: invoice.billing_reason || null,
-      generalNotes: invoice.general_notes || "",
-      appliesToInvoiceId: invoice.applies_to_invoice_id === null ? null : Number(invoice.applies_to_invoice_id),
-      appliesToInvoiceNumber: invoice.applies_to_invoice_number || null,
-      appliesToInvoiceStatus: invoice.applies_to_invoice_status || null,
-      rentalOrderId: invoice.rental_order_id === null ? null : Number(invoice.rental_order_id),
-      rentalOrderNumber: invoice.rental_order_number || invoice.quote_number || null,
-      customerId: Number(invoice.customer_id),
-      customerName: invoice.customer_name,
-      customerContactName: invoice.customer_contact_name || null,
-      customerStreetAddress: invoice.customer_street_address || null,
-      customerCity: invoice.customer_city || null,
-      customerRegion: invoice.customer_region || null,
-      customerCountry: invoice.customer_country || null,
-      customerPostalCode: invoice.customer_postal_code || null,
-      customerEmail: invoice.customer_email || null,
-      customerPhone: invoice.customer_phone || null,
-      customerAccountingContacts: normalizeAccountingContacts({
-        accountingContacts: invoice.customer_accounting_contacts,
-      }),
-      customerPaymentTermsDays:
-        invoice.customer_payment_terms_days === null || invoice.customer_payment_terms_days === undefined
-          ? null
-          : Number(invoice.customer_payment_terms_days),
-      notes: invoice.notes || "",
-      voidReason: invoice.void_reason || null,
-      voidedAt: invoice.voided_at || null,
-      voidedBy: invoice.voided_by || null,
-      subtotal: totals.subtotal,
-      taxTotal: totals.taxTotal,
-      total: totals.total,
-      paid: paidAmount,
-      balance,
-      customerCredit,
-      customerDeposit,
-      emailSentAt: invoice.email_sent_at || null,
-      emailSent: Boolean(invoice.email_sent_at),
-      createdAt: invoice.created_at,
-      updatedAt: invoice.updated_at,
-    },
-    lineItems: itemsRes.rows.map((r) => ({
-      id: Number(r.id),
-      description: r.description,
-      quantity: Number(r.quantity || 0),
-      unitPrice: Number(r.unit_price || 0),
-      amount: Number(r.amount || 0),
-      isTaxable: r.is_taxable === true,
-      taxRate: Number(r.tax_rate || 0),
-      taxAmount: Number(r.tax_amount || 0),
-      taxInclusive: r.tax_inclusive === true,
-      sortOrder: Number(r.sort_order || 0),
-      feeId: r.fee_id === null || r.fee_id === undefined ? null : Number(r.fee_id),
-      lineItemId: r.line_item_id === null || r.line_item_id === undefined ? null : Number(r.line_item_id),
-      coverageStart: r.coverage_start || null,
-      coverageEnd: r.coverage_end || null,
-      billingReason: r.billing_reason || null,
-    })),
-    payments: paymentsRes.rows.map((r) => {
-      const paymentAmount = Number(r.payment_amount || 0);
-      const isReversal = r.reverses_payment_id !== null && r.reverses_payment_id !== undefined ? true : paymentAmount < 0;
-      const isReversed = r.reversed_payment_id !== null && r.reversed_payment_id !== undefined;
-      return {
-        id: Number(r.allocation_id),
-        paymentId: Number(r.payment_id),
-        paidAt: r.paid_at,
-        amount: Number(r.allocated_amount || 0),
-        paymentAmount,
-        method: r.method || null,
-        reference: r.reference || null,
-        note: r.note || null,
-        isDeposit: r.is_deposit === true,
-        isReversal,
-        isReversed,
-        canReverse: !isReversal && !isReversed && paymentAmount > 0,
-        reversalReason: r.reversal_reason || null,
-        createdAt: r.created_at,
-        appliedAt: r.allocation_created_at,
-      };
-    }),
-  };
-}
-
-async function replaceInvoiceLineItems({ companyId, invoiceId, lineItems }) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const invRes = await client.query(
-      `SELECT id FROM invoices WHERE company_id = $1 AND id = $2 LIMIT 1`,
-      [companyId, invoiceId]
-    );
-    if (!invRes.rows[0]) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const settings = await getCompanySettingsForClient(client, companyId);
-    const taxConfig = buildTaxConfig(settings);
-
-    await client.query(`DELETE FROM invoice_line_items WHERE invoice_id = $1`, [invoiceId]);
-
-    const items = Array.isArray(lineItems) ? lineItems : [];
-    let sort = 0;
-    for (const raw of items) {
-      const description = String(raw?.description || "").trim();
-      if (!description) continue;
-      const originKey = raw?.originKey ? String(raw.originKey).trim() : null;
-      const quantity = raw?.quantity === null || raw?.quantity === undefined || raw?.quantity === "" ? 1 : Number(raw.quantity);
-      const unitPrice = raw?.unitPrice === null || raw?.unitPrice === undefined || raw?.unitPrice === "" ? 0 : Number(raw.unitPrice);
-      const providedAmount = raw?.amount === null || raw?.amount === undefined || raw?.amount === "" ? null : Number(raw.amount);
-      const amount = Number.isFinite(providedAmount) ? providedAmount : toMoney((Number.isFinite(quantity) ? quantity : 0) * (Number.isFinite(unitPrice) ? unitPrice : 0));
-      const taxInfo = computeLineItemTax({
-        amount,
-        isTaxable: raw?.isTaxable,
-        taxRate: raw?.taxRate,
-        taxConfig,
-      });
-      await client.query(
-        `
-          INSERT INTO invoice_line_items
-            (invoice_id, description, quantity, unit_price, amount, is_taxable, tax_rate, tax_amount, tax_inclusive, sort_order, origin_key)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-          `,
-        [
-          invoiceId,
-          description,
-          Number.isFinite(quantity) ? quantity : 0,
-          Number.isFinite(unitPrice) ? unitPrice : 0,
-          toMoney(amount),
-          taxInfo.isTaxable === true,
-          taxInfo.taxRate,
-          taxInfo.taxAmount,
-          taxInfo.taxInclusive === true,
-          sort++,
-          originKey,
-        ]
-      );
-    }
-
-    await client.query(`UPDATE invoices SET updated_at = NOW() WHERE id = $1`, [invoiceId]);
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-
-  return await getInvoice({ companyId, id: invoiceId });
-}
-
-async function addInvoicePayment({ companyId, invoiceId, amount, paidAt = null, method = null, reference = null, note = null }) {
-  const n = Number(amount);
-  if (!Number.isFinite(n) || n <= 0) throw new Error("Payment amount must be a positive number.");
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const invRes = await client.query(
-      `SELECT id, customer_id FROM invoices WHERE company_id = $1 AND id = $2 LIMIT 1 FOR UPDATE`,
-      [companyId, invoiceId]
-    );
-    const invoice = invRes.rows[0];
-    if (!invoice) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const paidIso = paidAt ? normalizeTimestamptz(paidAt) : null;
-    const paymentRes = await client.query(
-      `
-      INSERT INTO invoice_payments (invoice_id, customer_id, paid_at, amount, method, reference, note)
-      VALUES ($1, $2, COALESCE($3::timestamptz, NOW()), $4, $5, $6, $7)
-      RETURNING id
-      `,
-      [
-        invoiceId,
-        invoice.customer_id,
-        paidIso,
-        toMoney(n),
-        method ? String(method).trim() : null,
-        reference ? String(reference).trim() : null,
-        note ? String(note).trim() : null,
-      ]
-    );
-    const paymentId = paymentRes.rows[0]?.id;
-
-      const totalsRes = await client.query(
-        `
-        SELECT COALESCE(SUM(amount - CASE WHEN tax_inclusive THEN tax_amount ELSE 0 END), 0)
-                 + COALESCE(SUM(tax_amount), 0) AS total_amount
-          FROM invoice_line_items
-         WHERE invoice_id = $1
-        `,
-        [invoiceId]
-      );
-    const appliedRes = await client.query(
-      `
-      SELECT COALESCE(SUM(amount), 0) AS applied_amount
-        FROM invoice_payment_allocations
-       WHERE invoice_id = $1
-      `,
-      [invoiceId]
-    );
-    const totalAmount = Number(totalsRes.rows[0]?.total_amount || 0);
-    const appliedAmount = Number(appliedRes.rows[0]?.applied_amount || 0);
-    const currentBalance = toMoney(totalAmount - appliedAmount);
-    const applyAmount = toMoney(Math.min(toMoney(n), Math.max(0, currentBalance)));
-    if (paymentId && applyAmount > 0) {
-      await client.query(
-        `
-        INSERT INTO invoice_payment_allocations (payment_id, invoice_id, amount)
-        VALUES ($1, $2, $3)
-        `,
-        [paymentId, invoiceId, applyAmount]
-      );
-    }
-    const nextBalance = toMoney(currentBalance - applyAmount);
-    await client.query(
-      `
-      UPDATE invoices
-         SET status = CASE
-                        WHEN status = 'void' THEN status
-                        WHEN $3 <= 0 THEN 'paid'
-                        ELSE status
-                      END,
-             updated_at = NOW()
-       WHERE id = $1 AND company_id = $2
-      `,
-      [invoiceId, companyId, nextBalance]
-    );
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-
-  return await getInvoice({ companyId, id: invoiceId });
-}
-
-async function addCustomerPayment({ companyId, customerId, amount, paidAt = null, method = null, reference = null, note = null }) {
-  const n = Number(amount);
-  if (!Number.isFinite(n) || n <= 0) throw new Error("Payment amount must be a positive number.");
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const custRes = await client.query(
-      `SELECT id FROM customers WHERE company_id = $1 AND id = $2 LIMIT 1`,
-      [companyId, customerId]
-    );
-    if (!custRes.rows[0]) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-    const paidIso = paidAt ? normalizeTimestamptz(paidAt) : null;
-    const paymentRes = await client.query(
-      `
-      INSERT INTO invoice_payments (invoice_id, customer_id, paid_at, amount, method, reference, note)
-      VALUES (NULL, $1, COALESCE($2::timestamptz, NOW()), $3, $4, $5, $6)
-      RETURNING id
-      `,
-      [
-        customerId,
-        paidIso,
-        toMoney(n),
-        method ? String(method).trim() : null,
-        reference ? String(reference).trim() : null,
-        note ? String(note).trim() : null,
-      ]
-    );
-    await client.query("COMMIT");
-    return { paymentId: paymentRes.rows[0]?.id || null };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function addCustomerDeposit({ companyId, customerId, amount, paidAt = null, method = null, reference = null, note = null }) {
-  const n = Number(amount);
-  if (!Number.isFinite(n) || n <= 0) throw new Error("Deposit amount must be a positive number.");
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const custRes = await client.query(
-      `SELECT id FROM customers WHERE company_id = $1 AND id = $2 LIMIT 1`,
-      [companyId, customerId]
-    );
-    if (!custRes.rows[0]) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-    const paidIso = paidAt ? normalizeTimestamptz(paidAt) : null;
-    const paymentRes = await client.query(
-      `
-      INSERT INTO invoice_payments (invoice_id, customer_id, paid_at, amount, method, reference, note, is_deposit)
-      VALUES (NULL, $1, COALESCE($2::timestamptz, NOW()), $3, $4, $5, $6, TRUE)
-      RETURNING id
-      `,
-      [
-        customerId,
-        paidIso,
-        toMoney(n),
-        method ? String(method).trim() : null,
-        reference ? String(reference).trim() : null,
-        note ? String(note).trim() : null,
-      ]
-    );
-    await client.query("COMMIT");
-    return { paymentId: paymentRes.rows[0]?.id || null };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function getCustomerCreditBalance({ companyId, customerId }) {
-  const cid = Number(companyId);
-  const custId = Number(customerId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(custId) || custId <= 0) throw new Error("customerId is required.");
-  const res = await pool.query(
-    `
-    WITH payment_totals AS (
-      SELECT p.id,
-             p.amount,
-             COALESCE(SUM(a.amount), 0) AS allocated_amount
-        FROM invoice_payments p
-   LEFT JOIN invoice_payment_allocations a ON a.payment_id = p.id
-        JOIN customers c ON c.id = p.customer_id
-       WHERE c.company_id = $1 AND c.id = $2
-         AND p.is_deposit IS NOT TRUE
-       GROUP BY p.id, p.amount
-    )
-    SELECT COALESCE(SUM(amount - allocated_amount), 0) AS credit
-      FROM payment_totals
-    `,
-    [cid, custId]
-  );
-  return toMoney(Math.max(0, Number(res.rows[0]?.credit || 0)));
-}
-
-async function getCustomerDepositBalance({ companyId, customerId }) {
-  const cid = Number(companyId);
-  const custId = Number(customerId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(custId) || custId <= 0) throw new Error("customerId is required.");
-  const res = await pool.query(
-    `
-    WITH payment_totals AS (
-      SELECT p.id,
-             p.amount,
-             COALESCE(SUM(a.amount), 0) AS allocated_amount
-        FROM invoice_payments p
-   LEFT JOIN invoice_payment_allocations a ON a.payment_id = p.id
-        JOIN customers c ON c.id = p.customer_id
-       WHERE c.company_id = $1 AND c.id = $2
-         AND p.is_deposit IS TRUE
-       GROUP BY p.id, p.amount
-    )
-    SELECT COALESCE(SUM(amount - allocated_amount), 0) AS deposit
-      FROM payment_totals
-    `,
-    [cid, custId]
-  );
-  return toMoney(Math.max(0, Number(res.rows[0]?.deposit || 0)));
-}
-
-async function refundCustomerDeposit({
-  companyId,
-  customerId,
-  amount,
-  paidAt = null,
-  method = null,
-  reference = null,
-  note = null,
-} = {}) {
-  const cid = Number(companyId);
-  const custId = Number(customerId);
-  const n = Number(amount);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(custId) || custId <= 0) throw new Error("customerId is required.");
-  if (!Number.isFinite(n) || n <= 0) throw new Error("Refund amount must be a positive number.");
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const custRes = await client.query(
-      `SELECT id FROM customers WHERE company_id = $1 AND id = $2 LIMIT 1 FOR UPDATE`,
-      [cid, custId]
-    );
-    if (!custRes.rows[0]) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const balanceRes = await client.query(
-      `
-      WITH payments AS (
-        SELECT id, amount
-          FROM invoice_payments
-         WHERE customer_id = $1
-           AND is_deposit IS TRUE
-         FOR UPDATE
-      ),
-      payment_totals AS (
-        SELECT p.id,
-               p.amount,
-               COALESCE(SUM(a.amount), 0) AS allocated_amount
-          FROM payments p
-     LEFT JOIN invoice_payment_allocations a ON a.payment_id = p.id
-         GROUP BY p.id, p.amount
-      )
-      SELECT COALESCE(SUM(amount - allocated_amount), 0) AS deposit
-        FROM payment_totals
-      `,
-      [custId]
-    );
-    const available = toMoney(Math.max(0, Number(balanceRes.rows[0]?.deposit || 0)));
-    if (n > available) {
-      throw new Error("Refund exceeds available deposit balance.");
-    }
-
-    const paidIso = paidAt ? normalizeTimestamptz(paidAt) : null;
-    const refundMethod = method ? String(method).trim() : "refund";
-    const refundNote = note ? String(note).trim() : "Deposit refund";
-    const refundRes = await client.query(
-      `
-      INSERT INTO invoice_payments (invoice_id, customer_id, paid_at, amount, method, reference, note, is_deposit)
-      VALUES (NULL, $1, COALESCE($2::timestamptz, NOW()), $3, $4, $5, $6, TRUE)
-      RETURNING id
-      `,
-      [custId, paidIso, toMoney(-n), refundMethod, reference ? String(reference).trim() : null, refundNote]
-    );
-
-    await client.query("COMMIT");
-    const paymentId = refundRes.rows[0]?.id || null;
-    return { paymentId, refundedAmount: toMoney(n), remainingDeposit: toMoney(available - n) };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function applyCustomerCreditToInvoice({ companyId, invoiceId, amount = null }) {
-  const cid = Number(companyId);
-  const invId = Number(invoiceId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(invId) || invId <= 0) throw new Error("invoiceId is required.");
-  const requested = amount === null || amount === undefined || amount === "" ? null : Number(amount);
-  if (requested !== null && (!Number.isFinite(requested) || requested <= 0)) {
-    throw new Error("Amount must be a positive number.");
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const invRes = await client.query(
-      `SELECT id, customer_id FROM invoices WHERE company_id = $1 AND id = $2 LIMIT 1 FOR UPDATE`,
-      [cid, invId]
-    );
-    const invoice = invRes.rows[0];
-    if (!invoice) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-      const totalsRes = await client.query(
-        `
-        SELECT COALESCE(SUM(amount - CASE WHEN tax_inclusive THEN tax_amount ELSE 0 END), 0)
-                 + COALESCE(SUM(tax_amount), 0) AS total_amount
-          FROM invoice_line_items
-         WHERE invoice_id = $1
-        `,
-        [invId]
-      );
-    const appliedRes = await client.query(
-      `
-      SELECT COALESCE(SUM(amount), 0) AS applied_amount
-        FROM invoice_payment_allocations
-       WHERE invoice_id = $1
-      `,
-      [invId]
-    );
-    const totalAmount = Number(totalsRes.rows[0]?.total_amount || 0);
-    const appliedAmount = Number(appliedRes.rows[0]?.applied_amount || 0);
-    const balance = toMoney(totalAmount - appliedAmount);
-    const target = requested === null ? balance : toMoney(Math.min(balance, requested));
-    if (target <= 0) {
-      await client.query("COMMIT");
-      return { appliedAmount: 0 };
-    }
-
-      const creditsRes = await client.query(
-        `
-        SELECT p.id,
-               p.paid_at,
-               p.amount,
-               COALESCE(SUM(a.amount), 0) AS allocated_amount
-          FROM invoice_payments p
-     LEFT JOIN invoice_payment_allocations a ON a.payment_id = p.id
-         WHERE p.customer_id = $1
-           AND p.is_deposit IS NOT TRUE
-         GROUP BY p.id, p.paid_at, p.amount
-        HAVING p.amount > COALESCE(SUM(a.amount), 0)
-         ORDER BY p.paid_at ASC NULLS LAST, p.id ASC
-        `,
-        [invoice.customer_id]
-      );
-
-    let remaining = target;
-    let appliedTotal = 0;
-    for (const row of creditsRes.rows) {
-      const available = toMoney(Number(row.amount || 0) - Number(row.allocated_amount || 0));
-      if (available <= 0) continue;
-      const applyNow = toMoney(Math.min(available, remaining));
-      if (applyNow <= 0) continue;
-      await client.query(
-        `
-        INSERT INTO invoice_payment_allocations (payment_id, invoice_id, amount)
-        VALUES ($1, $2, $3)
-        `,
-        [row.id, invId, applyNow]
-      );
-      appliedTotal = toMoney(appliedTotal + applyNow);
-      remaining = toMoney(remaining - applyNow);
-      if (remaining <= 0) break;
-    }
-
-    const nextBalance = toMoney(balance - appliedTotal);
-    await client.query(
-      `
-      UPDATE invoices
-         SET status = CASE
-                        WHEN status = 'void' THEN status
-                        WHEN $3 <= 0 THEN 'paid'
-                        ELSE status
-                      END,
-             updated_at = NOW()
-       WHERE id = $1 AND company_id = $2
-      `,
-      [invId, cid, nextBalance]
-    );
-    await client.query("COMMIT");
-    return { appliedAmount: appliedTotal };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function applyCustomerDepositToInvoice({ companyId, invoiceId, amount = null }) {
-  const cid = Number(companyId);
-  const invId = Number(invoiceId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(invId) || invId <= 0) throw new Error("invoiceId is required.");
-  const requested = amount === null || amount === undefined || amount === "" ? null : Number(amount);
-  if (requested !== null && (!Number.isFinite(requested) || requested <= 0)) {
-    throw new Error("Amount must be a positive number.");
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const invRes = await client.query(
-      `SELECT id, customer_id FROM invoices WHERE company_id = $1 AND id = $2 LIMIT 1 FOR UPDATE`,
-      [cid, invId]
-    );
-    const invoice = invRes.rows[0];
-    if (!invoice) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const totalsRes = await client.query(
-      `
-      SELECT COALESCE(SUM(amount - CASE WHEN tax_inclusive THEN tax_amount ELSE 0 END), 0)
-               + COALESCE(SUM(tax_amount), 0) AS total_amount
-        FROM invoice_line_items
-       WHERE invoice_id = $1
-      `,
-      [invId]
-    );
-    const appliedRes = await client.query(
-      `
-      SELECT COALESCE(SUM(amount), 0) AS applied_amount
-        FROM invoice_payment_allocations
-       WHERE invoice_id = $1
-      `,
-      [invId]
-    );
-    const totalAmount = Number(totalsRes.rows[0]?.total_amount || 0);
-    const appliedAmount = Number(appliedRes.rows[0]?.applied_amount || 0);
-    const balance = toMoney(totalAmount - appliedAmount);
-    const target = requested === null ? balance : toMoney(Math.min(balance, requested));
-    if (target <= 0) {
-      await client.query("COMMIT");
-      return { appliedAmount: 0 };
-    }
-
-    const depositsRes = await client.query(
-      `
-      SELECT p.id,
-             p.paid_at,
-             p.amount,
-             COALESCE(SUM(a.amount), 0) AS allocated_amount
-        FROM invoice_payments p
-   LEFT JOIN invoice_payment_allocations a ON a.payment_id = p.id
-       WHERE p.customer_id = $1
-         AND p.is_deposit IS TRUE
-       GROUP BY p.id, p.paid_at, p.amount
-      HAVING p.amount > COALESCE(SUM(a.amount), 0)
-       ORDER BY p.paid_at ASC NULLS LAST, p.id ASC
-      `,
-      [invoice.customer_id]
-    );
-
-    let remaining = target;
-    let appliedTotal = 0;
-    for (const row of depositsRes.rows) {
-      const available = toMoney(Number(row.amount || 0) - Number(row.allocated_amount || 0));
-      if (available <= 0) continue;
-      const applyNow = toMoney(Math.min(available, remaining));
-      if (applyNow <= 0) continue;
-      await client.query(
-        `
-        INSERT INTO invoice_payment_allocations (payment_id, invoice_id, amount)
-        VALUES ($1, $2, $3)
-        `,
-        [row.id, invId, applyNow]
-      );
-      appliedTotal = toMoney(appliedTotal + applyNow);
-      remaining = toMoney(remaining - applyNow);
-      if (remaining <= 0) break;
-    }
-
-    const nextBalance = toMoney(balance - appliedTotal);
-    await client.query(
-      `
-      UPDATE invoices
-         SET status = CASE
-                        WHEN status = 'void' THEN status
-                        WHEN $3 <= 0 THEN 'paid'
-                        ELSE status
-                      END,
-             updated_at = NOW()
-       WHERE id = $1 AND company_id = $2
-      `,
-      [invId, cid, nextBalance]
-    );
-
-    await client.query("COMMIT");
-    return { appliedAmount: appliedTotal };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function applyCustomerCreditToOldestInvoices({ companyId, customerId, excludeInvoiceId = null }) {
-  const cid = Number(companyId);
-  const custId = Number(customerId);
-  const excludeId = excludeInvoiceId === null || excludeInvoiceId === undefined || excludeInvoiceId === "" ? null : Number(excludeInvoiceId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(custId) || custId <= 0) throw new Error("customerId is required.");
-  if (excludeId !== null && (!Number.isFinite(excludeId) || excludeId <= 0)) throw new Error("excludeInvoiceId must be a valid id.");
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const invoicesRes = await client.query(
-      `
-        WITH totals AS (
-          SELECT invoice_id,
-                 COALESCE(SUM(amount - CASE WHEN tax_inclusive THEN tax_amount ELSE 0 END), 0)
-                   + COALESCE(SUM(tax_amount), 0) AS total_amount
-            FROM invoice_line_items
-           GROUP BY invoice_id
-        ),
-      applied AS (
-        SELECT invoice_id, COALESCE(SUM(amount), 0) AS applied_amount
-          FROM invoice_payment_allocations
-         GROUP BY invoice_id
-      )
-       SELECT i.id,
-              i.status,
-              COALESCE(i.invoice_date, i.issue_date) AS invoice_date,
-              COALESCE(t.total_amount, 0) AS total_amount,
-              COALESCE(a.applied_amount, 0) AS applied_amount
-         FROM invoices i
-   LEFT JOIN totals t ON t.invoice_id = i.id
-   LEFT JOIN applied a ON a.invoice_id = i.id
-       WHERE i.company_id = $1
-         AND i.customer_id = $2
-         AND i.status NOT IN ('void', 'draft')
-         AND (COALESCE(t.total_amount, 0) - COALESCE(a.applied_amount, 0)) > 0
-         AND ($3::integer IS NULL OR i.id <> $3)
-       ORDER BY COALESCE(i.invoice_date, i.issue_date) ASC NULLS LAST, i.id ASC
-      `,
-      [cid, custId, excludeId]
-    );
-
-      const creditsRes = await client.query(
-        `
-        SELECT p.id,
-               p.paid_at,
-               p.amount,
-               COALESCE(SUM(a.amount), 0) AS allocated_amount
-          FROM invoice_payments p
-     LEFT JOIN invoice_payment_allocations a ON a.payment_id = p.id
-         WHERE p.customer_id = $1
-           AND p.is_deposit IS NOT TRUE
-         GROUP BY p.id, p.paid_at, p.amount
-        HAVING p.amount > COALESCE(SUM(a.amount), 0)
-         ORDER BY p.paid_at ASC NULLS LAST, p.id ASC
-        `,
-        [custId]
-      );
-
-    const credits = creditsRes.rows.map((row) => ({
-      id: row.id,
-      available: toMoney(Number(row.amount || 0) - Number(row.allocated_amount || 0)),
-    }));
-
-    let appliedTotal = 0;
-    for (const inv of invoicesRes.rows) {
-      let balance = toMoney(Number(inv.total_amount || 0) - Number(inv.applied_amount || 0));
-      if (balance <= 0) continue;
-      for (const credit of credits) {
-        if (credit.available <= 0) continue;
-        const applyNow = toMoney(Math.min(balance, credit.available));
-        if (applyNow <= 0) continue;
-        await client.query(
-          `
-          INSERT INTO invoice_payment_allocations (payment_id, invoice_id, amount)
-          VALUES ($1, $2, $3)
-          `,
-          [credit.id, inv.id, applyNow]
-        );
-        credit.available = toMoney(credit.available - applyNow);
-        balance = toMoney(balance - applyNow);
-        appliedTotal = toMoney(appliedTotal + applyNow);
-        if (balance <= 0) break;
-      }
-      await client.query(
-        `
-        UPDATE invoices
-           SET status = CASE
-                          WHEN status = 'void' THEN status
-                          WHEN $3 <= 0 THEN 'paid'
-                          ELSE status
-                        END,
-               updated_at = NOW()
-         WHERE id = $1 AND company_id = $2
-        `,
-        [inv.id, cid, balance]
-      );
-    }
-
-    await client.query("COMMIT");
-    return { appliedAmount: appliedTotal };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function listCustomerCreditActivity({ companyId, customerId, limit = 25 } = {}) {
-  const cid = Number(companyId);
-  const custId = Number(customerId);
-  const lim = Math.max(1, Math.min(200, Number(limit) || 25));
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(custId) || custId <= 0) throw new Error("customerId is required.");
-
-  const res = await pool.query(
-    `
-    SELECT *
-      FROM (
-        SELECT CASE
-                 WHEN p.is_deposit IS TRUE AND (p.reverses_payment_id IS NOT NULL OR p.amount < 0) THEN 'deposit_refund'
-                 WHEN p.is_deposit IS TRUE THEN 'deposit'
-                 WHEN p.reverses_payment_id IS NOT NULL OR p.amount < 0 THEN 'reversal'
-                 ELSE 'payment'
-               END AS entry_type,
-               p.id AS entry_id,
-               p.paid_at AS occurred_at,
-               p.amount AS amount,
-               p.method AS method,
-               p.reference AS reference,
-               p.reversal_reason AS reversal_reason,
-               NULL::integer AS invoice_id,
-               NULL::text AS invoice_number
-          FROM invoice_payments p
-          JOIN customers c ON c.id = p.customer_id
-         WHERE c.company_id = $1
-           AND p.customer_id = $2
-        UNION ALL
-        SELECT CASE
-                 WHEN p.is_deposit IS TRUE AND a.amount < 0 THEN 'deposit_allocation_reversal'
-                 WHEN p.is_deposit IS TRUE THEN 'deposit_allocation'
-                 WHEN a.amount < 0 THEN 'allocation_reversal'
-                 ELSE 'allocation'
-               END AS entry_type,
-               a.id AS entry_id,
-               a.created_at AS occurred_at,
-               -a.amount AS amount,
-               p.method AS method,
-               p.reference AS reference,
-               NULL::text AS reversal_reason,
-               i.id AS invoice_id,
-               i.invoice_number AS invoice_number
-          FROM invoice_payment_allocations a
-          JOIN invoice_payments p ON p.id = a.payment_id
-          JOIN invoices i ON i.id = a.invoice_id
-         WHERE i.company_id = $1
-           AND p.customer_id = $2
-      ) AS entries
-     ORDER BY occurred_at DESC NULLS LAST, entry_id DESC
-     LIMIT $3
-    `,
-    [cid, custId, lim]
-  );
-
-  return res.rows.map((row) => ({
-    type: row.entry_type,
-    id: Number(row.entry_id),
-    occurredAt: row.occurred_at || null,
-    amount: Number(row.amount || 0),
-    method: row.method || null,
-    reference: row.reference || null,
-    reversalReason: row.reversal_reason || null,
-    invoiceId: row.invoice_id === null || row.invoice_id === undefined ? null : Number(row.invoice_id),
-    invoiceNumber: row.invoice_number || null,
-  }));
-}
-
-async function reverseInvoicePayment({ companyId, paymentId, reason = null, reversedAt = null }) {
-  const cid = Number(companyId);
-  const pid = Number(paymentId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(pid) || pid <= 0) throw new Error("paymentId is required.");
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const paymentRes = await client.query(
-      `
-      SELECT p.id,
-             p.invoice_id,
-             p.customer_id,
-             p.amount,
-             p.paid_at,
-             p.method,
-             p.reference,
-             p.note,
-             p.reverses_payment_id
-        FROM invoice_payments p
-        JOIN customers c ON c.id = p.customer_id
-       WHERE p.id = $1 AND c.company_id = $2
-       LIMIT 1
-       FOR UPDATE
-      `,
-      [pid, cid]
-    );
-    const payment = paymentRes.rows[0];
-    if (!payment) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-    const amount = Number(payment.amount || 0);
-    if (payment.reverses_payment_id) throw new Error("Payment is already a reversal.");
-    if (!Number.isFinite(amount) || amount <= 0) throw new Error("Only positive payments can be reversed.");
-
-    const reversedRes = await client.query(
-      `SELECT id FROM invoice_payments WHERE reverses_payment_id = $1 LIMIT 1`,
-      [pid]
-    );
-    if (reversedRes.rows[0]) throw new Error("Payment has already been reversed.");
-
-    const paidIso = reversedAt ? normalizeTimestamptz(reversedAt) : null;
-    const reversalNote = reason ? `Reversal: ${String(reason).trim()}` : `Reversal of payment #${pid}`;
-    const reversalRes = await client.query(
-      `
-      INSERT INTO invoice_payments (invoice_id, customer_id, paid_at, amount, method, reference, note, reverses_payment_id, reversal_reason)
-      VALUES ($1, $2, COALESCE($3::timestamptz, NOW()), $4, $5, $6, $7, $8, $9)
-      RETURNING id
-      `,
-      [
-        payment.invoice_id,
-        payment.customer_id,
-        paidIso,
-        toMoney(-amount),
-        payment.method || null,
-        payment.reference || null,
-        reversalNote,
-        pid,
-        reason ? String(reason).trim() : null,
-      ]
-    );
-    const reversalId = reversalRes.rows[0]?.id;
-
-    const allocationsRes = await client.query(
-      `
-      SELECT invoice_id, COALESCE(SUM(amount), 0) AS allocated_amount
-        FROM invoice_payment_allocations
-       WHERE payment_id = $1
-       GROUP BY invoice_id
-      `,
-      [pid]
-    );
-
-    const affectedInvoices = [];
-    for (const row of allocationsRes.rows) {
-      const invoiceId = Number(row.invoice_id);
-      const allocated = Number(row.allocated_amount || 0);
-      if (!Number.isFinite(invoiceId) || invoiceId <= 0 || allocated === 0) continue;
-      await client.query(
-        `
-        INSERT INTO invoice_payment_allocations (payment_id, invoice_id, amount)
-        VALUES ($1, $2, $3)
-        `,
-        [reversalId, invoiceId, toMoney(-allocated)]
-      );
-      affectedInvoices.push(invoiceId);
-    }
-
-    for (const invoiceId of affectedInvoices) {
-      const balanceRes = await client.query(
-        `
-          WITH totals AS (
-            SELECT COALESCE(SUM(amount - CASE WHEN tax_inclusive THEN tax_amount ELSE 0 END), 0)
-                     + COALESCE(SUM(tax_amount), 0) AS total_amount
-              FROM invoice_line_items
-             WHERE invoice_id = $1
-          ),
-        applied AS (
-          SELECT COALESCE(SUM(amount), 0) AS applied_amount
-            FROM invoice_payment_allocations
-           WHERE invoice_id = $1
-        )
-        SELECT COALESCE(t.total_amount, 0) - COALESCE(a.applied_amount, 0) AS balance
-          FROM totals t
-     LEFT JOIN applied a ON TRUE
-        `,
-        [invoiceId]
-      );
-      const balance = toMoney(Number(balanceRes.rows[0]?.balance || 0));
-      await client.query(
-        `
-        UPDATE invoices
-           SET status = CASE
-                          WHEN status = 'void' THEN status
-                          WHEN $3 <= 0 THEN 'paid'
-                          WHEN status = 'paid' AND $3 > 0 THEN 'sent'
-                          ELSE status
-                        END,
-               updated_at = NOW()
-         WHERE id = $1 AND company_id = $2
-        `,
-        [invoiceId, cid, balance]
-      );
-    }
-
-    await client.query("COMMIT");
-    return { reversalPaymentId: reversalId || null, affectedInvoices };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function markInvoiceEmailSent({ companyId, invoiceId, sentAt = null } = {}) {
-  const cid = Number(companyId);
-  const id = Number(invoiceId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(id) || id <= 0) throw new Error("invoiceId is required.");
-
-  const sentIso = sentAt ? normalizeTimestamptz(sentAt) : null;
-  const res = await pool.query(
-    `
-    UPDATE invoices
-       SET email_sent_at = COALESCE($1, NOW()),
-           status = CASE
-                      WHEN status IN ('paid', 'void') THEN status
-                      ELSE 'sent'
-                    END,
-           updated_at = NOW()
-     WHERE company_id = $2 AND id = $3
-     RETURNING email_sent_at
-    `,
-    [sentIso, cid, id]
-  );
-  return res.rows?.[0]?.email_sent_at || null;
-}
-
-async function createInvoiceVersion({ companyId, invoiceId, snapshot, pdfBuffer, pdfFilename, sentAt = null } = {}) {
-  const cid = Number(companyId);
-  const iid = Number(invoiceId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(iid) || iid <= 0) throw new Error("invoiceId is required.");
-  if (!Buffer.isBuffer(pdfBuffer) || !pdfBuffer.length) throw new Error("pdfBuffer is required.");
-
-  const safeFilename = String(pdfFilename || "").trim() || `invoice-${iid}.pdf`;
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const invRes = await client.query(
-      `SELECT id FROM invoices WHERE company_id = $1 AND id = $2 LIMIT 1`,
-      [cid, iid]
-    );
-    if (!invRes.rows[0]) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const versionRes = await client.query(
-      `SELECT COALESCE(MAX(version_number), 0) AS max_version FROM invoice_versions WHERE invoice_id = $1`,
-      [iid]
-    );
-    const nextVersion = Number(versionRes.rows?.[0]?.max_version || 0) + 1;
-    const sentIso = sentAt ? normalizeTimestamptz(sentAt) : null;
-
-    const insertRes = await client.query(
-      `
-      INSERT INTO invoice_versions (invoice_id, version_number, snapshot, pdf_bytes, pdf_filename, sent_at)
-      VALUES ($1, $2, $3::jsonb, $4, $5, $6)
-      RETURNING id, version_number, pdf_filename, sent_at, created_at
-      `,
-      [iid, nextVersion, JSON.stringify(snapshot || {}), pdfBuffer, safeFilename, sentIso]
-    );
-    await client.query("COMMIT");
-    const row = insertRes.rows?.[0] || null;
-    if (!row) return null;
-    return {
-      id: Number(row.id),
-      versionNumber: Number(row.version_number),
-      pdfFilename: row.pdf_filename || null,
-      sentAt: row.sent_at || null,
-      createdAt: row.created_at || null,
-    };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function markInvoiceVersionSent({ companyId, invoiceId, versionId, sentAt = null } = {}) {
-  const cid = Number(companyId);
-  const iid = Number(invoiceId);
-  const vid = Number(versionId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(iid) || iid <= 0) throw new Error("invoiceId is required.");
-  if (!Number.isFinite(vid) || vid <= 0) throw new Error("versionId is required.");
-
-  const sentIso = sentAt ? normalizeTimestamptz(sentAt) : null;
-  const res = await pool.query(
-    `
-    UPDATE invoice_versions v
-       SET sent_at = COALESCE($1, NOW())
-      FROM invoices i
-     WHERE v.id = $2
-       AND v.invoice_id = i.id
-       AND i.company_id = $3
-       AND i.id = $4
-     RETURNING v.sent_at
-    `,
-    [sentIso, vid, cid, iid]
-  );
-  return res.rows?.[0]?.sent_at || null;
-}
-
-async function getLatestSentInvoiceVersion({ companyId, invoiceId } = {}) {
-  const cid = Number(companyId);
-  const iid = Number(invoiceId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(iid) || iid <= 0) throw new Error("invoiceId is required.");
-
-  const res = await pool.query(
-    `
-    SELECT v.id,
-           v.version_number,
-           v.snapshot,
-           v.pdf_bytes,
-           v.pdf_filename,
-           v.sent_at,
-           v.created_at
-      FROM invoice_versions v
-      JOIN invoices i ON i.id = v.invoice_id
-     WHERE i.company_id = $1
-       AND i.id = $2
-       AND v.sent_at IS NOT NULL
-     ORDER BY v.sent_at DESC NULLS LAST, v.version_number DESC, v.id DESC
-     LIMIT 1
-    `,
-    [cid, iid]
-  );
-  const row = res.rows?.[0] || null;
-  if (!row) return null;
-  return {
-    id: Number(row.id),
-    versionNumber: Number(row.version_number),
-    snapshot: row.snapshot || null,
-    pdfBytes: row.pdf_bytes || null,
-    pdfFilename: row.pdf_filename || null,
-    sentAt: row.sent_at || null,
-    createdAt: row.created_at || null,
-  };
-}
-
-async function getLatestInvoiceVersion({ companyId, invoiceId } = {}) {
-  const cid = Number(companyId);
-  const iid = Number(invoiceId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(iid) || iid <= 0) throw new Error("invoiceId is required.");
-
-  const res = await pool.query(
-    `
-    SELECT v.id,
-           v.version_number,
-           v.snapshot,
-           v.pdf_bytes,
-           v.pdf_filename,
-           v.sent_at,
-           v.created_at
-      FROM invoice_versions v
-      JOIN invoices i ON i.id = v.invoice_id
-     WHERE i.company_id = $1
-       AND i.id = $2
-     ORDER BY v.created_at DESC NULLS LAST, v.version_number DESC, v.id DESC
-     LIMIT 1
-    `,
-    [cid, iid]
-  );
-  const row = res.rows?.[0] || null;
-  if (!row) return null;
-  return {
-    id: Number(row.id),
-    versionNumber: Number(row.version_number),
-    snapshot: row.snapshot || null,
-    pdfBytes: row.pdf_bytes || null,
-    pdfFilename: row.pdf_filename || null,
-    sentAt: row.sent_at || null,
-    createdAt: row.created_at || null,
-  };
-}
-
-async function deleteInvoice({ companyId, id }) {
-  const cid = Number(companyId);
-  const iid = Number(id);
-  if (!Number.isFinite(cid) || !Number.isFinite(iid)) throw new Error("companyId and id are required.");
-
-  const res = await pool.query(
-    `DELETE FROM invoices WHERE company_id = $1 AND id = $2 RETURNING id`,
-    [cid, iid]
-  );
-  return !!res.rows?.[0]?.id;
-}
-
-async function voidInvoice({ companyId, invoiceId, reason = null, voidedBy = null, voidedAt = null } = {}) {
-  const cid = Number(companyId);
-  const iid = Number(invoiceId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(iid) || iid <= 0) throw new Error("invoiceId is required.");
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const invRes = await client.query(
-      `SELECT id, status FROM invoices WHERE company_id = $1 AND id = $2 LIMIT 1 FOR UPDATE`,
-      [cid, iid]
-    );
-    const invoice = invRes.rows?.[0] || null;
-    if (!invoice) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const status = String(invoice.status || "").trim().toLowerCase();
-    if (status === "void") {
-      await client.query("COMMIT");
-      return { id: iid, status: "void", alreadyVoid: true };
-    }
-
-    const allocRes = await client.query(
-      `SELECT COALESCE(SUM(amount), 0) AS allocated_amount FROM invoice_payment_allocations WHERE invoice_id = $1`,
-      [iid]
-    );
-    const allocated = Number(allocRes.rows?.[0]?.allocated_amount || 0);
-    if (Math.abs(allocated) > 0.005) {
-      const err = new Error("Invoice has payments applied. Reverse or remove payments before voiding.");
-      err.code = "PAYMENTS_EXIST";
-      throw err;
-    }
-
-    const voidReason = reason ? String(reason).trim() : null;
-    const voidBy = voidedBy ? String(voidedBy).trim() : null;
-    const voidIso = voidedAt ? normalizeTimestamptz(voidedAt) : null;
-    const res = await client.query(
-      `
-      UPDATE invoices
-         SET status = 'void',
-             void_reason = $3,
-             voided_at = COALESCE($4::timestamptz, NOW()),
-             voided_by = $5,
-             updated_at = NOW()
-       WHERE company_id = $1 AND id = $2
-       RETURNING id
-      `,
-      [cid, iid, voidReason, voidIso, voidBy]
-    );
-    await client.query("COMMIT");
-    return res.rows?.[0]?.id ? { id: Number(res.rows[0].id), status: "void" } : null;
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
 async function getCompanySettingsForClient(client, companyId) {
   const res = await client.query(
     `SELECT company_id,
@@ -3045,11 +1159,7 @@ async function getCompanySettingsForClient(client, companyId) {
             billing_rounding_granularity,
             monthly_proration_method,
             billing_timezone,
-            invoice_date_mode,
-            default_payment_terms_days,
             logo_url,
-            invoice_auto_run,
-            invoice_auto_mode,
             tax_enabled,
             default_tax_rate,
             tax_registration_number,
@@ -3069,11 +1179,7 @@ async function getCompanySettingsForClient(client, companyId) {
       billing_rounding_granularity: normalizeBillingRoundingGranularity(res.rows[0].billing_rounding_granularity),
       monthly_proration_method: normalizeMonthlyProrationMethod(res.rows[0].monthly_proration_method),
       billing_timezone: normalizeBillingTimeZone(res.rows[0].billing_timezone),
-      invoice_date_mode: normalizeInvoiceDateMode(res.rows[0].invoice_date_mode),
-      default_payment_terms_days: res.rows[0].default_payment_terms_days === null || res.rows[0].default_payment_terms_days === undefined ? 30 : Number(res.rows[0].default_payment_terms_days),
       logo_url: res.rows[0].logo_url || null,
-      invoice_auto_run: normalizeInvoiceAutoRun(res.rows[0].invoice_auto_run),
-      invoice_auto_mode: normalizeInvoiceGenerationMode(res.rows[0].invoice_auto_mode),
       tax_enabled: res.rows[0].tax_enabled === true,
       default_tax_rate: Number(res.rows[0].default_tax_rate || 0),
       tax_registration_number: res.rows[0].tax_registration_number || null,
@@ -3089,11 +1195,7 @@ async function getCompanySettingsForClient(client, companyId) {
     billing_rounding_granularity: "unit",
     monthly_proration_method: "hours",
     billing_timezone: "UTC",
-    invoice_date_mode: "generation",
-    default_payment_terms_days: 30,
     logo_url: null,
-    invoice_auto_run: "off",
-    invoice_auto_mode: "auto",
     tax_enabled: false,
     default_tax_rate: 0,
     tax_registration_number: null,
@@ -3103,421 +1205,6 @@ async function getCompanySettingsForClient(client, companyId) {
       rental_info_fields: normalizeRentalInfoFields(null),
   };
 }
-
-async function generateInvoicesForRentalOrder({ companyId, orderId, mode = "auto" }) {
-  const cid = Number(companyId);
-  const oid = Number(orderId);
-  if (!Number.isFinite(cid) || !Number.isFinite(oid)) throw new Error("companyId and orderId are required.");
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-
-    const headerRes = await client.query(
-      `SELECT id, customer_id, status FROM rental_orders WHERE company_id = $1 AND id = $2 LIMIT 1`,
-      [cid, oid]
-    );
-    const header = headerRes.rows[0];
-    if (!header) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const lineRes = await client.query(
-      `
-      SELECT li.id,
-             li.type_id,
-             et.name AS type_name,
-             li.start_at,
-             li.end_at,
-             li.fulfilled_at,
-             li.returned_at,
-             li.rate_basis,
-             li.rate_amount,
-             cond.pause_periods,
-             (SELECT COUNT(*) FROM rental_order_line_inventory liv WHERE liv.line_item_id = li.id) AS qty
-        FROM rental_order_line_items li
-        JOIN equipment_types et ON et.id = li.type_id
-   LEFT JOIN rental_order_line_conditions cond ON cond.line_item_id = li.id
-       WHERE li.rental_order_id = $1
-       ORDER BY li.id ASC
-      `,
-      [oid]
-    );
-    const lines = lineRes.rows;
-    if (!lines.length) {
-      await client.query("ROLLBACK");
-      throw new Error("Rental order has no line items to invoice.");
-    }
-
-    const nowIso = normalizeTimestamptz(new Date().toISOString());
-    if (!nowIso) {
-      await client.query("ROLLBACK");
-      throw new Error("Unable to determine current time.");
-    }
-    const nowMs = Date.parse(nowIso);
-
-    const normalizedLines = lines
-      .map((li) => {
-        const lineStart = normalizeTimestamptz(li.fulfilled_at || li.start_at);
-        const bookedEnd = normalizeTimestamptz(li.end_at);
-        const actualEnd = normalizeTimestamptz(li.returned_at);
-        if (!lineStart || (!bookedEnd && !actualEnd)) return null;
-        const endSource = actualEnd || bookedEnd;
-        let lineEnd = endSource;
-        if (!actualEnd && bookedEnd && Date.parse(bookedEnd) < nowMs) {
-          lineEnd = nowIso;
-        }
-        if (!lineEnd || Date.parse(lineEnd) <= Date.parse(lineStart)) return null;
-        return {
-          ...li,
-          lineStart,
-          lineEnd,
-          pausePeriods: normalizePausePeriods(li.pause_periods),
-        };
-      })
-      .filter(Boolean);
-
-    const contractStart = normalizedLines.reduce((min, r) => (!min || r.lineStart < min ? r.lineStart : min), null);
-    const contractEnd = normalizedLines.reduce((max, r) => (!max || r.lineEnd > max ? r.lineEnd : max), null);
-    if (!contractStart || !contractEnd) {
-      await client.query("ROLLBACK");
-      throw new Error("Rental order is missing billable dates.");
-    }
-
-    const orderStatus = normalizeRentalOrderStatus(header.status);
-    const orderIsClosed = orderStatus === "closed" || orderStatus === "received";
-
-    const contractStartIso = normalizeTimestamptz(contractStart);
-    const contractEndIso = normalizeTimestamptz(contractEnd);
-
-    const effectiveEndIso =
-      orderIsClosed && contractEndIso && Date.parse(contractEndIso) > Date.parse(nowIso) ? nowIso : contractEndIso;
-
-    const durationMs = Date.parse(effectiveEndIso) - Date.parse(contractStartIso);
-    const longContract = Number.isFinite(durationMs) ? durationMs >= 28 * 24 * 60 * 60 * 1000 : false;
-    const normalizedMode = String(mode || "auto").trim().toLowerCase();
-    const shouldMonthly = normalizedMode === "monthly" || (normalizedMode === "auto" && longContract);
-
-    const settings = await getCompanySettingsForClient(client, cid);
-    const taxConfig = buildTaxConfig(settings);
-    const billingTimeZone = settings?.billing_timezone || "UTC";
-
-    // Only generate invoices for periods that are actually due.
-    // Monthly billing: allow current period (service period start <= now) for advance billing.
-    // Single invoice: generate only once the contract has ended (contract_end <= now).
-    const periods = shouldMonthly
-      ? splitIntoMonthlyPeriods({ startAt: contractStartIso, endAt: effectiveEndIso, timeZone: billingTimeZone }).filter(
-          (p) => p?.startAt && p?.endAt && Date.parse(p.startAt) <= Date.parse(nowIso)
-        )
-      : (contractStartIso &&
-          effectiveEndIso &&
-          Date.parse(effectiveEndIso) > Date.parse(contractStartIso) &&
-          Date.parse(effectiveEndIso) <= Date.parse(nowIso))
-        ? [{ startAt: contractStartIso, endAt: effectiveEndIso }]
-        : [];
-
-    const feeRes = await client.query(
-      `SELECT id, name, amount FROM rental_order_fees WHERE rental_order_id = $1 ORDER BY id ASC`,
-      [oid]
-    );
-    const fees = feeRes.rows || [];
-
-    const customerRes = await client.query(
-      `
-      SELECT CASE
-               WHEN c.parent_customer_id IS NOT NULL THEN p.payment_terms_days
-               ELSE c.payment_terms_days
-             END AS payment_terms_days
-        FROM customers c
-        LEFT JOIN customers p ON p.id = c.parent_customer_id
-       WHERE c.company_id = $1 AND c.id = $2
-       LIMIT 1
-      `,
-      [cid, header.customer_id]
-    );
-    const customerTerms = customerRes.rows?.[0]?.payment_terms_days === null || customerRes.rows?.[0]?.payment_terms_days === undefined
-      ? null
-      : Number(customerRes.rows[0].payment_terms_days);
-    const termsDays = normalizePaymentTermsDays(customerTerms) || settings.default_payment_terms_days || 30;
-    const created = [];
-
-    const invoicedFeeRes = await client.query(
-      `
-      SELECT DISTINCT ili.fee_id
-        FROM invoice_line_items ili
-        JOIN invoices i ON i.id = ili.invoice_id
-       WHERE i.company_id = $1
-         AND i.rental_order_id = $2
-         AND ili.fee_id IS NOT NULL
-      `,
-      [cid, oid]
-    );
-    const invoicedFeeIds = new Set(
-      invoicedFeeRes.rows
-        .map((r) => (r.fee_id === null || r.fee_id === undefined ? null : Number(r.fee_id)))
-        .filter((id) => Number.isFinite(id))
-    );
-
-    const invoiceReason = shouldMonthly ? "monthly" : "contract_final";
-    for (let idx = 0; idx < periods.length; idx++) {
-      const period = periods[idx];
-      if (!period?.startAt || !period?.endAt) continue;
-
-      const existingRes = await client.query(
-        `
-        SELECT id, invoice_number
-          FROM invoices
-         WHERE company_id = $1
-           AND rental_order_id = $2
-           AND (
-             (service_period_start = $3::timestamptz AND service_period_end = $4::timestamptz)
-             OR (service_period_start IS NULL AND period_start = $3::timestamptz AND period_end = $4::timestamptz)
-           )
-           AND document_type = 'invoice'
-         LIMIT 1
-         `,
-        [cid, oid, period.startAt, period.endAt]
-      );
-      if (existingRes.rows[0]) continue;
-
-      const invoiceDate = resolveInvoiceDate({
-        servicePeriodStart: period.startAt,
-        timeZone: billingTimeZone,
-        invoiceDateMode: settings.invoice_date_mode,
-      });
-      const invoiceDateObj = invoiceDate ? new Date(`${invoiceDate}T00:00:00Z`) : new Date();
-      const dueDateObj = new Date(invoiceDateObj.getTime() + Number(termsDays) * 24 * 60 * 60 * 1000);
-      const invoiceNumber = await nextDocumentNumber(client, cid, "INV", invoiceDateObj);
-
-      const invoiceRes = await client.query(
-        `
-        INSERT INTO invoices (company_id, invoice_number, customer_id, rental_order_id, status, invoice_date, issue_date, due_date, service_period_start, service_period_end, period_start, period_end, billing_reason, general_notes, created_at, updated_at)
-        VALUES ($1,$2,$3,$4,'draft',$5::date,$6::date,$7::date,$8::timestamptz,$9::timestamptz,$10::timestamptz,$11::timestamptz,$12,$13,NOW(),NOW())
-        RETURNING id, invoice_number
-        `,
-        [
-          cid,
-          invoiceNumber,
-          header.customer_id,
-          oid,
-          invoiceDate,
-          invoiceDate,
-          isoDate(dueDateObj),
-          period.startAt,
-          period.endAt,
-          period.startAt,
-          period.endAt,
-          invoiceReason,
-          generalNotesForBillingReason(invoiceReason),
-        ]
-      );
-      const invoiceId = Number(invoiceRes.rows[0].id);
-
-      let sortOrder = 0;
-      for (const li of normalizedLines) {
-        const liStart = li.lineStart;
-        const liEnd = li.lineEnd;
-        if (!liStart || !liEnd) continue;
-        const overlapStart = Date.parse(liStart) > Date.parse(period.startAt) ? liStart : period.startAt;
-        const overlapEnd = Date.parse(liEnd) < Date.parse(period.endAt) ? liEnd : period.endAt;
-        if (!overlapStart || !overlapEnd) continue;
-        if (Date.parse(overlapEnd) <= Date.parse(overlapStart)) continue;
-
-        const qty = Number(li.qty || 0);
-        if (!Number.isFinite(qty) || qty <= 0) continue;
-
-        const rateAmount = li.rate_amount === null || li.rate_amount === undefined ? null : Number(li.rate_amount);
-        const rateBasis = normalizeRateBasis(li.rate_basis);
-        if (rateAmount === null || !Number.isFinite(rateAmount) || !rateBasis) continue;
-
-        const pauseInfo = collectPauseOverlap({
-          pausePeriods: li.pausePeriods,
-          startAt: overlapStart,
-          endAt: overlapEnd,
-        });
-        const billableUnits = computeBillableUnits({
-          startAt: overlapStart,
-          endAt: overlapEnd,
-          rateBasis,
-          roundingMode: settings.billing_rounding_mode,
-          roundingGranularity: settings.billing_rounding_granularity,
-          monthlyProrationMethod: settings.monthly_proration_method,
-          pausePeriods: pauseInfo.segments,
-        });
-        if (billableUnits === null || !Number.isFinite(billableUnits) || billableUnits <= 0) continue;
-
-        const quantity = qty * billableUnits;
-        const amount = toMoney(quantity * rateAmount);
-        let desc = `${li.type_name} (${qty} units) - ${formatPeriodLabel(overlapStart, overlapEnd, billingTimeZone)}`;
-        if (pauseInfo.totalMs > 0) {
-          const pauseRanges = pauseInfo.segments
-            .map((seg) => formatPeriodLabel(seg.startAt, seg.endAt, billingTimeZone))
-            .filter(Boolean)
-            .join("; ");
-          const pauseDuration = formatDurationDays(pauseInfo.totalMs);
-          if (pauseRanges) {
-            desc += ` (Paused ${pauseDuration}: ${pauseRanges})`;
-          } else {
-            desc += ` (Paused ${pauseDuration})`;
-          }
-        }
-        const taxInfo = computeLineItemTax({ amount, isTaxable: true, taxRate: null, taxConfig });
-        const originKey = buildLineOriginKey({
-          lineItemId: li.id,
-          coverageStart: overlapStart,
-          coverageEnd: overlapEnd,
-          billingReason: invoiceReason,
-          isCredit: false,
-        });
-        await client.query(
-          `
-          INSERT INTO invoice_line_items
-            (invoice_id, description, quantity, unit_price, amount, is_taxable, tax_rate, tax_amount, tax_inclusive, sort_order, line_item_id, coverage_start, coverage_end, billing_reason, origin_key)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-          ON CONFLICT (invoice_id, origin_key) DO NOTHING
-          `,
-          [
-            invoiceId,
-            desc,
-            quantity,
-            toMoney(rateAmount),
-            amount,
-            taxInfo.isTaxable === true,
-            taxInfo.taxRate,
-            taxInfo.taxAmount,
-            taxInfo.taxInclusive === true,
-            sortOrder++,
-            li.id,
-            overlapStart,
-            overlapEnd,
-            invoiceReason,
-            originKey,
-          ]
-        );
-      }
-
-      // Apply each order-level fee once; new fees added later should appear on the next invoice.
-      if (fees.length) {
-        for (const fee of fees) {
-          const feeId = Number(fee.id);
-          if (!Number.isFinite(feeId) || invoicedFeeIds.has(feeId)) continue;
-          const name = String(fee.name || "").trim();
-          if (!name) continue;
-          const amount = toMoney(fee.amount);
-          if (!amount) continue;
-          const taxInfo = computeLineItemTax({ amount, isTaxable: true, taxRate: null, taxConfig });
-          const originKey = buildFeeOriginKey({ feeId, billingReason: "fee" });
-          await client.query(
-            `
-            INSERT INTO invoice_line_items
-              (invoice_id, description, quantity, unit_price, amount, is_taxable, tax_rate, tax_amount, tax_inclusive, sort_order, fee_id, billing_reason, origin_key)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-            ON CONFLICT (invoice_id, origin_key) DO NOTHING
-            `,
-            [
-              invoiceId,
-              name,
-              1,
-              amount,
-              amount,
-              taxInfo.isTaxable === true,
-              taxInfo.taxRate,
-              taxInfo.taxAmount,
-              taxInfo.taxInclusive === true,
-              sortOrder++,
-              feeId,
-              "fee",
-              originKey,
-            ]
-          );
-          invoicedFeeIds.add(feeId);
-        }
-      }
-
-      created.push({ id: invoiceId, invoiceNumber });
-    }
-
-    await client.query("COMMIT");
-    return { orderId: oid, created };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function getAccountsReceivableSummary(companyId) {
-  const res = await pool.query(
-    `
-    WITH invoice_totals AS (
-      SELECT i.id AS invoice_id,
-             i.customer_id,
-             COALESCE(SUM(li.amount - CASE WHEN li.tax_inclusive THEN li.tax_amount ELSE 0 END), 0) AS subtotal_amount,
-             COALESCE(SUM(li.tax_amount), 0) AS tax_total,
-             COALESCE(SUM(li.amount - CASE WHEN li.tax_inclusive THEN li.tax_amount ELSE 0 END), 0)
-               + COALESCE(SUM(li.tax_amount), 0) AS total_amount
-        FROM invoices i
-   LEFT JOIN invoice_line_items li ON li.invoice_id = i.id
-       WHERE i.company_id = $1
-       GROUP BY i.id, i.customer_id
-    ),
-      invoice_paid AS (
-        SELECT invoice_id,
-               COALESCE(SUM(amount), 0) AS paid_amount
-          FROM invoice_payment_allocations
-         GROUP BY invoice_id
-      ),
-        customer_credit AS (
-          SELECT totals.customer_id,
-                 COALESCE(SUM(totals.amount - totals.allocated_amount), 0) AS credit
-            FROM (
-              SELECT p.id,
-                     p.customer_id,
-                     p.amount,
-                     COALESCE(SUM(a.amount), 0) AS allocated_amount
-                FROM invoice_payments p
-                JOIN customers c ON c.id = p.customer_id
-           LEFT JOIN invoice_payment_allocations a ON a.payment_id = p.id
-               WHERE c.company_id = $1
-                 AND p.is_deposit IS NOT TRUE
-               GROUP BY p.id, p.customer_id, p.amount
-            ) totals
-           GROUP BY totals.customer_id
-        ),
-      customers_with_activity AS (
-        SELECT customer_id FROM invoice_totals
-        UNION
-        SELECT customer_id FROM customer_credit
-      )
-      SELECT c.id AS customer_id,
-             c.company_name AS customer_name,
-             COALESCE(SUM(t.total_amount), 0) AS total_invoiced,
-             COALESCE(SUM(COALESCE(p.paid_amount, 0)), 0) AS total_paid,
-             COALESCE(SUM(t.total_amount), 0) - COALESCE(SUM(COALESCE(p.paid_amount, 0)), 0) AS balance,
-             COALESCE(MAX(cc.credit), 0) AS credit
-        FROM customers_with_activity ca
-        JOIN customers c ON c.id = ca.customer_id
-   LEFT JOIN invoice_totals t ON t.customer_id = ca.customer_id
-   LEFT JOIN invoice_paid p ON p.invoice_id = t.invoice_id
-   LEFT JOIN customer_credit cc ON cc.customer_id = ca.customer_id
-       WHERE c.company_id = $1
-       GROUP BY c.id, c.company_name
-       ORDER BY balance DESC, c.company_name ASC
-    `,
-    [companyId]
-  );
-
-  return res.rows.map((r) => ({
-    customerId: Number(r.customer_id),
-      customerName: r.customer_name,
-      totalInvoiced: Number(r.total_invoiced || 0),
-      totalPaid: Number(r.total_paid || 0),
-      balance: Number(r.balance || 0),
-      credit: Number(r.credit || 0),
-    }));
-  }
 
 async function createCompanyWithUser({ companyName, contactEmail, ownerName, ownerEmail, password }) {
   const client = await pool.connect();
@@ -4936,7 +2623,6 @@ async function listCustomers(companyId) {
             c.contacts,
             c.accounting_contacts,
             c.can_charge_deposit,
-            c.payment_terms_days,
             c.sales_person_id,
             c.follow_up_date,
             c.notes,
@@ -4945,11 +2631,7 @@ async function listCustomers(companyId) {
             CASE
               WHEN c.parent_customer_id IS NOT NULL THEN p.can_charge_deposit
               ELSE c.can_charge_deposit
-            END AS effective_can_charge_deposit,
-            CASE
-              WHEN c.parent_customer_id IS NOT NULL THEN p.payment_terms_days
-              ELSE c.payment_terms_days
-            END AS effective_payment_terms_days
+            END AS effective_can_charge_deposit
      FROM customers c
      LEFT JOIN customers p ON p.id = c.parent_customer_id
      WHERE c.company_id = $1
@@ -5000,14 +2682,6 @@ function normalizeCustomerContacts({ contacts, contactName, email, phone }) {
   return normalized;
 }
 
-function normalizeInvoiceEmailFlag(value) {
-  if (value === true) return true;
-  if (value === false || value === null || value === undefined) return false;
-  const raw = String(value).trim().toLowerCase();
-  if (!raw) return false;
-  return ["true", "1", "yes", "y", "on"].includes(raw);
-}
-
 function normalizeAccountingContacts({ accountingContacts }) {
   let raw = [];
   if (Array.isArray(accountingContacts)) {
@@ -5028,10 +2702,7 @@ function normalizeAccountingContacts({ accountingContacts }) {
       const emailValue = normalizeContactField(entry.email);
       const phoneValue = normalizeContactField(entry.phone);
       if (!name && !emailValue && !phoneValue) return null;
-      const invoiceEmail = normalizeInvoiceEmailFlag(
-        entry.invoiceEmail ?? entry.invoice_email ?? entry.emailInvoices ?? entry.sendInvoices ?? entry.send_invoices
-      );
-      return { name, email: emailValue, phone: phoneValue, invoiceEmail };
+      return { name, email: emailValue, phone: phoneValue };
     })
     .filter(Boolean);
 }
@@ -5154,7 +2825,6 @@ async function createCustomer({
   email,
   phone,
   canChargeDeposit,
-  paymentTermsDays,
   salesPersonId,
   followUpDate,
   notes,
@@ -5163,7 +2833,6 @@ async function createCustomer({
 }) {
   const parent = await resolveParentCustomer({ companyId, parentCustomerId });
   const isBranch = !!parent;
-  const terms = isBranch ? null : normalizePaymentTermsDays(paymentTermsDays);
   const contactList = normalizeCustomerContacts({ contacts, contactName, email, phone });
   const accountingContactList = normalizeAccountingContacts({ accountingContacts });
   const primary = contactList[0] || {};
@@ -5172,9 +2841,9 @@ async function createCustomer({
   const primaryPhone = normalizeContactField(primary.phone) || normalizeContactField(phone);
   const finalCompanyName = parent?.company_name || companyName;
   const result = await pool.query(
-    `INSERT INTO customers (company_id, parent_customer_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, payment_terms_days, sales_person_id, follow_up_date, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, payment_terms_days, sales_person_id, follow_up_date, notes, parent_customer_id`,
+    `INSERT INTO customers (company_id, parent_customer_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id`,
     [
       companyId,
       parent?.id || null,
@@ -5190,7 +2859,6 @@ async function createCustomer({
       JSON.stringify(contactList),
       JSON.stringify(accountingContactList),
       isBranch ? false : !!canChargeDeposit,
-      terms,
       salesPersonId || null,
       followUpDate || null,
       notes || null,
@@ -5213,7 +2881,6 @@ async function updateCustomer({
   email,
   phone,
   canChargeDeposit,
-  paymentTermsDays,
   salesPersonId,
   followUpDate,
   notes,
@@ -5226,7 +2893,6 @@ async function updateCustomer({
   }
   const parent = await resolveParentCustomer({ companyId, parentCustomerId: normalizedParentId });
   const isBranch = !!parent;
-  const terms = isBranch ? null : normalizePaymentTermsDays(paymentTermsDays);
   const contactList = normalizeCustomerContacts({ contacts, contactName, email, phone });
   const accountingContactList = normalizeAccountingContacts({ accountingContacts });
   const primary = contactList[0] || {};
@@ -5249,12 +2915,11 @@ async function updateCustomer({
          contacts = $11,
          accounting_contacts = $12,
          can_charge_deposit = $13,
-         payment_terms_days = $14,
-         sales_person_id = $15,
-         follow_up_date = $16,
-         notes = $17
-     WHERE id = $18 AND company_id = $19
-     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, payment_terms_days, sales_person_id, follow_up_date, notes, parent_customer_id`,
+         sales_person_id = $14,
+         follow_up_date = $15,
+         notes = $16
+     WHERE id = $17 AND company_id = $18
+     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id`,
     [
       parent?.id || null,
       finalCompanyName,
@@ -5269,7 +2934,6 @@ async function updateCustomer({
       JSON.stringify(contactList),
       JSON.stringify(accountingContactList),
       isBranch ? false : !!canChargeDeposit,
-      terms,
       salesPersonId || null,
       followUpDate || null,
       notes || null,
@@ -5927,12 +3591,6 @@ function normalizeMonthlyProrationMethod(value) {
   return "hours";
 }
 
-function normalizeInvoiceDateMode(value) {
-  const v = String(value || "").trim().toLowerCase();
-  if (v === "period_start" || v === "service_period_start") return "period_start";
-  return "generation";
-}
-
 function normalizeRateBasis(value) {
   const v = String(value || "").toLowerCase();
   if (v === "daily" || v === "weekly" || v === "monthly") return v;
@@ -5968,1909 +3626,6 @@ function billingPeriodDays(rateBasis) {
       return 1;
     default:
       return null;
-  }
-}
-
-function billingReasonLabel(reason) {
-  const v = String(reason || "").trim().toLowerCase();
-  switch (v) {
-    case "monthly":
-      return "Monthly billing";
-    case "monthly_arrears":
-      return "Monthly billing (arrears)";
-    case "contract_final":
-      return "Final invoice";
-    case "pickup_proration":
-      return "Pickup proration";
-    case "pause_credit":
-      return "Pause credit";
-    case "return_credit":
-      return "Return credit";
-    case "resume_charge":
-      return "Resume charge";
-    case "fee":
-      return "Fee";
-    default:
-      return "Invoice";
-  }
-}
-
-function generalNotesForBillingReason(reason) {
-  const v = String(reason || "").trim().toLowerCase();
-  switch (v) {
-    case "monthly":
-      return "Invoice created for scheduled monthly billing in advance.";
-    case "monthly_arrears":
-      return "Invoice created for monthly billing in arrears.";
-    case "contract_final":
-      return "Invoice created because the rental period ended.";
-    case "pickup_proration":
-      return "Invoice created because items were picked up (prorated for the remainder of the month).";
-    case "pause_credit":
-      return "Invoice created because the rental was paused.";
-    case "return_credit":
-      return "Invoice created because items were returned.";
-    case "resume_charge":
-      return "Invoice created because the rental resumed.";
-    case "fee":
-      return "Invoice created to bill fees.";
-    default:
-      return "Invoice created.";
-  }
-}
-
-async function resolveInvoiceTermsDaysForCustomer(client, companyId, customerId) {
-  const settings = await getCompanySettingsForClient(client, companyId);
-  const customerRes = await client.query(
-    `
-    SELECT CASE
-             WHEN c.parent_customer_id IS NOT NULL THEN p.payment_terms_days
-             ELSE c.payment_terms_days
-           END AS payment_terms_days
-      FROM customers c
-      LEFT JOIN customers p ON p.id = c.parent_customer_id
-     WHERE c.company_id = $1 AND c.id = $2
-     LIMIT 1
-    `,
-    [companyId, customerId]
-  );
-  const customerTerms = customerRes.rows?.[0]?.payment_terms_days === null || customerRes.rows?.[0]?.payment_terms_days === undefined
-    ? null
-    : Number(customerRes.rows[0].payment_terms_days);
-  return normalizePaymentTermsDays(customerTerms) || settings.default_payment_terms_days || 30;
-}
-
-async function fetchLineItemForBilling(client, lineItemId) {
-  const res = await client.query(
-    `
-    SELECT li.id,
-           li.rental_order_id,
-           et.name AS type_name,
-           li.start_at,
-           li.end_at,
-           li.fulfilled_at,
-           li.returned_at,
-           li.rate_basis,
-           li.rate_amount,
-           cond.pause_periods,
-           (SELECT COUNT(*) FROM rental_order_line_inventory liv WHERE liv.line_item_id = li.id) AS qty
-      FROM rental_order_line_items li
-      JOIN equipment_types et ON et.id = li.type_id
- LEFT JOIN rental_order_line_conditions cond ON cond.line_item_id = li.id
-     WHERE li.id = $1
-     LIMIT 1
-    `,
-    [lineItemId]
-  );
-  return res.rows[0] || null;
-}
-
-function normalizeLineBillingDates(line) {
-  const lineStart = normalizeTimestamptz(line?.fulfilled_at || line?.start_at);
-  const lineEnd = normalizeTimestamptz(line?.returned_at || line?.end_at);
-  if (!lineStart || !lineEnd) return null;
-  if (Date.parse(lineEnd) <= Date.parse(lineStart)) return null;
-  return { lineStart, lineEnd };
-}
-
-function buildLineOriginKey({ lineItemId, coverageStart, coverageEnd, billingReason, isCredit }) {
-  const liid = Number(lineItemId);
-  const startIso = normalizeTimestamptz(coverageStart);
-  const endIso = normalizeTimestamptz(coverageEnd);
-  if (!Number.isFinite(liid) || liid <= 0 || !startIso || !endIso) return null;
-  const reason = billingReason ? String(billingReason).trim() : "";
-  const creditFlag = isCredit ? "credit" : "debit";
-  return `line:${liid}:${startIso}:${endIso}:${reason}:${creditFlag}`;
-}
-
-function buildFeeOriginKey({ feeId, billingReason }) {
-  const fid = Number(feeId);
-  if (!Number.isFinite(fid) || fid <= 0) return null;
-  const reason = billingReason ? String(billingReason).trim() : "fee";
-  return `fee:${fid}:${reason}`;
-}
-
-function buildInvoiceLineEntry({
-  line,
-  coverageStart,
-  coverageEnd,
-  roundingMode,
-  roundingGranularity,
-  monthlyProrationMethod,
-  billingReason,
-  isCredit = false,
-  pausePeriods = null,
-  descriptionPrefix = "",
-  timeZone = null,
-} = {}) {
-  if (!line || !coverageStart || !coverageEnd) return null;
-  const qty = Number(line.qty || 0);
-  if (!Number.isFinite(qty) || qty <= 0) return null;
-
-  const rateAmount = line.rate_amount === null || line.rate_amount === undefined ? null : Number(line.rate_amount);
-  const rateBasis = normalizeRateBasis(line.rate_basis);
-  if (rateAmount === null || !Number.isFinite(rateAmount) || !rateBasis) return null;
-
-  const pauseInfo = pausePeriods
-    ? collectPauseOverlap({ pausePeriods, startAt: coverageStart, endAt: coverageEnd })
-    : { totalMs: 0, segments: [] };
-
-  const billableUnits = computeBillableUnits({
-    startAt: coverageStart,
-    endAt: coverageEnd,
-    rateBasis,
-    roundingMode,
-    roundingGranularity,
-    monthlyProrationMethod,
-    pausePeriods: pauseInfo.segments,
-  });
-  if (billableUnits === null || !Number.isFinite(billableUnits) || billableUnits <= 0) return null;
-
-  const quantity = qty * billableUnits;
-  const amount = toMoney(quantity * rateAmount);
-  if (!amount) return null;
-
-  let desc = `${line.type_name} (${qty} units) - ${formatPeriodLabel(coverageStart, coverageEnd, timeZone)}`;
-  if (pauseInfo.totalMs > 0) {
-    const pauseRanges = pauseInfo.segments
-      .map((seg) => formatPeriodLabel(seg.startAt, seg.endAt, timeZone))
-      .filter(Boolean)
-      .join("; ");
-    const pauseDuration = formatDurationDays(pauseInfo.totalMs);
-    if (pauseRanges) {
-      desc += ` (Paused ${pauseDuration}: ${pauseRanges})`;
-    } else {
-      desc += ` (Paused ${pauseDuration})`;
-    }
-  }
-
-  if (descriptionPrefix) {
-    desc = `${descriptionPrefix}${desc}`;
-  }
-
-  return {
-    description: desc,
-    quantity: isCredit ? -quantity : quantity,
-    unitPrice: toMoney(rateAmount),
-    amount: isCredit ? -amount : amount,
-    lineItemId: Number(line.id),
-    coverageStart,
-    coverageEnd,
-    billingReason: billingReason || null,
-    originKey: buildLineOriginKey({
-      lineItemId: line.id,
-      coverageStart,
-      coverageEnd,
-      billingReason,
-      isCredit,
-    }),
-  };
-}
-
-async function hasInvoiceLineItemCoverage({
-  client,
-  companyId,
-  lineItemId,
-  coverageStart,
-  coverageEnd,
-  billingReason,
-  isCredit,
-}) {
-  const originKey = buildLineOriginKey({
-    lineItemId,
-    coverageStart,
-    coverageEnd,
-    billingReason,
-    isCredit,
-  });
-  if (originKey) {
-    const res = await client.query(
-      `
-      SELECT ili.id
-        FROM invoice_line_items ili
-        JOIN invoices i ON i.id = ili.invoice_id
-       WHERE i.company_id = $1
-         AND ili.origin_key = $2
-       LIMIT 1
-      `,
-      [companyId, originKey]
-    );
-    if (res.rows?.[0]?.id) return true;
-  }
-  const res = await client.query(
-    `
-    SELECT ili.id
-      FROM invoice_line_items ili
-      JOIN invoices i ON i.id = ili.invoice_id
-     WHERE i.company_id = $1
-       AND ili.line_item_id = $2
-       AND ili.coverage_start = $3::timestamptz
-       AND ili.coverage_end = $4::timestamptz
-       AND COALESCE(ili.billing_reason, '') = $5
-       AND (ili.amount < 0) = $6
-     LIMIT 1
-    `,
-    [companyId, lineItemId, coverageStart, coverageEnd, billingReason || "", !!isCredit]
-  );
-  return !!res.rows?.[0]?.id;
-}
-
-async function findDraftInvoiceCoveringDate(client, companyId, orderId, atIso) {
-  const res = await client.query(
-    `
-    SELECT id, invoice_number, service_period_start, service_period_end, period_start, period_end, billing_reason
-      FROM invoices
-     WHERE company_id = $1
-       AND rental_order_id = $2
-       AND status = 'draft'
-       AND COALESCE(service_period_start, period_start) IS NOT NULL
-       AND COALESCE(service_period_end, period_end) IS NOT NULL
-       AND COALESCE(service_period_start, period_start) <= $3::timestamptz
-       AND COALESCE(service_period_end, period_end) > $3::timestamptz
-     ORDER BY COALESCE(invoice_date, issue_date) DESC NULLS LAST, id DESC
-     LIMIT 1
-    `,
-    [companyId, orderId, atIso]
-  );
-  return res.rows[0] || null;
-}
-
-async function getNextInvoiceSortOrder(client, invoiceId) {
-  const res = await client.query(
-    `SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM invoice_line_items WHERE invoice_id = $1`,
-    [invoiceId]
-  );
-  const maxSort = res.rows?.[0]?.max_sort;
-  const next = Number(maxSort === null || maxSort === undefined ? -1 : maxSort);
-  return Number.isFinite(next) ? next + 1 : 0;
-}
-
-async function insertInvoiceLineEntries(client, invoiceId, entries, sortOrderStart = 0, taxConfig = null) {
-  let sortOrder = Number(sortOrderStart) || 0;
-  for (const entry of entries) {
-    const taxInfo = computeLineItemTax({
-      amount: entry.amount,
-      isTaxable: entry.isTaxable,
-      taxRate: entry.taxRate,
-      taxConfig,
-    });
-    const originKey = entry.originKey ? String(entry.originKey).trim() : null;
-    await client.query(
-      `
-      INSERT INTO invoice_line_items
-          (invoice_id, description, quantity, unit_price, amount, is_taxable, tax_rate, tax_amount, tax_inclusive, sort_order, line_item_id, coverage_start, coverage_end, billing_reason, origin_key)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-        ON CONFLICT (invoice_id, origin_key) DO NOTHING
-        `,
-        [
-          invoiceId,
-          entry.description,
-          entry.quantity,
-          entry.unitPrice,
-          toMoney(entry.amount),
-          taxInfo.isTaxable === true,
-          taxInfo.taxRate,
-          taxInfo.taxAmount,
-          taxInfo.taxInclusive === true,
-          sortOrder++,
-          entry.lineItemId || null,
-          entry.coverageStart || null,
-          entry.coverageEnd || null,
-          entry.billingReason || null,
-          originKey,
-        ]
-      );
-    }
-    return sortOrder;
-  }
-
-async function collectUninvoicedFeesForOrder(client, companyId, orderId) {
-  const feeRes = await client.query(
-    `SELECT id, name, amount FROM rental_order_fees WHERE rental_order_id = $1 ORDER BY id ASC`,
-    [orderId]
-  );
-  const fees = feeRes.rows || [];
-  if (!fees.length) return [];
-
-  const invoicedFeeRes = await client.query(
-    `
-    SELECT DISTINCT ili.fee_id
-      FROM invoice_line_items ili
-      JOIN invoices i ON i.id = ili.invoice_id
-     WHERE i.company_id = $1
-       AND i.rental_order_id = $2
-       AND ili.fee_id IS NOT NULL
-    `,
-    [companyId, orderId]
-  );
-  const invoicedFeeIds = new Set(
-    invoicedFeeRes.rows
-      .map((r) => (r.fee_id === null || r.fee_id === undefined ? null : Number(r.fee_id)))
-      .filter((id) => Number.isFinite(id))
-  );
-
-  return fees
-    .map((fee) => ({
-      id: Number(fee.id),
-      name: String(fee.name || "").trim(),
-      amount: toMoney(fee.amount),
-    }))
-    .filter((fee) => fee.name && fee.amount && !invoicedFeeIds.has(fee.id));
-}
-
-async function insertFeeLineEntries(client, invoiceId, fees, sortOrderStart, taxConfig = null) {
-  let sortOrder = Number(sortOrderStart) || 0;
-  for (const fee of fees) {
-    const taxInfo = computeLineItemTax({ amount: fee.amount, isTaxable: true, taxRate: null, taxConfig });
-    const originKey = buildFeeOriginKey({ feeId: fee.id, billingReason: "fee" });
-    await client.query(
-      `
-      INSERT INTO invoice_line_items
-          (invoice_id, description, quantity, unit_price, amount, is_taxable, tax_rate, tax_amount, tax_inclusive, sort_order, fee_id, billing_reason, origin_key)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-        ON CONFLICT (invoice_id, origin_key) DO NOTHING
-        `,
-        [
-          invoiceId,
-          fee.name,
-          1,
-          fee.amount,
-          fee.amount,
-          taxInfo.isTaxable === true,
-          taxInfo.taxRate,
-          taxInfo.taxAmount,
-          taxInfo.taxInclusive === true,
-          sortOrder++,
-          fee.id,
-          "fee",
-          originKey,
-        ]
-      );
-    }
-    return sortOrder;
-  }
-
-async function createInvoiceWithEntries({
-  client,
-  companyId,
-  orderId,
-  customerId,
-  periodStart,
-  periodEnd,
-  billingReason,
-  lineEntries,
-  feeEntries,
-  generalNotes,
-  documentType = "invoice",
-  timeZone = null,
-  invoiceDateMode = null,
-  taxConfig = null,
-} = {}) {
-  const lines = Array.isArray(lineEntries) ? lineEntries.filter(Boolean) : [];
-  const fees = Array.isArray(feeEntries) ? feeEntries.filter(Boolean) : [];
-  if (!lines.length && !fees.length) return null;
-
-  const docType = normalizeInvoiceDocumentType(documentType);
-  const prefix = docType === "credit_memo" ? "CRM" : docType === "debit_memo" ? "DBM" : "INV";
-  const invoiceDate = resolveInvoiceDate({
-    servicePeriodStart: periodStart,
-    timeZone,
-    invoiceDateMode,
-  });
-  const invoiceDateObj = invoiceDate ? new Date(`${invoiceDate}T00:00:00Z`) : new Date();
-  const termsDays = await resolveInvoiceTermsDaysForCustomer(client, companyId, customerId);
-  const dueDateObj = new Date(invoiceDateObj.getTime() + Number(termsDays) * 24 * 60 * 60 * 1000);
-  const invoiceNumber = await nextDocumentNumber(client, companyId, prefix, invoiceDateObj);
-
-  const invoiceRes = await client.query(
-    `
-    INSERT INTO invoices
-        (company_id, invoice_number, customer_id, rental_order_id, status, document_type, invoice_date, issue_date, due_date, service_period_start, service_period_end, period_start, period_end, billing_reason, general_notes, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,'draft',$5,$6::date,$7::date,$8::date,$9::timestamptz,$10::timestamptz,$11::timestamptz,$12::timestamptz,$13,$14,NOW(),NOW())
-      RETURNING id, invoice_number
-      `,
-      [
-        companyId,
-        invoiceNumber,
-        customerId,
-        orderId,
-        docType,
-        invoiceDate,
-        invoiceDate,
-        isoDate(dueDateObj),
-        periodStart,
-        periodEnd,
-        periodStart,
-        periodEnd,
-        billingReason || null,
-        generalNotes ?? generalNotesForBillingReason(billingReason),
-      ]
-    );
-  const invoiceId = Number(invoiceRes.rows[0].id);
-
-  let sortOrder = await insertInvoiceLineEntries(client, invoiceId, lines, 0, taxConfig);
-  if (fees.length) {
-    await insertFeeLineEntries(client, invoiceId, fees, sortOrder, taxConfig);
-  }
-
-  return { id: invoiceId, invoiceNumber, periodStart, periodEnd, servicePeriodStart: periodStart, servicePeriodEnd: periodEnd };
-}
-
-async function createManualInvoice({
-  companyId,
-  customerId,
-  invoiceDate = null,
-  dueDate = null,
-  servicePeriodStart = null,
-  servicePeriodEnd = null,
-  generalNotes = null,
-  notes = null,
-  lineItems = null,
-} = {}) {
-  const cid = Number(companyId);
-  const custId = Number(customerId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(custId) || custId <= 0) throw new Error("customerId is required.");
-
-  const items = Array.isArray(lineItems) ? lineItems : [];
-  const hasLine = items.some((raw) => String(raw?.description || "").trim());
-  if (!hasLine) throw new Error("At least one line item is required.");
-
-  const periodStart = servicePeriodStart ? normalizeTimestamptz(servicePeriodStart) : null;
-  const periodEnd = servicePeriodEnd ? normalizeTimestamptz(servicePeriodEnd) : null;
-  if (periodStart && periodEnd && Date.parse(periodEnd) <= Date.parse(periodStart)) {
-    throw new Error("servicePeriodEnd must be after servicePeriodStart.");
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const settings = await getCompanySettingsForClient(client, cid);
-    const taxConfig = buildTaxConfig(settings);
-    const billingTimeZone = settings?.billing_timezone || "UTC";
-
-    let invoiceDateValue = invoiceDate ? isoDate(invoiceDate) : null;
-    if (!invoiceDateValue) {
-      invoiceDateValue = resolveInvoiceDate({
-        servicePeriodStart: periodStart,
-        timeZone: billingTimeZone,
-        invoiceDateMode: settings.invoice_date_mode,
-      });
-    }
-    if (!invoiceDateValue) invoiceDateValue = isoDate(new Date());
-    const invoiceDateObj = new Date(`${invoiceDateValue}T00:00:00Z`);
-
-    let dueDateValue = dueDate ? isoDate(dueDate) : null;
-    if (!dueDateValue) {
-      const termsDays = await resolveInvoiceTermsDaysForCustomer(client, cid, custId);
-      const dueDateObj = new Date(invoiceDateObj.getTime() + Number(termsDays) * 24 * 60 * 60 * 1000);
-      dueDateValue = isoDate(dueDateObj);
-    }
-
-    const invoiceNumber = await nextDocumentNumber(client, cid, "INV", invoiceDateObj);
-    const headerRes = await client.query(
-      `
-      INSERT INTO invoices
-          (company_id, invoice_number, customer_id, rental_order_id, status, document_type,
-           invoice_date, issue_date, due_date, service_period_start, service_period_end,
-           period_start, period_end, billing_reason, general_notes, notes, created_at, updated_at)
-      VALUES ($1,$2,$3,NULL,'draft','invoice',$4::date,$5::date,$6::date,$7::timestamptz,$8::timestamptz,$9::timestamptz,$10::timestamptz,$11,$12,$13,NOW(),NOW())
-      RETURNING id, invoice_number
-      `,
-      [
-        cid,
-        invoiceNumber,
-        custId,
-        invoiceDateValue,
-        invoiceDateValue,
-        dueDateValue,
-        periodStart,
-        periodEnd,
-        periodStart,
-        periodEnd,
-        "manual",
-        generalNotes ?? "Manual invoice.",
-        notes ? String(notes).trim() : null,
-      ]
-    );
-    const invoiceId = Number(headerRes.rows[0].id);
-
-    let sort = 0;
-    for (const raw of items) {
-      const description = String(raw?.description || "").trim();
-      if (!description) continue;
-      const originKey = raw?.originKey ? String(raw.originKey).trim() : null;
-      const quantity = raw?.quantity === null || raw?.quantity === undefined || raw?.quantity === "" ? 1 : Number(raw.quantity);
-      const unitPrice = raw?.unitPrice === null || raw?.unitPrice === undefined || raw?.unitPrice === "" ? 0 : Number(raw.unitPrice);
-      const providedAmount = raw?.amount === null || raw?.amount === undefined || raw?.amount === "" ? null : Number(raw.amount);
-      const amount = Number.isFinite(providedAmount)
-        ? providedAmount
-        : toMoney((Number.isFinite(quantity) ? quantity : 0) * (Number.isFinite(unitPrice) ? unitPrice : 0));
-      const taxInfo = computeLineItemTax({
-        amount,
-        isTaxable: raw?.isTaxable,
-        taxRate: raw?.taxRate,
-        taxConfig,
-      });
-
-      await client.query(
-        `
-        INSERT INTO invoice_line_items
-          (invoice_id, description, quantity, unit_price, amount, is_taxable, tax_rate, tax_amount, tax_inclusive, sort_order, origin_key)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-        `,
-        [
-          invoiceId,
-          description,
-          Number.isFinite(quantity) ? quantity : 0,
-          Number.isFinite(unitPrice) ? unitPrice : 0,
-          toMoney(amount),
-          taxInfo.isTaxable === true,
-          taxInfo.taxRate,
-          taxInfo.taxAmount,
-          taxInfo.taxInclusive === true,
-          sort++,
-          originKey,
-        ]
-      );
-    }
-
-    await client.query("COMMIT");
-    return await getInvoice({ companyId: cid, id: invoiceId });
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function createInvoiceCorrection({ companyId, invoiceId, documentType } = {}) {
-  const cid = Number(companyId);
-  const iid = Number(invoiceId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(iid) || iid <= 0) throw new Error("invoiceId is required.");
-
-  const docType = normalizeInvoiceDocumentType(documentType);
-  if (docType === "invoice") throw new Error("documentType must be credit_memo or debit_memo.");
-
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const baseRes = await client.query(
-      `
-      SELECT id,
-             invoice_number,
-             customer_id,
-             rental_order_id,
-             status,
-             document_type,
-             service_period_start,
-             service_period_end,
-             period_start,
-             period_end
-        FROM invoices
-       WHERE company_id = $1 AND id = $2
-       LIMIT 1
-      `,
-      [cid, iid]
-    );
-    const base = baseRes.rows?.[0] || null;
-    if (!base) {
-      await client.query("ROLLBACK");
-      return null;
-    }
-
-    const baseDocType = normalizeInvoiceDocumentType(base.document_type);
-    if (baseDocType !== "invoice") {
-      await client.query("ROLLBACK");
-      throw new Error("Corrections can only be created from invoices.");
-    }
-
-    const status = String(base.status || "").trim().toLowerCase();
-    if (status === "draft") {
-      await client.query("ROLLBACK");
-      throw new Error("Draft invoices can be edited directly.");
-    }
-    if (status === "void") {
-      await client.query("ROLLBACK");
-      throw new Error("Voided invoices cannot be corrected.");
-    }
-
-    const settings = await getCompanySettingsForClient(client, cid).catch(() => null);
-    const billingTimeZone = settings?.billing_timezone || "UTC";
-    const servicePeriodStart = base.service_period_start || base.period_start || null;
-    const servicePeriodEnd = base.service_period_end || base.period_end || null;
-    const invoiceDate = resolveInvoiceDate({
-      servicePeriodStart,
-      timeZone: billingTimeZone,
-      invoiceDateMode: settings?.invoice_date_mode,
-    });
-    const invoiceDateObj = invoiceDate ? new Date(`${invoiceDate}T00:00:00Z`) : new Date();
-    const termsDays = await resolveInvoiceTermsDaysForCustomer(client, cid, base.customer_id);
-    const dueDateObj = new Date(invoiceDateObj.getTime() + Number(termsDays) * 24 * 60 * 60 * 1000);
-
-    const prefix = docType === "credit_memo" ? "CRM" : "DBM";
-    const invoiceNumber = await nextDocumentNumber(client, cid, prefix, invoiceDateObj);
-
-    const generalNotes =
-      docType === "credit_memo"
-        ? `Credit memo issued for invoice ${base.invoice_number}.`
-        : `Debit memo issued for invoice ${base.invoice_number}.`;
-
-    const invoiceRes = await client.query(
-      `
-      INSERT INTO invoices
-        (company_id, invoice_number, customer_id, rental_order_id, applies_to_invoice_id, status, document_type,
-         invoice_date, issue_date, due_date, service_period_start, service_period_end, period_start, period_end, billing_reason, general_notes, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5,'draft',$6,$7::date,$8::date,$9::date,$10::timestamptz,$11::timestamptz,$12::timestamptz,$13::timestamptz,$14,$15,NOW(),NOW())
-      RETURNING id, invoice_number
-      `,
-      [
-        cid,
-        invoiceNumber,
-        Number(base.customer_id),
-        base.rental_order_id,
-        Number(base.id),
-        docType,
-        invoiceDate,
-        invoiceDate,
-        isoDate(dueDateObj),
-        servicePeriodStart,
-        servicePeriodEnd,
-        servicePeriodStart,
-        servicePeriodEnd,
-        docType,
-        generalNotes,
-      ]
-    );
-
-    await client.query("COMMIT");
-    const row = invoiceRes.rows?.[0] || null;
-    if (!row) return null;
-    return { id: Number(row.id), invoiceNumber: row.invoice_number };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function rebuildDraftInvoiceLineItemsForLineItem({
-  client,
-  invoice,
-  line,
-  roundingMode,
-  roundingGranularity,
-  monthlyProrationMethod,
-  billingReason,
-  timeZone = null,
-  taxConfig = null,
-} = {}) {
-  if (!invoice?.id || !line?.id) return false;
-  await client.query(
-    `DELETE FROM invoice_line_items WHERE invoice_id = $1 AND line_item_id = $2`,
-    [invoice.id, line.id]
-  );
-
-  const lineDates = normalizeLineBillingDates(line);
-  if (!lineDates) return false;
-  const overlap = overlapRange({
-    startAt: lineDates.lineStart,
-    endAt: lineDates.lineEnd,
-    rangeStart: invoice.service_period_start || invoice.period_start,
-    rangeEnd: invoice.service_period_end || invoice.period_end,
-  });
-  if (!overlap) return false;
-
-  const pausePeriods = normalizePausePeriods(line.pause_periods);
-  const entry = buildInvoiceLineEntry({
-    line,
-    coverageStart: overlap.startAt,
-    coverageEnd: overlap.endAt,
-    roundingMode,
-    roundingGranularity,
-    monthlyProrationMethod,
-    billingReason: billingReason || invoice.billing_reason || "draft_adjust",
-    pausePeriods,
-    timeZone,
-  });
-  if (!entry) return false;
-
-  const sortOrder = await getNextInvoiceSortOrder(client, invoice.id);
-  await insertInvoiceLineEntries(client, invoice.id, [entry], sortOrder, taxConfig);
-  return true;
-}
-
-async function insertInvoiceAudit({
-  client,
-  companyId,
-  orderId,
-  invoice,
-  reason,
-  summaryPrefix,
-  lineEntries,
-  actorName,
-  actorEmail,
-  action = "invoice_created",
-} = {}) {
-  if (!orderId || !invoice?.id) return;
-  const label = billingReasonLabel(reason);
-  const invoiceNumber = invoice.invoiceNumber || invoice.invoice_number || null;
-  const summary = summaryPrefix || `Created invoice ${invoiceNumber || `#${invoice.id}`} (${label}).`;
-  const changes = {
-    invoiceId: invoice.id,
-    invoiceNumber,
-    billingReason: reason || null,
-    billingLabel: label,
-    periodStart:
-      invoice.servicePeriodStart || invoice.service_period_start || invoice.periodStart || invoice.period_start || null,
-    periodEnd: invoice.servicePeriodEnd || invoice.service_period_end || invoice.periodEnd || invoice.period_end || null,
-    lines: Array.isArray(lineEntries)
-      ? lineEntries.map((entry) => ({
-          lineItemId: entry.lineItemId || null,
-          coverageStart: entry.coverageStart || null,
-          coverageEnd: entry.coverageEnd || null,
-          amount: entry.amount || 0,
-          billingReason: entry.billingReason || null,
-        }))
-      : [],
-  };
-  await insertRentalOrderAudit({
-    client,
-    companyId,
-    orderId,
-    actorName,
-    actorEmail,
-    action,
-    summary,
-    changes,
-  });
-}
-
-async function createPickupBillingForLineItem({ companyId, lineItemId, actorName = null, actorEmail = null } = {}) {
-  const cid = Number(companyId);
-  const liid = Number(lineItemId);
-  if (!Number.isFinite(cid) || !Number.isFinite(liid)) throw new Error("companyId and lineItemId are required.");
-
-  const client = await pool.connect();
-  const created = [];
-  let updated = null;
-
-  try {
-    await client.query("BEGIN");
-    const settings = await getCompanySettingsForClient(client, cid);
-    const taxConfig = buildTaxConfig(settings);
-    const billingTimeZone = settings?.billing_timezone || "UTC";
-
-    const line = await fetchLineItemForBilling(client, liid);
-    if (!line || !line.fulfilled_at) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-
-    const orderId = Number(line.rental_order_id);
-    const orderRes = await client.query(
-      `SELECT id, customer_id FROM rental_orders WHERE company_id = $1 AND id = $2 LIMIT 1`,
-      [cid, orderId]
-    );
-    const order = orderRes.rows[0];
-    if (!order) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-
-    let lineDates = normalizeLineBillingDates(line);
-    const period = monthRangeForDate(line.fulfilled_at, billingTimeZone);
-    if (!lineDates && !line?.returned_at && !line?.end_at && period) {
-      const lineStart = normalizeTimestamptz(line.fulfilled_at || line.start_at);
-      const lineEnd = normalizeTimestamptz(period.endAt);
-      if (lineStart && lineEnd && Date.parse(lineEnd) > Date.parse(lineStart)) {
-        lineDates = { lineStart, lineEnd };
-      }
-    }
-    if (!lineDates || !period) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-
-    const coverage = overlapRange({
-      startAt: line.fulfilled_at,
-      endAt: lineDates.lineEnd,
-      rangeStart: period.startAt,
-      rangeEnd: period.endAt,
-    });
-    if (!coverage) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-
-    const already = await hasInvoiceLineItemCoverage({
-      client,
-      companyId: cid,
-      lineItemId: liid,
-      coverageStart: coverage.startAt,
-      coverageEnd: coverage.endAt,
-      billingReason: "pickup_proration",
-      isCredit: false,
-    });
-    if (already) {
-      await client.query("COMMIT");
-      return { created };
-    }
-
-    const pausePeriods = normalizePausePeriods(line.pause_periods);
-    const entry = buildInvoiceLineEntry({
-      line,
-      coverageStart: coverage.startAt,
-      coverageEnd: coverage.endAt,
-      roundingMode: settings.billing_rounding_mode,
-      roundingGranularity: settings.billing_rounding_granularity,
-      monthlyProrationMethod: settings.monthly_proration_method,
-      billingReason: "pickup_proration",
-      pausePeriods,
-      timeZone: billingTimeZone,
-    });
-    if (!entry) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-
-    const draftInvoice = await findDraftInvoiceCoveringDate(client, cid, orderId, coverage.startAt);
-    if (draftInvoice) {
-      const sortOrder = await getNextInvoiceSortOrder(client, draftInvoice.id);
-        const nextSort = await insertInvoiceLineEntries(client, draftInvoice.id, [entry], sortOrder, taxConfig);
-        const fees = await collectUninvoicedFeesForOrder(client, cid, orderId);
-        if (fees.length) {
-          await insertFeeLineEntries(client, draftInvoice.id, fees, nextSort, taxConfig);
-        }
-      updated = {
-        id: Number(draftInvoice.id),
-        invoiceNumber: draftInvoice.invoice_number,
-        periodStart: draftInvoice.service_period_start || draftInvoice.period_start,
-        periodEnd: draftInvoice.service_period_end || draftInvoice.period_end,
-      };
-      await insertInvoiceAudit({
-        client,
-        companyId: cid,
-        orderId,
-        invoice: updated,
-        reason: "pickup_proration",
-        summaryPrefix: `Updated draft invoice ${draftInvoice.invoice_number || `#${draftInvoice.id}`} (Pickup proration).`,
-        lineEntries: [entry],
-        actorName,
-        actorEmail,
-        action: "invoice_updated",
-      });
-    } else {
-      const fees = await collectUninvoicedFeesForOrder(client, cid, orderId);
-      const includeMonthlyMethod = normalizeRateBasis(line.rate_basis) === "monthly";
-      const prorationNotes = buildProrationNotes({
-        periodStart: coverage.startAt,
-        periodEnd: coverage.endAt,
-        timeZone: billingTimeZone,
-        roundingMode: settings.billing_rounding_mode,
-        roundingGranularity: settings.billing_rounding_granularity,
-        monthlyProrationMethod: settings.monthly_proration_method,
-        includeMonthlyMethod,
-      });
-      const generalNotes = [generalNotesForBillingReason("pickup_proration"), prorationNotes].filter(Boolean).join("\n");
-        const invoice = await createInvoiceWithEntries({
-          client,
-          companyId: cid,
-          orderId,
-          customerId: Number(order.customer_id),
-          periodStart: coverage.startAt,
-          periodEnd: coverage.endAt,
-          billingReason: "pickup_proration",
-          lineEntries: [entry],
-          feeEntries: fees,
-          generalNotes,
-          timeZone: billingTimeZone,
-          invoiceDateMode: settings.invoice_date_mode,
-          taxConfig,
-        });
-      if (invoice) {
-        created.push({ ...invoice, orderId });
-        await insertInvoiceAudit({
-          client,
-          companyId: cid,
-          orderId,
-          invoice,
-          reason: "pickup_proration",
-          lineEntries: [entry],
-          actorName,
-          actorEmail,
-          action: "invoice_created",
-        });
-      }
-    }
-
-    await client.query("COMMIT");
-    return { created, updated };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function createReturnBillingForLineItem({
-  companyId,
-  lineItemId,
-  returned,
-  actorName = null,
-  actorEmail = null,
-} = {}) {
-  const cid = Number(companyId);
-  const liid = Number(lineItemId);
-  if (!Number.isFinite(cid) || !Number.isFinite(liid)) throw new Error("companyId and lineItemId are required.");
-
-  const client = await pool.connect();
-  const created = [];
-  let updated = null;
-
-  try {
-    await client.query("BEGIN");
-    const settings = await getCompanySettingsForClient(client, cid);
-    const taxConfig = buildTaxConfig(settings);
-    const billingTimeZone = settings?.billing_timezone || "UTC";
-    const autoRun = normalizeInvoiceAutoRun(settings?.invoice_auto_run);
-    if (autoRun === "monthly" && !returned) {
-      await client.query("ROLLBACK");
-      return { created, updated };
-    }
-    const line = await fetchLineItemForBilling(client, liid);
-    if (!line || !line.fulfilled_at) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-    const orderId = Number(line.rental_order_id);
-
-    const lineDates = normalizeLineBillingDates(line);
-    if (!lineDates) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-
-    const eventIso = returned ? normalizeTimestamptz(line.returned_at) : normalizeTimestamptz(new Date().toISOString());
-    if (!eventIso) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-    const period = monthRangeForDate(eventIso, billingTimeZone);
-    if (!period) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-
-    const lineEndForCredit = returned ? (normalizeTimestamptz(line.end_at) || lineDates.lineEnd) : lineDates.lineEnd;
-    const coverage = overlapRange({
-      startAt: eventIso,
-      endAt: lineEndForCredit,
-      rangeStart: period.startAt,
-      rangeEnd: period.endAt,
-    });
-    if (!coverage) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-
-    const draftInvoice = await findDraftInvoiceCoveringDate(client, cid, orderId, eventIso);
-    if (draftInvoice) {
-      const updatedDraft = await rebuildDraftInvoiceLineItemsForLineItem({
-        client,
-        invoice: draftInvoice,
-        line,
-        roundingMode: settings.billing_rounding_mode,
-        roundingGranularity: settings.billing_rounding_granularity,
-        monthlyProrationMethod: settings.monthly_proration_method,
-        timeZone: billingTimeZone,
-        taxConfig,
-      });
-      if (updatedDraft) {
-        updated = {
-          id: Number(draftInvoice.id),
-          invoiceNumber: draftInvoice.invoice_number,
-          periodStart: draftInvoice.service_period_start || draftInvoice.period_start,
-          periodEnd: draftInvoice.service_period_end || draftInvoice.period_end,
-        };
-        await insertInvoiceAudit({
-          client,
-          companyId: cid,
-          orderId,
-          invoice: updated,
-          reason: returned ? "return_credit" : "resume_charge",
-          summaryPrefix: `Updated draft invoice ${draftInvoice.invoice_number || `#${draftInvoice.id}`} (${returned ? "Return adjustment" : "Resume adjustment"}).`,
-          lineEntries: [],
-          actorName,
-          actorEmail,
-          action: "invoice_updated",
-        });
-      }
-      await client.query("COMMIT");
-      return { created, updated };
-    }
-
-    const reason = returned ? "return_credit" : "resume_charge";
-    const already = await hasInvoiceLineItemCoverage({
-      client,
-      companyId: cid,
-      lineItemId: liid,
-      coverageStart: coverage.startAt,
-      coverageEnd: coverage.endAt,
-      billingReason: reason,
-      isCredit: returned,
-    });
-    if (already) {
-      await client.query("COMMIT");
-      return { created };
-    }
-
-    const pausePeriods = normalizePausePeriods(line.pause_periods);
-    const entry = buildInvoiceLineEntry({
-      line,
-      coverageStart: coverage.startAt,
-      coverageEnd: coverage.endAt,
-      roundingMode: settings.billing_rounding_mode,
-      roundingGranularity: settings.billing_rounding_granularity,
-      monthlyProrationMethod: settings.monthly_proration_method,
-      billingReason: reason,
-      pausePeriods,
-      isCredit: returned,
-      descriptionPrefix: returned ? "Credit: " : "",
-      timeZone: billingTimeZone,
-    });
-    if (!entry) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-
-    const orderRes = await client.query(
-      `SELECT id, customer_id FROM rental_orders WHERE company_id = $1 AND id = $2 LIMIT 1`,
-      [cid, orderId]
-    );
-    const order = orderRes.rows[0];
-    if (!order) {
-      await client.query("ROLLBACK");
-      return { created };
-    }
-
-        const includeMonthlyMethod = normalizeRateBasis(line.rate_basis) === "monthly";
-        const prorationNotes = buildProrationNotes({
-          periodStart: coverage.startAt,
-          periodEnd: coverage.endAt,
-          timeZone: billingTimeZone,
-          roundingMode: settings.billing_rounding_mode,
-          roundingGranularity: settings.billing_rounding_granularity,
-          monthlyProrationMethod: settings.monthly_proration_method,
-          includeMonthlyMethod,
-        });
-        const generalNotes = [generalNotesForBillingReason(reason), prorationNotes].filter(Boolean).join("\n");
-    const invoice = await createInvoiceWithEntries({
-      client,
-      companyId: cid,
-      orderId,
-      customerId: Number(order.customer_id),
-      periodStart: coverage.startAt,
-      periodEnd: coverage.endAt,
-      billingReason: reason,
-      lineEntries: [entry],
-      feeEntries: [],
-      generalNotes,
-      documentType: returned ? "credit_memo" : "invoice",
-      timeZone: billingTimeZone,
-      invoiceDateMode: settings.invoice_date_mode,
-      taxConfig,
-    });
-    if (invoice) {
-      created.push({ ...invoice, orderId });
-      await insertInvoiceAudit({
-        client,
-        companyId: cid,
-        orderId,
-        invoice,
-        reason,
-        lineEntries: [entry],
-        actorName,
-        actorEmail,
-        action: returned ? "invoice_credit" : "invoice_created",
-        summaryPrefix: returned
-          ? `Created credit ${invoice.invoiceNumber || `#${invoice.id}`} (${billingReasonLabel(reason)}).`
-          : undefined,
-      });
-    }
-
-    await client.query("COMMIT");
-    return { created };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function createPauseBillingAdjustments({
-  companyId,
-  lineItemIds,
-  startAt = null,
-  endAt = null,
-  workOrderNumber = null,
-  actorName = "System",
-  actorEmail = null,
-} = {}) {
-  const cid = Number(companyId);
-  if (!Number.isFinite(cid)) throw new Error("companyId is required.");
-  const lineIds = Array.isArray(lineItemIds) ? lineItemIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)) : [];
-  if (!lineIds.length) return { created: [], updated: [] };
-
-  const startIso = startAt ? normalizeTimestamptz(startAt) : null;
-  const endIso = endAt ? normalizeTimestamptz(endAt) : null;
-  const isPauseStart = !!startIso;
-  const isPauseEnd = !startIso && !!endIso;
-
-  if (!isPauseStart && !isPauseEnd) return { created: [], updated: [] };
-
-  const client = await pool.connect();
-  const created = [];
-  const updated = [];
-
-  try {
-    await client.query("BEGIN");
-    const settings = await getCompanySettingsForClient(client, cid);
-    const taxConfig = buildTaxConfig(settings);
-    const billingTimeZone = settings?.billing_timezone || "UTC";
-    const autoRun = normalizeInvoiceAutoRun(settings?.invoice_auto_run);
-    const monthlyMode = autoRun === "monthly";
-
-    for (const lineItemId of lineIds) {
-      const line = await fetchLineItemForBilling(client, lineItemId);
-      if (!line || !line.fulfilled_at) continue;
-      const orderId = Number(line.rental_order_id);
-      const lineDates = normalizeLineBillingDates(line);
-      if (!lineDates) continue;
-
-      const eventIso = isPauseStart ? startIso : endIso;
-      const period = monthRangeForDate(eventIso, billingTimeZone);
-      if (!period) continue;
-
-      const pausePeriods = normalizePausePeriods(line.pause_periods, { allowOpen: true });
-      const matchWorkOrder = String(workOrderNumber || "").trim();
-      const findMatchingPause = () => {
-        if (!pausePeriods.length || !endIso) return null;
-        const exact = pausePeriods.find((p) => {
-          if (!p.endAt || p.endAt !== endIso) return false;
-          if (!matchWorkOrder) return true;
-          return p.source === "work_order" && p.workOrderNumber === matchWorkOrder;
-        });
-        if (exact) return exact;
-        return pausePeriods.find((p) => p.endAt === endIso) || null;
-      };
-
-      let coverage = null;
-      let pauseEndReason = null;
-      if (monthlyMode && isPauseStart) {
-        // In monthly advance billing, pause credits are issued at pause end or month boundary.
-        const draftInvoice = await findDraftInvoiceCoveringDate(client, cid, orderId, eventIso);
-        if (draftInvoice) {
-          const updatedDraft = await rebuildDraftInvoiceLineItemsForLineItem({
-            client,
-            invoice: draftInvoice,
-            line,
-            roundingMode: settings.billing_rounding_mode,
-            roundingGranularity: settings.billing_rounding_granularity,
-            monthlyProrationMethod: settings.monthly_proration_method,
-            timeZone: billingTimeZone,
-            taxConfig,
-          });
-          if (updatedDraft) {
-            updated.push({
-              id: Number(draftInvoice.id),
-              invoiceNumber: draftInvoice.invoice_number,
-              periodStart: draftInvoice.service_period_start || draftInvoice.period_start,
-              periodEnd: draftInvoice.service_period_end || draftInvoice.period_end,
-            });
-            await insertInvoiceAudit({
-              client,
-              companyId: cid,
-              orderId,
-              invoice: draftInvoice,
-              reason: "pause_credit",
-              summaryPrefix: `Updated draft invoice ${draftInvoice.invoice_number || `#${draftInvoice.id}`} (Pause adjustment).`,
-              lineEntries: [],
-              actorName,
-              actorEmail,
-              action: "invoice_updated",
-            });
-          }
-        }
-        continue;
-      }
-
-      if (monthlyMode && isPauseEnd) {
-        const matchedPause = findMatchingPause();
-        if (!matchedPause?.startAt) continue;
-        const invoiceRes = await client.query(
-          `
-          SELECT id, created_at
-            FROM invoices
-           WHERE company_id = $1
-             AND rental_order_id = $2
-             AND (
-               (service_period_start = $3::timestamptz AND service_period_end = $4::timestamptz)
-               OR (service_period_start IS NULL AND period_start = $3::timestamptz AND period_end = $4::timestamptz)
-             )
-             AND document_type = 'invoice'
-           LIMIT 1
-          `,
-          [cid, orderId, period.startAt, period.endAt]
-        );
-        const invoiceRow = invoiceRes.rows?.[0] || null;
-        if (!invoiceRow) continue;
-        const invoiceCreatedMs = Date.parse(invoiceRow.created_at);
-        const pauseStartMs = Date.parse(matchedPause.startAt);
-        if (!Number.isFinite(pauseStartMs)) continue;
-
-        const billedBeforePause = Number.isFinite(invoiceCreatedMs) && invoiceCreatedMs < pauseStartMs;
-        if (billedBeforePause) {
-          pauseEndReason = "pause_credit";
-          const rawCoverage = overlapRange({
-            startAt: matchedPause.startAt,
-            endAt: endIso,
-            rangeStart: period.startAt,
-            rangeEnd: period.endAt,
-          });
-          if (rawCoverage) {
-            coverage = overlapRange({
-              startAt: rawCoverage.startAt,
-              endAt: rawCoverage.endAt,
-              rangeStart: lineDates.lineStart,
-              rangeEnd: lineDates.lineEnd,
-            });
-          }
-        } else {
-          pauseEndReason = "resume_charge";
-          coverage = overlapRange({
-            startAt: endIso,
-            endAt: lineDates.lineEnd,
-            rangeStart: period.startAt,
-            rangeEnd: period.endAt,
-          });
-        }
-      } else {
-        let pauseStart = isPauseStart ? startIso : null;
-        let pauseEnd = isPauseStart ? (endIso || period.endAt) : null;
-        if (isPauseStart) {
-          coverage = overlapRange({ startAt: pauseStart, endAt: pauseEnd, rangeStart: lineDates.lineStart, rangeEnd: lineDates.lineEnd });
-          if (coverage) {
-            coverage = overlapRange({ startAt: coverage.startAt, endAt: coverage.endAt, rangeStart: period.startAt, rangeEnd: period.endAt });
-          }
-        } else if (isPauseEnd) {
-          coverage = overlapRange({ startAt: endIso, endAt: lineDates.lineEnd, rangeStart: period.startAt, rangeEnd: period.endAt });
-        }
-      }
-      if (!coverage) continue;
-
-      const draftInvoice = await findDraftInvoiceCoveringDate(client, cid, orderId, eventIso);
-      if (draftInvoice) {
-        const updatedDraft = await rebuildDraftInvoiceLineItemsForLineItem({
-          client,
-          invoice: draftInvoice,
-          line,
-          roundingMode: settings.billing_rounding_mode,
-          roundingGranularity: settings.billing_rounding_granularity,
-          monthlyProrationMethod: settings.monthly_proration_method,
-          timeZone: billingTimeZone,
-          taxConfig,
-        });
-        if (updatedDraft) {
-          updated.push({
-            id: Number(draftInvoice.id),
-            invoiceNumber: draftInvoice.invoice_number,
-            periodStart: draftInvoice.service_period_start || draftInvoice.period_start,
-            periodEnd: draftInvoice.service_period_end || draftInvoice.period_end,
-          });
-          await insertInvoiceAudit({
-            client,
-            companyId: cid,
-            orderId,
-            invoice: draftInvoice,
-            reason: isPauseStart ? "pause_credit" : "resume_charge",
-            summaryPrefix: `Updated draft invoice ${draftInvoice.invoice_number || `#${draftInvoice.id}`} (${isPauseStart ? "Pause adjustment" : "Resume adjustment"}).`,
-            lineEntries: [],
-            actorName,
-            actorEmail,
-            action: "invoice_updated",
-          });
-        }
-        continue;
-      }
-
-      const reason = monthlyMode && isPauseEnd
-        ? (pauseEndReason || "resume_charge")
-        : isPauseStart ? "pause_credit" : "resume_charge";
-      const isCredit = reason === "pause_credit";
-      const already = await hasInvoiceLineItemCoverage({
-        client,
-        companyId: cid,
-        lineItemId,
-        coverageStart: coverage.startAt,
-        coverageEnd: coverage.endAt,
-        billingReason: reason,
-        isCredit,
-      });
-      if (already) continue;
-
-      let filteredPauses = pausePeriods;
-      if ((isPauseStart || (monthlyMode && isPauseEnd)) && startIso) {
-        filteredPauses = pausePeriods.filter((p) => {
-          if (p.startAt !== startIso) return true;
-          if (!matchWorkOrder) return false;
-          return !(p.source === "work_order" && p.workOrderNumber === matchWorkOrder);
-        });
-      } else if (monthlyMode && isPauseEnd && endIso) {
-        filteredPauses = pausePeriods.filter((p) => p.endAt !== endIso);
-      }
-
-      const entry = buildInvoiceLineEntry({
-        line,
-        coverageStart: coverage.startAt,
-        coverageEnd: coverage.endAt,
-        roundingMode: settings.billing_rounding_mode,
-        roundingGranularity: settings.billing_rounding_granularity,
-        monthlyProrationMethod: settings.monthly_proration_method,
-        billingReason: reason,
-        pausePeriods: filteredPauses,
-        isCredit,
-        descriptionPrefix: isCredit ? "Credit: " : "",
-        timeZone: billingTimeZone,
-      });
-      if (!entry) continue;
-
-      const orderRes = await client.query(
-        `SELECT id, customer_id FROM rental_orders WHERE company_id = $1 AND id = $2 LIMIT 1`,
-        [cid, orderId]
-      );
-      const order = orderRes.rows[0];
-      if (!order) continue;
-
-      const includeMonthlyMethod = normalizeRateBasis(line.rate_basis) === "monthly";
-      const prorationNotes = buildProrationNotes({
-        periodStart: coverage.startAt,
-        periodEnd: coverage.endAt,
-        timeZone: billingTimeZone,
-        roundingMode: settings.billing_rounding_mode,
-        roundingGranularity: settings.billing_rounding_granularity,
-        monthlyProrationMethod: settings.monthly_proration_method,
-        includeMonthlyMethod,
-      });
-      const generalNotes = [generalNotesForBillingReason(reason), prorationNotes].filter(Boolean).join("\n");
-      const invoice = await createInvoiceWithEntries({
-        client,
-        companyId: cid,
-        orderId,
-        customerId: Number(order.customer_id),
-        periodStart: coverage.startAt,
-        periodEnd: coverage.endAt,
-        billingReason: reason,
-        lineEntries: [entry],
-        feeEntries: [],
-        generalNotes,
-        documentType: isCredit ? "credit_memo" : "invoice",
-        timeZone: billingTimeZone,
-        invoiceDateMode: settings.invoice_date_mode,
-        taxConfig,
-      });
-      if (invoice) {
-        created.push({ ...invoice, orderId });
-        await insertInvoiceAudit({
-          client,
-          companyId: cid,
-          orderId,
-          invoice,
-          reason,
-          lineEntries: [entry],
-          actorName,
-          actorEmail,
-          action: isCredit ? "invoice_credit" : "invoice_created",
-          summaryPrefix: isCredit
-            ? `Created credit ${invoice.invoiceNumber || `#${invoice.id}`} (${billingReasonLabel(reason)}).`
-            : undefined,
-        });
-      }
-    }
-
-    await client.query("COMMIT");
-    return { created, updated };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-async function listCompaniesWithMonthlyAutoRun() {
-  const res = await pool.query(
-    `SELECT company_id FROM company_settings WHERE invoice_auto_run = 'monthly'`
-  );
-  return res.rows.map((r) => Number(r.company_id)).filter((id) => Number.isFinite(id));
-}
-
-function formatRoundingNote({ roundingMode, roundingGranularity } = {}) {
-  const mode = normalizeBillingRoundingMode(roundingMode);
-  const granularity = normalizeBillingRoundingGranularity(roundingGranularity);
-  if (mode === "none") return "Rounding: exact time (no rounding).";
-  const modeLabel = mode === "ceil" ? "Round up" : mode === "floor" ? "Round down" : "Round to nearest";
-  const granLabel = granularity === "unit" ? "billing unit" : granularity;
-  return `Rounding: ${modeLabel} to ${granLabel}.`;
-}
-
-function formatMonthlyProrationNote(method) {
-  const normalized = normalizeMonthlyProrationMethod(method);
-  if (normalized === "days") {
-    return "Monthly proration: day-based (partial days count as full days).";
-  }
-  return "Monthly proration: hours-based.";
-}
-
-function buildProrationNotes({
-  periodStart,
-  periodEnd,
-  timeZone,
-  roundingMode,
-  roundingGranularity,
-  monthlyProrationMethod,
-  includeMonthlyMethod = false,
-} = {}) {
-  const notes = [];
-  const periodLabel = formatPeriodLabel(periodStart, periodEnd, timeZone);
-  if (periodLabel) notes.push(`Service period: ${periodLabel}.`);
-  const roundingNote = formatRoundingNote({ roundingMode, roundingGranularity });
-  if (roundingNote) notes.push(roundingNote);
-  if (includeMonthlyMethod) {
-    const monthlyNote = formatMonthlyProrationNote(monthlyProrationMethod);
-    if (monthlyNote) notes.push(monthlyNote);
-  }
-  return notes.join("\n");
-}
-
-function buildMonthlyInvoiceNotes({
-  period,
-  lines,
-  feesCount,
-  timeZone,
-  roundingMode,
-  roundingGranularity,
-  monthlyProrationMethod,
-} = {}) {
-  const periodLabel = formatPeriodLabel(period?.startAt, period?.endAt, timeZone);
-  const notes = [`Monthly billing in advance for ${periodLabel || "the upcoming period"}.`];
-  if (!Array.isArray(lines) || !lines.length) {
-    if (feesCount) notes.push("Order-level fees billed this period.");
-    const roundingNote = formatRoundingNote({ roundingMode, roundingGranularity });
-    if (roundingNote) notes.push(roundingNote);
-    const monthlyNote = formatMonthlyProrationNote(monthlyProrationMethod);
-    if (monthlyNote) notes.push(monthlyNote);
-    return notes.join("\n");
-  }
-
-  notes.push("Line item activity:");
-  for (const line of lines) {
-    const qty = Number(line.qty || 0);
-    const typeName = String(line.type_name || "Item");
-    const label = qty > 1 ? `${typeName} x${qty}` : typeName;
-    const events = [];
-
-    const fulfilledIso = normalizeTimestamptz(line.fulfilled_at);
-    if (fulfilledIso) {
-      const ms = Date.parse(fulfilledIso);
-      if (Number.isFinite(ms) && ms >= Date.parse(period.startAt) && ms < Date.parse(period.endAt)) {
-        const localDate = formatDateInTimeZone(fulfilledIso, timeZone) || isoDate(fulfilledIso);
-        events.push(`picked up ${localDate}`);
-      }
-    }
-
-    const returnedIso = normalizeTimestamptz(line.returned_at);
-    if (returnedIso) {
-      const ms = Date.parse(returnedIso);
-      if (Number.isFinite(ms) && ms >= Date.parse(period.startAt) && ms < Date.parse(period.endAt)) {
-        const localDate = formatDateInTimeZone(returnedIso, timeZone) || isoDate(returnedIso);
-        events.push(`returned ${localDate}`);
-      }
-    }
-
-    const pausePeriods = normalizePausePeriods(line.pause_periods, { allowOpen: true });
-    if (pausePeriods.length) {
-      const pauseInfo = collectPauseOverlap({ pausePeriods, startAt: period.startAt, endAt: period.endAt });
-      if (pauseInfo?.totalMs > 0) {
-        const pauseDuration = formatDurationDays(pauseInfo.totalMs);
-        const ranges = pausePeriods
-          .map((pause) => {
-            const overlap = overlapRange({
-              startAt: pause.startAt,
-              endAt: pause.endAt || period.endAt,
-              rangeStart: period.startAt,
-              rangeEnd: period.endAt,
-            });
-            if (!overlap) return null;
-            const rangeLabel = formatPeriodLabel(overlap.startAt, overlap.endAt, timeZone);
-            if (!rangeLabel) return null;
-            const workOrderLabel = pause.workOrderNumber ? ` (WO ${pause.workOrderNumber})` : "";
-            return `${rangeLabel}${workOrderLabel}`;
-          })
-          .filter(Boolean);
-        const rangeNote = ranges.length ? `: ${ranges.join("; ")}` : "";
-        events.push(`paused ${pauseDuration}${rangeNote}`);
-      }
-    }
-
-    if (!events.length) events.push("active during period");
-    notes.push(`- ${label}: ${events.join("; ")}`);
-  }
-
-  if (feesCount) notes.push("Order-level fees billed this period.");
-  const roundingNote = formatRoundingNote({ roundingMode, roundingGranularity });
-  if (roundingNote) notes.push(roundingNote);
-  const monthlyNote = formatMonthlyProrationNote(monthlyProrationMethod);
-  if (monthlyNote) notes.push(monthlyNote);
-  return notes.join("\n");
-}
-
-async function generateMonthlyInvoicesForCompany({ companyId, runDate = null } = {}) {
-  const cid = Number(companyId);
-  if (!Number.isFinite(cid)) throw new Error("companyId is required.");
-  const runIso = normalizeTimestamptz(runDate || new Date().toISOString());
-  if (!runIso) throw new Error("Invalid runDate.");
-
-  const client = await pool.connect();
-  const created = [];
-  let runId = null;
-
-  try {
-    await client.query("BEGIN");
-    const settings = await getCompanySettingsForClient(client, cid);
-    const taxConfig = buildTaxConfig(settings);
-    const billingTimeZone = settings?.billing_timezone || "UTC";
-
-    const period = monthRangeForDate(runIso, billingTimeZone);
-    if (!period) throw new Error("Unable to determine billing period.");
-    const runMonth = formatDateInTimeZone(period.startAt, billingTimeZone) || isoDate(period.startAt);
-    if (!runMonth) throw new Error("Unable to determine run month.");
-
-    const runRes = await client.query(
-      `
-      INSERT INTO billing_runs (company_id, run_month, status, started_at)
-      VALUES ($1, $2::date, 'running', NOW())
-      ON CONFLICT (company_id, run_month) DO NOTHING
-      RETURNING id
-      `,
-      [cid, runMonth]
-    );
-    runId = runRes.rows?.[0]?.id || null;
-    if (!runId) {
-      await client.query("ROLLBACK");
-      return { companyId: cid, created: [], skipped: true };
-    }
-
-    const ordersRes = await client.query(
-      `SELECT id, customer_id FROM rental_orders WHERE company_id = $1 AND status = 'ordered' ORDER BY id ASC`,
-      [cid]
-    );
-
-    for (const row of ordersRes.rows) {
-      const orderId = Number(row.id);
-      const existingMonthlyRes = await client.query(
-        `
-        SELECT id, created_at
-          FROM invoices
-         WHERE company_id = $1
-           AND rental_order_id = $2
-            AND (
-              (service_period_start = $3::timestamptz AND service_period_end = $4::timestamptz)
-              OR (service_period_start IS NULL AND period_start = $3::timestamptz AND period_end = $4::timestamptz)
-            )
-            AND document_type = 'invoice'
-         LIMIT 1
-        `,
-        [cid, orderId, period.startAt, period.endAt]
-      );
-      if (existingMonthlyRes.rows[0]) {
-        const invoiceCreatedMs = Date.parse(existingMonthlyRes.rows[0].created_at);
-        const pauseCreditEntries = [];
-        const linesRes = await client.query(
-          `
-          SELECT li.id,
-                 et.name AS type_name,
-                 li.start_at,
-                 li.end_at,
-                 li.fulfilled_at,
-                 li.returned_at,
-                 li.rate_basis,
-                 li.rate_amount,
-                 cond.pause_periods,
-                 (SELECT COUNT(*) FROM rental_order_line_inventory liv WHERE liv.line_item_id = li.id) AS qty
-            FROM rental_order_line_items li
-            JOIN equipment_types et ON et.id = li.type_id
-       LEFT JOIN rental_order_line_conditions cond ON cond.line_item_id = li.id
-           WHERE li.rental_order_id = $1
-             AND li.fulfilled_at IS NOT NULL
-             AND (li.returned_at IS NULL OR li.returned_at > $2::timestamptz)
-          `,
-          [orderId, period.startAt]
-        );
-
-        for (const line of linesRes.rows) {
-          const lineDates = normalizeLineBillingDates(line);
-          if (!lineDates) continue;
-          const pausePeriods = normalizePausePeriods(line.pause_periods, { allowOpen: true });
-          if (!pausePeriods.length) continue;
-
-          for (const pause of pausePeriods) {
-            if (!pause?.startAt) continue;
-            const pauseStartMs = Date.parse(pause.startAt);
-            const periodStartMs = Date.parse(period.startAt);
-            const periodEndMs = Date.parse(period.endAt);
-            if (!Number.isFinite(pauseStartMs) || !Number.isFinite(periodStartMs) || !Number.isFinite(periodEndMs)) continue;
-            if (Number.isFinite(invoiceCreatedMs) && pauseStartMs <= invoiceCreatedMs) continue;
-            const pauseEndIso = pause.endAt || null;
-            const pauseEndMs = pauseEndIso ? Date.parse(pauseEndIso) : null;
-
-            const rawOverlap = overlapRange({
-              startAt: pause.startAt,
-              endAt: pause.endAt || period.endAt,
-              rangeStart: period.startAt,
-              rangeEnd: period.endAt,
-            });
-            if (!rawOverlap) continue;
-            const overlap = overlapRange({
-              startAt: rawOverlap.startAt,
-              endAt: rawOverlap.endAt,
-              rangeStart: lineDates.lineStart,
-              rangeEnd: lineDates.lineEnd,
-            });
-            if (!overlap) continue;
-
-            const already = await hasInvoiceLineItemCoverage({
-              client,
-              companyId: cid,
-              lineItemId: line.id,
-              coverageStart: overlap.startAt,
-              coverageEnd: overlap.endAt,
-              billingReason: "pause_credit",
-              isCredit: true,
-            });
-            if (already) continue;
-
-            const filteredPauses = pausePeriods.filter((p) => !(
-              p.startAt === pause.startAt
-              && (p.endAt || null) === (pause.endAt || null)
-              && (p.source || null) === (pause.source || null)
-              && (p.workOrderNumber || null) === (pause.workOrderNumber || null)
-            ));
-
-            const entry = buildInvoiceLineEntry({
-              line,
-              coverageStart: overlap.startAt,
-              coverageEnd: overlap.endAt,
-              roundingMode: settings.billing_rounding_mode,
-              roundingGranularity: settings.billing_rounding_granularity,
-              monthlyProrationMethod: settings.monthly_proration_method,
-              billingReason: "pause_credit",
-              pausePeriods: filteredPauses,
-              isCredit: true,
-              descriptionPrefix: "Credit: ",
-              timeZone: billingTimeZone,
-            });
-            if (entry) pauseCreditEntries.push(entry);
-          }
-        }
-
-        if (pauseCreditEntries.length) {
-          const includeMonthlyMethod = linesRes.rows.some((li) => normalizeRateBasis(li.rate_basis) === "monthly");
-          const prorationNotes = buildProrationNotes({
-            periodStart: period.startAt,
-            periodEnd: period.endAt,
-            timeZone: billingTimeZone,
-            roundingMode: settings.billing_rounding_mode,
-            roundingGranularity: settings.billing_rounding_granularity,
-            monthlyProrationMethod: settings.monthly_proration_method,
-            includeMonthlyMethod,
-          });
-          const generalNotes = [generalNotesForBillingReason("pause_credit"), prorationNotes].filter(Boolean).join("\n");
-          const creditInvoice = await createInvoiceWithEntries({
-            client,
-            companyId: cid,
-            orderId,
-            customerId: Number(row.customer_id),
-            periodStart: period.startAt,
-            periodEnd: period.endAt,
-            billingReason: "pause_credit",
-            lineEntries: pauseCreditEntries,
-            feeEntries: [],
-            generalNotes,
-            documentType: "credit_memo",
-            timeZone: billingTimeZone,
-            invoiceDateMode: settings.invoice_date_mode,
-            taxConfig,
-          });
-          if (creditInvoice) {
-            created.push({ ...creditInvoice, orderId });
-            await insertInvoiceAudit({
-              client,
-              companyId: cid,
-              orderId,
-              invoice: creditInvoice,
-              reason: "pause_credit",
-              lineEntries: pauseCreditEntries,
-              actorName: "System",
-              actorEmail: null,
-              action: "invoice_credit",
-              summaryPrefix: `Created credit ${creditInvoice.invoiceNumber || `#${creditInvoice.id}`} (Pause credit).`,
-            });
-          }
-        }
-        continue;
-      }
-
-      const billedRes = await client.query(
-        `
-        SELECT i.id
-          FROM invoices i
-          JOIN invoice_line_items ili ON ili.invoice_id = i.id
-         WHERE i.company_id = $1
-           AND i.rental_order_id = $2
-            AND COALESCE(i.service_period_start, i.period_start) IS NOT NULL
-            AND COALESCE(i.service_period_start, i.period_start) >= $3::timestamptz
-            AND COALESCE(i.service_period_start, i.period_start) < $4::timestamptz
-         GROUP BY i.id
-        HAVING COALESCE(SUM(ili.amount), 0) > 0
-         LIMIT 1
-        `,
-        [cid, orderId, period.startAt, period.endAt]
-      );
-      if (billedRes.rows[0]) continue;
-
-      const linesRes = await client.query(
-        `
-        SELECT li.id,
-               et.name AS type_name,
-               li.start_at,
-               li.end_at,
-               li.fulfilled_at,
-               li.returned_at,
-               li.rate_basis,
-               li.rate_amount,
-               cond.pause_periods,
-               (SELECT COUNT(*) FROM rental_order_line_inventory liv WHERE liv.line_item_id = li.id) AS qty
-          FROM rental_order_line_items li
-          JOIN equipment_types et ON et.id = li.type_id
-     LEFT JOIN rental_order_line_conditions cond ON cond.line_item_id = li.id
-         WHERE li.rental_order_id = $1
-           AND li.fulfilled_at IS NOT NULL
-           AND (li.returned_at IS NULL OR li.returned_at > $2::timestamptz)
-        `,
-        [orderId, period.startAt]
-      );
-
-      const lineEntries = [];
-      const billedLines = [];
-      for (const line of linesRes.rows) {
-        const lineStart = normalizeTimestamptz(line.fulfilled_at || line.start_at);
-        const bookedEnd = normalizeTimestamptz(line.end_at);
-        const returnedEnd = normalizeTimestamptz(line.returned_at);
-        if (!lineStart || (!bookedEnd && !returnedEnd)) continue;
-        let lineEnd = returnedEnd || bookedEnd;
-        const overdue = !returnedEnd && bookedEnd && Date.parse(runIso) > Date.parse(bookedEnd);
-        if (overdue) {
-          const periodEnd = normalizeTimestamptz(period.endAt);
-          if (periodEnd && Date.parse(periodEnd) > Date.parse(lineEnd)) {
-            lineEnd = periodEnd;
-          }
-        }
-        if (!lineEnd || Date.parse(lineEnd) <= Date.parse(lineStart)) continue;
-        const overlap = overlapRange({
-          startAt: lineStart,
-          endAt: lineEnd,
-          rangeStart: period.startAt,
-          rangeEnd: period.endAt,
-        });
-        if (!overlap) continue;
-        const pausePeriods = normalizePausePeriods(line.pause_periods);
-        const entry = buildInvoiceLineEntry({
-          line,
-          coverageStart: overlap.startAt,
-          coverageEnd: overlap.endAt,
-          roundingMode: settings.billing_rounding_mode,
-          roundingGranularity: settings.billing_rounding_granularity,
-          monthlyProrationMethod: settings.monthly_proration_method,
-          billingReason: "monthly",
-          pausePeriods,
-          timeZone: billingTimeZone,
-        });
-        if (entry) {
-          lineEntries.push(entry);
-          billedLines.push(line);
-        }
-      }
-
-      const fees = await collectUninvoicedFeesForOrder(client, cid, orderId);
-      if (!lineEntries.length && !fees.length) continue;
-      const generalNotes = buildMonthlyInvoiceNotes({
-        period,
-        lines: billedLines,
-        feesCount: fees.length,
-        timeZone: billingTimeZone,
-        roundingMode: settings.billing_rounding_mode,
-        roundingGranularity: settings.billing_rounding_granularity,
-        monthlyProrationMethod: settings.monthly_proration_method,
-      });
-
-      const invoice = await createInvoiceWithEntries({
-        client,
-        companyId: cid,
-        orderId,
-        customerId: Number(row.customer_id),
-        periodStart: period.startAt,
-        periodEnd: period.endAt,
-        billingReason: "monthly",
-        lineEntries,
-        feeEntries: fees,
-        generalNotes,
-        timeZone: billingTimeZone,
-        invoiceDateMode: settings.invoice_date_mode,
-        taxConfig,
-      });
-      if (invoice) {
-        created.push({ ...invoice, orderId });
-        await insertInvoiceAudit({
-          client,
-          companyId: cid,
-          orderId,
-          invoice,
-          reason: "monthly",
-          lineEntries,
-          actorName: "System",
-          actorEmail: null,
-          action: "invoice_created",
-        });
-      }
-    }
-
-    await client.query(
-      `UPDATE billing_runs SET status = 'completed', completed_at = NOW() WHERE id = $1`,
-      [runId]
-    );
-    await client.query("COMMIT");
-    return { companyId: cid, created };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
   }
 }
 
@@ -8083,18 +3838,6 @@ function computeBillableUnits({
   return applyRoundingValue(raw, mode);
 }
 
-function normalizeInvoiceAutoRun(value) {
-  const v = String(value || "").trim().toLowerCase();
-  if (v === "off" || v === "on_received" || v === "on_closed" || v === "monthly") return v;
-  return "off";
-}
-
-function normalizeInvoiceGenerationMode(value) {
-  const v = String(value || "").trim().toLowerCase();
-  if (v === "auto" || v === "monthly" || v === "single") return v;
-  return "auto";
-}
-
 async function getCompanySettings(companyId) {
   const res = await pool.query(
     `SELECT company_id,
@@ -8102,11 +3845,7 @@ async function getCompanySettings(companyId) {
             billing_rounding_granularity,
             monthly_proration_method,
             billing_timezone,
-            invoice_date_mode,
-            default_payment_terms_days,
             logo_url,
-            invoice_auto_run,
-            invoice_auto_mode,
             tax_enabled,
             default_tax_rate,
             tax_registration_number,
@@ -8127,11 +3866,7 @@ async function getCompanySettings(companyId) {
       billing_rounding_granularity: normalizeBillingRoundingGranularity(res.rows[0].billing_rounding_granularity),
       monthly_proration_method: normalizeMonthlyProrationMethod(res.rows[0].monthly_proration_method),
       billing_timezone: normalizeBillingTimeZone(res.rows[0].billing_timezone),
-      invoice_date_mode: normalizeInvoiceDateMode(res.rows[0].invoice_date_mode),
-      default_payment_terms_days: res.rows[0].default_payment_terms_days === null || res.rows[0].default_payment_terms_days === undefined ? 30 : Number(res.rows[0].default_payment_terms_days),
       logo_url: res.rows[0].logo_url || null,
-      invoice_auto_run: normalizeInvoiceAutoRun(res.rows[0].invoice_auto_run),
-      invoice_auto_mode: normalizeInvoiceGenerationMode(res.rows[0].invoice_auto_mode),
       tax_enabled: res.rows[0].tax_enabled === true,
       default_tax_rate: Number(res.rows[0].default_tax_rate || 0),
       tax_registration_number: res.rows[0].tax_registration_number || null,
@@ -8148,11 +3883,7 @@ async function getCompanySettings(companyId) {
     billing_rounding_granularity: "unit",
     monthly_proration_method: "hours",
     billing_timezone: "UTC",
-    invoice_date_mode: "generation",
-    default_payment_terms_days: 30,
     logo_url: null,
-    invoice_auto_run: "off",
-    invoice_auto_mode: "auto",
     tax_enabled: false,
     default_tax_rate: 0,
     tax_registration_number: null,
@@ -8182,7 +3913,6 @@ async function getCompanyEmailSettings(companyId) {
            email_from_address,
            email_notify_request_submit,
            email_notify_status_updates,
-           email_notify_invoices,
            updated_at
       FROM company_settings
      WHERE company_id = $1
@@ -8205,7 +3935,6 @@ async function getCompanyEmailSettings(companyId) {
       email_from_address: null,
       email_notify_request_submit: true,
       email_notify_status_updates: true,
-      email_notify_invoices: false,
       updated_at: null,
     };
   }
@@ -8226,7 +3955,6 @@ async function upsertCompanyEmailSettings({
   fromAddress,
   notifyRequestSubmit,
   notifyStatusUpdates,
-  notifyInvoices,
 } = {}) {
   const cid = Number(companyId);
   if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
@@ -8244,7 +3972,6 @@ async function upsertCompanyEmailSettings({
   const enabledValue = enabled === true;
   const notifyRequestSubmitValue = notifyRequestSubmit !== false;
   const notifyStatusUpdatesValue = notifyStatusUpdates !== false;
-  const notifyInvoicesValue = notifyInvoices === true;
 
   const client = await pool.connect();
   try {
@@ -8273,9 +4000,8 @@ async function upsertCompanyEmailSettings({
              email_from_address = $10,
              email_notify_request_submit = $11,
              email_notify_status_updates = $12,
-             email_notify_invoices = $13,
              updated_at = NOW()
-       WHERE company_id = $14
+       WHERE company_id = $13
        RETURNING company_id,
                  email_enabled,
                  email_smtp_provider,
@@ -8289,7 +4015,6 @@ async function upsertCompanyEmailSettings({
                  email_from_address,
                  email_notify_request_submit,
                  email_notify_status_updates,
-                 email_notify_invoices,
                  updated_at
       `,
       [
@@ -8305,7 +4030,6 @@ async function upsertCompanyEmailSettings({
         cleanFromAddress,
         notifyRequestSubmitValue,
         notifyStatusUpdatesValue,
-        notifyInvoicesValue,
         cid,
       ]
     );
@@ -8319,24 +4043,12 @@ async function upsertCompanyEmailSettings({
   }
 }
 
-function normalizePaymentTermsDays(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  if (n === 30 || n === 60) return n;
-  return null;
-}
-
-  async function upsertCompanySettings({
+async function upsertCompanySettings({
   companyId,
   billingRoundingMode = null,
   billingRoundingGranularity = null,
   monthlyProrationMethod = null,
   billingTimeZone = null,
-  invoiceDateMode = null,
-  defaultPaymentTermsDays = null,
-  invoiceAutoRun = null,
-  invoiceAutoMode = null,
   taxEnabled = null,
   defaultTaxRate = null,
   taxRegistrationNumber = null,
@@ -8344,9 +4056,9 @@ function normalizePaymentTermsDays(value) {
   autoApplyCustomerCredit = null,
   autoWorkOrderOnReturn = null,
   logoUrl = undefined,
-    requiredStorefrontCustomerFields = undefined,
-    rentalInfoFields = undefined,
-  }) {
+  requiredStorefrontCustomerFields = undefined,
+  rentalInfoFields = undefined,
+}) {
   const current = await getCompanySettings(companyId);
   const nextMode =
     billingRoundingMode === null || billingRoundingMode === undefined
@@ -8364,17 +4076,6 @@ function normalizePaymentTermsDays(value) {
     billingTimeZone === null || billingTimeZone === undefined
       ? normalizeBillingTimeZone(current.billing_timezone)
       : normalizeBillingTimeZone(billingTimeZone);
-  const nextInvoiceDateMode =
-    invoiceDateMode === null || invoiceDateMode === undefined
-      ? normalizeInvoiceDateMode(current.invoice_date_mode)
-      : normalizeInvoiceDateMode(invoiceDateMode);
-  const nextTerms = defaultPaymentTermsDays === null || defaultPaymentTermsDays === undefined ? current.default_payment_terms_days : (normalizePaymentTermsDays(defaultPaymentTermsDays) || 30);
-  const nextAutoRun =
-    invoiceAutoRun === null || invoiceAutoRun === undefined ? normalizeInvoiceAutoRun(current.invoice_auto_run) : normalizeInvoiceAutoRun(invoiceAutoRun);
-  const nextAutoMode =
-    invoiceAutoMode === null || invoiceAutoMode === undefined
-      ? normalizeInvoiceGenerationMode(current.invoice_auto_mode)
-      : normalizeInvoiceGenerationMode(invoiceAutoMode);
   const nextTaxEnabled =
     taxEnabled === null || taxEnabled === undefined ? current.tax_enabled === true : taxEnabled === true;
   const nextTaxRate =
@@ -8407,17 +4108,13 @@ function normalizePaymentTermsDays(value) {
   const res = await pool.query(
     `
     INSERT INTO company_settings
-      (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, invoice_date_mode, default_payment_terms_days, invoice_auto_run, invoice_auto_mode, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, logo_url, required_storefront_customer_fields, rental_info_fields)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb)
+      (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, logo_url, required_storefront_customer_fields, rental_info_fields)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb)
     ON CONFLICT (company_id)
     DO UPDATE SET billing_rounding_mode = EXCLUDED.billing_rounding_mode,
                   billing_rounding_granularity = EXCLUDED.billing_rounding_granularity,
                   monthly_proration_method = EXCLUDED.monthly_proration_method,
                   billing_timezone = EXCLUDED.billing_timezone,
-                  invoice_date_mode = EXCLUDED.invoice_date_mode,
-                  default_payment_terms_days = EXCLUDED.default_payment_terms_days,
-                  invoice_auto_run = EXCLUDED.invoice_auto_run,
-                  invoice_auto_mode = EXCLUDED.invoice_auto_mode,
                   tax_enabled = EXCLUDED.tax_enabled,
                   default_tax_rate = EXCLUDED.default_tax_rate,
                   tax_registration_number = EXCLUDED.tax_registration_number,
@@ -8425,18 +4122,14 @@ function normalizePaymentTermsDays(value) {
                   auto_apply_customer_credit = EXCLUDED.auto_apply_customer_credit,
                   auto_work_order_on_return = EXCLUDED.auto_work_order_on_return,
                   logo_url = EXCLUDED.logo_url,
-                    required_storefront_customer_fields = EXCLUDED.required_storefront_customer_fields,
-                    rental_info_fields = EXCLUDED.rental_info_fields,
+                  required_storefront_customer_fields = EXCLUDED.required_storefront_customer_fields,
+                  rental_info_fields = EXCLUDED.rental_info_fields,
                   updated_at = NOW()
     RETURNING company_id,
               billing_rounding_mode,
               billing_rounding_granularity,
               monthly_proration_method,
               billing_timezone,
-              invoice_date_mode,
-              default_payment_terms_days,
-              invoice_auto_run,
-              invoice_auto_mode,
               tax_enabled,
               default_tax_rate,
               tax_registration_number,
@@ -8453,10 +4146,6 @@ function normalizePaymentTermsDays(value) {
       nextGranularity,
       nextProrationMethod,
       nextTimeZone,
-      nextInvoiceDateMode,
-      nextTerms,
-      nextAutoRun,
-      nextAutoMode,
       nextTaxEnabled,
       nextTaxRate,
       nextTaxRegistration,
@@ -8464,9 +4153,9 @@ function normalizePaymentTermsDays(value) {
       nextAutoApplyCustomerCredit,
       nextAutoWorkOrderOnReturn,
       nextLogo,
-        JSON.stringify(nextRequired),
-        JSON.stringify(nextRentalInfoFields),
-      ]
+      JSON.stringify(nextRequired),
+      JSON.stringify(nextRentalInfoFields),
+    ]
     );
   return res.rows[0];
 }
@@ -9196,8 +4885,6 @@ async function setLineItemPickedUp({
     lineItemId: liid,
     pickedUpAt: updatedLine?.fulfilled_at || null,
     returnedAt: updatedLine?.returned_at || null,
-    invoices: [],
-    invoiceError: null,
   };
 }
 
@@ -9221,8 +4908,6 @@ async function setLineItemReturned({
   let nextStatus = null;
   let statusChanged = false;
   let updatedLine = null;
-  let shouldGenerateInvoices = false;
-  let invoiceMode = "auto";
 
   try {
     await client.query("BEGIN");
@@ -9310,14 +4995,6 @@ async function setLineItemReturned({
         orderId,
         cid,
       ]);
-      const settings = await getCompanySettingsForClient(client, cid);
-      const autoRun = normalizeInvoiceAutoRun(settings?.invoice_auto_run);
-      const configuredMode = normalizeInvoiceGenerationMode(settings?.invoice_auto_mode);
-      invoiceMode = autoRun === "monthly" ? "monthly" : configuredMode;
-      shouldGenerateInvoices =
-        prevStatus !== "received" &&
-        nextStatus === "received" &&
-        (autoRun === "on_received" || autoRun === "on_closed");
     }
 
     await insertRentalOrderAudit({
@@ -9345,16 +5022,6 @@ async function setLineItemReturned({
     client.release();
   }
 
-  let invoiceResult = null;
-  let invoiceError = null;
-  if (shouldGenerateInvoices) {
-    try {
-      invoiceResult = await generateInvoicesForRentalOrder({ companyId: cid, orderId, mode: invoiceMode });
-    } catch (err) {
-      invoiceError = err?.message ? String(err.message) : "Unable to generate invoice.";
-    }
-  }
-
   return {
     ok: true,
     orderId,
@@ -9362,8 +5029,6 @@ async function setLineItemReturned({
     lineItemId: liid,
     pickedUpAt: updatedLine?.fulfilled_at || null,
     returnedAt: updatedLine?.returned_at || null,
-    invoices: invoiceResult?.created || [],
-    invoiceError,
   };
 }
 
@@ -11181,14 +6846,7 @@ async function getRentalOrder({ companyId, id }) {
     `
     SELECT f.id,
            f.name,
-           f.amount,
-           EXISTS (
-             SELECT 1
-               FROM invoice_line_items ili
-               JOIN invoices i ON i.id = ili.invoice_id
-              WHERE i.rental_order_id = f.rental_order_id
-                AND ili.fee_id = f.id
-           ) AS invoiced
+           f.amount
       FROM rental_order_fees f
      WHERE f.rental_order_id = $1
      ORDER BY f.id
@@ -13127,8 +8785,6 @@ async function updateRentalOrder({
 
 async function updateRentalOrderStatus({ id, companyId, status, actorName, actorEmail }) {
   const client = await pool.connect();
-  let shouldGenerateInvoices = false;
-  let invoiceMode = "auto";
   let quoteNumberOut = null;
   let roNumberOut = null;
   let statusOut = null;
@@ -13197,13 +8853,8 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
       );
     }
 
-    const settings = await getCompanySettingsForClient(client, companyId);
-    const autoRun = normalizeInvoiceAutoRun(settings?.invoice_auto_run);
-    const configuredMode = normalizeInvoiceGenerationMode(settings?.invoice_auto_mode);
-    invoiceMode = autoRun === "monthly" ? "monthly" : configuredMode;
-
-    // If an order is closed, clamp any future line-item end dates to now so invoice generation
-    // doesn't skip the order due to "end_at" being in the future.
+    // If an order is closed, clamp any future line-item end dates to now so availability
+    // reflects the closure.
     if (normalizedStatus === "closed") {
       await client.query(
         `
@@ -13215,16 +8866,6 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
         `,
         [id]
       );
-    }
-
-    if (prevStatus !== normalizedStatus) {
-      const becameReceived = prevStatus !== "received" && normalizedStatus === "received";
-      const becameClosed = prevStatus !== "closed" && normalizedStatus === "closed";
-      if (becameReceived && (autoRun === "on_received" || autoRun === "on_closed")) {
-        shouldGenerateInvoices = true;
-      } else if (becameClosed && autoRun === "on_closed") {
-        shouldGenerateInvoices = true;
-      }
     }
 
     await insertRentalOrderAudit({
@@ -13249,17 +8890,6 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
     client.release();
   }
 
-  let invoices = [];
-  let invoiceError = null;
-  if (shouldGenerateInvoices) {
-    try {
-      const result = await generateInvoicesForRentalOrder({ companyId, orderId: id, mode: invoiceMode });
-      invoices = result?.created || [];
-    } catch (err) {
-      invoiceError = err?.message ? String(err.message) : "Unable to generate invoice.";
-    }
-  }
-
   return {
     id,
     quoteNumber: quoteNumberOut,
@@ -13267,8 +8897,6 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
     status: statusOut,
     prevStatus: prevStatusOut,
     statusChanged: statusChangedOut,
-    invoices,
-    invoiceError,
   };
 }
 
@@ -13944,7 +9572,6 @@ async function createStorefrontCustomer({
   followUpDate = null,
   notes = null,
   canChargeDeposit = null,
-  paymentTermsDays = null,
 } = {}) {
   const cid = Number(companyId);
   if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
@@ -13975,7 +9602,6 @@ async function createStorefrontCustomer({
   const primaryEmail = normalizeContactField(primary.email) || normalizeContactField(cleanEmail);
   const primaryPhone = normalizeContactField(primary.phone) || normalizeContactField(phone);
   const finalCompanyName = String(companyName || businessName || cleanName || cleanEmail).trim();
-  const terms = normalizePaymentTermsDays(paymentTermsDays);
   const depositFlag = canChargeDeposit === true;
   const cleanedNotes = String(notes || "").trim();
 
@@ -13985,7 +9611,7 @@ async function createStorefrontCustomer({
 
     let internalCustomerRow = null;
     const internalByEmail = await client.query(
-      `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, payment_terms_days, follow_up_date, notes
+      `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, follow_up_date, notes
        FROM customers
        WHERE company_id = $1 AND LOWER(email) = $2
        ORDER BY id ASC
@@ -13998,7 +9624,7 @@ async function createStorefrontCustomer({
 
     if (!internalCustomerRow && finalCompanyName && primaryName) {
       const internalByName = await client.query(
-        `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, payment_terms_days, follow_up_date, notes
+        `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, follow_up_date, notes
          FROM customers
          WHERE company_id = $1
            AND LOWER(company_name) = LOWER($2)
@@ -14015,7 +9641,7 @@ async function createStorefrontCustomer({
       const phoneDigits = String(primaryPhone).replace(/\D/g, "");
       if (phoneDigits.length >= 7) {
         const internalByPhone = await client.query(
-          `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, payment_terms_days, follow_up_date, notes
+          `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, follow_up_date, notes
            FROM customers
            WHERE company_id = $1
              AND regexp_replace(COALESCE(phone, ''), '\\\\D', '', 'g') = $2
@@ -14046,7 +9672,6 @@ async function createStorefrontCustomer({
       if (isEmptyArray(internalCustomerRow.accounting_contacts) && accountingContactList.length) {
         updates.accounting_contacts = accountingContactList;
       }
-      if (internalCustomerRow.payment_terms_days === null && terms !== null) updates.payment_terms_days = terms;
       if (internalCustomerRow.follow_up_date === null && followUpDate) updates.follow_up_date = followUpDate;
       if (isBlank(internalCustomerRow.notes) && cleanedNotes) updates.notes = cleanedNotes;
 
@@ -14078,11 +9703,10 @@ async function createStorefrontCustomer({
           contacts,
           accounting_contacts,
           can_charge_deposit,
-          payment_terms_days,
           follow_up_date,
           notes
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING id
         `,
         [
@@ -14099,7 +9723,6 @@ async function createStorefrontCustomer({
           contactList,
           accountingContactList,
           depositFlag,
-          terms,
           followUpDate || null,
           finalNotes,
         ]
@@ -15294,9 +10917,6 @@ module.exports = {
   setLineItemPickedUp,
   setLineItemReturned,
   applyWorkOrderPauseToEquipment,
-  createPickupBillingForLineItem,
-  createReturnBillingForLineItem,
-  createPauseBillingAdjustments,
   getTypeAvailabilitySeries,
   getAvailabilityShortfallsSummary,
   getTypeAvailabilitySeriesWithProjection,
@@ -15308,31 +10928,4 @@ module.exports = {
   getSalespersonClosedTransactionsTimeSeries,
   getLocationClosedTransactionsTimeSeries,
   getLocationTypeStockSummary,
-  listInvoices,
-  getInvoice,
-  replaceInvoiceLineItems,
-  createManualInvoice,
-  addInvoicePayment,
-  addCustomerPayment,
-  addCustomerDeposit,
-  getCustomerCreditBalance,
-  getCustomerDepositBalance,
-  applyCustomerCreditToInvoice,
-  applyCustomerDepositToInvoice,
-  applyCustomerCreditToOldestInvoices,
-  listCustomerCreditActivity,
-  refundCustomerDeposit,
-  reverseInvoicePayment,
-  markInvoiceEmailSent,
-  createInvoiceVersion,
-  markInvoiceVersionSent,
-  getLatestSentInvoiceVersion,
-  getLatestInvoiceVersion,
-  createInvoiceCorrection,
-  deleteInvoice,
-  voidInvoice,
-  generateInvoicesForRentalOrder,
-  listCompaniesWithMonthlyAutoRun,
-  generateMonthlyInvoicesForCompany,
-  getAccountsReceivableSummary,
 };

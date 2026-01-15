@@ -168,7 +168,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const back = $("customer-account-back");
   const saveBtn = $("customer-account-save");
   const logoutBtn = $("customer-account-logout");
-  const invoicesLink = $("customer-account-invoices");
   const createCompanyLink = $("create-company-link");
 
   const returnTo = getQueryParam("returnTo");
@@ -213,15 +212,6 @@ document.addEventListener("DOMContentLoaded", () => {
     return cid;
   }
 
-  function setInvoiceLink(customer) {
-    if (!invoicesLink) return;
-    const params = new URLSearchParams();
-    const accountReturnTo = `${window.location.pathname}${window.location.search}`;
-    params.set("returnTo", accountReturnTo);
-    const companyId = companyIdQuery || (customer?.companyId ? Number(customer.companyId) : null) || readLastCompanyId();
-    if (companyId) params.set("companyId", String(companyId));
-    invoicesLink.href = `customer-invoices.html?${params.toString()}`;
-  }
 
   async function loadHistory(customer) {
     if (!historyEl) return;
@@ -283,7 +273,6 @@ document.addEventListener("DOMContentLoaded", () => {
       createCompanyLink.href = `signup.html?${params.toString()}`;
     }
 
-    setInvoiceLink(customer);
 
     await loadHistory(customer);
     setMeta(meta, "");

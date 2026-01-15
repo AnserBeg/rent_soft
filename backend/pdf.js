@@ -171,16 +171,6 @@ function fmtDateTime(value, timeZone = null) {
 function statusLabel(status) {
   const s = String(status || "").toLowerCase();
   switch (s) {
-    // Invoices
-    case "draft":
-      return "Draft";
-    case "sent":
-      return "Sent";
-    case "paid":
-      return "Paid";
-    case "void":
-      return "Void";
-
     // Rental orders / quotes
     case "quote":
       return "Quote";
@@ -200,32 +190,6 @@ function statusLabel(status) {
       return "Closed";
     default:
       return s || "";
-  }
-}
-
-function normalizeInvoiceDocumentType(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  switch (raw) {
-    case "credit_memo":
-    case "credit":
-      return "credit_memo";
-    case "debit_memo":
-    case "debit":
-      return "debit_memo";
-    default:
-      return "invoice";
-  }
-}
-
-function invoiceDocMeta(invoice) {
-  const docType = normalizeInvoiceDocumentType(invoice?.documentType || invoice?.document_type);
-  switch (docType) {
-    case "credit_memo":
-      return { title: "Credit Memo", label: "Credit Memo", filenamePrefix: "credit-memo" };
-    case "debit_memo":
-      return { title: "Debit Memo", label: "Debit Memo", filenamePrefix: "debit-memo" };
-    default:
-      return { title: "Invoice", label: "Invoice", filenamePrefix: "invoice" };
   }
 }
 
@@ -295,24 +259,6 @@ function customerContactLines(order) {
   return lines;
 }
 
-function invoiceCustomerAddressLines(invoice) {
-  const line1 = safeText(invoice?.customerStreetAddress);
-  const line2 = [safeText(invoice?.customerCity), safeText(invoice?.customerRegion), safeText(invoice?.customerPostalCode)]
-    .filter(Boolean)
-    .join(", ");
-  const line3 = safeText(invoice?.customerCountry);
-  return [line1, line2, line3].filter(Boolean);
-}
-
-function invoiceCustomerContactLines(invoice) {
-  const email = safeText(invoice?.customerEmail);
-  const phone = safeText(invoice?.customerPhone);
-  const lines = [];
-  if (email) lines.push(`Email: ${email}`);
-  if (phone) lines.push(`Phone: ${phone}`);
-  return lines;
-}
-
 function computeOrderDateRange(lineItems) {
   const items = Array.isArray(lineItems) ? lineItems : [];
   let min = null;
@@ -337,31 +283,6 @@ function computeTotals({ lineItems, fees }) {
   const tax = Number((subtotal * 0.05).toFixed(2));
   const grandTotal = Number((subtotal + tax).toFixed(2));
   return { rentalTotal, feeTotal, subtotal, tax, grandTotal, amountPaid: 0, amountDue: grandTotal };
-}
-
-function computeInvoiceTotals({ invoice, lineItems, payments }) {
-  const items = Array.isArray(lineItems) ? lineItems : [];
-  const pmts = Array.isArray(payments) ? payments : [];
-  let subtotal = 0;
-  let taxTotal = 0;
-  items.forEach((li) => {
-    const amount = Number(li?.amount || 0);
-    const taxAmount = Number(li?.taxAmount ?? li?.tax_amount ?? 0);
-    const taxInclusive = li?.taxInclusive ?? li?.tax_inclusive;
-    if (!Number.isFinite(amount)) return;
-    subtotal += amount - (taxInclusive ? (Number.isFinite(taxAmount) ? taxAmount : 0) : 0);
-    taxTotal += Number.isFinite(taxAmount) ? taxAmount : 0;
-  });
-  const subtotalFixed = Number((Number.isFinite(subtotal) ? subtotal : 0).toFixed(2));
-  const taxFixed = Number((Number.isFinite(taxTotal) ? taxTotal : 0).toFixed(2));
-  const total = Number((subtotalFixed + taxFixed).toFixed(2));
-  const amountPaid =
-    invoice?.paid === null || invoice?.paid === undefined ? pmts.reduce((sum, p) => sum + (Number(p?.amount) || 0), 0) : Number(invoice.paid) || 0;
-  const amountDue =
-    invoice?.balance === null || invoice?.balance === undefined
-      ? Number((total - amountPaid).toFixed(2))
-      : Number(invoice.balance) || 0;
-  return { subtotal: subtotalFixed, taxTotal: taxFixed, total, amountPaid, amountDue };
 }
 
 function drawBox(doc, { x, y, w, h, border = "#cbd5e1", fill = null, radius = 0 }) {
@@ -707,280 +628,6 @@ async function buildOrderPdfBuffer({
   };
 }
 
-function writeInvoicePdf(doc, { invoice, lineItems, payments, extraFields = null, timeZone = null }) {
-  const inv = invoice || {};
-  const docMeta = invoiceDocMeta(inv);
-  const left = doc.page.margins.left;
-  const right = doc.page.margins.right;
-  const pageWidth = doc.page.width;
-  const usableW = pageWidth - left - right;
-  const splitGap = 12;
-  const leftW = Math.floor(usableW * 0.54);
-  const rightW = usableW - leftW - splitGap;
-
-  // Customer + invoice detail blocks
-  const boxY = doc.y + 6;
-  const boxH = 118;
-  drawBox(doc, { x: left, y: boxY, w: leftW, h: boxH, border: "#e2e8f0", fill: "#ffffff", radius: 6 });
-  const customerName = safeText(inv.customerName) || "--";
-  const customerContact = safeText(inv.customerContactName);
-  doc.fillColor("#111").font("Helvetica-Bold").fontSize(10).text(customerName, left + 10, boxY + 10, { width: leftW - 20 });
-  if (customerContact && customerContact.toLowerCase() !== customerName.toLowerCase()) {
-    doc.font("Helvetica").fontSize(8).fillColor("#475569").text(customerContact, { width: leftW - 20 });
-  }
-  doc.font("Helvetica").fontSize(9).fillColor("#111");
-  invoiceCustomerAddressLines(inv).forEach((line) => doc.text(line, { width: leftW - 20 }));
-  const customerContacts = invoiceCustomerContactLines(inv);
-  if (customerContacts.length) {
-    doc.moveDown(0.3);
-    doc.font("Helvetica").fontSize(8).fillColor("#475569");
-    customerContacts.forEach((line) => doc.text(line, { width: leftW - 20 }));
-  }
-
-  const detailX = left + leftW + splitGap;
-  drawBox(doc, { x: detailX, y: boxY, w: rightW, h: boxH, border: "#e2e8f0", fill: "#ffffff", radius: 6 });
-  const headerH = 22;
-  drawBox(doc, { x: detailX, y: boxY, w: rightW, h: headerH, border: "#e2e8f0", fill: "#f8fafc", radius: 6 });
-  const detailTitle = `${docMeta.label} details`.toUpperCase();
-  doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(9).text(detailTitle, detailX + 10, boxY + 6, {
-    width: rightW - 20,
-  });
-
-  const details = [];
-  const invoiceDate = inv.invoiceDate || inv.issueDate || null;
-  const servicePeriodStart = inv.servicePeriodStart || inv.periodStart || null;
-  const servicePeriodEnd = inv.servicePeriodEnd || inv.periodEnd || null;
-  details.push({ label: "Invoice date", value: fmtDate(invoiceDate, timeZone) });
-  if (inv.dueDate) details.push({ label: "Due date", value: fmtDate(inv.dueDate, timeZone) });
-  if (inv.rentalOrderId) details.push({ label: "Rental order", value: inv.rentalOrderNumber || `#${inv.rentalOrderId}` });
-  if (inv.appliesToInvoiceNumber) details.push({ label: "Applies to", value: inv.appliesToInvoiceNumber });
-  if (servicePeriodStart || servicePeriodEnd) {
-    const p = [
-      servicePeriodStart ? fmtDateTime(servicePeriodStart, timeZone) : null,
-      servicePeriodEnd ? fmtDateTime(servicePeriodEnd, timeZone) : null,
-    ].filter(Boolean).join(" to ");
-    if (p) details.push({ label: "Service period", value: p });
-  }
-  if (Array.isArray(extraFields)) {
-    extraFields.forEach((f) => {
-      const label = safeText(f?.label);
-      const value = safeText(f?.value);
-      if (label && value) details.push({ label, value });
-    });
-  }
-
-  const startY = boxY + headerH + 8;
-  const rowGap = 16;
-  details.slice(0, 5).forEach((row, idx) => {
-    const y = startY + idx * rowGap;
-    doc.fillColor("#475569").font("Helvetica-Bold").fontSize(8).text(row.label, detailX + 10, y);
-    doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(10).text(row.value, detailX + 10, y + 10, { width: rightW - 20 });
-  });
-
-  doc.fillColor("#000");
-  doc.y = boxY + boxH + 16;
-
-  // Line items table
-  const tableX = left;
-  const tableW = usableW;
-  const headerY2 = doc.y;
-  const rowH = 20;
-  drawBox(doc, { x: tableX, y: headerY2, w: tableW, h: rowH, border: "#0ea5e9", fill: "#38bdf8" });
-  doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(9);
-  const descW = Math.floor(tableW * 0.55);
-  const qtyW = Math.floor(tableW * 0.12);
-  const unitW = Math.floor(tableW * 0.15);
-  const amtW = tableW - descW - qtyW - unitW;
-  doc.text("Description", tableX + 8, headerY2 + 6, { width: descW - 16, align: "left" });
-  doc.text("Qty", tableX + descW, headerY2 + 6, { width: qtyW, align: "right" });
-  doc.text("Unit", tableX + descW + qtyW, headerY2 + 6, { width: unitW, align: "right" });
-  doc.text("Amount", tableX + descW + qtyW + unitW, headerY2 + 6, { width: amtW - 8, align: "right" });
-  doc.y = headerY2 + rowH;
-
-  const items = Array.isArray(lineItems) ? lineItems : [];
-  if (!items.length) {
-    ensureSpace(doc, 24);
-    const y = doc.y;
-    drawBox(doc, { x: tableX, y, w: tableW, h: 24, border: "#e2e8f0", fill: "#ffffff" });
-    doc.fillColor("#475569").font("Helvetica").fontSize(9).text("No line items.", tableX + 8, y + 7, { width: tableW - 16 });
-    doc.y = y + 24;
-  } else {
-    items.forEach((li, idx) => {
-      ensureSpace(doc, 38);
-      const y = doc.y;
-      const fill = idx % 2 === 0 ? "#f8fafc" : "#ffffff";
-      drawBox(doc, { x: tableX, y, w: tableW, h: 32, border: "#e2e8f0", fill });
-      doc.fillColor("#111").font("Helvetica").fontSize(9).text(li.description || "Item", tableX + 8, y + 8, { width: descW - 16 });
-      doc.text(String(Number(li.quantity || 0)), tableX + descW, y + 8, { width: qtyW, align: "right" });
-      doc.text(fmtMoney(li.unitPrice), tableX + descW + qtyW, y + 8, { width: unitW, align: "right" });
-      doc.text(fmtMoney(li.amount), tableX + descW + qtyW + unitW, y + 8, { width: amtW - 8, align: "right" });
-      doc.y = y + 32;
-    });
-  }
-
-  // Notes + totals
-  doc.moveDown(0.8);
-  const notesX = left;
-  const notesW = leftW;
-  const totalsX = left + leftW + splitGap;
-  const totalsW = rightW;
-  const y0 = doc.y;
-
-  const generalNotesText = safeText(inv.generalNotes || inv.general_notes);
-  if (generalNotesText) {
-    drawSectionTitle(doc, "General notes");
-    doc.font("Helvetica").fontSize(8).fillColor("#111").text(generalNotesText, notesX, doc.y + 2, { width: notesW });
-    doc.moveDown(0.4);
-  }
-
-  const isVoid = String(inv.status || "").toLowerCase() === "void";
-  if (isVoid) {
-    const voidReason = safeText(inv.voidReason || inv.void_reason);
-    const voidedAt = inv.voidedAt || inv.voided_at;
-    const voidedBy = safeText(inv.voidedBy || inv.voided_by);
-    const voidLines = [];
-    if (voidReason) voidLines.push(`Reason: ${voidReason}`);
-    if (voidedAt) voidLines.push(`Voided at: ${fmtDateTime(voidedAt, timeZone)}`);
-    if (voidedBy) voidLines.push(`Voided by: ${voidedBy}`);
-    if (voidLines.length) {
-      drawSectionTitle(doc, "Void details");
-      doc.font("Helvetica").fontSize(8).fillColor("#111").text(voidLines.join("\n"), notesX, doc.y + 2, { width: notesW });
-      doc.moveDown(0.4);
-    }
-  }
-
-  const notesText = safeText(inv.notes);
-  if (notesText) {
-    drawSectionTitle(doc, "Notes");
-    doc.font("Helvetica").fontSize(8).fillColor("#111").text(notesText, notesX, doc.y + 2, { width: notesW });
-  }
-
-  const totals = computeInvoiceTotals({ invoice: inv, lineItems, payments });
-  const boxTop = y0;
-  drawBox(doc, { x: totalsX, y: boxTop, w: totalsW, h: 144, border: "#cbd5e1", fill: "#ffffff" });
-
-  const lineY = (row) => boxTop + 12 + row * 18;
-  const labelW = totalsW * 0.65;
-  const valW = totalsW - labelW - 16;
-  const drawTotalRow = (row, label, value, bold = false) => {
-    doc.font(bold ? "Helvetica-Bold" : "Helvetica").fillColor("#111").fontSize(9).text(label, totalsX + 10, lineY(row), { width: labelW });
-    doc.font(bold ? "Helvetica-Bold" : "Helvetica").text(value, totalsX + labelW, lineY(row), { width: valW, align: "right" });
-    doc.save()
-      .strokeColor("#e2e8f0")
-      .moveTo(totalsX + 10, lineY(row) + 14)
-      .lineTo(totalsX + totalsW - 10, lineY(row) + 14)
-      .stroke()
-      .restore();
-  };
-
-  const creditValue =
-    inv?.customerCredit === null || inv?.customerCredit === undefined
-      ? null
-      : Number(inv.customerCredit);
-  drawTotalRow(0, "Subtotal", fmtMoney(totals.subtotal));
-  drawTotalRow(1, "Tax", fmtMoney(totals.taxTotal));
-  drawTotalRow(2, "Total", fmtMoney(totals.total), true);
-  drawTotalRow(3, "Amount Paid", fmtMoney(totals.amountPaid));
-  drawTotalRow(4, "Customer Credit", creditValue === null || Number.isNaN(creditValue) ? "--" : fmtMoney(creditValue));
-  doc.font("Helvetica-Bold").fontSize(10);
-  drawTotalRow(5, "Amount Due", fmtMoney(totals.amountDue), true);
-
-  // Payments table (optional)
-  const pmts = Array.isArray(payments) ? payments : [];
-  if (pmts.length) {
-    ensureSpace(doc, 90);
-      doc.y = Math.max(doc.y, boxTop + 156);
-    drawSectionTitle(doc, "Payments");
-    const pTableX = left;
-    const pTableW = usableW;
-    const pHeaderY = doc.y + 6;
-    drawBox(doc, { x: pTableX, y: pHeaderY, w: pTableW, h: 18, border: "#0ea5e9", fill: "#38bdf8" });
-    doc.fillColor("#fff").font("Helvetica-Bold").fontSize(8);
-    doc.text("Date", pTableX + 8, pHeaderY + 5, { width: 100 });
-    doc.text("Method", pTableX + 110, pHeaderY + 5, { width: 130 });
-    doc.text("Reference", pTableX + 244, pHeaderY + 5, { width: pTableW - 244 - 80 });
-    doc.text("Amount", pTableX + pTableW - 80, pHeaderY + 5, { width: 72, align: "right" });
-    doc.y = pHeaderY + 18;
-    doc.fillColor("#111").font("Helvetica").fontSize(8);
-      pmts.slice(0, 12).forEach((p, idx) => {
-        ensureSpace(doc, 16);
-        const y = doc.y;
-        const fill = idx % 2 === 0 ? "#f8fafc" : "#ffffff";
-          const methodLabel = p.isReversal ? "Reversal" : (p.isDeposit ? "Deposit" : (p.method || "--"));
-        const referenceLabel = p.isReversal && p.reversalReason ? p.reversalReason : (p.reference || "--");
-        drawBox(doc, { x: pTableX, y, w: pTableW, h: 16, border: "#e2e8f0", fill });
-        doc.text(fmtDate(p.paidAt, timeZone), pTableX + 8, y + 4, { width: 100 });
-        doc.text(methodLabel, pTableX + 110, y + 4, { width: 130 });
-        doc.text(referenceLabel, pTableX + 244, y + 4, { width: pTableW - 244 - 80 });
-        doc.text(fmtMoney(p.amount), pTableX + pTableW - 80, y + 4, { width: 72, align: "right" });
-        doc.y = y + 16;
-      });
-  }
-
-  const generatedLabel = timeZone ? fmtDateTime(new Date(), timeZone) : new Date().toLocaleString();
-  doc.fillColor("#555").font("Helvetica").fontSize(8).text(`Generated ${generatedLabel}`, left, doc.page.height - (doc.page.margins.bottom ?? 50) + 14, {
-    width: usableW,
-    align: "center",
-  });
-
-  doc.end();
-}
-
-function streamInvoicePdf(res, { invoice, lineItems, payments, companyLogoPath = null, companyProfile = null, extraFields = null, timeZone = null }) {
-  const inv = invoice || {};
-  const docMeta = invoiceDocMeta(inv);
-  const docNo = safeText(inv.invoiceNumber) || (inv.id ? String(inv.id) : "invoice");
-  const doc = createContractDoc({
-    title: docMeta.title,
-    docNo,
-    docLabel: docMeta.label,
-    status: inv.status,
-    logoPath: companyLogoPath,
-    companyProfile,
-  });
-
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="${sanitizeFileName(`${docMeta.filenamePrefix}-${docNo}`)}.pdf"`
-  );
-  doc.pipe(res);
-  writeInvoicePdf(doc, { invoice, lineItems, payments, extraFields, timeZone });
-}
-
-async function buildInvoicePdfBuffer({ invoice, lineItems, payments, companyLogoPath = null, companyProfile = null, extraFields = null, timeZone = null }) {
-  const inv = invoice || {};
-  const docMeta = invoiceDocMeta(inv);
-  const docNo = safeText(inv.invoiceNumber) || (inv.id ? String(inv.id) : "invoice");
-  const doc = createContractDoc({
-    title: docMeta.title,
-    docNo,
-    docLabel: docMeta.label,
-    status: inv.status,
-    logoPath: companyLogoPath,
-    companyProfile,
-  });
-
-  const stream = new PassThrough();
-  const chunks = [];
-  stream.on("data", (c) => chunks.push(c));
-
-  const done = new Promise((resolve, reject) => {
-    stream.on("end", resolve);
-    stream.on("error", reject);
-    doc.on("error", reject);
-  });
-
-  doc.pipe(stream);
-  writeInvoicePdf(doc, { invoice, lineItems, payments, extraFields, timeZone });
-  await done;
-
-  return {
-    filename: `${sanitizeFileName(`${docMeta.filenamePrefix}-${docNo}`)}.pdf`,
-    buffer: Buffer.concat(chunks),
-  };
-}
-
 function streamOrdersReportPdf(res, { title, rows, companyLogoPath = null, companyProfile = null, rentalInfoFields = null }) {
   const docNo = "rental-orders-report";
   const doc = createContractDoc({
@@ -1055,7 +702,5 @@ function streamOrdersReportPdf(res, { title, rows, companyLogoPath = null, compa
 module.exports = {
   streamOrderPdf,
   buildOrderPdfBuffer,
-  streamInvoicePdf,
-  buildInvoicePdfBuffer,
   streamOrdersReportPdf,
 };

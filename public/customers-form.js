@@ -22,11 +22,8 @@ const pricingMonthly = document.getElementById("pricing-monthly");
 const savePricingBtn = document.getElementById("save-pricing");
 const pricingTable = document.getElementById("pricing-table");
 const pricingSearchInput = document.getElementById("pricing-search");
-const paymentTermsSelect = document.getElementById("payment-terms");
 const contactsList = document.getElementById("contacts-list");
 const addContactRowBtn = document.getElementById("add-contact-row");
-const accountingContactsList = document.getElementById("accounting-contacts-list");
-const addAccountingContactRowBtn = document.getElementById("add-accounting-contact-row");
 const salesModal = document.getElementById("sales-modal");
 const closeSalesModalBtn = document.getElementById("close-sales-modal");
 const salesForm = document.getElementById("sales-form");
@@ -58,20 +55,11 @@ let currentPricing = [];
 let pricingSortField = "type_name";
 let pricingSortDir = "asc";
 let pricingSearchTerm = "";
-let companyDefaultTermsDays = 30;
 
 let customerExtras = { documents: [], storefront: null };
 let extrasDrawerOpen = false;
 let extrasActiveTab = "documents";
 
-function normalizeTermsValue(value) {
-  const raw = String(value ?? "").trim();
-  if (!raw) return null;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return null;
-  if (n === 30 || n === 60) return n;
-  return null;
-}
 
 function updateModeLabels() {
   if (editingCustomerId) {
@@ -88,14 +76,6 @@ function updateModeLabels() {
 function normalizeContactValue(value) {
   const clean = String(value ?? "").trim();
   return clean;
-}
-
-function normalizeInvoiceFlag(value) {
-  if (value === true) return true;
-  if (value === false || value === null || value === undefined) return false;
-  const raw = String(value).trim().toLowerCase();
-  if (!raw) return false;
-  return ["true", "1", "yes", "y", "on"].includes(raw);
 }
 
 function parseContacts(raw) {
@@ -143,7 +123,6 @@ function setBranchMode(isBranch) {
   }
   if (companyNameInput) companyNameInput.disabled = isBranch;
   if (canChargeDepositInput) canChargeDepositInput.disabled = isBranch;
-  if (paymentTermsSelect) paymentTermsSelect.disabled = isBranch;
 }
 
 function applyParentDefaults(parentId) {
@@ -152,10 +131,6 @@ function applyParentDefaults(parentId) {
   if (companyNameInput) companyNameInput.value = parent.company_name || "";
   if (canChargeDepositInput) {
     canChargeDepositInput.checked = !!(parent.effective_can_charge_deposit ?? parent.can_charge_deposit);
-  }
-  if (paymentTermsSelect) {
-    const terms = normalizeTermsValue(parent.effective_payment_terms_days ?? parent.payment_terms_days);
-    paymentTermsSelect.value = terms ? String(terms) : "";
   }
 }
 
@@ -179,43 +154,28 @@ function updateContactRemoveButtons(list) {
   });
 }
 
-function addContactRow(
-  list,
-  { name = "", email = "", phone = "", invoiceEmail = false } = {},
-  { focus = false, includeInvoice = false } = {}
-) {
+function addContactRow(list, { name = "", email = "", phone = "" } = {}, { focus = false } = {}) {
   if (!list) return;
   const row = document.createElement("div");
   row.className = "contact-row";
-  const invoiceMarkup = includeInvoice
-    ? `
-      <div class="inline invoice-toggle">
-        <input type="checkbox" data-contact-field="invoiceEmail" />
-        <span class="hint">Email invoices</span>
-      </div>
-    `
-    : "";
   row.innerHTML = `
     <label>Contact name <input data-contact-field="name" /></label>
     <label>Email <input data-contact-field="email" type="email" /></label>
     <label>Phone number <input data-contact-field="phone" /></label>
-    ${invoiceMarkup}
     <button type="button" class="ghost small contact-remove" aria-label="Remove contact">Remove</button>
   `;
   const nameInput = row.querySelector('[data-contact-field="name"]');
   const emailInput = row.querySelector('[data-contact-field="email"]');
   const phoneInput = row.querySelector('[data-contact-field="phone"]');
-  const invoiceInput = row.querySelector('[data-contact-field="invoiceEmail"]');
   if (nameInput) nameInput.value = name;
   if (emailInput) emailInput.value = email;
   if (phoneInput) phoneInput.value = phone;
-  if (invoiceInput) invoiceInput.checked = !!invoiceEmail;
   list.appendChild(row);
   updateContactRemoveButtons(list);
   if (focus && nameInput) nameInput.focus();
 }
 
-function setContactRows(list, rows, { includeInvoice = false } = {}) {
+function setContactRows(list, rows) {
   if (!list) return;
   list.innerHTML = "";
   const normalized = Array.isArray(rows) && rows.length ? rows : [{ name: "", email: "", phone: "" }];
@@ -226,16 +186,13 @@ function setContactRows(list, rows, { includeInvoice = false } = {}) {
         name: normalizeContactValue(row?.name || row?.contactName || row?.contact_name),
         email: normalizeContactValue(row?.email),
         phone: normalizeContactValue(row?.phone),
-        invoiceEmail: normalizeInvoiceFlag(
-          row?.invoiceEmail ?? row?.invoice_email ?? row?.emailInvoices ?? row?.sendInvoices ?? row?.send_invoices
-        ),
       },
-      { focus: false, includeInvoice }
+      { focus: false }
     );
   });
 }
 
-function collectContacts(list, { includeInvoice = false } = {}) {
+function collectContacts(list) {
   if (!list) return [];
   const rows = Array.from(list.querySelectorAll(".contact-row"));
   return rows
@@ -243,9 +200,7 @@ function collectContacts(list, { includeInvoice = false } = {}) {
       const name = normalizeContactValue(row.querySelector('[data-contact-field="name"]')?.value);
       const email = normalizeContactValue(row.querySelector('[data-contact-field="email"]')?.value);
       const phone = normalizeContactValue(row.querySelector('[data-contact-field="phone"]')?.value);
-      const invoiceEmail = includeInvoice ? row.querySelector('[data-contact-field="invoiceEmail"]')?.checked === true : false;
-      if (!name && !email && !phone && !invoiceEmail) return null;
-      if (includeInvoice) return { name, email, phone, invoiceEmail };
+      if (!name && !email && !phone) return null;
       return { name, email, phone };
     })
     .filter(Boolean);
@@ -518,22 +473,6 @@ async function loadSales() {
   }
 }
 
-async function loadCompanySettings() {
-  if (!activeCompanyId) return;
-  try {
-    const res = await fetch(`/api/company-settings?companyId=${activeCompanyId}`);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return;
-    const terms = normalizeTermsValue(data.settings?.default_payment_terms_days) || 30;
-    companyDefaultTermsDays = terms;
-    if (paymentTermsSelect) {
-      paymentTermsSelect.options[0].textContent = terms === 60 ? "Use company default (Net 60)" : "Use company default (Net 30)";
-    }
-  } catch {
-    // ignore
-  }
-}
-
 async function loadTypes() {
   if (!activeCompanyId) return;
   try {
@@ -585,7 +524,6 @@ async function loadCustomer() {
       });
     }
     setContactRows(contactsList, contactRows);
-    setContactRows(accountingContactsList, parseContacts(customer.accounting_contacts), { includeInvoice: true });
     customerForm.streetAddress.value = customer.street_address || "";
     customerForm.city.value = customer.city || "";
     customerForm.region.value = customer.region || "";
@@ -593,10 +531,6 @@ async function loadCustomer() {
     customerForm.postalCode.value = customer.postal_code || "";
     customerForm.notes.value = customer.notes || "";
     if (canChargeDepositInput) canChargeDepositInput.checked = !!customer.can_charge_deposit;
-    if (paymentTermsSelect) {
-      const terms = normalizeTermsValue(customer.payment_terms_days);
-      paymentTermsSelect.value = terms ? String(terms) : "";
-    }
     customerForm.followUpDate.value = customer.follow_up_date ? customer.follow_up_date.split("T")[0] : "";
     salesSelect.value = customer.sales_person_id || "";
     const isBranch = !!customer.parent_customer_id;
@@ -636,17 +570,13 @@ customerForm.addEventListener("submit", async (e) => {
   }
   const payload = Object.fromEntries(new FormData(customerForm).entries());
   const contacts = collectContacts(contactsList);
-  const accountingContacts = collectContacts(accountingContactsList, { includeInvoice: true });
   const primaryContact = contacts[0] || {};
   payload.contacts = contacts;
-  payload.accountingContacts = accountingContacts;
   payload.contactName = primaryContact.name || null;
   payload.email = primaryContact.email || null;
   payload.phone = primaryContact.phone || null;
   payload.companyId = activeCompanyId;
   payload.canChargeDeposit = !!canChargeDepositInput?.checked;
-  const rawTerms = payload.paymentTermsDays;
-  payload.paymentTermsDays = rawTerms === undefined || rawTerms === "" ? null : Number(rawTerms);
   const isBranch = customerKindSelect?.value === "branch";
   if (isBranch) {
     const parentId = parentCustomerSelect?.value ? Number(parentCustomerSelect.value) : null;
@@ -816,19 +746,6 @@ contactsList?.addEventListener("click", (e) => {
   updateContactRemoveButtons(contactsList);
 });
 
-addAccountingContactRowBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  addContactRow(accountingContactsList, {}, { focus: true });
-});
-
-accountingContactsList?.addEventListener("click", (e) => {
-  const btn = e.target.closest?.(".contact-remove");
-  if (!btn) return;
-  e.preventDefault();
-  const row = btn.closest(".contact-row");
-  if (row) row.remove();
-  updateContactRemoveButtons(accountingContactsList);
-});
 
 function openSalesModal() {
   salesModal.classList.add("show");
@@ -960,11 +877,9 @@ if (activeCompanyId) {
   const session = window.RentSoft?.getSession?.();
   const companyName = session?.company?.name ? String(session.company.name) : null;
   companyMeta.textContent = companyName ? `${companyName} (Company #${activeCompanyId})` : `Company #${activeCompanyId}`;
-  loadCompanySettings();
   loadSales();
   loadTypes();
   setContactRows(contactsList, []);
-  setContactRows(accountingContactsList, [], { includeInvoice: true });
   setBranchMode(false);
   ensureCustomersCache().catch((err) => {
     companyMeta.textContent = err.message;

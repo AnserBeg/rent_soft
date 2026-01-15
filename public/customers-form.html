@@ -21,7 +21,6 @@
             <div class="nav-group-title">Operations</div>
             <a class="nav-link" href="rental-quotes.html">Quotes</a>
             <a class="nav-link" href="rental-orders.html">Rental Orders</a>
-            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
           </div>
           <div class="nav-group">
             <div class="nav-group-title">Repairs</div>
@@ -122,13 +121,6 @@
                   </div>
                   <div class="contacts-list stack" id="contacts-list"></div>
                 </div>
-                <div class="contact-block">
-                  <div class="contact-header">
-                    <strong>Accounting contacts</strong>
-                    <button type="button" class="ghost small" id="add-accounting-contact-row">+ Add contact</button>
-                  </div>
-                  <div class="contacts-list stack" id="accounting-contacts-list"></div>
-                </div>
                 <label>Street address <input name="streetAddress" /></label>
                 <div class="two-col">
                   <label>City <input name="city" /></label>
@@ -158,16 +150,6 @@
                   <div class="deposit-field">
                     <label for="canChargeDeposit">Charge Deposit</label>
                     <input id="canChargeDeposit" type="checkbox" name="canChargeDeposit" />
-                  </div>
-                  <div class="two-col" style="margin-top:10px;">
-                    <label>Invoice terms
-                      <select id="payment-terms" name="paymentTermsDays">
-                        <option value="">Use company default</option>
-                        <option value="30">Net 30</option>
-                        <option value="60">Net 60</option>
-                      </select>
-                    </label>
-                    <div></div>
                   </div>
                   <div class="pricing-grid">
                     <label>Equipment type

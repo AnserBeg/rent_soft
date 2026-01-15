@@ -22,7 +22,6 @@
             <div class="nav-group-title">Operations</div>
             <a class="nav-link" href="rental-quotes.html">Quotes</a>
             <a class="nav-link active" href="rental-orders.html">Rental Orders</a>
-            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
           </div>
           <div class="nav-group">
             <div class="nav-group-title">Repairs</div>
@@ -220,7 +219,7 @@
               </div>
             </div>
             <p class="hint" id="pricing-contract-helper" style="margin: 0;">
-              Billed monthly; first/last invoice may be prorated based on actual dates.
+              Monthly pricing is prorated based on actual dates.
             </p>
           </section>
 
@@ -351,7 +350,6 @@
               <span class="extras-dot">·</span>
             </div>
             <div class="extras-actions">
-              <button class="ghost small" id="open-invoices" type="button">Invoices</button>
               <button class="ghost small" id="open-note-modal" type="button">
                 + Note <span class="mini-badge" id="extras-notes-badge" style="display:none;"></span>
               </button>
@@ -381,7 +379,6 @@
       <button class="drawer-tab" type="button" data-tab="terms">Terms</button>
       <button class="drawer-tab" type="button" data-tab="notes">Notes</button>
       <button class="drawer-tab" type="button" data-tab="attachments">Attachments</button>
-      <button class="drawer-tab" type="button" data-tab="invoices">Invoices</button>
     </div>
     <div class="drawer-body">
       <div class="drawer-panel" data-panel="terms">
@@ -420,23 +417,6 @@
           </div>
           <span class="hint" id="attachment-hint"></span>
           <div class="stack" id="attachments-list"></div>
-        </div>
-      </div>
-      <div class="drawer-panel" data-panel="invoices" style="display:none;">
-        <div class="stack">
-          <span class="hint" id="rental-order-invoices-meta"></span>
-          <div class="table" id="rental-order-invoices-table">
-            <div class="table-row table-header">
-              <span>Invoice #</span>
-              <span>Amount</span>
-              <span>Billing</span>
-              <span>Overdue</span>
-              <span>Email sent</span>
-            </div>
-            <div class="table-row">
-              <span class="hint" style="grid-column: 1 / -1;">No invoices yet.</span>
-            </div>
-          </div>
         </div>
       </div>
     </div>

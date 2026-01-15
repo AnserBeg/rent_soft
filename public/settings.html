@@ -21,7 +21,6 @@
             <div class="nav-group-title">Operations</div>
             <a class="nav-link" href="rental-quotes.html">Quotes</a>
             <a class="nav-link" href="rental-orders.html">Rental Orders</a>
-            <a class="nav-link" href="accounts-receivable.html">Accounts Receivable</a>
           </div>
           <div class="nav-group">
             <div class="nav-group-title">Repairs</div>
@@ -67,7 +66,7 @@
         <header class="hero">
           <div>
             <h1>Settings</h1>
-            <p class="lede">Company-wide settings for rental billing calculations.</p>
+            <p class="lede">Company-wide settings for your rental operations.</p>
           </div>
         </header>
 
@@ -94,96 +93,6 @@
             </div>
           </section>
 
-          <section class="card wide">
-            <div class="card-header">
-              <div>
-                <h2>Billing</h2>
-              </div>
-              <div class="inline-actions">
-                <button class="primary" id="save-settings" disabled>Save</button>
-              </div>
-            </div>
-
-            <div class="stack">
-              <label>Rounding mode
-                <select id="billing-rounding-mode" disabled>
-                  <option value="ceil">Round up</option>
-                  <option value="floor">Round down</option>
-                  <option value="nearest">Round to nearest</option>
-                  <option value="none">Exact (no rounding)</option>
-                </select>
-              </label>
-              <label>Rounding granularity
-                <select id="billing-rounding-granularity" disabled>
-                  <option value="unit">Billing unit</option>
-                  <option value="day">Day</option>
-                  <option value="hour">Hour</option>
-                </select>
-              </label>
-              <label>Monthly proration method
-                <select id="monthly-proration-method" disabled>
-                  <option value="hours">Hours (exact)</option>
-                  <option value="days">Days (count partial days)</option>
-                </select>
-              </label>
-              <p class="hint">Granularity controls whether rounding happens by billing unit, day, or hour.</p>
-              <p class="hint">Monthly proration can use exact hours or count partial days as full days.</p>
-              <label>Auto-create invoices
-                <select id="invoice-auto-run" disabled>
-                  <option value="off">Off</option>
-                  <option value="on_received">When order is received</option>
-                  <option value="on_closed">When order is closed</option>
-                  <option value="monthly">Monthly (create due invoices)</option>
-                </select>
-              </label>
-              <label>Invoice cadence
-                <select id="invoice-auto-mode" disabled>
-                  <option value="auto">Auto (monthly for long contracts)</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="single">Single invoice at end</option>
-                </select>
-              </label>
-              <label>Billing timezone
-                <input id="billing-timezone" placeholder="America/Edmonton" disabled />
-              </label>
-              <p class="hint">Use an IANA timezone like America/Edmonton.</p>
-              <label>Invoice date basis
-                <select id="invoice-date-mode" disabled>
-                  <option value="generation">Date generated</option>
-                  <option value="period_start">Service period start</option>
-                </select>
-              </label>
-              <p class="hint">Defaults to the generation date; change to service period start if you prefer backdating.</p>
-              <label>Default invoice terms
-                <select id="default-payment-terms" disabled>
-                  <option value="30">Net 30</option>
-                  <option value="60">Net 60</option>
-                </select>
-              </label>
-              <p class="hint">Customers can override this in their special pricing settings.</p>
-              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
-                <input id="tax-enabled" type="checkbox" disabled />
-                <span>Enable tax on invoices</span>
-              </label>
-              <div class="two-col">
-                <label>Default tax rate (%)
-                  <input id="default-tax-rate" type="number" min="0" step="0.01" disabled />
-                </label>
-                <label>Tax registration number
-                  <input id="tax-registration-number" disabled />
-                </label>
-              </div>
-              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
-                <input id="tax-inclusive-pricing" type="checkbox" disabled />
-                <span>Prices include tax</span>
-              </label>
-              <p class="hint">Tax rate uses percent values (e.g., 5 for 5%).</p>
-              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
-                <input id="auto-work-order-on-return" type="checkbox" disabled />
-                <span>Auto-create return inspection work orders when items are returned</span>
-              </label>
-            </div>
-          </section>
 
           <section class="card wide">
             <div class="card-header">
@@ -342,10 +251,6 @@
                 </label>
               </div>
 
-              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
-                <input id="email-notify-invoices" type="checkbox" disabled />
-                <span>Email customer when an invoice is created</span>
-              </label>
 
               <p class="hint" id="email-settings-hint" style="margin:0;"></p>
             </div>

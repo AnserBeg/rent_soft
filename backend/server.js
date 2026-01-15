@@ -126,9 +126,6 @@ const {
   setLineItemPickedUp,
   setLineItemReturned,
   applyWorkOrderPauseToEquipment,
-  createPickupBillingForLineItem,
-  createReturnBillingForLineItem,
-  createPauseBillingAdjustments,
   getTypeAvailabilitySeries,
   getAvailabilityShortfallsSummary,
   getTypeAvailabilitySeriesWithProjection,
@@ -140,37 +137,10 @@ const {
   getSalespersonClosedTransactionsTimeSeries,
   getLocationClosedTransactionsTimeSeries,
   getLocationTypeStockSummary,
-  listInvoices,
-  getInvoice,
-  replaceInvoiceLineItems,
-  createManualInvoice,
-  addInvoicePayment,
-  addCustomerPayment,
-  addCustomerDeposit,
-  getCustomerCreditBalance,
-  getCustomerDepositBalance,
-  applyCustomerCreditToInvoice,
-  applyCustomerDepositToInvoice,
-  applyCustomerCreditToOldestInvoices,
-  listCustomerCreditActivity,
-  refundCustomerDeposit,
-  reverseInvoicePayment,
-  markInvoiceEmailSent,
-  createInvoiceVersion,
-  markInvoiceVersionSent,
-  getLatestSentInvoiceVersion,
-  getLatestInvoiceVersion,
-  createInvoiceCorrection,
-  deleteInvoice,
-  voidInvoice,
-  generateInvoicesForRentalOrder,
-  listCompaniesWithMonthlyAutoRun,
-  generateMonthlyInvoicesForCompany,
-  getAccountsReceivableSummary,
 } = require("./db");
 
-const { streamOrderPdf, buildOrderPdfBuffer, streamInvoicePdf, buildInvoicePdfBuffer, streamOrdersReportPdf } = require("./pdf");
-const { sendCompanyEmail, requestSubmittedEmail, statusUpdatedEmail, invoiceEmail } = require("./mailer");
+const { streamOrderPdf, buildOrderPdfBuffer, streamOrdersReportPdf } = require("./pdf");
+const { sendCompanyEmail, requestSubmittedEmail, statusUpdatedEmail } = require("./mailer");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -179,144 +149,6 @@ const publicRoot = path.join(__dirname, "..", "public");
 const spaRoot = path.join(publicRoot, "spa");
 const defaultUploadRoot = path.join(publicRoot, "uploads");
 const uploadRoot = process.env.UPLOAD_ROOT ? path.resolve(process.env.UPLOAD_ROOT) : defaultUploadRoot;
-
-function normalizeInvoiceDocumentType(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  switch (raw) {
-    case "credit_memo":
-    case "credit":
-      return "credit_memo";
-    case "debit_memo":
-    case "debit":
-      return "debit_memo";
-    default:
-      return "invoice";
-  }
-}
-
-function buildInvoiceSnapshot({ detail, companyProfile, companyLogoUrl }) {
-  return {
-    generatedAt: new Date().toISOString(),
-    invoice: detail?.invoice || null,
-    lineItems: Array.isArray(detail?.lineItems) ? detail.lineItems : [],
-    payments: Array.isArray(detail?.payments) ? detail.payments : [],
-    companyProfile: companyProfile || null,
-    companyLogoUrl: companyLogoUrl || null,
-  };
-}
-
-async function createInvoiceVersionSnapshot({
-  companyId,
-  invoiceId,
-  detail,
-  companyProfile = null,
-  companyLogoPath = null,
-  companyLogoUrl = null,
-  billingTimeZone = null,
-} = {}) {
-  const invoiceDetail = detail || (await getInvoice({ companyId, id: invoiceId }));
-  if (!invoiceDetail) return null;
-
-  const pdf = await buildInvoicePdfBuffer({ ...invoiceDetail, companyLogoPath, companyProfile, timeZone: billingTimeZone });
-  const snapshot = buildInvoiceSnapshot({ detail: invoiceDetail, companyProfile, companyLogoUrl });
-  const version = await createInvoiceVersion({
-    companyId,
-    invoiceId,
-    snapshot,
-    pdfBuffer: pdf.buffer,
-    pdfFilename: pdf.filename,
-  });
-  if (!version) return null;
-  return { detail: invoiceDetail, pdf, snapshot, version };
-}
-
-async function sendInvoiceEmailWithVersion({
-  companyId,
-  invoiceId,
-  detail,
-  to,
-  message = null,
-  emailSettings,
-  companyProfile = null,
-  companyLogoPath = null,
-  companyLogoUrl = null,
-  billingTimeZone = null,
-} = {}) {
-  const recipient = String(to || "").trim();
-  if (!recipient) return { ok: false, error: "Recipient email is required." };
-
-  const versioned = await createInvoiceVersionSnapshot({
-    companyId,
-    invoiceId,
-    detail,
-    companyProfile,
-    companyLogoPath,
-    companyLogoUrl,
-    billingTimeZone,
-  });
-  if (!versioned) return { ok: false, error: "Invoice not found." };
-
-  const tpl = invoiceEmail({
-    invoice: versioned.detail.invoice,
-    companyName: companyProfile?.name || null,
-    message: message || null,
-  });
-  const attachments = [{ filename: versioned.pdf.filename, content: versioned.pdf.buffer, contentType: "application/pdf" }];
-  const result = await sendCompanyEmail({
-    companyId,
-    settings: emailSettings,
-    to: recipient,
-    subject: tpl.subject,
-    text: tpl.text,
-    attachments,
-  });
-  if (result.ok) {
-    const versionId = versioned.version?.id;
-    if (versionId) {
-      await markInvoiceVersionSent({ companyId, invoiceId, versionId }).catch(() => null);
-    }
-    await markInvoiceEmailSent({ companyId, invoiceId }).catch(() => null);
-  }
-  return result;
-}
-
-async function emailInvoicesIfConfigured({ companyId, invoices } = {}) {
-  const cid = Number(companyId);
-  const created = Array.isArray(invoices) ? invoices : [];
-  if (!Number.isFinite(cid) || !created.length) return;
-
-  const emailSettings = await getCompanyEmailSettings(cid);
-  if (emailSettings.email_enabled !== true || emailSettings.email_notify_invoices !== true) return;
-
-  const companySettings = await getCompanySettings(cid);
-  const companyLogoUrl = companySettings?.logo_url || null;
-  const billingTimeZone = companySettings?.billing_timezone || null;
-  const rawLogoPath = companySettings?.logo_url
-    ? resolveCompanyUploadPath({ companyId: cid, url: companySettings.logo_url })
-    : null;
-  const logoPath = rawLogoPath ? await resolvePdfCompatibleImagePath(rawLogoPath) : null;
-  const profile = await getCompanyProfile(cid).catch(() => null);
-
-  for (const createdInvoice of created) {
-    const invoiceId = createdInvoice?.id ? Number(createdInvoice.id) : null;
-    if (!invoiceId) continue;
-    const detail = await getInvoice({ companyId: cid, id: invoiceId }).catch(() => null);
-    const recipients = getInvoiceRecipientEmails(detail?.invoice);
-    if (!detail || !recipients.length) continue;
-
-    await sendInvoiceEmailWithVersion({
-      companyId: cid,
-      invoiceId,
-      detail,
-      to: recipients.join(", "),
-      emailSettings,
-      companyProfile: profile || null,
-      companyLogoPath: logoPath,
-      companyLogoUrl,
-      billingTimeZone,
-    });
-  }
-}
 
 app.use(cors());
 app.use(express.json());
@@ -414,20 +246,6 @@ function normalizePurchaseOrderStatus(value) {
   const raw = String(value ?? "").trim().toLowerCase();
   if (raw === "closed") return "closed";
   return "open";
-}
-
-function getInvoiceRecipientEmails(invoice) {
-  const contacts = Array.isArray(invoice?.customerAccountingContacts) ? invoice.customerAccountingContacts : [];
-  const normalizeEmail = (value) => String(value || "").trim();
-  const selected = contacts
-    .filter((c) => c && c.invoiceEmail === true)
-    .map((c) => normalizeEmail(c.email))
-    .filter(Boolean);
-  if (selected.length) return selected;
-  const accounting = contacts.map((c) => normalizeEmail(c?.email)).filter(Boolean);
-  if (accounting.length) return accounting;
-  const fallback = normalizeEmail(invoice?.customerEmail);
-  return fallback ? [fallback] : [];
 }
 
 app.get(
@@ -1247,98 +1065,6 @@ app.get(
 );
 
 app.get(
-  "/api/customers/invoices",
-  asyncHandler(async (req, res) => {
-    const auth = await requireCustomerAccount(req);
-    if (!auth) return res.status(401).json({ error: "Customer login required." });
-
-    const companyIdQuery = String(req.query?.companyId || "").trim();
-    const cid = auth.kind === "storefront" ? Number(auth.customer.companyId) : Number(companyIdQuery);
-    if (!Number.isFinite(cid) || cid <= 0) return res.status(400).json({ error: "companyId is required." });
-
-    let internalCustomerId = null;
-    if (auth.kind === "storefront" && auth.customer?.internalCustomerId) {
-      internalCustomerId = Number(auth.customer.internalCustomerId);
-    }
-    if (!internalCustomerId && auth.customer?.email) {
-      internalCustomerId = await findInternalCustomerIdByEmail({ companyId: cid, email: auth.customer.email });
-    }
-
-    if (!internalCustomerId) return res.json({ invoices: [], companyId: cid });
-    const invoices = await listInvoices(cid, { customerId: internalCustomerId });
-    return res.json({ invoices, companyId: cid });
-  })
-);
-
-app.get(
-  "/api/customers/invoices/:id/pdf",
-  asyncHandler(async (req, res) => {
-    const auth = await requireCustomerAccount(req);
-    if (!auth) return res.status(401).json({ error: "Customer login required." });
-
-    const invoiceId = Number(req.params?.id);
-    if (!Number.isFinite(invoiceId) || invoiceId <= 0) return res.status(400).json({ error: "Invalid invoice id." });
-
-    const companyIdQuery = String(req.query?.companyId || "").trim();
-    const cid = auth.kind === "storefront" ? Number(auth.customer.companyId) : Number(companyIdQuery);
-    if (!Number.isFinite(cid) || cid <= 0) return res.status(400).json({ error: "companyId is required." });
-
-    let internalCustomerId = null;
-    if (auth.kind === "storefront" && auth.customer?.internalCustomerId) {
-      internalCustomerId = Number(auth.customer.internalCustomerId);
-    }
-    if (!internalCustomerId && auth.customer?.email) {
-      internalCustomerId = await findInternalCustomerIdByEmail({ companyId: cid, email: auth.customer.email });
-    }
-    if (!internalCustomerId) return res.status(404).json({ error: "Invoice not found." });
-
-    const detail = await getInvoice({ companyId: cid, id: invoiceId });
-    if (!detail) return res.status(404).json({ error: "Invoice not found." });
-    if (Number(detail?.invoice?.customerId) !== Number(internalCustomerId)) {
-      return res.status(404).json({ error: "Invoice not found." });
-    }
-
-    const status = String(detail?.invoice?.status || "").trim().toLowerCase();
-    if (status === "void") {
-      const version = await getLatestInvoiceVersion({
-        companyId: cid,
-        invoiceId: Number(detail.invoice?.id || invoiceId),
-      });
-      if (version?.pdfBytes) {
-        res.setHeader("Content-Type", "application/pdf");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${version.pdfFilename || `invoice-${detail.invoice?.invoiceNumber || invoiceId}.pdf`}"`
-        );
-        res.send(version.pdfBytes);
-        return;
-      }
-    } else if (["sent", "paid"].includes(status)) {
-      const version = await getLatestSentInvoiceVersion({
-        companyId: cid,
-        invoiceId: Number(detail.invoice?.id || invoiceId),
-      });
-      if (version?.pdfBytes) {
-        res.setHeader("Content-Type", "application/pdf");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${version.pdfFilename || `invoice-${detail.invoice?.invoiceNumber || invoiceId}.pdf`}"`
-        );
-        res.send(version.pdfBytes);
-        return;
-      }
-    }
-
-    const settings = await getCompanySettings(cid);
-    const billingTimeZone = settings?.billing_timezone || null;
-    const rawLogoPath = settings?.logo_url ? resolveCompanyUploadPath({ companyId: cid, url: settings.logo_url }) : null;
-    const logoPath = rawLogoPath ? await resolvePdfCompatibleImagePath(rawLogoPath) : null;
-    const companyProfile = await getCompanyProfile(Number(cid));
-    streamInvoicePdf(res, { ...detail, companyLogoPath: logoPath, companyProfile, timeZone: billingTimeZone });
-  })
-);
-
-app.get(
   "/api/customers/orders/:id/pdf",
   asyncHandler(async (req, res) => {
     const auth = await requireCustomerAccount(req);
@@ -1525,10 +1251,8 @@ app.post(
       driversLicense: mapDoc("driversLicense"),
     };
 
-      const parsedDeposit = parseBoolean(req.body.canChargeDeposit);
-      const paymentTermsRaw = String(req.body.paymentTermsDays ?? "").trim();
-      const paymentTermsDays = paymentTermsRaw ? Number(paymentTermsRaw) : null;
-      const payload = {
+    const parsedDeposit = parseBoolean(req.body.canChargeDeposit);
+    const payload = {
         companyId,
         name: String(req.body.name || "").trim(),
         businessName: String(req.body.businessName || "").trim() || null,
@@ -1546,10 +1270,9 @@ app.post(
         accountingContacts: req.body.accountingContacts,
         followUpDate: String(req.body.followUpDate || "").trim() || null,
         notes: String(req.body.notes || "").trim() || null,
-        canChargeDeposit: parsedDeposit === null ? null : parsedDeposit,
-        paymentTermsDays: Number.isFinite(paymentTermsDays) ? paymentTermsDays : null,
-        documents,
-      };
+      canChargeDeposit: parsedDeposit === null ? null : parsedDeposit,
+      documents,
+    };
 
     const created = await createStorefrontCustomer(payload);
     const session = await authenticateStorefrontCustomer({ companyId, email: payload.email, password: payload.password });
@@ -2592,115 +2315,6 @@ app.get(
   })
 );
 
-app.get(
-  "/api/customers/:id/credit",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId } = req.query;
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const credit = await getCustomerCreditBalance({ companyId: Number(companyId), customerId: Number(id) });
-    res.json({ credit });
-  })
-);
-
-app.get(
-  "/api/customers/:id/deposit",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId } = req.query;
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const deposit = await getCustomerDepositBalance({ companyId: Number(companyId), customerId: Number(id) });
-    res.json({ deposit });
-  })
-);
-
-app.get(
-  "/api/customers/:id/credits",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, limit } = req.query;
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const activity = await listCustomerCreditActivity({
-      companyId: Number(companyId),
-      customerId: Number(id),
-      limit: limit ?? 25,
-    });
-    res.json({ activity });
-  })
-);
-
-app.post(
-  "/api/customers/:id/payments",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, amount, paidAt, method, reference, note } = req.body || {};
-    if (!companyId || amount === null || amount === undefined) {
-      return res.status(400).json({ error: "companyId and amount are required." });
-    }
-    const created = await addCustomerPayment({
-      companyId: Number(companyId),
-      customerId: Number(id),
-      amount,
-      paidAt: paidAt || null,
-      method: method || null,
-      reference: reference || null,
-      note: note || null,
-    });
-    if (!created) return res.status(404).json({ error: "Customer not found." });
-    const settings = await getCompanySettings(Number(companyId));
-    const autoApplied = settings?.auto_apply_customer_credit === true
-      ? await applyCustomerCreditToOldestInvoices({ companyId: Number(companyId), customerId: Number(id) })
-      : { appliedAmount: 0 };
-    const credit = await getCustomerCreditBalance({ companyId: Number(companyId), customerId: Number(id) });
-    res.status(201).json({ ...created, credit, autoAppliedAmount: autoApplied?.appliedAmount || 0 });
-  })
-);
-
-app.post(
-  "/api/customers/:id/deposits",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, amount, paidAt, method, reference, note } = req.body || {};
-    if (!companyId || amount === null || amount === undefined) {
-      return res.status(400).json({ error: "companyId and amount are required." });
-    }
-    const created = await addCustomerDeposit({
-      companyId: Number(companyId),
-      customerId: Number(id),
-      amount,
-      paidAt: paidAt || null,
-      method: method || null,
-      reference: reference || null,
-      note: note || null,
-    });
-    if (!created) return res.status(404).json({ error: "Customer not found." });
-    const deposit = await getCustomerDepositBalance({ companyId: Number(companyId), customerId: Number(id) });
-    res.status(201).json({ ...created, deposit });
-  })
-);
-
-app.post(
-  "/api/customers/:id/deposits/refund",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, amount, paidAt, method, reference, note } = req.body || {};
-    if (!companyId || amount === null || amount === undefined) {
-      return res.status(400).json({ error: "companyId and amount are required." });
-    }
-    const result = await refundCustomerDeposit({
-      companyId: Number(companyId),
-      customerId: Number(id),
-      amount,
-      paidAt: paidAt || null,
-      method: method || null,
-      reference: reference || null,
-      note: note || null,
-    });
-    if (!result) return res.status(404).json({ error: "Customer not found." });
-    res.status(201).json(result);
-  })
-);
-
 app.post(
   "/api/customers/:id/documents",
   asyncHandler(async (req, res) => {
@@ -2751,7 +2365,6 @@ app.post(
       contacts,
       accountingContacts,
       canChargeDeposit,
-      paymentTermsDays,
     } = req.body;
     if (!companyId || (!companyName && !parentCustomerId)) {
       return res.status(400).json({ error: "companyId and companyName are required." });
@@ -2772,7 +2385,6 @@ app.post(
         contacts,
         accountingContacts,
         canChargeDeposit: canChargeDeposit === true || canChargeDeposit === "true" || canChargeDeposit === "on",
-        paymentTermsDays: paymentTermsDays ?? null,
       });
       res.status(201).json(customer);
     } catch (err) {
@@ -2804,7 +2416,6 @@ app.put(
       contacts,
       accountingContacts,
       canChargeDeposit,
-      paymentTermsDays,
     } = req.body;
     if (!companyId || (!companyName && !parentCustomerId)) {
       return res.status(400).json({ error: "companyId and companyName are required." });
@@ -2826,7 +2437,6 @@ app.put(
         contacts,
         accountingContacts,
         canChargeDeposit: canChargeDeposit === true || canChargeDeposit === "true" || canChargeDeposit === "on",
-        paymentTermsDays: paymentTermsDays ?? null,
       });
       if (!updated) return res.status(404).json({ error: "Customer not found" });
       res.json(updated);
@@ -3134,10 +2744,6 @@ app.put(
         billingRoundingGranularity,
         monthlyProrationMethod,
         billingTimeZone,
-        invoiceDateMode,
-        defaultPaymentTermsDays,
-        invoiceAutoRun,
-        invoiceAutoMode,
         taxEnabled,
         defaultTaxRate,
           taxRegistrationNumber,
@@ -3155,10 +2761,6 @@ app.put(
         billingRoundingGranularity: billingRoundingGranularity ?? null,
         monthlyProrationMethod: monthlyProrationMethod ?? null,
         billingTimeZone: billingTimeZone ?? null,
-        invoiceDateMode: invoiceDateMode ?? null,
-        defaultPaymentTermsDays: defaultPaymentTermsDays ?? null,
-        invoiceAutoRun: invoiceAutoRun ?? null,
-        invoiceAutoMode: invoiceAutoMode ?? null,
         taxEnabled: taxEnabled ?? null,
         defaultTaxRate: defaultTaxRate ?? null,
         taxRegistrationNumber: taxRegistrationNumber ?? null,
@@ -3194,7 +2796,6 @@ app.get(
         email_from_address: settings.email_from_address || null,
         email_notify_request_submit: settings.email_notify_request_submit !== false,
         email_notify_status_updates: settings.email_notify_status_updates !== false,
-        email_notify_invoices: settings.email_notify_invoices === true,
         updated_at: settings.updated_at || null,
       },
     });
@@ -3218,7 +2819,6 @@ app.put(
       fromAddress,
       notifyRequestSubmit,
       notifyStatusUpdates,
-      notifyInvoices,
     } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
 
@@ -3236,7 +2836,6 @@ app.put(
       fromAddress,
       notifyRequestSubmit,
       notifyStatusUpdates,
-      notifyInvoices,
     });
 
     res.json({
@@ -3254,7 +2853,6 @@ app.put(
         email_from_address: updated.email_from_address || null,
         email_notify_request_submit: updated.email_notify_request_submit !== false,
         email_notify_status_updates: updated.email_notify_status_updates !== false,
-        email_notify_invoices: updated.email_notify_invoices === true,
         updated_at: updated.updated_at || null,
       },
     });
@@ -3502,23 +3100,6 @@ app.put(
       actorEmail: actorEmail || null,
     });
     if (!result.ok) return res.status(409).json(result);
-    if (pickedUp) {
-      try {
-        const billing = await createPickupBillingForLineItem({
-          companyId: Number(companyId),
-          lineItemId: Number(id),
-          actorName: actorName || null,
-          actorEmail: actorEmail || null,
-        });
-        result.invoices = Array.isArray(billing?.created) ? billing.created : [];
-        result.invoiceError = null;
-        if (result.invoices.length) {
-          await emailInvoicesIfConfigured({ companyId: Number(companyId), invoices: result.invoices }).catch(() => null);
-        }
-      } catch (err) {
-        result.invoiceError = err?.message ? String(err.message) : "Unable to create invoice.";
-      }
-    }
     res.json(result);
   })
 );
@@ -3547,24 +3128,6 @@ app.put(
       actorEmail: actorEmail || null,
     });
     if (!result.ok) return res.status(409).json(result);
-    try {
-      const billing = await createReturnBillingForLineItem({
-        companyId: Number(companyId),
-        lineItemId: Number(id),
-        returned: !!returned,
-        actorName: actorName || null,
-        actorEmail: actorEmail || null,
-      });
-      const existing = Array.isArray(result.invoices) ? result.invoices : [];
-      const created = Array.isArray(billing?.created) ? billing.created : [];
-      result.invoices = existing.concat(created);
-      if (!result.invoiceError) result.invoiceError = null;
-      if (created.length) {
-        await emailInvoicesIfConfigured({ companyId: Number(companyId), invoices: created }).catch(() => null);
-      }
-    } catch (err) {
-      result.invoiceError = err?.message ? String(err.message) : "Unable to create invoice.";
-    }
     res.json(result);
   })
 );
@@ -3586,22 +3149,6 @@ app.post(
       startAt,
       endAt,
     });
-    try {
-      const billing = await createPauseBillingAdjustments({
-        companyId: Number(companyId),
-        lineItemIds: result?.lineItemIds || [],
-        startAt: startAt || null,
-        endAt: endAt || null,
-        workOrderNumber,
-      });
-      result.invoices = Array.isArray(billing?.created) ? billing.created : [];
-      result.invoiceError = null;
-      if (result.invoices.length) {
-        await emailInvoicesIfConfigured({ companyId: Number(companyId), invoices: result.invoices }).catch(() => null);
-      }
-    } catch (err) {
-      result.invoiceError = err?.message ? String(err.message) : "Unable to create invoice.";
-    }
     res.json(result);
   })
 );
@@ -3928,38 +3475,7 @@ app.put(
     (async () => {
       try {
         const cid = Number(companyId);
-        const createdInvoices = Array.isArray(updated.invoices) ? updated.invoices : [];
-
         const emailSettings = await getCompanyEmailSettings(cid);
-
-        if (createdInvoices.length && emailSettings.email_enabled === true && emailSettings.email_notify_invoices === true) {
-          const companySettings = await getCompanySettings(cid);
-          const companyLogoUrl = companySettings?.logo_url || null;
-          const billingTimeZone = companySettings?.billing_timezone || null;
-          const rawLogoPath = companySettings?.logo_url ? resolveCompanyUploadPath({ companyId: cid, url: companySettings.logo_url }) : null;
-          const logoPath = rawLogoPath ? await resolvePdfCompatibleImagePath(rawLogoPath) : null;
-          const profile = await getCompanyProfile(cid).catch(() => null);
-
-          for (const created of createdInvoices) {
-            const invoiceId = created?.id ? Number(created.id) : null;
-            if (!invoiceId) continue;
-            const detail = await getInvoice({ companyId: cid, id: invoiceId }).catch(() => null);
-            const recipients = getInvoiceRecipientEmails(detail?.invoice);
-            if (!detail || !recipients.length) continue;
-
-            await sendInvoiceEmailWithVersion({
-              companyId: cid,
-              invoiceId,
-              detail,
-              to: recipients.join(", "),
-              emailSettings,
-              companyProfile: profile || null,
-              companyLogoPath: logoPath,
-              companyLogoUrl,
-              billingTimeZone,
-            });
-          }
-        }
 
         if (updated.statusChanged !== true) return;
         const nextStatus = String(updated.status || "").toLowerCase();
@@ -4002,7 +3518,7 @@ app.put(
           attachments = [{ filename: pdf.filename, content: pdf.buffer, contentType: "application/pdf" }];
         }
 
-            const result = await sendCompanyEmail({
+            await sendCompanyEmail({
               companyId: cid,
               settings: emailSettings,
               to: customerEmail,
@@ -4010,9 +3526,6 @@ app.put(
               text: tpl.text,
               attachments,
             });
-            if (result.ok) {
-              await markInvoiceEmailSent({ companyId: cid, invoiceId }).catch(() => null);
-            }
       } catch (err) {
         console.warn("Status update email failed:", err?.message || err);
       }
@@ -4083,446 +3596,6 @@ app.delete(
       actorEmail: actorEmail || null,
     });
     res.status(204).end();
-  })
-);
-
-app.post(
-  "/api/rental-orders/:id/invoices/generate",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, mode } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const result = await generateInvoicesForRentalOrder({
-      companyId: Number(companyId),
-      orderId: Number(id),
-      mode: mode || "auto",
-    });
-    if (!result) return res.status(404).json({ error: "Rental order not found." });
-    res.status(201).json(result);
-
-    (async () => {
-      try {
-        const cid = Number(companyId);
-        const createdInvoices = Array.isArray(result?.created) ? result.created : [];
-        if (!createdInvoices.length) return;
-
-        const emailSettings = await getCompanyEmailSettings(cid);
-        if (emailSettings.email_enabled !== true || emailSettings.email_notify_invoices !== true) return;
-
-        const companySettings = await getCompanySettings(cid);
-        const companyLogoUrl = companySettings?.logo_url || null;
-        const billingTimeZone = companySettings?.billing_timezone || null;
-        const rawLogoPath = companySettings?.logo_url ? resolveCompanyUploadPath({ companyId: cid, url: companySettings.logo_url }) : null;
-        const logoPath = rawLogoPath ? await resolvePdfCompatibleImagePath(rawLogoPath) : null;
-        const profile = await getCompanyProfile(cid).catch(() => null);
-
-        for (const created of createdInvoices) {
-          const invoiceId = created?.id ? Number(created.id) : null;
-          if (!invoiceId) continue;
-          const detail = await getInvoice({ companyId: cid, id: invoiceId }).catch(() => null);
-          const recipients = getInvoiceRecipientEmails(detail?.invoice);
-          if (!detail || !recipients.length) continue;
-
-          await sendInvoiceEmailWithVersion({
-            companyId: cid,
-            invoiceId,
-            detail,
-            to: recipients.join(", "),
-            emailSettings,
-            companyProfile: profile || null,
-            companyLogoPath: logoPath,
-            companyLogoUrl,
-            billingTimeZone,
-          });
-        }
-      } catch (err) {
-        console.warn("Invoice email failed:", err?.message || err);
-      }
-    })();
-  })
-);
-
-app.post(
-  "/api/invoices/:id/email",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, to, message } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-
-    const cid = Number(companyId);
-    const invoiceId = Number(id);
-    if (!Number.isFinite(invoiceId) || invoiceId <= 0) return res.status(400).json({ error: "Invalid invoice id." });
-
-    const detail = await getInvoice({ companyId: cid, id: invoiceId });
-    if (!detail) return res.status(404).json({ error: "Invoice not found." });
-
-    const fallbackRecipients = getInvoiceRecipientEmails(detail?.invoice);
-    const recipient = String(to || "").trim() || fallbackRecipients.join(", ");
-    if (!recipient) return res.status(400).json({ error: "Recipient email is required." });
-
-    const emailSettings = await getCompanyEmailSettings(cid);
-    if (emailSettings.email_enabled !== true) return res.status(400).json({ error: "Email is not enabled for this company." });
-
-    const companySettings = await getCompanySettings(cid);
-    const companyLogoUrl = companySettings?.logo_url || null;
-    const billingTimeZone = companySettings?.billing_timezone || null;
-    const rawLogoPath = companySettings?.logo_url ? resolveCompanyUploadPath({ companyId: cid, url: companySettings.logo_url }) : null;
-    const logoPath = rawLogoPath ? await resolvePdfCompatibleImagePath(rawLogoPath) : null;
-    const profile = await getCompanyProfile(cid).catch(() => null);
-
-    const result = await sendInvoiceEmailWithVersion({
-      companyId: cid,
-      invoiceId,
-      detail,
-      to: recipient,
-      message,
-      emailSettings,
-      companyProfile: profile || null,
-      companyLogoPath: logoPath,
-      companyLogoUrl,
-      billingTimeZone,
-    });
-    if (!result.ok) return res.status(400).json({ error: result.error || "Unable to send invoice email." });
-    res.json({ ok: true, messageId: result.messageId || null });
-  })
-);
-
-app.get(
-  "/api/invoices",
-  asyncHandler(async (req, res) => {
-    const { companyId, customerId, rentalOrderId, status } = req.query || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const invoices = await listInvoices(Number(companyId), { customerId, rentalOrderId, status });
-    res.json({ invoices });
-  })
-);
-
-app.post(
-  "/api/invoices/manual",
-  asyncHandler(async (req, res) => {
-    const {
-      companyId,
-      customerId,
-      invoiceDate,
-      dueDate,
-      servicePeriodStart,
-      servicePeriodEnd,
-      generalNotes,
-      notes,
-      lineItems,
-    } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    if (!customerId) return res.status(400).json({ error: "customerId is required." });
-    if (!Array.isArray(lineItems) || !lineItems.length) {
-      return res.status(400).json({ error: "At least one line item is required." });
-    }
-
-    const invoice = await createManualInvoice({
-      companyId: Number(companyId),
-      customerId: Number(customerId),
-      invoiceDate: invoiceDate || null,
-      dueDate: dueDate || null,
-      servicePeriodStart: servicePeriodStart || null,
-      servicePeriodEnd: servicePeriodEnd || null,
-      generalNotes: generalNotes || null,
-      notes: notes || null,
-      lineItems,
-    });
-    res.status(201).json(invoice);
-  })
-);
-
-app.get(
-  "/api/invoices/:id",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId } = req.query || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const invoice = await getInvoice({ companyId: Number(companyId), id: Number(id) });
-    if (!invoice) return res.status(404).json({ error: "Invoice not found." });
-    res.json(invoice);
-  })
-);
-
-app.get(
-  "/api/invoices/:id/pdf",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId } = req.query || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const detail = await getInvoice({ companyId: Number(companyId), id: Number(id) });
-    if (!detail) return res.status(404).json({ error: "Invoice not found." });
-    const status = String(detail?.invoice?.status || "").trim().toLowerCase();
-    if (status === "void") {
-      const version = await getLatestInvoiceVersion({
-        companyId: Number(companyId),
-        invoiceId: Number(detail.invoice?.id || id),
-      });
-      if (version?.pdfBytes) {
-        res.setHeader("Content-Type", "application/pdf");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${version.pdfFilename || `invoice-${detail.invoice?.invoiceNumber || id}.pdf`}"`
-        );
-        res.send(version.pdfBytes);
-        return;
-      }
-    } else if (["sent", "paid"].includes(status)) {
-      const version = await getLatestSentInvoiceVersion({
-        companyId: Number(companyId),
-        invoiceId: Number(detail.invoice?.id || id),
-      });
-      if (version?.pdfBytes) {
-        res.setHeader("Content-Type", "application/pdf");
-        res.setHeader(
-          "Content-Disposition",
-          `attachment; filename="${version.pdfFilename || `invoice-${detail.invoice?.invoiceNumber || id}.pdf`}"`
-        );
-        res.send(version.pdfBytes);
-        return;
-      }
-    }
-    const settings = await getCompanySettings(companyId);
-    const billingTimeZone = settings?.billing_timezone || null;
-    const rawLogoPath = settings?.logo_url ? resolveCompanyUploadPath({ companyId, url: settings.logo_url }) : null;
-    const logoPath = rawLogoPath ? await resolvePdfCompatibleImagePath(rawLogoPath) : null;
-    const companyProfile = await getCompanyProfile(Number(companyId));
-    streamInvoicePdf(res, { ...detail, companyLogoPath: logoPath, companyProfile, timeZone: billingTimeZone });
-  })
-);
-
-app.put(
-  "/api/invoices/:id/line-items",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, lineItems } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const detail = await getInvoice({ companyId: Number(companyId), id: Number(id) });
-    if (!detail) return res.status(404).json({ error: "Invoice not found." });
-    const status = String(detail?.invoice?.status || "").trim().toLowerCase();
-    if (status !== "draft") {
-      return res.status(409).json({ error: "Invoice line items are locked once sent, paid, or void." });
-    }
-    const updated = await replaceInvoiceLineItems({
-      companyId: Number(companyId),
-      invoiceId: Number(id),
-      lineItems,
-    });
-    if (!updated) return res.status(404).json({ error: "Invoice not found." });
-    res.json(updated);
-  })
-);
-
-app.post(
-  "/api/invoices/:id/payments",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, amount, paidAt, method, reference, note } = req.body || {};
-    if (!companyId || amount === null || amount === undefined) {
-      return res.status(400).json({ error: "companyId and amount are required." });
-    }
-    const updated = await addInvoicePayment({
-      companyId: Number(companyId),
-      invoiceId: Number(id),
-      amount,
-      paidAt: paidAt || null,
-      method: method || null,
-      reference: reference || null,
-      note: note || null,
-    });
-    if (!updated) return res.status(404).json({ error: "Invoice not found." });
-    const settings = await getCompanySettings(Number(companyId));
-    if (settings?.auto_apply_customer_credit === true) {
-      const customerId = updated?.invoice?.customerId;
-      if (customerId) {
-        await applyCustomerCreditToOldestInvoices({
-          companyId: Number(companyId),
-          customerId: Number(customerId),
-          excludeInvoiceId: Number(id),
-        });
-      }
-    }
-    res.status(201).json(updated);
-  })
-);
-
-app.post(
-  "/api/payments/:id/reverse",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, reason, reversedAt } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const result = await reverseInvoicePayment({
-      companyId: Number(companyId),
-      paymentId: Number(id),
-      reason: reason || null,
-      reversedAt: reversedAt || null,
-    });
-    if (!result) return res.status(404).json({ error: "Payment not found." });
-    res.status(201).json(result);
-  })
-);
-
-app.post(
-  "/api/invoices/:id/apply-credit",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, amount } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const applied = await applyCustomerCreditToInvoice({
-      companyId: Number(companyId),
-      invoiceId: Number(id),
-      amount: amount ?? null,
-    });
-    if (!applied) return res.status(404).json({ error: "Invoice not found." });
-    const updated = await getInvoice({ companyId: Number(companyId), id: Number(id) });
-    if (!updated) return res.status(404).json({ error: "Invoice not found." });
-    res.status(201).json({ appliedAmount: applied.appliedAmount || 0, ...updated });
-  })
-);
-
-app.post(
-  "/api/invoices/:id/apply-deposit",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, amount } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const applied = await applyCustomerDepositToInvoice({
-      companyId: Number(companyId),
-      invoiceId: Number(id),
-      amount: amount ?? null,
-    });
-    if (!applied) return res.status(404).json({ error: "Invoice not found." });
-    const updated = await getInvoice({ companyId: Number(companyId), id: Number(id) });
-    if (!updated) return res.status(404).json({ error: "Invoice not found." });
-    res.status(201).json({ appliedAmount: applied.appliedAmount || 0, ...updated });
-  })
-);
-
-app.post(
-  "/api/invoices/:id/corrections",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, documentType } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-
-    const invoiceId = Number(id);
-    if (!Number.isFinite(invoiceId) || invoiceId <= 0) return res.status(400).json({ error: "Invalid invoice id." });
-
-    const docType = normalizeInvoiceDocumentType(documentType);
-    if (docType === "invoice") {
-      return res.status(400).json({ error: "documentType must be credit_memo or debit_memo." });
-    }
-
-    const detail = await getInvoice({ companyId: Number(companyId), id: invoiceId });
-    if (!detail) return res.status(404).json({ error: "Invoice not found." });
-
-    const baseType = normalizeInvoiceDocumentType(detail?.invoice?.documentType);
-    if (baseType !== "invoice") {
-      return res.status(400).json({ error: "Corrections can only be created from invoices." });
-    }
-
-    const status = String(detail?.invoice?.status || "").trim().toLowerCase();
-    if (status === "draft") {
-      return res.status(409).json({ error: "Draft invoices can be edited directly." });
-    }
-    if (status === "void") {
-      return res.status(409).json({ error: "Voided invoices cannot be corrected." });
-    }
-    if (!["sent", "paid"].includes(status)) {
-      return res.status(409).json({ error: "Invoice must be sent or paid before creating a correction." });
-    }
-
-    const created = await createInvoiceCorrection({
-      companyId: Number(companyId),
-      invoiceId,
-      documentType: docType,
-    });
-    if (!created) return res.status(404).json({ error: "Invoice not found." });
-    res.status(201).json({ invoiceId: created.id, invoiceNumber: created.invoiceNumber });
-  })
-);
-
-app.post(
-  "/api/invoices/:id/void",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, reason, voidedAt } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-
-    const invoiceId = Number(id);
-    if (!Number.isFinite(invoiceId) || invoiceId <= 0) return res.status(400).json({ error: "Invalid invoice id." });
-
-    const reasonText = String(reason || "").trim();
-    if (!reasonText) return res.status(400).json({ error: "Void reason is required." });
-
-    const voidedBy = req.auth?.user?.email || req.auth?.user?.name || null;
-
-    let result;
-    try {
-      result = await voidInvoice({
-        companyId: Number(companyId),
-        invoiceId,
-        reason: reasonText,
-        voidedBy,
-        voidedAt: voidedAt || null,
-      });
-    } catch (err) {
-      if (err?.code === "PAYMENTS_EXIST") {
-        return res.status(409).json({ error: err.message || "Invoice has payments applied." });
-      }
-      throw err;
-    }
-
-    if (!result) return res.status(404).json({ error: "Invoice not found." });
-    if (result.alreadyVoid) return res.status(409).json({ error: "Invoice is already void." });
-
-    const detail = await getInvoice({ companyId: Number(companyId), id: invoiceId });
-    if (!detail) return res.status(404).json({ error: "Invoice not found." });
-
-    try {
-      const settings = await getCompanySettings(Number(companyId));
-      const billingTimeZone = settings?.billing_timezone || null;
-      const companyLogoUrl = settings?.logo_url || null;
-      const rawLogoPath = settings?.logo_url ? resolveCompanyUploadPath({ companyId: Number(companyId), url: settings.logo_url }) : null;
-      const logoPath = rawLogoPath ? await resolvePdfCompatibleImagePath(rawLogoPath) : null;
-      const companyProfile = await getCompanyProfile(Number(companyId));
-      await createInvoiceVersionSnapshot({
-        companyId: Number(companyId),
-        invoiceId,
-        detail,
-        companyProfile,
-        companyLogoPath: logoPath,
-        companyLogoUrl,
-        billingTimeZone,
-      });
-    } catch (err) {
-      console.error("Failed to create void invoice version:", err?.message || err);
-    }
-
-    res.json(detail);
-  })
-);
-
-app.delete(
-  "/api/invoices/:id",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const deleted = await deleteInvoice({ companyId: Number(companyId), id: Number(id) });
-    if (!deleted) return res.status(404).json({ error: "Invoice not found." });
-    res.status(204).end();
-  })
-);
-
-app.get(
-  "/api/ar/summary",
-  asyncHandler(async (req, res) => {
-    const { companyId } = req.query || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const summary = await getAccountsReceivableSummary(Number(companyId));
-    res.json({ summary });
   })
 );
 
@@ -5058,53 +4131,11 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Internal server error" });
 });
 
-let lastMonthlyBillingKey = null;
-
-function resolveMonthlyBillingNow() {
-  const raw = process.env.MONTHLY_BILLING_TEST_DATE;
-  if (!raw) return null;
-  const d = new Date(raw);
-  if (Number.isNaN(d.getTime())) return null;
-  return d;
-}
-
-async function runMonthlyBillingIfDue() {
-  const overrideNow = resolveMonthlyBillingNow();
-  const now = overrideNow || new Date();
-  if (Number.isNaN(now.getTime())) return;
-  if (!overrideNow && now.getUTCDate() !== 1) return;
-  const key = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  if (lastMonthlyBillingKey === key) return;
-  lastMonthlyBillingKey = key;
-
-  const companies = await listCompaniesWithMonthlyAutoRun();
-  for (const companyId of companies) {
-    try {
-      const result = await generateMonthlyInvoicesForCompany({ companyId, runDate: now.toISOString() });
-      const created = Array.isArray(result?.created) ? result.created : [];
-      if (created.length) {
-        await emailInvoicesIfConfigured({ companyId, invoices: created }).catch(() => null);
-      }
-    } catch (err) {
-      console.warn("Monthly invoice run failed:", err?.message || err);
-    }
-  }
-}
-
 async function start() {
   await ensureTables();
   app.listen(PORT, () => {
     console.log(`API running on http://localhost:${PORT}`);
   });
-
-  runMonthlyBillingIfDue().catch((err) => {
-    console.warn("Monthly invoice run failed:", err?.message || err);
-  });
-  setInterval(() => {
-    runMonthlyBillingIfDue().catch((err) => {
-      console.warn("Monthly invoice run failed:", err?.message || err);
-    });
-  }, 6 * 60 * 60 * 1000);
 }
 
 start().catch((err) => {

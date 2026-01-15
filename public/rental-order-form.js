@@ -35,9 +35,6 @@ const statusPill = document.getElementById("status-pill");
 const orderNumberPill = document.getElementById("order-number-pill");
 const downloadOrderPdfBtn = document.getElementById("download-order-pdf");
 const openHistoryBtn = document.getElementById("open-history");
-const openInvoicesBtn = document.getElementById("open-invoices");
-const rentalOrderInvoicesTable = document.getElementById("rental-order-invoices-table");
-const rentalOrderInvoicesMeta = document.getElementById("rental-order-invoices-meta");
 
 function setCompanyMeta(message) {
   if (!companyMeta) return;
@@ -231,8 +228,6 @@ let billingRoundingMode = "ceil";
 let billingRoundingGranularity = "unit";
 let monthlyProrationMethod = "hours";
 let billingTimeZone = "UTC";
-let invoiceAutoRun = "off";
-let invoiceAutoMode = "auto";
 let autoWorkOrderOnReturn = false;
 let rentalInfoFields = null;
 
@@ -281,7 +276,6 @@ function applyRentalInfoConfig(config) {
     el.style.display = enabled ? "" : "none";
   });
 }
-let rentalOrderInvoicesCache = [];
 let sideAddressPicker = {
   mode: "leaflet",
   mapStyle: "street",
@@ -1313,8 +1307,6 @@ async function loadCompanySettings() {
   billingRoundingGranularity = "unit";
   monthlyProrationMethod = "hours";
   billingTimeZone = "UTC";
-  invoiceAutoRun = "off";
-  invoiceAutoMode = "auto";
   autoWorkOrderOnReturn = false;
   applyRentalInfoConfig(null);
   if (!activeCompanyId) return;
@@ -1331,12 +1323,6 @@ async function loadCompanySettings() {
   }
   if (res.ok && data.settings?.billing_timezone) {
     billingTimeZone = String(data.settings.billing_timezone);
-  }
-  if (res.ok && data.settings?.invoice_auto_run) {
-    invoiceAutoRun = String(data.settings.invoice_auto_run);
-  }
-  if (res.ok && data.settings?.invoice_auto_mode) {
-    invoiceAutoMode = String(data.settings.invoice_auto_mode);
   }
   if (res.ok && data.settings?.auto_work_order_on_return !== undefined) {
     autoWorkOrderOnReturn = data.settings.auto_work_order_on_return === true;
@@ -1724,28 +1710,6 @@ function fmtDate(value) {
   return d.toISOString().slice(0, 10);
 }
 
-function billingReasonLabel(reason) {
-  const v = String(reason || "").trim().toLowerCase();
-  switch (v) {
-    case "monthly":
-      return "Monthly billing";
-    case "monthly_arrears":
-      return "Monthly billing (arrears)";
-    case "contract_final":
-      return "Final invoice";
-    case "pickup_proration":
-      return "Pickup proration";
-    case "pause_credit":
-      return "Pause credit";
-    case "return_credit":
-      return "Return credit";
-    case "resume_charge":
-      return "Resume charge";
-    default:
-      return "";
-  }
-}
-
 function draftKey() {
   return activeCompanyId ? `ro-draft-${activeCompanyId}` : "ro-draft";
 }
@@ -1767,9 +1731,6 @@ function updateModeLabels() {
 
   if (openHistoryBtn) {
     openHistoryBtn.style.display = editingOrderId ? "inline-flex" : "none";
-  }
-  if (openInvoicesBtn) {
-    openInvoicesBtn.style.display = editingOrderId ? "inline-flex" : "none";
   }
   if (editingOrderId) {
     const label = primary ? `Edit ${primary}` : `Edit #${editingOrderId}`;
@@ -1947,7 +1908,7 @@ function ensureAtLeastOneLineItem() {
 
 function ensureAtLeastOneFeeRow() {
   if (!draft.fees || draft.fees.length === 0) {
-    draft.fees = [{ name: "", amount: "", invoiced: false }];
+    draft.fees = [{ name: "", amount: "" }];
   }
 }
 
@@ -2126,16 +2087,12 @@ function updateOrderTotals() {
 function renderFees() {
   feesEl.innerHTML = "";
   (draft.fees || []).forEach((fee, index) => {
-    const statusBadge = fee.invoiced
-      ? '<span class="badge new fee-status">Invoiced &#10003;</span>'
-      : '<span class="badge normal fee-status">Not invoiced</span>';
     const row = document.createElement("div");
     row.className = "two-col";
     row.innerHTML = `
       <label class="fee-label">
         <div class="fee-label-row">
           <span>Fee name</span>
-          ${statusBadge}
         </div>
         <input data-fee-name="${index}" value="${fee.name || ""}" />
       </label>
@@ -2694,12 +2651,10 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn }) {
       if (statusSelect && isRoWorkflowStatus(draft.status)) statusSelect.value = normalizeOrderStatus(draft.status);
       renderStatusControls();
     }
-    if (Array.isArray(data.invoices) && data.invoices.length) {
-      setCompanyMeta(`All items returned - invoice created (${data.invoices.map((x) => x.invoiceNumber || `#${x.id}`).join(", ")}).`);
-    } else if (data.invoiceError) {
-      setCompanyMeta(`All items returned - invoice generation failed: ${data.invoiceError}`);
-    } else if (normalizeOrderStatus(data.orderStatus) === "received") {
+    if (normalizeOrderStatus(data.orderStatus) === "received") {
       setCompanyMeta("All items returned - order received.");
+    } else {
+      setCompanyMeta("All items returned.");
     }
     if (targetReturn) {
       ensureReturnInspectionWorkOrders(li);
@@ -3270,7 +3225,6 @@ async function loadOrder() {
     id: f.id,
     name: f.name,
     amount: f.amount,
-    invoiced: !!f.invoiced,
   }));
   draft.lineItems = (data.lineItems || []).map((li) => ({
     tempId: uuid(),
@@ -3317,33 +3271,6 @@ async function loadOrder() {
     await refreshAvailabilityForLineItem(li).catch(() => {});
   }
   renderLineItems();
-  await maybeAutoGenerateInvoicesForOrder();
-}
-
-let autoInvoiceAttempted = false;
-async function maybeAutoGenerateInvoicesForOrder() {
-  if (!activeCompanyId || !editingOrderId) return;
-  if (autoInvoiceAttempted) return;
-  autoInvoiceAttempted = true;
-  const status = normalizeOrderStatus(draft.status);
-  if (!["ordered", "closed", "received"].includes(status)) return;
-
-  const run = String(invoiceAutoRun || "off").toLowerCase();
-  if (run !== "monthly") return;
-
-  try {
-    const res = await fetch(`/api/rental-orders/${encodeURIComponent(String(editingOrderId))}/invoices/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId: activeCompanyId, mode: "monthly" }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) return;
-    const created = Array.isArray(data?.created) ? data.created : [];
-    if (created.length) {
-      setCompanyMeta(`Auto-invoiced ${created.length} invoice${created.length === 1 ? "" : "s"}.`);
-    }
-  } catch (_) {}
 }
 
 function openSalesModal() {
@@ -3361,127 +3288,6 @@ function openFeesModal() {
 
 function closeFeesModal() {
   feesModal?.classList.remove("show");
-}
-
-function setRentalOrderInvoicesMeta(message) {
-  if (!rentalOrderInvoicesMeta) return;
-  rentalOrderInvoicesMeta.textContent = String(message || "");
-}
-
-function isInvoiceOverdue(inv) {
-  const balance = Number(inv?.balance);
-  if (!Number.isFinite(balance) || balance <= 0) return false;
-  const due = inv?.dueDate ? new Date(inv.dueDate) : null;
-  if (!due || Number.isNaN(due.getTime())) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  due.setHours(0, 0, 0, 0);
-  return due < today;
-}
-
-function renderRentalOrderInvoices(rows) {
-  if (!rentalOrderInvoicesTable) return;
-  const list = Array.isArray(rows) ? rows : [];
-  if (!list.length) {
-    rentalOrderInvoicesTable.innerHTML = `
-      <div class="table-row table-header">
-        <span>Invoice #</span>
-        <span>Amount</span>
-        <span>Billing</span>
-        <span>Overdue</span>
-        <span>Email sent</span>
-      </div>
-      <div class="table-row">
-        <span class="hint" style="grid-column: 1 / -1;">No invoices yet.</span>
-      </div>`;
-    return;
-  }
-
-  const body = list
-    .map((inv) => {
-      const number = inv.invoiceNumber || `#${inv.id}`;
-      const amount = fmtMoney(inv.total || 0);
-      const reason = billingReasonLabel(inv.billingReason);
-      const servicePeriodStart = inv.servicePeriodStart || inv.periodStart;
-      const servicePeriodEnd = inv.servicePeriodEnd || inv.periodEnd;
-      const period = servicePeriodStart && servicePeriodEnd ? `${fmtDate(servicePeriodStart)} to ${fmtDate(servicePeriodEnd)}` : "--";
-      const billingText = reason ? `${reason} \u2022 ${period}` : period;
-      const overdue = isInvoiceOverdue(inv);
-      const emailSent = inv.emailSent === true || Boolean(inv.emailSentAt);
-      return `
-        <div class="table-row" data-id="${escapeHtml(String(inv.id))}">
-          <span>${escapeHtml(number)}</span>
-          <span>${escapeHtml(amount)}</span>
-          <span title="${escapeHtml(billingText)}">${escapeHtml(billingText)}</span>
-          <span class="status-cell" title="${overdue ? "Overdue" : "Not overdue"}">
-            ${overdue ? '<span class="status-dot danger"></span>' : '<span class="status-placeholder">--</span>'}
-          </span>
-          <span class="status-cell" title="${emailSent ? "Email sent" : "Not sent"}">
-            <span class="status-check ${emailSent ? "ok" : "muted"}">${emailSent ? "&#10003;" : "--"}</span>
-          </span>
-        </div>`;
-    })
-    .join("");
-
-  rentalOrderInvoicesTable.innerHTML = `
-    <div class="table-row table-header">
-      <span>Invoice #</span>
-      <span>Amount</span>
-      <span>Billing</span>
-      <span>Overdue</span>
-      <span>Email sent</span>
-    </div>
-    ${body}`;
-}
-
-async function loadRentalOrderInvoices() {
-  if (!activeCompanyId || !editingOrderId) return;
-  setRentalOrderInvoicesMeta("Loading invoices...");
-  if (rentalOrderInvoicesTable) {
-    rentalOrderInvoicesTable.innerHTML = `
-      <div class="table-row table-header">
-        <span>Invoice #</span>
-        <span>Amount</span>
-        <span>Billing</span>
-        <span>Overdue</span>
-        <span>Email sent</span>
-      </div>
-      <div class="table-row">
-        <span class="hint" style="grid-column: 1 / -1;">Loading...</span>
-      </div>`;
-  }
-
-  const qs = new URLSearchParams({
-    companyId: String(activeCompanyId),
-    rentalOrderId: String(editingOrderId),
-  });
-  const res = await fetch(`/api/invoices?${qs.toString()}`);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = data.error || "Unable to load invoices.";
-    setRentalOrderInvoicesMeta(msg);
-    rentalOrderInvoicesCache = [];
-    renderRentalOrderInvoices([]);
-    return;
-  }
-  rentalOrderInvoicesCache = Array.isArray(data.invoices) ? data.invoices : [];
-  setRentalOrderInvoicesMeta(rentalOrderInvoicesCache.length ? "" : "No invoices for this rental order yet.");
-  renderRentalOrderInvoices(rentalOrderInvoicesCache);
-}
-
-function openRentalOrderInvoicesDrawer() {
-  if (!activeCompanyId) {
-    setCompanyMeta("Set company first.");
-    return;
-  }
-  if (!editingOrderId) {
-    setCompanyMeta("Save the document first.");
-    return;
-  }
-  openExtrasDrawer("invoices");
-  loadRentalOrderInvoices().catch((err) => {
-    setRentalOrderInvoicesMeta(err?.message ? String(err.message) : String(err));
-  });
 }
 
 customerSelect.addEventListener("change", (e) => {
@@ -3809,7 +3615,7 @@ feesEl.addEventListener("click", (e) => {
   if (insertIdx !== null) {
     e.preventDefault();
     const idx = Number(insertIdx);
-    const next = { name: "", amount: "", invoiced: false };
+    const next = { name: "", amount: "" };
     if (Number.isFinite(idx) && idx >= 0) draft.fees.splice(idx + 1, 0, next);
     else draft.fees.push(next);
     renderFees();
@@ -4117,25 +3923,11 @@ openHistoryBtn?.addEventListener("click", (e) => {
   window.location.href = `rental-order-history.html?id=${encodeURIComponent(String(editingOrderId))}${from}`;
 });
 
-openInvoicesBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  openRentalOrderInvoicesDrawer();
-});
-
-rentalOrderInvoicesTable?.addEventListener("click", (e) => {
-  const row = e.target?.closest?.(".table-row");
-  if (!row || row.classList.contains("table-header")) return;
-  const id = row.dataset.id;
-  if (!id) return;
-  const returnTo = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
-  window.location.href = `invoice.html?id=${encodeURIComponent(id)}&returnTo=${returnTo}`;
-});
-
 let extrasDrawerOpen = false;
 let extrasActiveTab = "terms";
 
 function setExtrasTab(tab) {
-  const next = ["terms", "notes", "attachments", "invoices"].includes(String(tab)) ? String(tab) : "terms";
+  const next = ["terms", "notes", "attachments"].includes(String(tab)) ? String(tab) : "terms";
   extrasActiveTab = next;
   extrasTabButtons.forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-tab") === next);
@@ -4201,16 +3993,6 @@ extrasTabButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     const tab = btn.getAttribute("data-tab");
     setExtrasTab(tab);
-    if (tab === "invoices") {
-      if (activeCompanyId && editingOrderId) {
-        loadRentalOrderInvoices().catch((err) => {
-          setRentalOrderInvoicesMeta(err?.message ? String(err.message) : String(err));
-        });
-      } else {
-        setRentalOrderInvoicesMeta(editingOrderId ? "" : "Save the document first.");
-        renderRentalOrderInvoices([]);
-      }
-    }
   });
 });
 
@@ -4914,9 +4696,6 @@ function init() {
 
     if (openHistoryBtn) {
       openHistoryBtn.style.display = editingOrderId ? "inline-flex" : "none";
-    }
-    if (openInvoicesBtn) {
-      openInvoicesBtn.style.display = editingOrderId ? "inline-flex" : "none";
     }
     syncExtrasDisabledState();
 

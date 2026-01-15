@@ -619,20 +619,9 @@ textarea:focus {
 
 .contact-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) auto auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
   gap: 14px;
   align-items: end;
-}
-
-.invoice-toggle {
-  align-self: end;
-  margin-top: 0;
-  gap: 6px;
-}
-
-.invoice-toggle input[type="checkbox"] {
-  width: auto;
-  margin: 0;
 }
 
 .contact-row button {
@@ -3026,21 +3015,11 @@ a.ghost {
   grid-template-columns: 1.2fr 1.8fr 1fr 2fr 0.6fr;
 }
 
-#rental-order-invoices-table .table-row {
-  grid-template-columns: 1.1fr 0.9fr 1.6fr 0.6fr 0.7fr;
-}
-
-#invoices-table .table-row {
-  grid-template-columns: 1fr 0.9fr 1.2fr 1.8fr 0.9fr 0.9fr 0.9fr 0.9fr 0.8fr 0.8fr 0.6fr;
-}
 
 #dispatch-table .table-row {
   grid-template-columns: minmax(200px, 1.1fr) minmax(180px, 1.1fr) minmax(240px, 1.6fr);
 }
 
-#rental-order-invoices-table .table-row:not(.table-header) {
-  cursor: pointer;
-}
 
 .status-cell {
   display: inline-flex;
@@ -4345,11 +4324,6 @@ body.drawer-open {
 
   .contact-row {
     grid-template-columns: 1fr;
-  }
-
-  .invoice-toggle {
-    grid-column: 1;
-    grid-row: auto;
   }
 
   .contact-row button {
