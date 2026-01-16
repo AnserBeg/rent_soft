@@ -64,6 +64,7 @@ function renderTable(rows) {
     <span>Date</span>
     <span>Total</span>
     <span>Balance</span>
+    <span>Detail</span>
   `;
   invoicesTable.appendChild(header);
 
@@ -82,6 +83,10 @@ function renderTable(rows) {
       doc.rental_order_id
         ? `<a class="ghost small" href="rental-order-form.html?id=${encodeURIComponent(String(doc.rental_order_id))}">${roLabel}</a>`
         : `<span class="hint">${roLabel}</span>`;
+    const detailLink =
+      doc.id
+        ? `<a class="ghost small" href="invoice-detail.html?id=${encodeURIComponent(String(doc.id))}&companyId=${encodeURIComponent(String(activeCompanyId || ""))}">View</a>`
+        : `<span class="hint">--</span>`;
     row.innerHTML = `
       <span>${typeLabel}</span>
       <span>${doc.doc_number || doc.qbo_entity_id || "--"}</span>
@@ -90,6 +95,7 @@ function renderTable(rows) {
       <span>${fmtDate(doc.txn_date)}</span>
       <span>${fmtMoney(doc.total_amount)}</span>
       <span>${fmtMoney(doc.balance)}</span>
+      <span>${detailLink}</span>
     `;
     invoicesTable.appendChild(row);
   });

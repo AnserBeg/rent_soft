@@ -11223,6 +11223,25 @@ async function listQboDocuments({ companyId, assigned = null, search = null, lim
   return res.rows || [];
 }
 
+async function getQboDocument({ companyId, id } = {}) {
+  const cid = Number(companyId);
+  const docId = Number(id);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(docId) || docId <= 0) throw new Error("id is required.");
+  const res = await pool.query(
+    `
+    SELECT d.*,
+           ro.ro_number
+      FROM qbo_documents d
+ LEFT JOIN rental_orders ro ON ro.id = d.rental_order_id
+     WHERE d.company_id = $1 AND d.id = $2
+     LIMIT 1
+    `,
+    [cid, docId]
+  );
+  return res.rows?.[0] || null;
+}
+
 async function listRentalOrdersWithOutItems({ companyId } = {}) {
   const cid = Number(companyId);
   if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
@@ -11570,6 +11589,7 @@ module.exports = {
   listQboDocumentsForRentalOrder,
   listQboDocumentsUnassigned,
   listQboDocuments,
+  getQboDocument,
   listRentalOrdersWithOutItems,
   countOutItemsForOrder,
   getRentalOrderQboContext,

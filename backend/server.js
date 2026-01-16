@@ -144,6 +144,7 @@ const {
   listQboDocumentsForRentalOrder,
   listQboDocumentsUnassigned,
   listQboDocuments,
+  getQboDocument,
   listRentalOrdersWithOutItems,
   countOutItemsForOrder,
 } = require("./db");
@@ -3052,6 +3053,20 @@ app.get(
       offset,
     });
     res.json({ documents: docs });
+  })
+);
+
+app.get(
+  "/api/qbo/documents/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const docId = Number(id);
+    if (!Number.isFinite(docId) || docId <= 0) return res.status(400).json({ error: "id is required." });
+    const document = await getQboDocument({ companyId: Number(companyId), id: docId });
+    if (!document) return res.status(404).json({ error: "Document not found." });
+    res.json({ document });
   })
 );
 
