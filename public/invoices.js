@@ -10,6 +10,8 @@ const qboSyncBtn = document.getElementById("qbo-sync");
 const refreshBtn = document.getElementById("refresh");
 const assignedFilter = document.getElementById("assigned-filter");
 const searchInput = document.getElementById("search");
+const syncSinceInput = document.getElementById("sync-since");
+const syncUntilInput = document.getElementById("sync-until");
 const invoicesTable = document.getElementById("invoices-table");
 const invoicesHint = document.getElementById("invoices-hint");
 
@@ -129,10 +131,15 @@ async function syncQbo() {
   if (!activeCompanyId) return;
   setQboHint("Syncing QBO...");
   try {
+    const since = String(syncSinceInput?.value || "").trim();
+    const until = String(syncUntilInput?.value || "").trim();
+    const payload = { companyId: activeCompanyId, mode: "query" };
+    if (since) payload.since = since;
+    if (until) payload.until = until;
     const res = await fetch("/api/qbo/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId: activeCompanyId, mode: "query" }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to sync QBO");

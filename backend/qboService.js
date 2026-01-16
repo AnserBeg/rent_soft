@@ -419,23 +419,27 @@ async function handleWebhookEvent({ companyId, entityType, entityId, operation }
   return { ok: true, document: doc || null };
 }
 
-function parseSinceDate(value) {
+function parseDate(value) {
   if (!value) return null;
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return null;
   return d;
 }
 
-async function runQuerySync({ companyId, entities, sinceDate }) {
+async function runQuerySync({ companyId, entities, sinceDate, untilDate }) {
   const entityList = Array.isArray(entities) && entities.length ? entities : ["Invoice", "CreditMemo"];
   const results = [];
   const since = sinceDate || new Date();
+  const until = untilDate || null;
   const sinceIso = since.toISOString().slice(0, 10);
+  const untilIso = until ? until.toISOString().slice(0, 10) : null;
   for (const name of entityList) {
     let startPosition = 1;
     const maxResults = 1000;
     while (true) {
-      const query = `select * from ${name} where TxnDate >= '${sinceIso}' STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
+      const filters = [`TxnDate >= '${sinceIso}'`];
+      if (untilIso) filters.push(`TxnDate <= '${untilIso}'`);
+      const query = `select * from ${name} where ${filters.join(" AND ")} STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
       const data = await qboApiRequest({
         companyId,
         method: "GET",
@@ -477,7 +481,7 @@ async function runQuerySync({ companyId, entities, sinceDate }) {
   return results;
 }
 
-async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], since = null, mode = null }) {
+async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], since = null, until = null, mode = null }) {
   const entityList = Array.isArray(entities) && entities.length ? entities : ["Invoice", "CreditMemo"];
   const state = await getQboSyncState({ companyId, entityName: "CDC" });
   const defaultSince = () => {
@@ -485,7 +489,13 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], sin
     d.setUTCMonth(d.getUTCMonth() - 12);
     return d;
   };
-  const sinceDate = parseSinceDate(since) || (state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : defaultSince());
+  let sinceDate = parseDate(since) || (state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : defaultSince());
+  let untilDate = parseDate(until) || null;
+  if (untilDate && sinceDate && untilDate < sinceDate) {
+    const tmp = sinceDate;
+    sinceDate = untilDate;
+    untilDate = tmp;
+  }
   const out = [];
   let cdcFailed = false;
 
@@ -532,7 +542,7 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], sin
   }
 
   if (String(mode || "").toLowerCase() === "query" || cdcFailed || out.length === 0) {
-    const queried = await runQuerySync({ companyId, entities: entityList, sinceDate });
+    const queried = await runQuerySync({ companyId, entities: entityList, sinceDate, untilDate });
     out.push(...queried);
   }
 
