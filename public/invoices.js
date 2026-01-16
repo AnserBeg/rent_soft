@@ -132,7 +132,7 @@ async function syncQbo() {
     const res = await fetch("/api/qbo/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId: activeCompanyId }),
+      body: JSON.stringify({ companyId: activeCompanyId, mode: "query" }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to sync QBO");

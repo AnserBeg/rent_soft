@@ -419,7 +419,65 @@ async function handleWebhookEvent({ companyId, entityType, entityId, operation }
   return { ok: true, document: doc || null };
 }
 
-async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"] }) {
+function parseSinceDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
+
+async function runQuerySync({ companyId, entities, sinceDate }) {
+  const entityList = Array.isArray(entities) && entities.length ? entities : ["Invoice", "CreditMemo"];
+  const results = [];
+  const since = sinceDate || new Date();
+  const sinceIso = since.toISOString().slice(0, 10);
+  for (const name of entityList) {
+    let startPosition = 1;
+    const maxResults = 1000;
+    while (true) {
+      const query = `select * from ${name} where TxnDate >= '${sinceIso}' STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
+      const data = await qboApiRequest({
+        companyId,
+        method: "GET",
+        path: `query?query=${encodeURIComponent(query)}`,
+      });
+      const response = data?.QueryResponse || {};
+      const docs = Array.isArray(response[name]) ? response[name] : [];
+      for (const doc of docs) {
+        const entityId = doc?.Id;
+        if (!entityId) continue;
+        const roNumber = extractRoNumberFromDoc(doc);
+        const rentalOrderId = roNumber ? await findRentalOrderIdByRoNumber({ companyId, roNumber }) : null;
+        const stored = await upsertQboDocument({
+          companyId,
+          rentalOrderId,
+          entityType: name,
+          entityId,
+          docNumber: doc?.DocNumber || null,
+          billingPeriod: extractBillingPeriod(doc),
+          txnDate: doc?.TxnDate || null,
+          dueDate: doc?.DueDate || null,
+          totalAmount: doc?.TotalAmt,
+          balance: doc?.Balance,
+          currencyCode: doc?.CurrencyRef?.value || null,
+          status: deriveStatus(doc, name),
+          customerRef: doc?.CustomerRef?.value || null,
+          source: "qbo",
+          isVoided: false,
+          isDeleted: false,
+          lastUpdatedAt: doc?.MetaData?.LastUpdatedTime || null,
+          raw: doc,
+        });
+        results.push(stored);
+      }
+      if (docs.length < maxResults) break;
+      startPosition += maxResults;
+    }
+  }
+  return results;
+}
+
+async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], since = null, mode = null }) {
   const entityList = Array.isArray(entities) && entities.length ? entities : ["Invoice", "CreditMemo"];
   const state = await getQboSyncState({ companyId, entityName: "CDC" });
   const defaultSince = () => {
@@ -427,43 +485,57 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"] }) {
     d.setUTCMonth(d.getUTCMonth() - 12);
     return d;
   };
-  const since = state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : defaultSince();
-  const sinceIso = since.toISOString();
-  const query = `cdc?entities=${encodeURIComponent(entityList.join(","))}&changedSince=${encodeURIComponent(sinceIso)}`;
-  const data = await qboApiRequest({ companyId, method: "GET", path: query });
-  const response = data?.CDCResponse || {};
+  const sinceDate = parseSinceDate(since) || (state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : defaultSince());
   const out = [];
-  for (const name of entityList) {
-    const items = response[name] || [];
-    for (const item of items) {
-      const doc = item;
-      const entityId = doc?.Id;
-      if (!entityId) continue;
-      const roNumber = extractRoNumberFromDoc(doc);
-      const rentalOrderId = roNumber ? await findRentalOrderIdByRoNumber({ companyId, roNumber }) : null;
-      const stored = await upsertQboDocument({
-        companyId,
-        rentalOrderId,
-        entityType: name,
-        entityId,
-        docNumber: doc?.DocNumber || null,
-        billingPeriod: extractBillingPeriod(doc),
-        txnDate: doc?.TxnDate || null,
-        dueDate: doc?.DueDate || null,
-        totalAmount: doc?.TotalAmt,
-        balance: doc?.Balance,
-        currencyCode: doc?.CurrencyRef?.value || null,
-        status: deriveStatus(doc, name),
-        customerRef: doc?.CustomerRef?.value || null,
-        source: "qbo",
-        isVoided: false,
-        isDeleted: false,
-        lastUpdatedAt: doc?.MetaData?.LastUpdatedTime || null,
-        raw: doc,
-      });
-      out.push(stored);
+  let cdcFailed = false;
+
+  if (String(mode || "").toLowerCase() !== "query") {
+    try {
+      const sinceIso = sinceDate.toISOString();
+      const query = `cdc?entities=${encodeURIComponent(entityList.join(","))}&changedSince=${encodeURIComponent(sinceIso)}`;
+      const data = await qboApiRequest({ companyId, method: "GET", path: query });
+      const response = data?.CDCResponse || {};
+      for (const name of entityList) {
+        const items = response[name] || [];
+        for (const item of items) {
+          const doc = item;
+          const entityId = doc?.Id;
+          if (!entityId) continue;
+          const roNumber = extractRoNumberFromDoc(doc);
+          const rentalOrderId = roNumber ? await findRentalOrderIdByRoNumber({ companyId, roNumber }) : null;
+          const stored = await upsertQboDocument({
+            companyId,
+            rentalOrderId,
+            entityType: name,
+            entityId,
+            docNumber: doc?.DocNumber || null,
+            billingPeriod: extractBillingPeriod(doc),
+            txnDate: doc?.TxnDate || null,
+            dueDate: doc?.DueDate || null,
+            totalAmount: doc?.TotalAmt,
+            balance: doc?.Balance,
+            currencyCode: doc?.CurrencyRef?.value || null,
+            status: deriveStatus(doc, name),
+            customerRef: doc?.CustomerRef?.value || null,
+            source: "qbo",
+            isVoided: false,
+            isDeleted: false,
+            lastUpdatedAt: doc?.MetaData?.LastUpdatedTime || null,
+            raw: doc,
+          });
+          out.push(stored);
+        }
+      }
+    } catch {
+      cdcFailed = true;
     }
   }
+
+  if (String(mode || "").toLowerCase() === "query" || cdcFailed || out.length === 0) {
+    const queried = await runQuerySync({ companyId, entities: entityList, sinceDate });
+    out.push(...queried);
+  }
+
   await upsertQboSyncState({ companyId, entityName: "CDC", lastCdcTimestamp: new Date().toISOString() });
   return out;
 }

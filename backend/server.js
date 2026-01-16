@@ -2976,10 +2976,10 @@ app.post(
 app.post(
   "/api/qbo/sync",
   asyncHandler(async (req, res) => {
-    const { companyId } = req.body || {};
+    const { companyId, since, mode } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     try {
-      const docs = await runCdcSync({ companyId: Number(companyId) });
+      const docs = await runCdcSync({ companyId: Number(companyId), since, mode });
       res.json({ documents: docs });
     } catch (err) {
       const message = err?.message ? String(err.message) : "QBO sync failed.";
