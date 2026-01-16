@@ -425,7 +425,7 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"] }) {
   const since = state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const sinceIso = since.toISOString();
   const query = `cdc?entities=${encodeURIComponent(entityList.join(","))}&changedSince=${encodeURIComponent(sinceIso)}`;
-  const data = await qboApiRequest({ companyId, method: "POST", path: query });
+  const data = await qboApiRequest({ companyId, method: "GET", path: query });
   const response = data?.CDCResponse || {};
   const out = [];
   for (const name of entityList) {
