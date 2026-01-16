@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Aiven Rental – Customers</title>
+  <title>Aiven Rental - QBO Customers</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="no-top-headers">
@@ -59,21 +59,10 @@
               <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
             </a>
             <div class="topbar-actions">
+              <a class="ghost" href="customers.html">Back to customers</a>
               <a class="ghost" href="/#/marketplace">Marketplace</a>
               <a class="primary" href="/#/home">Home</a>
             </div>
-          </div>
-        </header>
-        <header class="hero">
-          <div>
-            <p class="eyebrow">CRM</p>
-            <h1>Customers</h1>
-            <p class="lede">Manage customers for the current company. Add, edit, or remove records quickly.</p>
-          </div>
-          <div class="hero-badge">
-            <span>Multi-tenant</span>
-            <span>Contacts</span>
-            <span>Addresses</span>
           </div>
         </header>
 
@@ -85,33 +74,44 @@
                 <h2>Company</h2>
               </div>
             </div>
-            <p class="hint" id="company-meta">Loading your company…</p>
+            <p class="hint" id="company-meta">Loading your company...</p>
           </section>
 
-
-          <section class="card wide">
-              <div class="card-header">
-                <div>
-                  <h2>Customer directory</h2>
-                </div>
-                <div class="inline-actions">
-                  <button class="ghost" id="refresh">Refresh</button>
-                  <button class="ghost" id="import-customers">Import</button>
-                  <a class="ghost" href="qbo-customers.html">QBO customer sync</a>
-                  <button class="primary" id="new-customer">New customer</button>
-                </div>
+          <section class="card wide" id="qbo-customers-panel">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">QuickBooks Online</p>
+                <h2>Customer sync</h2>
               </div>
-              <input type="file" id="import-file" accept=".csv,.tsv,.txt" style="display:none;" />
-              <p class="hint" id="import-status" style="margin: 0 0 10px;"></p>
+              <div class="inline-actions">
+                <button class="ghost" id="qbo-customers-refresh">Refresh</button>
+                <button class="ghost" id="qbo-customers-load">Load QBO customers</button>
+                <button class="ghost" id="qbo-customers-import-all">Import unlinked</button>
+                <button class="ghost danger" id="qbo-disconnect">Disconnect</button>
+                <button class="primary" id="qbo-connect">Connect QBO</button>
+              </div>
+            </div>
+            <p class="hint" id="qbo-customers-status">Checking QuickBooks connection...</p>
+            <p class="hint" id="qbo-customers-hint">Fuzzy matches are suggestions only. Link manually and optionally update the local name to match QBO.</p>
 
             <div class="table-shell">
               <div class="table-head">
-                <p>All customers</p>
+                <p>QuickBooks customers</p>
                 <div class="inline">
-                  <input id="search" class="search-input" placeholder="Search customers..." />
+                  <input id="qbo-customers-search" class="search-input" placeholder="Search QBO customers..." />
                 </div>
               </div>
-              <div class="table" id="customers-table"></div>
+              <div class="table" id="qbo-customers-table"></div>
+            </div>
+
+            <div class="table-shell">
+              <div class="table-head">
+                <p>Local customers missing QBO</p>
+                <div class="inline">
+                  <input id="qbo-local-search" class="search-input" placeholder="Search local customers..." />
+                </div>
+              </div>
+              <div class="table" id="qbo-local-customers-table"></div>
             </div>
           </section>
         </main>
@@ -120,13 +120,6 @@
   </div>
 
   <script src="session.js"></script>
-  <script src="customers.js"></script>
+  <script src="qbo-customers.js"></script>
 </body>
 </html>
-
-
-
-
-
-
-

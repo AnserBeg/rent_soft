@@ -1,11 +1,7 @@
+const params = new URLSearchParams(window.location.search);
+const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
+
 const companyMeta = document.getElementById("company-meta");
-const refreshBtn = document.getElementById("refresh");
-const customersTable = document.getElementById("customers-table");
-const newCustomerBtn = document.getElementById("new-customer");
-const importCustomersBtn = document.getElementById("import-customers");
-const importFileInput = document.getElementById("import-file");
-const importStatus = document.getElementById("import-status");
-const searchInput = document.getElementById("search");
 const qboStatus = document.getElementById("qbo-customers-status");
 const qboHint = document.getElementById("qbo-customers-hint");
 const qboConnectBtn = document.getElementById("qbo-connect");
@@ -18,61 +14,16 @@ const qboLocalCustomersTable = document.getElementById("qbo-local-customers-tabl
 const qboCustomersSearch = document.getElementById("qbo-customers-search");
 const qboLocalSearch = document.getElementById("qbo-local-search");
 
-const params = new URLSearchParams(window.location.search);
-const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
-
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let customersCache = [];
-let salesCache = [];
 let qboCustomersCache = [];
 let qboConnected = false;
-let sortField = "company_name";
-let sortDir = "asc";
-let searchTerm = "";
 let qboSearchTerm = "";
 let qboLocalSearchTerm = "";
 
-function renderCustomers(rows) {
-  const indicator = (field) => {
-    if (sortField !== field) return "";
-    return sortDir === "asc" ? "^" : "v";
-  };
-  customersTable.innerHTML = `
-    <div class="table-row table-header">
-      <span class="sort ${sortField === "company_name" ? "active" : ""}" data-sort="company_name">Company ${indicator("company_name")}</span>
-      <span class="sort ${sortField === "parent_company_name" ? "active" : ""}" data-sort="parent_company_name">Parent ${indicator("parent_company_name")}</span>
-      <span class="sort ${sortField === "contact_name" ? "active" : ""}" data-sort="contact_name">Contact ${indicator("contact_name")}</span>
-      <span class="sort ${sortField === "email" ? "active" : ""}" data-sort="email">Email ${indicator("email")}</span>
-      <span class="sort ${sortField === "phone" ? "active" : ""}" data-sort="phone">Phone ${indicator("phone")}</span>
-      <span class="sort ${sortField === "city" ? "active" : ""}" data-sort="city">City ${indicator("city")}</span>
-      <span class="sort ${sortField === "region" ? "active" : ""}" data-sort="region">Region ${indicator("region")}</span>
-      <span class="sort ${sortField === "country" ? "active" : ""}" data-sort="country">Country ${indicator("country")}</span>
-      <span class="sort ${sortField === "postal_code" ? "active" : ""}" data-sort="postal_code">Postal ${indicator("postal_code")}</span>
-      <span class="sort ${sortField === "follow_up_date" ? "active" : ""}" data-sort="follow_up_date">Follow up ${indicator("follow_up_date")}</span>
-      <span class="sort ${sortField === "sales" ? "active" : ""}" data-sort="sales">Sales ${indicator("sales")}</span>
-      <span></span>
-    </div>`;
-  rows.forEach((row) => {
-    const sales = salesCache.find((s) => s.id === row.sales_person_id);
-    const div = document.createElement("div");
-    div.className = "table-row";
-    div.dataset.id = row.id;
-    div.innerHTML = `
-      <span>${row.company_name}</span>
-      <span>${row.parent_company_name || "--"}</span>
-      <span>${row.contact_name || "--"}</span>
-      <span>${row.email || "--"}</span>
-      <span>${row.phone || "--"}</span>
-      <span>${row.city || "--"}</span>
-      <span>${row.region || "--"}</span>
-      <span>${row.country || "--"}</span>
-      <span>${row.postal_code || "--"}</span>
-      <span>${row.follow_up_date || "--"}</span>
-      <span>${sales?.name || "--"}</span>
-      <span></span>
-    `;
-    customersTable.appendChild(div);
-  });
+function setCompanyMeta(message) {
+  if (!companyMeta) return;
+  companyMeta.textContent = String(message || "");
 }
 
 function setQboStatus(message) {
@@ -112,8 +63,8 @@ function scoreCustomerMatch(local, qbo) {
     const qboTokens = new Set(qboName.split(" ").filter(Boolean));
     if (localTokens.size && qboTokens.size) {
       let overlap = 0;
-      localTokens.forEach((t) => {
-        if (qboTokens.has(t)) overlap += 1;
+      localTokens.forEach((token) => {
+        if (qboTokens.has(token)) overlap += 1;
       });
       const union = localTokens.size + qboTokens.size - overlap;
       if (union > 0) score += (overlap / union) * 2;
@@ -135,59 +86,6 @@ function scoreCustomerMatch(local, qbo) {
   }
 
   return score;
-}
-
-function applyFilters() {
-  let rows = [...customersCache];
-  const bySalesId = new Map((salesCache || []).map((s) => [s.id, s.name]));
-
-  if (searchTerm) {
-    const term = searchTerm.toLowerCase();
-    rows = rows.filter((r) => {
-      const sales = bySalesId.get(r.sales_person_id) || "";
-      return [
-        r.company_name,
-        r.contact_name,
-        r.email,
-        r.phone,
-        r.city,
-        r.region,
-        r.country,
-        r.postal_code,
-        r.parent_company_name,
-        r.follow_up_date,
-        sales,
-        r.notes,
-      ]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(term));
-    });
-  }
-
-  const dir = sortDir === "asc" ? 1 : -1;
-  const norm = (v) => String(v || "").toLowerCase();
-  const sortKey = (row) => {
-    const sales = bySalesId.get(row.sales_person_id) || "";
-    switch (sortField) {
-      case "sales":
-        return norm(sales);
-      case "follow_up_date": {
-        const t = Date.parse(row.follow_up_date || "");
-        return Number.isFinite(t) ? t : -Infinity;
-      }
-      default:
-        return norm(row[sortField]);
-    }
-  };
-  rows.sort((a, b) => {
-    const av = sortKey(a);
-    const bv = sortKey(b);
-    if (av < bv) return -1 * dir;
-    if (av > bv) return 1 * dir;
-    return 0;
-  });
-
-  return rows;
 }
 
 function renderQboCustomersTable() {
@@ -238,14 +136,7 @@ function renderQboCustomersTable() {
   const term = normalizeMatchValue(qboSearchTerm);
   const rows = qboCustomersCache.filter((qbo) => {
     if (!term) return true;
-    const haystack = [
-      qbo.displayName,
-      qbo.companyName,
-      qbo.email,
-      qbo.phone,
-    ]
-      .filter(Boolean)
-      .join(" ");
+    const haystack = [qbo.displayName, qbo.companyName, qbo.email, qbo.phone].filter(Boolean).join(" ");
     return normalizeMatchValue(haystack).includes(term);
   });
 
@@ -267,13 +158,13 @@ function renderQboCustomersTable() {
       .sort((a, b) => String(a.company_name || "").localeCompare(String(b.company_name || "")));
 
     const options = [
-      `<option value=\"\">Select local customer...</option>`,
+      `<option value="">Select local customer...</option>`,
       ...suggestions.map(
-        (entry) => `<option value=\"${entry.local.id}\">${entry.local.company_name} (suggested)</option>`
+        (entry) => `<option value="${entry.local.id}">${entry.local.company_name} (suggested)</option>`
       ),
       ...sortedLocals
         .filter((local) => !suggestedIds.has(local.id))
-        .map((local) => `<option value=\"${local.id}\">${local.company_name}</option>`),
+        .map((local) => `<option value="${local.id}">${local.company_name}</option>`),
     ];
 
     const disabledAttr = linkedLocal ? "disabled" : "";
@@ -286,14 +177,14 @@ function renderQboCustomersTable() {
       <span>${qbo.phone || "--"}</span>
       <span>${suggestedLabel}</span>
       <span>
-        <select class=\"qbo-link-select\" ${disabledAttr}>${options.join("")}</select>
+        <select class="qbo-link-select" ${disabledAttr}>${options.join("")}</select>
       </span>
       <span>
-        <input type=\"checkbox\" class=\"qbo-update-name\" ${disabledAttr} />
+        <input type="checkbox" class="qbo-update-name" ${disabledAttr} />
       </span>
-      <span class=\"inline\">
-        <button class=\"ghost small\" data-action=\"link-qbo\" ${disabledAttr}>Link</button>
-        <button class=\"ghost small\" data-action=\"create-local\" ${disabledAttr}>Create local</button>
+      <span class="inline">
+        <button class="ghost small" data-action="link-qbo" ${disabledAttr}>Link</button>
+        <button class="ghost small" data-action="create-local" ${disabledAttr}>Create local</button>
       </span>
       <span>${linkedLocal ? `Linked: ${linkedLocal.company_name}` : "Unlinked"}</span>
     `;
@@ -322,12 +213,7 @@ function renderLocalQboTable() {
   const term = normalizeMatchValue(qboLocalSearchTerm);
   const locals = customersCache.filter((local) => !local.qbo_customer_id).filter((local) => {
     if (!term) return true;
-    const haystack = [
-      local.company_name,
-      local.email,
-      local.phone,
-      local.contact_name,
-    ]
+    const haystack = [local.company_name, local.email, local.phone, local.contact_name]
       .filter(Boolean)
       .join(" ");
     return normalizeMatchValue(haystack).includes(term);
@@ -363,13 +249,13 @@ function renderLocalQboTable() {
       .sort((a, b) => String(a.displayName || a.companyName || "").localeCompare(String(b.displayName || b.companyName || "")));
 
     const options = [
-      `<option value=\"\">Select QBO customer...</option>`,
+      `<option value="">Select QBO customer...</option>`,
       ...suggestions.map(
-        (entry) => `<option value=\"${entry.qbo.id}\">${entry.qbo.displayName || entry.qbo.companyName} (suggested)</option>`
+        (entry) => `<option value="${entry.qbo.id}">${entry.qbo.displayName || entry.qbo.companyName} (suggested)</option>`
       ),
       ...sortedQbo
         .filter((qbo) => !suggestedIds.has(qbo.id))
-        .map((qbo) => `<option value=\"${qbo.id}\">${qbo.displayName || qbo.companyName || `QBO #${qbo.id}`}</option>`),
+        .map((qbo) => `<option value="${qbo.id}">${qbo.displayName || qbo.companyName || `QBO #${qbo.id}`}</option>`),
     ];
 
     const disabledAttr = qboConnected ? "" : "disabled";
@@ -382,14 +268,14 @@ function renderLocalQboTable() {
       <span>${local.phone || "--"}</span>
       <span>${suggestedLabel}</span>
       <span>
-        <select class=\"qbo-link-select\" ${disabledAttr}>${options.join("")}</select>
+        <select class="qbo-link-select" ${disabledAttr}>${options.join("")}</select>
       </span>
       <span>
-        <input type=\"checkbox\" class=\"qbo-update-name\" ${disabledAttr} />
+        <input type="checkbox" class="qbo-update-name" ${disabledAttr} />
       </span>
-      <span class=\"inline\">
-        <button class=\"ghost small\" data-action=\"link-local\" ${disabledAttr}>Link</button>
-        <button class=\"ghost small\" data-action=\"create-qbo\" ${disabledAttr}>Create QBO</button>
+      <span class="inline">
+        <button class="ghost small" data-action="link-local" ${disabledAttr}>Link</button>
+        <button class="ghost small" data-action="create-qbo" ${disabledAttr}>Create QBO</button>
       </span>
       <span>${qboConnected ? "Unlinked" : "QBO disconnected"}</span>
     `;
@@ -400,6 +286,19 @@ function renderLocalQboTable() {
 function renderQboTables() {
   renderQboCustomersTable();
   renderLocalQboTable();
+}
+
+async function loadLocalCustomers() {
+  if (!activeCompanyId) return;
+  try {
+    const res = await fetch(`/api/customers?companyId=${activeCompanyId}`);
+    if (!res.ok) throw new Error("Unable to fetch customers");
+    const data = await res.json();
+    customersCache = data.customers || [];
+    renderQboTables();
+  } catch (err) {
+    setQboHint(err?.message ? String(err.message) : "Unable to load customers.");
+  }
 }
 
 async function loadQboStatus() {
@@ -451,7 +350,7 @@ async function linkLocalToQbo({ localId, qboId, updateName }) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to link customer.");
-    await loadCustomers();
+    await loadLocalCustomers();
     setQboHint("Customer linked.");
   } catch (err) {
     setQboHint(err?.message ? String(err.message) : "Unable to link customer.");
@@ -469,7 +368,7 @@ async function createLocalFromQbo(qboId) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to create local customer.");
-    await loadCustomers();
+    await loadLocalCustomers();
     setQboHint(data.skipped ? "Customer already linked." : "Local customer created.");
   } catch (err) {
     setQboHint(err?.message ? String(err.message) : "Unable to create local customer.");
@@ -487,7 +386,7 @@ async function createQboFromLocal(localId) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to create QBO customer.");
-    await loadCustomers();
+    await loadLocalCustomers();
     if (qboConnected) {
       await loadQboCustomers().catch(() => null);
     }
@@ -497,89 +396,10 @@ async function createQboFromLocal(localId) {
   }
 }
 
-async function loadCustomers() {
-  if (!activeCompanyId) return;
-  try {
-    const res = await fetch(`/api/customers?companyId=${activeCompanyId}`);
-    if (!res.ok) throw new Error("Unable to fetch customers");
-    const data = await res.json();
-    customersCache = data.customers || [];
-    renderCustomers(applyFilters());
-    renderQboTables();
-  } catch (err) {
-    companyMeta.textContent = err.message;
-  }
-}
-
-async function loadSales() {
-  if (!activeCompanyId) return;
-  try {
-    const res = await fetch(`/api/sales-people?companyId=${activeCompanyId}`);
-    if (!res.ok) throw new Error("Unable to fetch sales people");
-    const data = await res.json();
-    salesCache = data.sales || [];
-    renderCustomers(applyFilters());
-  } catch (err) {
-    companyMeta.textContent = err.message;
-  }
-}
-
-refreshBtn.addEventListener("click", (e) => {
-  e.preventDefault();
-  loadSales();
-  loadCustomers();
-});
-
-newCustomerBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  if (!activeCompanyId) {
-    companyMeta.textContent = "Log in to continue.";
-    return;
-  }
-  window.location.href = "customers-form.html";
-});
-
-importCustomersBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  if (!activeCompanyId) {
-    companyMeta.textContent = "Log in to continue.";
-    return;
-  }
-  importFileInput?.click();
-});
-
-importFileInput?.addEventListener("change", async (e) => {
-  const file = e.target.files?.[0];
-  if (!file || !activeCompanyId) return;
-  if (importStatus) importStatus.textContent = "Importing customers…";
-
-  const body = new FormData();
-  body.append("companyId", String(activeCompanyId));
-  body.append("file", file);
-
-  try {
-    const res = await fetch("/api/customers/import", { method: "POST", body });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "Import failed");
-    }
-    const data = await res.json();
-    if (importStatus) {
-      importStatus.textContent = `Import complete: created ${data.created || 0}, updated ${data.updated || 0}, skipped ${data.skipped || 0}.`;
-    }
-    await loadCustomers();
-  } catch (err) {
-    if (importStatus) importStatus.textContent = err.message || "Import failed";
-  } finally {
-    if (importFileInput) importFileInput.value = "";
-  }
-});
-
-
 qboConnectBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   if (!activeCompanyId) return;
-  const redirect = "/customers.html?qbo=connected";
+  const redirect = "/qbo-customers.html?qbo=connected";
   window.location.href = `/api/qbo/authorize?companyId=${encodeURIComponent(String(activeCompanyId))}&redirect=${encodeURIComponent(redirect)}`;
 });
 
@@ -644,7 +464,7 @@ qboImportAllBtn?.addEventListener("click", async (e) => {
     ].filter(Boolean);
     setQboHint(hintParts.join(" "));
 
-    await loadCustomers();
+    await loadLocalCustomers();
     await loadQboCustomers().catch(() => null);
   } catch (err) {
     setQboHint(err?.message ? String(err.message) : "Unable to import QBO customers.");
@@ -654,7 +474,7 @@ qboImportAllBtn?.addEventListener("click", async (e) => {
 qboRefreshBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   loadQboStatus().catch((err) => setQboHint(err?.message ? String(err.message) : "Unable to refresh QBO status."));
-  loadCustomers().catch(() => null);
+  loadLocalCustomers().catch(() => null);
 });
 
 qboCustomersSearch?.addEventListener("input", (e) => {
@@ -710,47 +530,18 @@ qboLocalCustomersTable?.addEventListener("click", (e) => {
     createQboFromLocal(localId);
   }
 });
-customersTable.addEventListener("click", (e) => {
-  const sort = e.target.closest?.(".sort")?.getAttribute?.("data-sort") ?? e.target.getAttribute?.("data-sort");
-  if (sort) {
-    e.preventDefault();
-    if (sortField === sort) sortDir = sortDir === "asc" ? "desc" : "asc";
-    else {
-      sortField = sort;
-      sortDir = "asc";
-    }
-    renderCustomers(applyFilters());
-    return;
-  }
-
-  const row = e.target.closest(".table-row");
-  if (!row || row.classList.contains("table-header")) return;
-  const id = row.dataset.id;
-  if (!id || !activeCompanyId) return;
-  window.location.href = `customers-form.html?id=${id}`;
-});
-
-searchInput?.addEventListener("input", (e) => {
-  searchTerm = String(e.target.value || "");
-  renderCustomers(applyFilters());
-});
-
-// Init
-const hasQboPanel = !!document.getElementById("qbo-customers-panel");
 
 if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
-  companyMeta.textContent = `Using company #${activeCompanyId}`;
-  if (hasQboPanel && new URLSearchParams(window.location.search).get("qbo") === "connected") {
+  const session = window.RentSoft?.getSession?.();
+  const companyName = session?.company?.name ? String(session.company.name) : null;
+  setCompanyMeta(companyName ? `${companyName} (Company #${activeCompanyId})` : `Company #${activeCompanyId}`);
+  if (new URLSearchParams(window.location.search).get("qbo") === "connected") {
     setQboHint("QuickBooks connected.");
   }
-  loadSales();
-  loadCustomers();
-  if (hasQboPanel) {
-    loadQboStatus().catch((err) => setQboHint(err?.message ? String(err.message) : "Unable to load QBO status."));
-  }
+  loadLocalCustomers();
+  loadQboStatus().catch((err) => setQboHint(err?.message ? String(err.message) : "Unable to load QBO status."));
 } else {
-  companyMeta.textContent = "Log in to view customers.";
-  if (hasQboPanel) setQboStatus("Log in to view QBO sync.");
+  setCompanyMeta("Log in to view customers.");
+  setQboStatus("Log in to view QBO sync.");
 }
-
