@@ -422,7 +422,12 @@ async function handleWebhookEvent({ companyId, entityType, entityId, operation }
 async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"] }) {
   const entityList = Array.isArray(entities) && entities.length ? entities : ["Invoice", "CreditMemo"];
   const state = await getQboSyncState({ companyId, entityName: "CDC" });
-  const since = state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const defaultSince = () => {
+    const d = new Date();
+    d.setUTCMonth(d.getUTCMonth() - 2);
+    return d;
+  };
+  const since = state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : defaultSince();
   const sinceIso = since.toISOString();
   const query = `cdc?entities=${encodeURIComponent(entityList.join(","))}&changedSince=${encodeURIComponent(sinceIso)}`;
   const data = await qboApiRequest({ companyId, method: "GET", path: query });
