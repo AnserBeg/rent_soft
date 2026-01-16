@@ -56,6 +56,7 @@ const {
   deleteType,
   listTypeStats,
   listCustomers,
+  getCustomerById,
   createCustomer,
   updateCustomer,
   deleteCustomer,
@@ -141,6 +142,8 @@ const {
   findCompanyIdByQboRealmId,
   upsertQboConnection,
   deleteQboConnection,
+  findCustomerIdByQboCustomerId,
+  updateCustomerQboLink,
   listQboDocumentsForRentalOrder,
   listQboDocumentsUnassigned,
   listQboDocuments,
@@ -161,6 +164,10 @@ const {
   handleWebhookEvent,
   runCdcSync,
   getIncomeTotals,
+  listQboCustomers,
+  getQboCustomerById,
+  createQboCustomer,
+  normalizeQboCustomer,
 } = require("./qboService");
 const { verifyWebhookSignature, computeExpiryTimestamp } = require("./qbo");
 
@@ -2843,6 +2850,154 @@ app.put(
   })
 );
 
+function buildQboCustomerDisplayName(customer) {
+  const display = String(
+    customer?.DisplayName || customer?.displayName || customer?.CompanyName || customer?.companyName || ""
+  ).trim();
+  if (display) return display;
+  const given = String(customer?.GivenName || customer?.givenName || "").trim();
+  const family = String(customer?.FamilyName || customer?.familyName || "").trim();
+  return [given, family].filter(Boolean).join(" ").trim();
+}
+
+function buildQboCustomerContactName(customer) {
+  const given = String(customer?.GivenName || customer?.givenName || "").trim();
+  const family = String(customer?.FamilyName || customer?.familyName || "").trim();
+  const combined = [given, family].filter(Boolean).join(" ").trim();
+  return combined || null;
+}
+
+function buildQboStreetAddress(addr) {
+  if (!addr) return null;
+  const lines = [
+    addr.Line1 || addr.line1,
+    addr.Line2 || addr.line2,
+    addr.Line3 || addr.line3,
+  ]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+  return lines.length ? lines.join("\n") : null;
+}
+
+function mapQboCustomerToLocal(customer) {
+  const displayName = buildQboCustomerDisplayName(customer);
+  const contactName = buildQboCustomerContactName(customer);
+  const bill = customer?.BillAddr || customer?.billAddr || null;
+  const streetAddress = buildQboStreetAddress(bill);
+  const email =
+    customer?.PrimaryEmailAddr?.Address ||
+    customer?.email ||
+    null;
+  const phone =
+    customer?.PrimaryPhone?.FreeFormNumber ||
+    customer?.Mobile?.FreeFormNumber ||
+    customer?.phone ||
+    null;
+  return {
+    companyName: displayName || "QBO Customer",
+    contactName,
+    streetAddress,
+    city: bill?.City || bill?.city || null,
+    region: bill?.CountrySubDivisionCode || bill?.region || null,
+    country: bill?.Country || bill?.country || null,
+    postalCode: bill?.PostalCode || bill?.postalCode || null,
+    email: email ? String(email) : null,
+    phone: phone ? String(phone) : null,
+  };
+}
+
+function buildQboCustomerPayloadFromLocal(customer) {
+  const payload = {};
+  const displayName = String(customer?.company_name || customer?.contact_name || `Customer ${customer?.id || ""}`).trim();
+  payload.DisplayName = displayName || `Customer ${customer?.id || ""}`;
+
+  if (customer?.company_name) payload.CompanyName = String(customer.company_name).trim();
+  if (customer?.contact_name) {
+    const parts = String(customer.contact_name).trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 1) {
+      payload.GivenName = parts[0];
+    } else if (parts.length > 1) {
+      payload.GivenName = parts[0];
+      payload.FamilyName = parts.slice(1).join(" ");
+    }
+  }
+
+  if (customer?.email) {
+    payload.PrimaryEmailAddr = { Address: String(customer.email).trim() };
+  }
+  if (customer?.phone) {
+    payload.PrimaryPhone = { FreeFormNumber: String(customer.phone).trim() };
+  }
+
+  const addressLines = String(customer?.street_address || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const addr = {};
+  if (addressLines[0]) addr.Line1 = addressLines[0];
+  if (addressLines[1]) addr.Line2 = addressLines[1];
+  if (addressLines[2]) addr.Line3 = addressLines[2];
+  if (customer?.city) addr.City = String(customer.city).trim();
+  if (customer?.region) addr.CountrySubDivisionCode = String(customer.region).trim();
+  if (customer?.country) addr.Country = String(customer.country).trim();
+  if (customer?.postal_code) addr.PostalCode = String(customer.postal_code).trim();
+  if (Object.keys(addr).length) payload.BillAddr = addr;
+
+  return payload;
+}
+
+function normalizeCustomerMatchValue(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeCustomerMatchEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeCustomerMatchPhone(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function scoreCustomerMatch(local, qbo) {
+  let score = 0;
+  const localName = normalizeCustomerMatchValue(local.company_name || "");
+  const qboName = normalizeCustomerMatchValue(buildQboCustomerDisplayName(qbo) || "");
+
+  if (localName && qboName) {
+    if (localName === qboName) score += 3;
+    const localTokens = new Set(localName.split(" ").filter(Boolean));
+    const qboTokens = new Set(qboName.split(" ").filter(Boolean));
+    if (localTokens.size && qboTokens.size) {
+      let overlap = 0;
+      localTokens.forEach((token) => {
+        if (qboTokens.has(token)) overlap += 1;
+      });
+      const union = localTokens.size + qboTokens.size - overlap;
+      if (union > 0) score += (overlap / union) * 2;
+    }
+    if (localName.includes(qboName) || qboName.includes(localName)) score += 1;
+  }
+
+  const localEmail = normalizeCustomerMatchEmail(local.email);
+  const qboEmail = normalizeCustomerMatchEmail(qbo.email || qbo?.PrimaryEmailAddr?.Address);
+  if (localEmail && qboEmail && localEmail === qboEmail) score += 3;
+
+  const localPhone = normalizeCustomerMatchPhone(local.phone);
+  const qboPhone = normalizeCustomerMatchPhone(qbo.phone || qbo?.PrimaryPhone?.FreeFormNumber || qbo?.Mobile?.FreeFormNumber);
+  if (localPhone && qboPhone) {
+    if (localPhone === qboPhone) score += 2;
+    else if (localPhone.length >= 7 && qboPhone.length >= 7 && localPhone.slice(-7) === qboPhone.slice(-7)) {
+      score += 1.5;
+    }
+  }
+
+  return score;
+}
+
 app.get(
   "/api/qbo/status",
   asyncHandler(async (req, res) => {
@@ -2939,6 +3094,256 @@ app.post(
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     await deleteQboConnection({ companyId: Number(companyId) });
     res.status(204).end();
+  })
+);
+
+app.get(
+  "/api/qbo/customers",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    try {
+      const customers = await listQboCustomers({ companyId: Number(companyId) });
+      res.json({ customers });
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "QBO customers request failed.";
+      if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
+      if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      res.status(500).json({ error: message });
+    }
+  })
+);
+
+app.post(
+  "/api/qbo/customers/link",
+  asyncHandler(async (req, res) => {
+    const { companyId, customerId, qboCustomerId, updateName } = req.body || {};
+    if (!companyId || !customerId || !qboCustomerId) {
+      return res.status(400).json({ error: "companyId, customerId, and qboCustomerId are required." });
+    }
+    const cid = Number(companyId);
+    const localId = Number(customerId);
+    const qboId = String(qboCustomerId || "").trim();
+    const updateNameFlag = parseBoolean(updateName) === true;
+
+    try {
+      const existing = await findCustomerIdByQboCustomerId({ companyId: cid, qboCustomerId: qboId });
+      if (existing && existing !== localId) {
+        return res.status(409).json({ error: "QBO customer is already linked to another customer." });
+      }
+
+      let qboCustomer = null;
+      let companyName = null;
+      let contactName = null;
+      if (updateNameFlag) {
+        qboCustomer = await getQboCustomerById({ companyId: cid, qboCustomerId: qboId });
+        if (!qboCustomer) return res.status(404).json({ error: "QBO customer not found." });
+        companyName = buildQboCustomerDisplayName(qboCustomer) || null;
+        contactName = buildQboCustomerContactName(qboCustomer) || null;
+      }
+
+      const updated = await updateCustomerQboLink({
+        companyId: cid,
+        id: localId,
+        qboCustomerId: qboId,
+        companyName,
+        contactName,
+      });
+      if (!updated) return res.status(404).json({ error: "Customer not found." });
+      res.json({ customer: updated, qboCustomer: qboCustomer ? normalizeQboCustomer(qboCustomer) : null });
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "QBO customer link failed.";
+      if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
+      if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      res.status(500).json({ error: message });
+    }
+  })
+);
+
+app.post(
+  "/api/qbo/customers/create-local",
+  asyncHandler(async (req, res) => {
+    const { companyId, qboCustomerId } = req.body || {};
+    if (!companyId || !qboCustomerId) {
+      return res.status(400).json({ error: "companyId and qboCustomerId are required." });
+    }
+    const cid = Number(companyId);
+    const qboId = String(qboCustomerId || "").trim();
+
+    try {
+      const existingId = await findCustomerIdByQboCustomerId({ companyId: cid, qboCustomerId: qboId });
+      if (existingId) {
+        const existingCustomer = await getCustomerById({ companyId: cid, id: existingId });
+        return res.json({ customer: existingCustomer, skipped: "already_linked" });
+      }
+
+      const qboCustomer = await getQboCustomerById({ companyId: cid, qboCustomerId: qboId });
+      if (!qboCustomer) return res.status(404).json({ error: "QBO customer not found." });
+
+      const mapped = mapQboCustomerToLocal(qboCustomer);
+      const noteParts = [];
+      const extraNotes = String(qboCustomer?.Notes || "").trim();
+      if (extraNotes) noteParts.push(extraNotes);
+      noteParts.push(`Imported from QBO (Id: ${qboId})`);
+
+      const created = await createCustomer({
+        companyId: cid,
+        companyName: mapped.companyName,
+        contactName: mapped.contactName,
+        streetAddress: mapped.streetAddress,
+        city: mapped.city,
+        region: mapped.region,
+        country: mapped.country,
+        postalCode: mapped.postalCode,
+        email: mapped.email,
+        phone: mapped.phone,
+        qboCustomerId: qboId,
+        notes: noteParts.join("\n"),
+      });
+      res.status(201).json({ customer: created, qboCustomer: normalizeQboCustomer(qboCustomer) });
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "QBO customer import failed.";
+      if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
+      if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      res.status(500).json({ error: message });
+    }
+  })
+);
+
+app.post(
+  "/api/qbo/customers/create-qbo",
+  asyncHandler(async (req, res) => {
+    const { companyId, customerId } = req.body || {};
+    if (!companyId || !customerId) {
+      return res.status(400).json({ error: "companyId and customerId are required." });
+    }
+    const cid = Number(companyId);
+    const localId = Number(customerId);
+    try {
+      const local = await getCustomerById({ companyId: cid, id: localId });
+      if (!local) return res.status(404).json({ error: "Customer not found." });
+      if (local.qbo_customer_id) {
+        return res.json({ customer: local, skipped: "already_linked", qboCustomerId: local.qbo_customer_id });
+      }
+
+      const payload = buildQboCustomerPayloadFromLocal(local);
+      const qboCustomer = await createQboCustomer({ companyId: cid, payload });
+      const updated = await updateCustomerQboLink({
+        companyId: cid,
+        id: localId,
+        qboCustomerId: qboCustomer?.Id || null,
+      });
+      res.status(201).json({ customer: updated || local, qboCustomer: normalizeQboCustomer(qboCustomer) });
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "QBO customer creation failed.";
+      if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
+      if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      res.status(500).json({ error: message });
+    }
+  })
+);
+
+app.post(
+  "/api/qbo/customers/import-unlinked",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.body || {};
+    if (!companyId) {
+      return res.status(400).json({ error: "companyId is required." });
+    }
+    const cid = Number(companyId);
+    const matchThreshold = 2.5;
+
+    try {
+      const [locals, qboCustomers] = await Promise.all([
+        listCustomers(cid),
+        listQboCustomers({ companyId: cid }),
+      ]);
+
+      const linkedQboIds = new Set(
+        (locals || []).map((local) => String(local.qbo_customer_id || "")).filter(Boolean)
+      );
+
+      let imported = 0;
+      let skippedLinked = 0;
+      let skippedMatched = 0;
+      let errors = 0;
+      const candidates = [];
+
+      for (const qbo of qboCustomers || []) {
+        if (!qbo?.id) continue;
+        const qboId = String(qbo.id);
+        if (linkedQboIds.has(qboId)) {
+          skippedLinked += 1;
+          continue;
+        }
+
+        const matches = (locals || [])
+          .map((local) => ({ local, score: scoreCustomerMatch(local, qbo) }))
+          .filter((entry) => entry.score >= matchThreshold)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 3);
+
+        if (matches.length) {
+          skippedMatched += 1;
+          candidates.push({
+            qboCustomerId: qboId,
+            qboName: buildQboCustomerDisplayName(qbo) || null,
+            matches: matches.map((entry) => ({
+              customerId: entry.local.id,
+              companyName: entry.local.company_name,
+              email: entry.local.email || null,
+              phone: entry.local.phone || null,
+              score: Number(entry.score.toFixed(2)),
+            })),
+          });
+          continue;
+        }
+
+        try {
+          const full = await getQboCustomerById({ companyId: cid, qboCustomerId: qboId }).catch(() => null);
+          const source = full || qbo;
+          const mapped = mapQboCustomerToLocal(source);
+          const noteParts = [];
+          const extraNotes = String(source?.Notes || "").trim();
+          if (extraNotes) noteParts.push(extraNotes);
+          noteParts.push(`Imported from QBO (Id: ${qboId})`);
+
+          const created = await createCustomer({
+            companyId: cid,
+            companyName: mapped.companyName,
+            contactName: mapped.contactName,
+            streetAddress: mapped.streetAddress,
+            city: mapped.city,
+            region: mapped.region,
+            country: mapped.country,
+            postalCode: mapped.postalCode,
+            email: mapped.email,
+            phone: mapped.phone,
+            qboCustomerId: qboId,
+            notes: noteParts.join("\n"),
+          });
+          if (created?.id) imported += 1;
+          else errors += 1;
+        } catch {
+          errors += 1;
+        }
+      }
+
+      res.json({
+        imported,
+        skipped: {
+          linked: skippedLinked,
+          matched: skippedMatched,
+          errors,
+        },
+        candidates,
+      });
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "QBO customer import failed.";
+      if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
+      if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      res.status(500).json({ error: message });
+    }
   })
 );
 

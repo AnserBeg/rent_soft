@@ -2745,6 +2745,70 @@ async function listCustomers(companyId) {
   return result.rows;
 }
 
+async function getCustomerById({ companyId, id }) {
+  const result = await pool.query(
+    `SELECT c.id,
+            c.company_name,
+            c.contact_name,
+            c.street_address,
+            c.city,
+            c.region,
+            c.country,
+            c.postal_code,
+            c.email,
+            c.phone,
+            c.qbo_customer_id,
+            c.contacts,
+            c.accounting_contacts,
+            c.can_charge_deposit,
+            c.sales_person_id,
+            c.follow_up_date,
+            c.notes,
+            c.parent_customer_id,
+            p.company_name AS parent_company_name,
+            CASE
+              WHEN c.parent_customer_id IS NOT NULL THEN p.can_charge_deposit
+              ELSE c.can_charge_deposit
+            END AS effective_can_charge_deposit
+     FROM customers c
+     LEFT JOIN customers p ON p.id = c.parent_customer_id
+     WHERE c.company_id = $1 AND c.id = $2
+     LIMIT 1`,
+    [companyId, id]
+  );
+  return result.rows[0] || null;
+}
+
+async function findCustomerIdByQboCustomerId({ companyId, qboCustomerId }) {
+  const qboId = String(qboCustomerId || "").trim();
+  if (!qboId) return null;
+  const result = await pool.query(
+    `SELECT id FROM customers WHERE company_id = $1 AND qbo_customer_id = $2 LIMIT 1`,
+    [companyId, qboId]
+  );
+  return result.rows[0] ? Number(result.rows[0].id) : null;
+}
+
+async function updateCustomerQboLink({
+  companyId,
+  id,
+  qboCustomerId,
+  companyName = null,
+  contactName = null,
+} = {}) {
+  const qboId = qboCustomerId ? String(qboCustomerId).trim() : null;
+  const result = await pool.query(
+    `UPDATE customers
+        SET qbo_customer_id = $1,
+            company_name = COALESCE($2, company_name),
+            contact_name = COALESCE($3, contact_name)
+      WHERE id = $4 AND company_id = $5
+      RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id`,
+    [qboId, companyName, contactName, id, companyId]
+  );
+  return result.rows[0] || null;
+}
+
 function normalizeContactField(value) {
   const clean = String(value ?? "").trim();
   return clean || null;
@@ -11514,6 +11578,9 @@ module.exports = {
   deleteType,
   listTypeStats,
   listCustomers,
+  getCustomerById,
+  findCustomerIdByQboCustomerId,
+  updateCustomerQboLink,
   createCustomer,
   updateCustomer,
   deleteCustomer,

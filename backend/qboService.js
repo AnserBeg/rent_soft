@@ -179,6 +179,79 @@ async function qboApiRequest({ companyId, method, path, body }) {
   });
 }
 
+function normalizeQboCustomer(customer) {
+  if (!customer) return null;
+  const billAddr = customer.BillAddr || null;
+  return {
+    id: customer.Id ? String(customer.Id) : null,
+    displayName: customer.DisplayName || null,
+    companyName: customer.CompanyName || null,
+    givenName: customer.GivenName || null,
+    familyName: customer.FamilyName || null,
+    email: customer.PrimaryEmailAddr?.Address || null,
+    phone: customer.PrimaryPhone?.FreeFormNumber || customer.Mobile?.FreeFormNumber || null,
+    mobile: customer.Mobile?.FreeFormNumber || null,
+    active: customer.Active !== false,
+    billAddr: billAddr
+      ? {
+          line1: billAddr.Line1 || null,
+          line2: billAddr.Line2 || null,
+          line3: billAddr.Line3 || null,
+          city: billAddr.City || null,
+          region: billAddr.CountrySubDivisionCode || null,
+          country: billAddr.Country || null,
+          postalCode: billAddr.PostalCode || null,
+        }
+      : null,
+  };
+}
+
+async function listQboCustomers({ companyId }) {
+  const customers = [];
+  let startPosition = 1;
+  const maxResults = 1000;
+  while (true) {
+    const query = `select * from Customer STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
+    const data = await qboApiRequest({
+      companyId,
+      method: "GET",
+      path: `query?query=${encodeURIComponent(query)}`,
+    });
+    const response = data?.QueryResponse || {};
+    const rows = Array.isArray(response.Customer) ? response.Customer : [];
+    rows.forEach((row) => {
+      const normalized = normalizeQboCustomer(row);
+      if (normalized?.id) customers.push(normalized);
+    });
+    if (rows.length < maxResults) break;
+    startPosition += maxResults;
+  }
+  return customers;
+}
+
+async function getQboCustomerById({ companyId, qboCustomerId }) {
+  if (!qboCustomerId) return null;
+  const data = await qboApiRequest({
+    companyId,
+    method: "GET",
+    path: `customer/${encodeURIComponent(String(qboCustomerId))}`,
+  });
+  return data?.Customer || data || null;
+}
+
+async function createQboCustomer({ companyId, payload }) {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Customer payload is required.");
+  }
+  const data = await qboApiRequest({
+    companyId,
+    method: "POST",
+    path: "customer",
+    body: payload,
+  });
+  return data?.Customer || data || null;
+}
+
 async function createDraftInvoice({
   companyId,
   orderId,
@@ -649,6 +722,10 @@ module.exports = {
   buildAuthUrl,
   exchangeAuthCode,
   getValidQboConnection,
+  normalizeQboCustomer,
+  listQboCustomers,
+  getQboCustomerById,
+  createQboCustomer,
   createDraftInvoice,
   createDraftCreditMemo,
   createPickupDraftInvoice,

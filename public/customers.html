@@ -88,6 +88,45 @@
             <p class="hint" id="company-meta">Loading your company…</p>
           </section>
 
+
+          <section class="card wide" id="qbo-customers-panel">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">QuickBooks Online</p>
+                <h2>Customer sync</h2>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost" id="qbo-customers-refresh">Refresh</button>
+                <button class="ghost" id="qbo-customers-load">Load QBO customers</button>
+                <button class="ghost" id="qbo-customers-import-all">Import unlinked</button>
+                <button class="ghost danger" id="qbo-disconnect">Disconnect</button>
+                <button class="primary" id="qbo-connect">Connect QBO</button>
+              </div>
+            </div>
+            <p class="hint" id="qbo-customers-status">Checking QuickBooks connection...</p>
+            <p class="hint" id="qbo-customers-hint">Fuzzy matches are suggestions only. Link manually and optionally update the local name to match QBO.</p>
+
+            <div class="table-shell">
+              <div class="table-head">
+                <p>QuickBooks customers</p>
+                <div class="inline">
+                  <input id="qbo-customers-search" class="search-input" placeholder="Search QBO customers..." />
+                </div>
+              </div>
+              <div class="table" id="qbo-customers-table"></div>
+            </div>
+
+            <div class="table-shell">
+              <div class="table-head">
+                <p>Local customers missing QBO</p>
+                <div class="inline">
+                  <input id="qbo-local-search" class="search-input" placeholder="Search local customers..." />
+                </div>
+              </div>
+              <div class="table" id="qbo-local-customers-table"></div>
+            </div>
+          </section>
+
           <section class="card wide">
               <div class="card-header">
                 <div>
@@ -121,6 +160,8 @@
   <script src="customers.js"></script>
 </body>
 </html>
+
+
 
 
 
