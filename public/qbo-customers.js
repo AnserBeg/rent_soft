@@ -102,7 +102,6 @@ function renderQboCustomersTable() {
     <span>Link to local</span>
     <span>Update name</span>
     <span>Actions</span>
-    <span>Status</span>
   `;
   qboCustomersTable.appendChild(header);
 
@@ -111,7 +110,7 @@ function renderQboCustomersTable() {
     row.className = "table-row";
     row.innerHTML = `
       <span>Connect QBO to load customers.</span>
-      <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span><span></span>
     `;
     qboCustomersTable.appendChild(row);
     return;
@@ -122,7 +121,7 @@ function renderQboCustomersTable() {
     row.className = "table-row";
     row.innerHTML = `
       <span>Load QBO customers to view matches.</span>
-      <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span><span></span>
     `;
     qboCustomersTable.appendChild(row);
     return;
@@ -168,6 +167,9 @@ function renderQboCustomersTable() {
     ];
 
     const disabledAttr = linkedLocal ? "disabled" : "";
+    const linkCell = linkedLocal
+      ? `<span>${linkedLocal.company_name}</span>`
+      : `<span><select class="qbo-link-select">${options.join("")}</select></span>`;
     const row = document.createElement("div");
     row.className = "table-row";
     row.dataset.qboId = qbo.id || "";
@@ -176,9 +178,7 @@ function renderQboCustomersTable() {
       <span>${qbo.email || "--"}</span>
       <span>${qbo.phone || "--"}</span>
       <span>${suggestedLabel}</span>
-      <span>
-        <select class="qbo-link-select" ${disabledAttr}>${options.join("")}</select>
-      </span>
+      ${linkCell}
       <span>
         <input type="checkbox" class="qbo-update-name" ${disabledAttr} />
       </span>
@@ -186,7 +186,6 @@ function renderQboCustomersTable() {
         <button class="ghost small" data-action="link-qbo" ${disabledAttr}>Link</button>
         <button class="ghost small" data-action="create-local" ${disabledAttr}>Create local</button>
       </span>
-      <span>${linkedLocal ? `Linked: ${linkedLocal.company_name}` : "Unlinked"}</span>
     `;
     qboCustomersTable.appendChild(row);
   });
@@ -206,7 +205,6 @@ function renderLocalQboTable() {
     <span>Link to QBO</span>
     <span>Update name</span>
     <span>Actions</span>
-    <span>Status</span>
   `;
   qboLocalCustomersTable.appendChild(header);
 
@@ -224,7 +222,7 @@ function renderLocalQboTable() {
     row.className = "table-row";
     row.innerHTML = `
       <span>All local customers are linked to QBO.</span>
-      <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span><span></span>
     `;
     qboLocalCustomersTable.appendChild(row);
     return;
@@ -277,7 +275,6 @@ function renderLocalQboTable() {
         <button class="ghost small" data-action="link-local" ${disabledAttr}>Link</button>
         <button class="ghost small" data-action="create-qbo" ${disabledAttr}>Create QBO</button>
       </span>
-      <span>${qboConnected ? "Unlinked" : "QBO disconnected"}</span>
     `;
     qboLocalCustomersTable.appendChild(row);
   });
