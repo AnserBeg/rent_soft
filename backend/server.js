@@ -2978,8 +2978,15 @@ app.post(
   asyncHandler(async (req, res) => {
     const { companyId } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const docs = await runCdcSync({ companyId: Number(companyId) });
-    res.json({ documents: docs });
+    try {
+      const docs = await runCdcSync({ companyId: Number(companyId) });
+      res.json({ documents: docs });
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "QBO sync failed.";
+      if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
+      if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      res.status(500).json({ error: message });
+    }
   })
 );
 
@@ -2990,8 +2997,15 @@ app.get(
     if (!companyId || !start || !end) {
       return res.status(400).json({ error: "companyId, start, and end are required." });
     }
-    const data = await getIncomeTotals({ companyId: Number(companyId), startDate: start, endDate: end });
-    res.json(data);
+    try {
+      const data = await getIncomeTotals({ companyId: Number(companyId), startDate: start, endDate: end });
+      res.json(data);
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "QBO income request failed.";
+      if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
+      if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      res.status(500).json({ error: message });
+    }
   })
 );
 
