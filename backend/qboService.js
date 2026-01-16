@@ -424,7 +424,7 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"] }) {
   const state = await getQboSyncState({ companyId, entityName: "CDC" });
   const defaultSince = () => {
     const d = new Date();
-    d.setUTCMonth(d.getUTCMonth() - 2);
+    d.setUTCMonth(d.getUTCMonth() - 6);
     return d;
   };
   const since = state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : defaultSince();
