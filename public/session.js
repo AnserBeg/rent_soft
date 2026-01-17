@@ -97,6 +97,7 @@
   }
 
   let saveBannerTimer = null;
+  let errorBannerTimer = null;
   function showSaveBanner(message = "Saved successfully.") {
     let banner = document.getElementById("save-banner");
     if (!banner) {
@@ -105,12 +106,29 @@
       banner.className = "save-banner";
       document.body.appendChild(banner);
     }
+    banner.classList.remove("error");
     banner.textContent = message;
     banner.classList.add("show");
     if (saveBannerTimer) clearTimeout(saveBannerTimer);
     saveBannerTimer = setTimeout(() => {
       banner.classList.remove("show");
     }, 2200);
+  }
+
+  function showErrorBanner(message = "Unable to save.") {
+    let banner = document.getElementById("error-banner");
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "error-banner";
+      banner.className = "save-banner error";
+      document.body.appendChild(banner);
+    }
+    banner.textContent = message;
+    banner.classList.add("show");
+    if (errorBannerTimer) clearTimeout(errorBannerTimer);
+    errorBannerTimer = setTimeout(() => {
+      banner.classList.remove("show");
+    }, 2600);
   }
 
   const nativeFetch = window.fetch?.bind(window);
@@ -144,6 +162,7 @@
     refreshSession,
     mountLogoutButton,
     showSaveBanner,
+    showErrorBanner,
   };
 })();
 

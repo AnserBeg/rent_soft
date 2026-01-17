@@ -3664,6 +3664,12 @@ body.drawer-open {
   pointer-events: none;
 }
 
+.save-banner.error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
 .save-banner.show {
   opacity: 1;
   transform: translateY(0);

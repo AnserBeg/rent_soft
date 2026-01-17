@@ -2669,7 +2669,11 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn }) {
       }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Unable to update pickup time.");
+    if (!res.ok) {
+      const message = data.error || "Unable to update pickup time.";
+      window.RentSoft?.showErrorBanner?.(message);
+      throw new Error(message);
+    }
     li.pickedUpAt = data.pickedUpAt || null;
     li.returnedAt = data.returnedAt || null;
     if (data.orderStatus) {
@@ -2692,7 +2696,11 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn }) {
       }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Unable to update return time.");
+    if (!res.ok) {
+      const message = data.error || "Unable to update return time.";
+      window.RentSoft?.showErrorBanner?.(message);
+      throw new Error(message);
+    }
     li.pickedUpAt = data.pickedUpAt || null;
     li.returnedAt = data.returnedAt || null;
     if (data.orderStatus) {
