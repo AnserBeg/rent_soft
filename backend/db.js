@@ -128,6 +128,27 @@ function allowsInventoryAssignment(status) {
   return normalized !== "quote" && normalized !== "quote_rejected" && normalized !== "requested";
 }
 
+function overrideStatusFromLineItems(status, lineItems) {
+  const normalized = normalizeRentalOrderStatus(status);
+  if (!["requested", "reservation", "ordered", "received"].includes(normalized)) return normalized;
+
+  const items = Array.isArray(lineItems) ? lineItems : [];
+  let fulfilled = 0;
+  let out = 0;
+  for (const item of items) {
+    const fulfilledAt = normalizeTimestamptz(item?.fulfilledAt);
+    if (!fulfilledAt) continue;
+    fulfilled += 1;
+    const returnedAt = normalizeTimestamptz(item?.returnedAt);
+    if (!returnedAt) out += 1;
+  }
+
+  if (fulfilled > 0 && out === 0) return "received";
+  if (fulfilled > 0 && (normalized === "requested" || normalized === "reservation")) return "ordered";
+  if (normalized === "received" && out > 0) return "ordered";
+  return normalized;
+}
+
 function formatDocNumber(prefix, year, seq, { yearDigits = 2, seqDigits = 4 } = {}) {
   const yearStr = yearDigits === 4 ? String(year).padStart(4, "0") : String(year).slice(-yearDigits).padStart(yearDigits, "0");
   const seqStr = String(seq).padStart(seqDigits, "0");
@@ -5207,25 +5228,24 @@ async function setLineItemReturned({
         );
     updatedLine = updateRes.rows[0] || { fulfilled_at: null, returned_at: null };
 
-    const countsRes = await client.query(
-      `
-      SELECT COUNT(*) FILTER (WHERE fulfilled_at IS NULL) AS unfulfilled,
-             COUNT(*) FILTER (WHERE returned_at IS NULL) AS unreturned,
-             COUNT(*) AS total
-        FROM rental_order_line_items
-       WHERE rental_order_id = $1
-      `,
-      [orderId]
-    );
-    const counts = countsRes.rows[0] || {};
-    const unfulfilled = Number(counts.unfulfilled || 0);
-    const unreturned = Number(counts.unreturned || 0);
+      const countsRes = await client.query(
+        `
+        SELECT COUNT(*) FILTER (WHERE fulfilled_at IS NOT NULL) AS fulfilled,
+               COUNT(*) FILTER (WHERE fulfilled_at IS NOT NULL AND returned_at IS NULL) AS out
+          FROM rental_order_line_items
+         WHERE rental_order_id = $1
+        `,
+        [orderId]
+      );
+      const counts = countsRes.rows[0] || {};
+      const fulfilled = Number(counts.fulfilled || 0);
+      const out = Number(counts.out || 0);
 
-    if (unfulfilled === 0 && unreturned === 0) {
-      nextStatus = "received";
-    } else if (status === "received" && (unfulfilled > 0 || unreturned > 0)) {
-      nextStatus = unfulfilled === 0 ? "ordered" : "reservation";
-    }
+      if (fulfilled > 0 && out === 0) {
+        nextStatus = "received";
+      } else if (status === "received" && out > 0) {
+        nextStatus = "ordered";
+      }
 
     if (nextStatus && nextStatus !== status) {
       statusChanged = true;
@@ -7139,16 +7159,16 @@ async function createRentalOrder({
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const settings = await getCompanySettings(companyId);
-    const normalizedStatus = normalizeRentalOrderStatus(status);
-    const demandOnly = isDemandOnlyStatus(normalizedStatus);
-    const allowsInventory = allowsInventoryAssignment(normalizedStatus);
+      const settings = await getCompanySettings(companyId);
+      const effectiveStatus = overrideStatusFromLineItems(status, lineItems);
+      const demandOnly = isDemandOnlyStatus(effectiveStatus);
+      const allowsInventory = allowsInventoryAssignment(effectiveStatus);
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
     const effectiveDate = createdAt ? new Date(createdAt) : new Date();
-    const quoteNumber = isQuoteStatus(normalizedStatus) ? await nextDocumentNumber(client, companyId, "QO", effectiveDate) : null;
-    const roNumber = !isQuoteStatus(normalizedStatus) ? await nextDocumentNumber(client, companyId, "RO", effectiveDate) : null;
+      const quoteNumber = isQuoteStatus(effectiveStatus) ? await nextDocumentNumber(client, companyId, "QO", effectiveDate) : null;
+      const roNumber = !isQuoteStatus(effectiveStatus) ? await nextDocumentNumber(client, companyId, "RO", effectiveDate) : null;
     const createdIso = normalizeTimestamptz(createdAt) || null;
     const bundleCache = new Map();
     const getBundleData = async (bundleId) => {
@@ -7199,7 +7219,7 @@ async function createRentalOrder({
         customerPo || null,
         salespersonId || null,
         fulfillmentMethod || "pickup",
-        normalizedStatus,
+          effectiveStatus,
         terms || null,
         generalNotes || null,
         pickupLocationId || null,
@@ -7323,20 +7343,25 @@ async function createRentalOrder({
       actorName,
       actorEmail,
       action: "create",
-      summary: `Created ${isQuoteStatus(normalizedStatus) ? "quote" : "rental order"}.`,
-      changes: {
-        status: normalizedStatus,
-        customerId,
-        pickupLocationId: pickupLocationId || null,
-        salespersonId: salespersonId || null,
-        fulfillmentMethod: fulfillmentMethod || "pickup",
-        lineItemsCount: Array.isArray(lineItems) ? lineItems.length : 0,
-        feesCount: Array.isArray(fees) ? fees.length : 0,
-      },
-    });
+        summary: `Created ${isQuoteStatus(effectiveStatus) ? "quote" : "rental order"}.`,
+        changes: {
+          status: effectiveStatus,
+          customerId,
+          pickupLocationId: pickupLocationId || null,
+          salespersonId: salespersonId || null,
+          fulfillmentMethod: fulfillmentMethod || "pickup",
+          lineItemsCount: Array.isArray(lineItems) ? lineItems.length : 0,
+          feesCount: Array.isArray(fees) ? fees.length : 0,
+        },
+      });
 
     await client.query("COMMIT");
-    return { id: orderId, quoteNumber: headerRes.rows[0].quote_number, roNumber: headerRes.rows[0].ro_number };
+      return {
+        id: orderId,
+        quoteNumber: headerRes.rows[0].quote_number,
+        roNumber: headerRes.rows[0].ro_number,
+        status: effectiveStatus,
+      };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -8747,10 +8772,10 @@ async function updateRentalOrder({
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const settings = await getCompanySettings(companyId);
-    const normalizedStatus = normalizeRentalOrderStatus(status);
-    const demandOnly = isDemandOnlyStatus(normalizedStatus);
-    const allowsInventory = allowsInventoryAssignment(normalizedStatus);
+      const settings = await getCompanySettings(companyId);
+      const effectiveStatus = overrideStatusFromLineItems(status, lineItems);
+      const demandOnly = isDemandOnlyStatus(effectiveStatus);
+      const allowsInventory = allowsInventoryAssignment(effectiveStatus);
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
@@ -8800,12 +8825,12 @@ async function updateRentalOrder({
     const prevStatus = normalizeRentalOrderStatus(existing.status);
     let quoteNumber = existing.quote_number || null;
     let roNumber = existing.ro_number || null;
-    if (isQuoteStatus(normalizedStatus) && !quoteNumber) {
-      quoteNumber = await nextDocumentNumber(client, companyId, "QO");
-    }
-    if (!isQuoteStatus(normalizedStatus) && !roNumber) {
-      roNumber = await nextDocumentNumber(client, companyId, "RO");
-    }
+      if (isQuoteStatus(effectiveStatus) && !quoteNumber) {
+        quoteNumber = await nextDocumentNumber(client, companyId, "QO");
+      }
+      if (!isQuoteStatus(effectiveStatus) && !roNumber) {
+        roNumber = await nextDocumentNumber(client, companyId, "RO");
+      }
     const headerRes = await client.query(
       `
       UPDATE rental_orders
@@ -8815,7 +8840,7 @@ async function updateRentalOrder({
              customer_po = $4,
              salesperson_id = $5,
              fulfillment_method = $6,
-             status = $7,
+               status = $7,
              terms = $8,
              general_notes = $9,
              pickup_location_id = $10,
@@ -8838,7 +8863,7 @@ async function updateRentalOrder({
         customerPo || null,
         salespersonId || null,
         fulfillmentMethod || "pickup",
-        normalizedStatus,
+          effectiveStatus,
         terms || null,
         generalNotes || null,
         pickupLocationId || null,
@@ -8982,13 +9007,13 @@ async function updateRentalOrder({
       salespersonId: existing.salesperson_id,
       fulfillmentMethod: existing.fulfillment_method,
     };
-    const after = {
-      status: normalizedStatus,
-      customerId,
-      pickupLocationId: pickupLocationId || null,
-      salespersonId: salespersonId || null,
-      fulfillmentMethod: fulfillmentMethod || "pickup",
-    };
+      const after = {
+        status: effectiveStatus,
+        customerId,
+        pickupLocationId: pickupLocationId || null,
+        salespersonId: salespersonId || null,
+        fulfillmentMethod: fulfillmentMethod || "pickup",
+      };
     await insertRentalOrderAudit({
       client,
       companyId,
@@ -9011,9 +9036,9 @@ async function updateRentalOrder({
       quoteNumber: headerRes.rows[0].quote_number,
       roNumber: headerRes.rows[0].ro_number,
       prevStatus,
-      status: normalizedStatus,
-      statusChanged: prevStatus !== normalizedStatus,
-    };
+        status: effectiveStatus,
+        statusChanged: prevStatus !== effectiveStatus,
+      };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;

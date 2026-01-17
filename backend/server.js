@@ -4068,15 +4068,15 @@ app.post(
       lineItems,
       fees,
     });
-    try {
-      await updateEquipmentCurrentLocationFromDropoff({
-        companyId: Number(companyId),
-        status,
-        fulfillmentMethod,
-        dropoffAddress,
-        lineItems,
-      });
-    } catch (err) {
+      try {
+        await updateEquipmentCurrentLocationFromDropoff({
+          companyId: Number(companyId),
+          status: created?.status || status,
+          fulfillmentMethod,
+          dropoffAddress,
+          lineItems,
+        });
+      } catch (err) {
       console.warn("Dropoff current-location update failed:", err?.message || err);
     }
     res.status(201).json(created);
