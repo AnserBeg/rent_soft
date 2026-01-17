@@ -2082,6 +2082,16 @@ a.ghost {
   padding-left: 56px;
 }
 
+.timeline-bar.status-reservation .timeline-duration {
+  left: auto;
+  right: 8px;
+}
+
+.timeline-bar.status-reservation.long .timeline-bar-label {
+  padding-left: 10px;
+  padding-right: 56px;
+}
+
 .timeline-bar.long::before {
   content: "";
   position: absolute;
