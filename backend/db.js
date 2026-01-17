@@ -5038,7 +5038,10 @@ async function setLineItemPickedUp({
              AND ro.status IN ('requested','reservation','ordered')
              AND tstzrange(
                COALESCE(li.fulfilled_at, li.start_at),
-               COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
+               CASE
+                 WHEN li.fulfilled_at IS NOT NULL AND li.returned_at IS NULL THEN 'infinity'::timestamptz
+                 ELSE COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+               END,
                '[)'
              ) && tstzrange($5::timestamptz, $6::timestamptz, '[)')
            ORDER BY COALESCE(li.fulfilled_at, li.start_at) ASC
