@@ -2323,6 +2323,11 @@ function selectedInventoryDetails(ids) {
   return (ids || []).map((id) => byId.get(String(id)) || { id, serial_number: `#${id}`, model_name: "" });
 }
 
+function needsRepairCondition(condition) {
+  const raw = String(condition || "").toLowerCase();
+  return raw.includes("repair");
+}
+
 function unitLabel(inv) {
   const model = inv?.model_name || "Unit";
   const base = inv?.location ? String(inv.location) : "Unknown";
@@ -2346,6 +2351,18 @@ function loadWorkOrdersForCompany(companyId) {
   return Array.isArray(data) ? data : [];
 }
 
+function findOpenWorkOrderForUnit(companyId, unitId) {
+  if (!companyId || !unitId) return null;
+  const orders = loadWorkOrdersForCompany(companyId);
+  return (
+    orders.find((order) => {
+      if (String(order?.unitId) !== String(unitId)) return false;
+      if (order?.orderStatus === "closed") return false;
+      return order?.serviceStatus === "out_of_service";
+    }) || null
+  );
+}
+
 function saveWorkOrdersForCompany(companyId, orders) {
   if (!companyId) return;
   localStorage.setItem(workOrdersStorageKey(companyId), JSON.stringify(orders || []));
@@ -2359,6 +2376,44 @@ function nextWorkOrderNumber(companyId) {
   const next = Number.isFinite(current) ? current + 1 : 1;
   localStorage.setItem(key, String(next));
   return `WO-${year}-${String(next).padStart(5, "0")}`;
+}
+
+function conflictOrderLabel(conflict) {
+  if (!conflict) return "another order";
+  return conflict.roNumber || conflict.quoteNumber || (conflict.orderId ? `order #${conflict.orderId}` : "another order");
+}
+
+function resolvePickupUnavailableMessage({ data, lineItem, status }) {
+  const fallback = data?.error || "Unable to update pickup time.";
+  const unavailable = status === 409 && String(fallback).toLowerCase().includes("no available units");
+  if (!unavailable) return fallback;
+
+  const selectedId =
+    Array.isArray(lineItem?.inventoryIds)
+      ? lineItem.inventoryIds.map((id) => Number(id)).find((id) => Number.isFinite(id))
+      : null;
+  if (!selectedId) return fallback;
+
+  const openWorkOrder = findOpenWorkOrderForUnit(activeCompanyId, selectedId);
+  if (openWorkOrder) {
+    const number = openWorkOrder.number ? ` (${openWorkOrder.number})` : "";
+    return `Unit has an open work order${number}.`;
+  }
+
+  const unit = selectedInventoryDetails([selectedId])[0];
+  if (needsRepairCondition(unit?.condition)) {
+    return "Unit needs repair before it can be picked up.";
+  }
+
+  const conflict =
+    Array.isArray(data?.conflicts)
+      ? data.conflicts.find((row) => Number(row?.equipmentId) === selectedId) || data.conflicts[0]
+      : null;
+  if (conflict) {
+    return `Unit is currently out on ${conflictOrderLabel(conflict)}.`;
+  }
+
+  return fallback;
 }
 
 function ensureReturnInspectionWorkOrders(li) {
@@ -2670,7 +2725,7 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn }) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const message = data.error || "Unable to update pickup time.";
+      const message = resolvePickupUnavailableMessage({ data, lineItem: li, status: res.status });
       window.RentSoft?.showErrorBanner?.(message);
       throw new Error(message);
     }

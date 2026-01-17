@@ -2032,6 +2032,12 @@ a.ghost {
   overflow: visible;
 }
 
+.timeline-bar.compact .timeline-duration,
+.timeline-bar.compact .timeline-badge,
+.timeline-bar.compact .timeline-bell {
+  display: none;
+}
+
 .timeline-bar.compact.compact-left .timeline-bar-label {
   left: auto;
   right: calc(100% + 6px);
