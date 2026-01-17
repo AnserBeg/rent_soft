@@ -4045,29 +4045,37 @@ app.post(
       actorEmail,
     } = req.body;
     if (!companyId || !customerId) return res.status(400).json({ error: "companyId and customerId are required." });
-    const created = await createRentalOrder({
-      companyId,
-      customerId,
-      customerPo,
-      salespersonId,
-      actorName,
-      actorEmail,
-      fulfillmentMethod,
-      status,
-      terms,
-      generalNotes,
-      pickupLocationId,
-      dropoffAddress,
-      siteAddress,
-      logisticsInstructions,
-      specialInstructions,
-      criticalAreas,
-      coverageHours,
-      emergencyContacts,
-      siteContacts,
-      lineItems,
-      fees,
-    });
+    let created;
+    try {
+      created = await createRentalOrder({
+        companyId,
+        customerId,
+        customerPo,
+        salespersonId,
+        actorName,
+        actorEmail,
+        fulfillmentMethod,
+        status,
+        terms,
+        generalNotes,
+        pickupLocationId,
+        dropoffAddress,
+        siteAddress,
+        logisticsInstructions,
+        specialInstructions,
+        criticalAreas,
+        coverageHours,
+        emergencyContacts,
+        siteContacts,
+        lineItems,
+        fees,
+      });
+    } catch (err) {
+      if (err?.code === "pickup_conflict") {
+        return res.status(409).json({ error: err.message, conflicts: err.conflicts || [] });
+      }
+      throw err;
+    }
       try {
         await updateEquipmentCurrentLocationFromDropoff({
           companyId: Number(companyId),
@@ -4111,30 +4119,38 @@ app.put(
       actorEmail,
     } = req.body;
     if (!companyId || !customerId) return res.status(400).json({ error: "companyId and customerId are required." });
-    const updated = await updateRentalOrder({
-      id: Number(id),
-      companyId,
-      customerId,
-      customerPo,
-      salespersonId,
-      actorName,
-      actorEmail,
-      fulfillmentMethod,
-      status,
-      terms,
-      generalNotes,
-      pickupLocationId,
-      dropoffAddress,
-      siteAddress,
-      logisticsInstructions,
-      specialInstructions,
-      criticalAreas,
-      coverageHours,
-      emergencyContacts,
-      siteContacts,
-      lineItems,
-      fees,
-    });
+    let updated;
+    try {
+      updated = await updateRentalOrder({
+        id: Number(id),
+        companyId,
+        customerId,
+        customerPo,
+        salespersonId,
+        actorName,
+        actorEmail,
+        fulfillmentMethod,
+        status,
+        terms,
+        generalNotes,
+        pickupLocationId,
+        dropoffAddress,
+        siteAddress,
+        logisticsInstructions,
+        specialInstructions,
+        criticalAreas,
+        coverageHours,
+        emergencyContacts,
+        siteContacts,
+        lineItems,
+        fees,
+      });
+    } catch (err) {
+      if (err?.code === "pickup_conflict") {
+        return res.status(409).json({ error: err.message, conflicts: err.conflicts || [] });
+      }
+      throw err;
+    }
     if (!updated) return res.status(404).json({ error: "Rental order not found" });
     res.json(updated);
 

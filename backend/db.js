@@ -4937,6 +4937,66 @@ async function rescheduleLineItemEnd({ companyId, lineItemId, endAt }) {
   }
 }
 
+function createPickupConflictError(conflicts) {
+  const err = new Error("No available units for that actual pickup time.");
+  err.code = "pickup_conflict";
+  err.conflicts = conflicts;
+  return err;
+}
+
+async function findPickupConflicts({ client, companyId, equipmentIds, orderId, startAt, endAt }) {
+  if (!equipmentIds.length) return [];
+  const conflicts = [];
+  for (const equipmentId of equipmentIds) {
+    const conflictRes = await client.query(
+      `
+      SELECT ro.id AS order_id,
+             ro.status,
+             ro.quote_number,
+             ro.ro_number,
+             c.company_name AS customer_name,
+             COALESCE(li.fulfilled_at, li.start_at) AS start_at,
+             CASE
+               WHEN li.fulfilled_at IS NOT NULL AND li.returned_at IS NULL THEN 'infinity'::timestamptz
+               ELSE COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+             END AS end_at
+        FROM rental_order_line_inventory liv
+        JOIN rental_order_line_items li ON li.id = liv.line_item_id
+        JOIN rental_orders ro ON ro.id = li.rental_order_id
+        JOIN customers c ON c.id = ro.customer_id
+       WHERE liv.equipment_id = $1
+         AND ro.company_id = $2
+         AND ($3::int IS NULL OR ro.id <> $3)
+         AND tstzrange(
+           COALESCE(li.fulfilled_at, li.start_at),
+           CASE
+             WHEN li.fulfilled_at IS NOT NULL AND li.returned_at IS NULL THEN 'infinity'::timestamptz
+             ELSE COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+           END,
+           '[)'
+         ) && tstzrange($4::timestamptz, $5::timestamptz, '[)')
+       ORDER BY COALESCE(li.fulfilled_at, li.start_at) ASC
+       LIMIT 3
+      `,
+      [equipmentId, companyId, orderId || null, startAt, endAt]
+    );
+    conflictRes.rows.forEach((r) => {
+      conflicts.push({
+        equipmentId,
+        orderId: r.order_id,
+        status: r.status,
+        quoteNumber: r.quote_number,
+        roNumber: r.ro_number,
+        customerName: r.customer_name,
+        startAt: r.start_at,
+        endAt: r.end_at,
+      });
+    });
+    if (conflicts.length) break;
+  }
+  return conflicts;
+}
+
 async function setLineItemPickedUp({
   companyId,
   lineItemId,
@@ -5035,7 +5095,6 @@ async function setLineItemPickedUp({
              AND ro.company_id = $2
              AND li.id <> $3
              AND ro.id <> $4
-             AND ro.status IN ('requested','reservation','ordered')
              AND tstzrange(
                COALESCE(li.fulfilled_at, li.start_at),
                CASE
@@ -7268,6 +7327,26 @@ async function createRentalOrder({
       if (bundleData && allowsInventory && !inventoryIds.length) {
         throw new Error("Bundle has no equipment assigned.");
       }
+      if (fulfilledAt && inventoryIds.length) {
+        const actualStart = fulfilledAt;
+        const actualEnd = returnedAt || endAt;
+        const startMs = Date.parse(actualStart);
+        const endMs = Date.parse(actualEnd);
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+          throw new Error("Invalid actual pickup/return dates.");
+        }
+        const conflicts = await findPickupConflicts({
+          client,
+          companyId,
+          equipmentIds: inventoryIds,
+          orderId,
+          startAt: actualStart,
+          endAt: actualEnd,
+        });
+        if (conflicts.length) {
+          throw createPickupConflictError(conflicts);
+        }
+      }
       const qty = bundleData ? 1 : inventoryIds.length;
       const effectiveQty = bundleData ? 1 : (qty || (demandOnly ? 1 : 0));
       const computedUnits = computeBillableUnits({
@@ -8908,6 +8987,26 @@ async function updateRentalOrder({
         : [];
       if (bundleData && allowsInventory && !inventoryIds.length) {
         throw new Error("Bundle has no equipment assigned.");
+      }
+      if (fulfilledAt && inventoryIds.length) {
+        const actualStart = fulfilledAt;
+        const actualEnd = returnedAt || endAt;
+        const startMs = Date.parse(actualStart);
+        const endMs = Date.parse(actualEnd);
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+          throw new Error("Invalid actual pickup/return dates.");
+        }
+        const conflicts = await findPickupConflicts({
+          client,
+          companyId,
+          equipmentIds: inventoryIds,
+          orderId: id,
+          startAt: actualStart,
+          endAt: actualEnd,
+        });
+        if (conflicts.length) {
+          throw createPickupConflictError(conflicts);
+        }
       }
       const qty = bundleData ? 1 : inventoryIds.length;
       const effectiveQty = bundleData ? 1 : (qty || (demandOnly ? 1 : 0));
