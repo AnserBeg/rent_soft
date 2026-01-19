@@ -3437,12 +3437,17 @@ app.post(
 app.get(
   "/api/qbo/income",
   asyncHandler(async (req, res) => {
-    const { companyId, start, end } = req.query || {};
+    const { companyId, start, end, debug } = req.query || {};
     if (!companyId || !start || !end) {
       return res.status(400).json({ error: "companyId, start, and end are required." });
     }
     try {
-      const data = await getIncomeTotals({ companyId: Number(companyId), startDate: start, endDate: end });
+      const data = await getIncomeTotals({
+        companyId: Number(companyId),
+        startDate: start,
+        endDate: end,
+        debug: String(debug || "") === "1",
+      });
       res.json(data);
     } catch (err) {
       const message = err?.message ? String(err.message) : "QBO income request failed.";
@@ -3456,7 +3461,7 @@ app.get(
 app.get(
   "/api/qbo/income-timeseries",
   asyncHandler(async (req, res) => {
-    const { companyId, start, end, bucket } = req.query || {};
+    const { companyId, start, end, bucket, debug } = req.query || {};
     if (!companyId || !start || !end) {
       return res.status(400).json({ error: "companyId, start, and end are required." });
     }
@@ -3466,6 +3471,7 @@ app.get(
         startDate: start,
         endDate: end,
         bucket: bucket || "month",
+        debug: String(debug || "") === "1",
       });
       res.json(data);
     } catch (err) {

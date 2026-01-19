@@ -755,21 +755,21 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], sin
   return out;
 }
 
+function parseReportAmount(value) {
+  if (value === null || value === undefined) return null;
+  const raw = String(value).trim();
+  if (!raw || raw === "-" || raw === "--") return null;
+  const negative = raw.startsWith("(") && raw.endsWith(")");
+  const cleaned = raw.replace(/[(),]/g, "");
+  const num = Number(cleaned);
+  if (!Number.isFinite(num)) return null;
+  return negative ? -num : num;
+}
+
 function sumReportIncomeRows(rows, selectedAccounts, selectedNames = new Set()) {
   if (!Array.isArray(rows) || !rows.length) return 0;
   const selected = new Set((selectedAccounts || []).map((v) => String(v)));
   let total = 0;
-
-  const parseAmount = (value) => {
-    if (value === null || value === undefined) return null;
-    const raw = String(value).trim();
-    if (!raw || raw === "-" || raw === "--") return null;
-    const negative = raw.startsWith("(") && raw.endsWith(")");
-    const cleaned = raw.replace(/[(),]/g, "");
-    const num = Number(cleaned);
-    if (!Number.isFinite(num)) return null;
-    return negative ? -num : num;
-  };
 
   const walk = (items) => {
     if (!Array.isArray(items)) return;
@@ -784,7 +784,7 @@ function sumReportIncomeRows(rows, selectedAccounts, selectedNames = new Set()) 
           (accountId && selected.has(String(accountId))) ||
           nameKeys.some((nameKey) => selectedNames.has(nameKey));
         if (matches) {
-          const num = parseAmount(amount);
+          const num = parseReportAmount(amount);
           if (Number.isFinite(num)) total += num;
         }
       }
@@ -949,6 +949,156 @@ async function resolveSelectedAccountNames({ companyId, selectedIds }) {
   }
 }
 
+async function resolveSelectedAccountLabels({ companyId, selectedIds }) {
+  const selected = Array.isArray(selectedIds) ? selectedIds : [];
+  const labels = new Map();
+  if (!selected.length) return labels;
+  const selectedSet = new Set(selected.map((id) => String(id)));
+  try {
+    const accounts = await listQboIncomeAccounts({ companyId });
+    accounts.forEach((account) => {
+      if (!account?.id) return;
+      const id = String(account.id);
+      if (!selectedSet.has(id)) return;
+      labels.set(id, account?.name || account?.fullyQualifiedName || id);
+    });
+  } catch {
+    // fall through with empty map
+  }
+  return labels;
+}
+
+function extractQuickReportColumnIndex(report, matchFn) {
+  const columns = Array.isArray(report?.Columns?.Column) ? report.Columns.Column : [];
+  for (let i = 0; i < columns.length; i += 1) {
+    const title = String(columns[i]?.ColTitle || "").trim().toLowerCase();
+    if (matchFn(title)) return i;
+  }
+  return -1;
+}
+
+function summarizeReport(report, rowLimit = 8) {
+  const columns = Array.isArray(report?.Columns?.Column)
+    ? report.Columns.Column.map((col) => col?.ColTitle || col?.ColType || "")
+    : [];
+  const rows = [];
+  const walk = (items) => {
+    if (!Array.isArray(items) || rows.length >= rowLimit) return;
+    for (const row of items) {
+      if (rows.length >= rowLimit) return;
+      if (row?.RowType === "Row") {
+        const cols = Array.isArray(row?.ColData) ? row.ColData : [];
+        rows.push({
+          rowType: row.RowType,
+          colData: cols.map((c) => ({
+            value: c?.value ?? c?.Value ?? null,
+            id: c?.id ?? c?.Id ?? null,
+          })),
+        });
+      }
+      if (row?.Rows?.Row) walk(row.Rows.Row);
+    }
+  };
+  walk(report?.Rows?.Row || []);
+  return { columns, sampleRows: rows };
+}
+
+function collectQuickReportTransactions(report) {
+  const dateIdx = extractQuickReportColumnIndex(report, (t) => t.includes("date"));
+  const amountIdx = extractQuickReportColumnIndex(report, (t) => t.includes("amount"));
+  if (dateIdx < 0 || amountIdx < 0) return [];
+  const txns = [];
+  walkReportRows(report?.Rows?.Row || [], (row) => {
+    const cols = Array.isArray(row?.ColData) ? row.ColData : [];
+    if (!cols.length) return;
+    const dateRaw = cols[dateIdx]?.value || null;
+    const amount = parseReportAmount(cols[amountIdx]?.value);
+    if (!dateRaw || !Number.isFinite(amount)) return;
+    const parsed = Date.parse(dateRaw);
+    if (!Number.isFinite(parsed)) return;
+    txns.push({ date: new Date(parsed), amount });
+  });
+  return txns;
+}
+
+function bucketStartIso(date, bucket) {
+  const start = startOfUtcBucket(date, bucket);
+  return start ? start.toISOString().slice(0, 10) : null;
+}
+
+async function getIncomeTotalsFromQuickReports({ companyId, selectedIds, startDate, endDate, debug = false }) {
+  let total = 0;
+  const debugReports = [];
+  for (const accountId of selectedIds) {
+    const query = `reports/AccountQuickReport?account=${encodeURIComponent(
+      accountId
+    )}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
+    const report = await qboApiRequest({ companyId, method: "GET", path: query });
+    if (debug) {
+      debugReports.push({
+        accountId: String(accountId),
+        report: summarizeReport(report),
+      });
+    }
+    const txns = collectQuickReportTransactions(report);
+    txns.forEach((txn) => {
+      total += txn.amount;
+    });
+  }
+  return { total, debugReports };
+}
+
+async function getIncomeTimeSeriesFromQuickReports({
+  companyId,
+  selectedIds,
+  startDate,
+  endDate,
+  bucket,
+  debug = false,
+}) {
+  const labels = await resolveSelectedAccountLabels({ companyId, selectedIds });
+  const series = new Map();
+  const debugReports = [];
+  for (const accountId of selectedIds) {
+    const query = `reports/AccountQuickReport?account=${encodeURIComponent(
+      accountId
+    )}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
+    const report = await qboApiRequest({ companyId, method: "GET", path: query });
+    if (debug) {
+      debugReports.push({
+        accountId: String(accountId),
+        report: summarizeReport(report),
+      });
+    }
+    const txns = collectQuickReportTransactions(report);
+    if (!txns.length) continue;
+    const label = labels.get(String(accountId)) || String(accountId);
+    const key = String(accountId);
+    if (!series.has(key)) series.set(key, { key, label, values: new Map() });
+    const entry = series.get(key);
+    txns.forEach((txn) => {
+      const bucketIso = bucketStartIso(txn.date, bucket);
+      if (!bucketIso) return;
+      const prev = entry.values.get(bucketIso) || 0;
+      entry.values.set(bucketIso, prev + txn.amount);
+    });
+  }
+
+  const rows = [];
+  for (const entry of series.values()) {
+    for (const [bucketIso, value] of entry.values.entries()) {
+      if (!Number.isFinite(value) || value === 0) continue;
+      rows.push({
+        bucket: bucketIso,
+        key: entry.key,
+        label: entry.label,
+        revenue: value,
+      });
+    }
+  }
+  return { rows, debugReports };
+}
+
 function walkReportRows(rows, cb) {
   if (!Array.isArray(rows)) return;
   for (const row of rows) {
@@ -965,7 +1115,7 @@ function walkReportRows(rows, cb) {
   }
 }
 
-async function getIncomeTotals({ companyId, startDate, endDate }) {
+async function getIncomeTotals({ companyId, startDate, endDate, debug = false }) {
   const settings = await getCompanySettings(companyId);
   const selected = settings.qbo_income_account_ids || [];
   if (!selected.length) return { total: 0, selectedAccounts: [] };
@@ -976,10 +1126,25 @@ async function getIncomeTotals({ companyId, startDate, endDate }) {
   const rows = data?.Rows?.Row || [];
   const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
   const total = sumReportIncomeRows(rows, selected, selectedNames);
-  return { total, selectedAccounts: selected };
+  const debugInfo = debug ? { pAndL: summarizeReport(data) } : null;
+  if (total !== 0) {
+    return debug ? { total, selectedAccounts: selected, debug: debugInfo } : { total, selectedAccounts: selected };
+  }
+  const quick = await getIncomeTotalsFromQuickReports({
+    companyId,
+    selectedIds: selected,
+    startDate,
+    endDate,
+    debug,
+  });
+  if (debug) {
+    debugInfo.quickReports = quick.debugReports;
+    return { total: quick.total, selectedAccounts: selected, debug: debugInfo };
+  }
+  return { total: quick.total, selectedAccounts: selected };
 }
 
-async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "month" }) {
+async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "month", debug = false }) {
   const settings = await getCompanySettings(companyId);
   const selected = settings.qbo_income_account_ids || [];
   if (!selected.length) return { rows: [], selectedAccounts: [] };
@@ -997,7 +1162,20 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
   )}&summarize_column_by=${encodeURIComponent(summarize)}`;
   const data = await qboApiRequest({ companyId, method: "GET", path: query });
   const columnDefs = extractReportBucketColumns(data, bucketKey, start, end);
-  if (!columnDefs.length) return { rows: [], selectedAccounts: selected };
+  if (!columnDefs.length) {
+    const quick = await getIncomeTimeSeriesFromQuickReports({
+      companyId,
+      selectedIds: selected,
+      startDate: start,
+      endDate: end,
+      bucket: bucketKey,
+      debug,
+    });
+    if (debug) {
+      return { rows: quick.rows, selectedAccounts: selected, debug: { quickReports: quick.debugReports } };
+    }
+    return { rows: quick.rows, selectedAccounts: selected };
+  }
 
   const selectedSet = new Set(selected.map((v) => String(v)));
   const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
@@ -1021,15 +1199,10 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
     }
     const entry = series.get(key);
     for (const col of columnDefs) {
-      const raw = cols[col.index]?.value;
-      if (raw === null || raw === undefined || raw === "-" || raw === "--") continue;
-      const cleaned = String(raw).replace(/[(),]/g, "");
-      const negative = String(raw).trim().startsWith("(") && String(raw).trim().endsWith(")");
-      const num = Number(cleaned);
+      const num = parseReportAmount(cols[col.index]?.value);
       if (!Number.isFinite(num)) continue;
-      const value = negative ? -num : num;
       const prev = entry.values.get(col.startDate) || 0;
-      entry.values.set(col.startDate, prev + value);
+      entry.values.set(col.startDate, prev + num);
     }
   });
 
@@ -1046,7 +1219,24 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
       });
     }
   }
-  return { rows, selectedAccounts: selected };
+  if (rows.length) {
+    if (debug) {
+      return { rows, selectedAccounts: selected, debug: { pAndL: summarizeReport(data) } };
+    }
+    return { rows, selectedAccounts: selected };
+  }
+  const quick = await getIncomeTimeSeriesFromQuickReports({
+    companyId,
+    selectedIds: selected,
+    startDate: start,
+    endDate: end,
+    bucket: bucketKey,
+    debug,
+  });
+  if (debug) {
+    return { rows: quick.rows, selectedAccounts: selected, debug: { pAndL: summarizeReport(data), quickReports: quick.debugReports } };
+  }
+  return { rows: quick.rows, selectedAccounts: selected };
 }
 
 async function createPickupDraftInvoice({ companyId, orderId, lineItemId, pickedUpAt }) {
