@@ -939,6 +939,14 @@ function walkReportRows(rows, cb) {
   if (!Array.isArray(rows)) return;
   for (const row of rows) {
     if (row?.RowType === "Row") cb(row);
+    if (row?.RowType === "Section") {
+      const headerCol = row?.Header?.ColData?.[0] || null;
+      const summaryCols = Array.isArray(row?.Summary?.ColData) ? row.Summary.ColData : null;
+      if (headerCol && summaryCols && summaryCols.length) {
+        const merged = [{ ...headerCol }, ...summaryCols.slice(1)];
+        cb({ RowType: "Row", ColData: merged });
+      }
+    }
     if (row?.Rows?.Row) walkReportRows(row.Rows.Row, cb);
   }
 }
