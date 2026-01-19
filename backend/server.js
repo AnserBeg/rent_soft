@@ -3847,6 +3847,12 @@ app.put(
     if (pickedUp) {
       const settings = await getCompanySettings(companyId).catch(() => null);
       if (settings?.qbo_enabled) {
+        console.info("QBO pickup invoice attempt", {
+          companyId: Number(companyId),
+          orderId: result.orderId,
+          lineItemId: Number(id),
+          pickedUpAt: result.pickedUpAt || normalizedPickedUpAt || null,
+        });
         try {
           qbo = await createPickupDraftInvoice({
             companyId: Number(companyId),
@@ -3854,9 +3860,30 @@ app.put(
             lineItemId: Number(id),
             pickedUpAt: result.pickedUpAt || normalizedPickedUpAt || new Date().toISOString(),
           });
+          console.info("QBO pickup invoice result", {
+            companyId: Number(companyId),
+            orderId: result.orderId,
+            lineItemId: Number(id),
+            ok: qbo?.ok ?? null,
+            skipped: qbo?.skipped ?? null,
+            error: qbo?.error ?? null,
+            docNumber: qbo?.document?.doc_number || qbo?.document?.docNumber || null,
+          });
         } catch (err) {
           qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
+          console.error("QBO pickup invoice failed", {
+            companyId: Number(companyId),
+            orderId: result.orderId,
+            lineItemId: Number(id),
+            error: qbo.error,
+          });
         }
+      } else {
+        console.info("QBO pickup invoice skipped (disabled)", {
+          companyId: Number(companyId),
+          orderId: result.orderId,
+          lineItemId: Number(id),
+        });
       }
     }
     res.json({ ...result, qbo });
