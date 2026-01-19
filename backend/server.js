@@ -164,12 +164,14 @@ const {
   handleWebhookEvent,
   runCdcSync,
   getIncomeTotals,
+  getIncomeTimeSeries,
   listQboCustomers,
   getQboCustomerById,
   createQboCustomer,
   normalizeQboCustomer,
   listQboItems,
   normalizeQboItem,
+  listQboIncomeAccounts,
 } = require("./qboService");
 const { verifyWebhookSignature, computeExpiryTimestamp } = require("./qbo");
 
@@ -3133,6 +3135,23 @@ app.get(
   })
 );
 
+app.get(
+  "/api/qbo/income-accounts",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    try {
+      const accounts = await listQboIncomeAccounts({ companyId: Number(companyId) });
+      res.json({ accounts: accounts.filter(Boolean) });
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "QBO income accounts request failed.";
+      if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
+      if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      res.status(500).json({ error: message });
+    }
+  })
+);
+
 app.post(
   "/api/qbo/customers/link",
   asyncHandler(async (req, res) => {
@@ -3427,6 +3446,30 @@ app.get(
       res.json(data);
     } catch (err) {
       const message = err?.message ? String(err.message) : "QBO income request failed.";
+      if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
+      if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      res.status(500).json({ error: message });
+    }
+  })
+);
+
+app.get(
+  "/api/qbo/income-timeseries",
+  asyncHandler(async (req, res) => {
+    const { companyId, start, end, bucket } = req.query || {};
+    if (!companyId || !start || !end) {
+      return res.status(400).json({ error: "companyId, start, and end are required." });
+    }
+    try {
+      const data = await getIncomeTimeSeries({
+        companyId: Number(companyId),
+        startDate: start,
+        endDate: end,
+        bucket: bucket || "month",
+      });
+      res.json(data);
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "QBO income time series request failed.";
       if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
       if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
       res.status(500).json({ error: message });

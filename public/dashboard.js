@@ -763,21 +763,19 @@ async function loadRevenueTimeSeries() {
   if (typeof Chart === "undefined") return;
 
   const bucket = String(revTsBucket?.value || "month");
-  const groupBy = String(revTsGroup?.value || "location");
   const stacked = Boolean(revTsStacked?.checked);
 
-  const from = rangeStartDate.toISOString();
-  const to = new Date(rangeStartDate.getTime() + rangeDays * DAY_MS).toISOString();
+  const start = rangeStartDate.toISOString().slice(0, 10);
+  const end = new Date(rangeStartDate.getTime() + rangeDays * DAY_MS).toISOString().slice(0, 10);
 
   const qs = new URLSearchParams({
     companyId: String(activeCompanyId),
-    from,
-    to,
-    groupBy,
+    start,
+    end,
     bucket,
   });
 
-  const res = await fetch(`/api/revenue-timeseries?${qs.toString()}`);
+  const res = await fetch(`/api/qbo/income-timeseries?${qs.toString()}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to load revenue time series");
 

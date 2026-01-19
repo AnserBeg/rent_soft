@@ -35,7 +35,9 @@ const qboDisconnectBtn = document.getElementById("qbo-disconnect");
 const qboEnabledToggle = document.getElementById("qbo-enabled");
 const qboBillingDayInput = document.getElementById("qbo-billing-day");
 const qboAdjustmentPolicySelect = document.getElementById("qbo-adjustment-policy");
-const qboIncomeAccountsInput = document.getElementById("qbo-income-accounts");
+const qboIncomeAccountsSelect = document.getElementById("qbo-income-accounts");
+const qboIncomeAccountsRefreshBtn = document.getElementById("qbo-income-accounts-refresh");
+const qboIncomeAccountsHint = document.getElementById("qbo-income-accounts-hint");
 const qboHint = document.getElementById("qbo-hint");
 const saveQboSettingsBtn = document.getElementById("save-qbo-settings");
 
@@ -64,6 +66,10 @@ let rentalInfoFieldsLoaded = false;
 let userModeLoaded = false;
 let emailSettingsLoaded = false;
 let qboSettingsLoaded = false;
+let qboConnected = false;
+let qboIncomeAccountsCache = [];
+let qboIncomeAccountsLoading = false;
+let qboIncomeAccountIds = [];
 
 const storefrontRequirementOptions = [
   { key: "businessName", label: "Business name" },
@@ -266,6 +272,11 @@ function setQboHint(message) {
   qboHint.textContent = String(message || "");
 }
 
+function setQboIncomeAccountsHint(message) {
+  if (!qboIncomeAccountsHint) return;
+  qboIncomeAccountsHint.textContent = String(message || "");
+}
+
 function setCustomerModeHint(message) {
   if (!customerModeHint) return;
   customerModeHint.textContent = String(message || "");
@@ -285,12 +296,58 @@ function renderLogoPreview(url) {
   if (removeLogoBtn) removeLogoBtn.disabled = !currentLogoUrl;
 }
 
-function parseIncomeAccountIds(value) {
-  if (!value) return [];
-  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean);
-  return String(value)
-    .split(",")
-    .map((v) => v.trim())
+function setQboIncomeAccountsEnabled(enabled) {
+  if (qboIncomeAccountsSelect) qboIncomeAccountsSelect.disabled = !enabled;
+  if (qboIncomeAccountsRefreshBtn) qboIncomeAccountsRefreshBtn.disabled = !enabled;
+}
+
+function applyQboIncomeAccountSelection() {
+  if (!qboIncomeAccountsSelect) return;
+  const selected = new Set(qboIncomeAccountIds.map((v) => String(v)));
+  Array.from(qboIncomeAccountsSelect.options).forEach((opt) => {
+    opt.selected = selected.has(opt.value);
+  });
+}
+
+function renderQboIncomeAccountsOptions(accounts) {
+  if (!qboIncomeAccountsSelect) return;
+  const rows = Array.isArray(accounts) ? accounts : [];
+  qboIncomeAccountsSelect.innerHTML = "";
+  const optionIds = new Set();
+  rows.forEach((account) => {
+    const id = account?.id ? String(account.id) : null;
+    if (!id) return;
+    const label = account?.name || account?.fullyQualifiedName || `Account ${id}`;
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = label;
+    qboIncomeAccountsSelect.appendChild(option);
+    optionIds.add(id);
+  });
+  qboIncomeAccountIds
+    .map((id) => String(id))
+    .filter((id) => id && !optionIds.has(id))
+    .forEach((id) => {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = `Account ${id}`;
+      qboIncomeAccountsSelect.appendChild(option);
+      optionIds.add(id);
+    });
+  if (!qboIncomeAccountsSelect.options.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = qboConnected ? "No income accounts found." : "Connect QuickBooks Online to load accounts.";
+    option.disabled = true;
+    qboIncomeAccountsSelect.appendChild(option);
+  }
+  applyQboIncomeAccountSelection();
+}
+
+function syncQboIncomeAccountIdsFromSelect() {
+  if (!qboIncomeAccountsSelect) return;
+  qboIncomeAccountIds = Array.from(qboIncomeAccountsSelect.selectedOptions)
+    .map((opt) => String(opt.value))
     .filter(Boolean);
 }
 
@@ -299,9 +356,10 @@ function setQboSettingsFields(settings) {
   if (qboEnabledToggle) qboEnabledToggle.checked = settings.qbo_enabled === true;
   if (qboBillingDayInput) qboBillingDayInput.value = settings.qbo_billing_day ? String(settings.qbo_billing_day) : "1";
   if (qboAdjustmentPolicySelect) qboAdjustmentPolicySelect.value = settings.qbo_adjustment_policy || "credit_memo";
-  if (qboIncomeAccountsInput) {
+  if (qboIncomeAccountsSelect) {
     const ids = Array.isArray(settings.qbo_income_account_ids) ? settings.qbo_income_account_ids : [];
-    qboIncomeAccountsInput.value = ids.join(", ");
+    qboIncomeAccountIds = ids.map((id) => String(id)).filter(Boolean);
+    renderQboIncomeAccountsOptions(qboIncomeAccountsCache);
   }
 }
 
@@ -311,7 +369,7 @@ function qboSettingsPayload() {
     qboEnabled: qboEnabledToggle?.checked === true,
     qboBillingDay: qboBillingDayInput?.value ? Number(qboBillingDayInput.value) : null,
     qboAdjustmentPolicy: qboAdjustmentPolicySelect?.value || "credit_memo",
-    qboIncomeAccountIds: parseIncomeAccountIds(qboIncomeAccountsInput?.value || ""),
+    qboIncomeAccountIds: qboIncomeAccountIds,
   };
 }
 
@@ -546,17 +604,67 @@ async function loadSettings() {
   if (saveQboSettingsBtn) saveQboSettingsBtn.disabled = false;
 }
 
+async function loadQboIncomeAccounts({ force = false } = {}) {
+  if (!activeCompanyId || !qboIncomeAccountsSelect) return;
+  if (qboIncomeAccountsLoading) return;
+  if (!qboConnected) {
+    setQboIncomeAccountsEnabled(false);
+    setQboIncomeAccountsHint("Connect QuickBooks Online to load accounts.");
+    renderQboIncomeAccountsOptions([]);
+    return;
+  }
+  if (qboIncomeAccountsCache.length && !force) {
+    renderQboIncomeAccountsOptions(qboIncomeAccountsCache);
+    setQboIncomeAccountsHint(`Loaded ${qboIncomeAccountsCache.length} income accounts.`);
+    setQboIncomeAccountsEnabled(true);
+    return;
+  }
+
+  qboIncomeAccountsLoading = true;
+  setQboIncomeAccountsEnabled(false);
+  setQboIncomeAccountsHint("Loading QBO income accounts...");
+  try {
+    const res = await fetch(
+      `/api/qbo/income-accounts?companyId=${encodeURIComponent(String(activeCompanyId))}`
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load QBO income accounts");
+    const accounts = Array.isArray(data.accounts) ? data.accounts : [];
+    qboIncomeAccountsCache = accounts;
+    renderQboIncomeAccountsOptions(accounts);
+    setQboIncomeAccountsHint(
+      accounts.length
+        ? `Loaded ${accounts.length} income accounts. Hold Ctrl/Cmd to select multiple.`
+        : "No income accounts found."
+    );
+  } catch (err) {
+    setQboIncomeAccountsHint(err?.message ? String(err.message) : "Unable to load QBO income accounts.");
+    renderQboIncomeAccountsOptions(qboIncomeAccountsCache);
+  } finally {
+    qboIncomeAccountsLoading = false;
+    setQboIncomeAccountsEnabled(qboConnected);
+  }
+}
+
 async function loadQboStatus() {
   if (!activeCompanyId) return;
   const res = await fetch(`/api/qbo/status?companyId=${encodeURIComponent(String(activeCompanyId))}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to load QBO status");
+  qboConnected = data.connected === true;
   if (qboStatus) {
     qboStatus.textContent = data.connected
       ? `Connected to QBO (realm ${data.realmId || "unknown"}).`
       : "Not connected to QuickBooks Online.";
   }
   if (qboDisconnectBtn) qboDisconnectBtn.disabled = !data.connected;
+  if (qboConnected) {
+    loadQboIncomeAccounts().catch((err) =>
+      setQboIncomeAccountsHint(err?.message ? String(err.message) : "Unable to load QBO income accounts.")
+    );
+  } else {
+    loadQboIncomeAccounts().catch(() => null);
+  }
   return data;
 }
 
@@ -748,6 +856,17 @@ saveQboSettingsBtn?.addEventListener("click", async (e) => {
   } finally {
     saveQboSettingsBtn.disabled = !qboSettingsLoaded;
   }
+});
+
+qboIncomeAccountsSelect?.addEventListener("change", () => {
+  syncQboIncomeAccountIdsFromSelect();
+});
+
+qboIncomeAccountsRefreshBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  await loadQboIncomeAccounts({ force: true }).catch((err) =>
+    setQboIncomeAccountsHint(err?.message ? String(err.message) : "Unable to load QBO income accounts.")
+  );
 });
 
 qboConnectBtn?.addEventListener("click", (e) => {

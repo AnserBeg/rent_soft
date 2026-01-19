@@ -3028,7 +3028,11 @@ async function refreshAvailabilityForLineItem(li) {
     return;
   }
   const availableIds = new Set(li.inventoryOptions.map((e) => Number(e.id)));
-  li.inventoryIds = (li.inventoryIds || []).map((x) => Number(x)).filter((id) => availableIds.has(id));
+  const existingIds = Array.isArray(li.inventoryIds)
+    ? li.inventoryIds.map((x) => Number(x)).filter((id) => Number.isFinite(id))
+    : [];
+  const preserveUnavailable = li.persisted === true;
+  li.inventoryIds = preserveUnavailable ? existingIds : existingIds.filter((id) => availableIds.has(id));
   ensureSingleUnitSelection(li);
   autoSelectUnitForLineItem(li);
 
@@ -3341,6 +3345,7 @@ async function loadOrder() {
   draft.lineItems = (data.lineItems || []).map((li) => ({
     tempId: uuid(),
     lineItemId: li.id,
+    persisted: true,
     typeId: li.typeId,
     bundleId: li.bundleId || null,
     bundleItems: Array.isArray(li.bundleItems) ? li.bundleItems : [],

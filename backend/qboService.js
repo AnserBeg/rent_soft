@@ -279,6 +279,20 @@ function normalizeQboItem(item) {
   };
 }
 
+function normalizeQboAccount(account) {
+  if (!account) return null;
+  const fullyQualifiedName = account.FullyQualifiedName || account.fullyQualifiedName || null;
+  const name = fullyQualifiedName || account.Name || account.name || null;
+  return {
+    id: account.Id ? String(account.Id) : account.id ? String(account.id) : null,
+    name,
+    fullyQualifiedName,
+    type: account.AccountType || account.accountType || null,
+    subType: account.AccountSubType || account.accountSubType || null,
+    active: account.Active !== undefined ? account.Active !== false : account.active !== false,
+  };
+}
+
 async function listQboItems({ companyId }) {
   const items = [];
   let startPosition = 1;
@@ -300,6 +314,31 @@ async function listQboItems({ companyId }) {
     startPosition += maxResults;
   }
   return items;
+}
+
+async function listQboIncomeAccounts({ companyId }) {
+  const accounts = [];
+  let startPosition = 1;
+  const maxResults = 1000;
+  while (true) {
+    const query =
+      "select * from Account where Active = true and (AccountType = 'Income' or AccountType = 'Other Income') " +
+      `STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
+    const data = await qboApiRequest({
+      companyId,
+      method: "GET",
+      path: `query?query=${encodeURIComponent(query)}`,
+    });
+    const response = data?.QueryResponse || {};
+    const rows = Array.isArray(response.Account) ? response.Account : [];
+    rows.forEach((row) => {
+      const normalized = normalizeQboAccount(row);
+      if (normalized?.id) accounts.push(normalized);
+    });
+    if (rows.length < maxResults) break;
+    startPosition += maxResults;
+  }
+  return accounts;
 }
 
 async function getQboCustomerById({ companyId, qboCustomerId }) {
@@ -739,6 +778,32 @@ function sumReportIncomeRows(rows, selectedAccounts) {
   return total;
 }
 
+function extractReportColumnMetaValue(meta, name) {
+  if (!Array.isArray(meta)) return null;
+  const target = String(name || "").toLowerCase();
+  const entry = meta.find((m) => String(m?.Name || "").toLowerCase() === target);
+  return entry?.Value || null;
+}
+
+function extractReportBucketColumns(report) {
+  const columns = Array.isArray(report?.Columns?.Column) ? report.Columns.Column : [];
+  return columns
+    .map((col, index) => {
+      const startDate = extractReportColumnMetaValue(col?.MetaData, "StartDate");
+      if (!startDate) return null;
+      return { index, startDate };
+    })
+    .filter(Boolean);
+}
+
+function walkReportRows(rows, cb) {
+  if (!Array.isArray(rows)) return;
+  for (const row of rows) {
+    if (row?.RowType === "Row") cb(row);
+    if (row?.Rows?.Row) walkReportRows(row.Rows.Row, cb);
+  }
+}
+
 async function getIncomeTotals({ companyId, startDate, endDate }) {
   const settings = await getCompanySettings(companyId);
   const selected = settings.qbo_income_account_ids || [];
@@ -750,6 +815,65 @@ async function getIncomeTotals({ companyId, startDate, endDate }) {
   const rows = data?.Rows?.Row || [];
   const total = sumReportIncomeRows(rows, selected);
   return { total, selectedAccounts: selected };
+}
+
+async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "month" }) {
+  const settings = await getCompanySettings(companyId);
+  const selected = settings.qbo_income_account_ids || [];
+  if (!selected.length) return { rows: [], selectedAccounts: [] };
+
+  const start = toQboDate(startDate);
+  const end = toQboDate(endDate);
+  if (!start || !end) return { rows: [], selectedAccounts: selected };
+
+  const bucketKey = String(bucket || "month").toLowerCase();
+  const summarize =
+    bucketKey === "day" ? "Day" : bucketKey === "week" ? "Week" : "Month";
+
+  const query = `reports/ProfitAndLoss?start_date=${encodeURIComponent(start)}&end_date=${encodeURIComponent(
+    end
+  )}&summarize_column_by=${encodeURIComponent(summarize)}`;
+  const data = await qboApiRequest({ companyId, method: "GET", path: query });
+  const columnDefs = extractReportBucketColumns(data);
+  if (!columnDefs.length) return { rows: [], selectedAccounts: selected };
+
+  const selectedSet = new Set(selected.map((v) => String(v)));
+  const series = new Map();
+
+  walkReportRows(data?.Rows?.Row || [], (row) => {
+    const cols = Array.isArray(row?.ColData) ? row.ColData : [];
+    if (!cols.length) return;
+    const accountCell = cols.find((c) => c?.id) || cols[0] || {};
+    const accountId = accountCell?.id ? String(accountCell.id) : null;
+    if (!accountId || !selectedSet.has(accountId)) return;
+    const label = accountCell?.value || accountId;
+    if (!series.has(accountId)) {
+      series.set(accountId, { key: accountId, label, values: new Map() });
+    }
+    const entry = series.get(accountId);
+    for (const col of columnDefs) {
+      const raw = cols[col.index]?.value;
+      const num = Number(raw || 0);
+      if (!Number.isFinite(num)) continue;
+      const prev = entry.values.get(col.startDate) || 0;
+      entry.values.set(col.startDate, prev + num);
+    }
+  });
+
+  const rows = [];
+  for (const entry of series.values()) {
+    for (const col of columnDefs) {
+      const value = entry.values.get(col.startDate);
+      if (!Number.isFinite(value) || value === 0) continue;
+      rows.push({
+        bucket: col.startDate,
+        key: entry.key,
+        label: entry.label,
+        revenue: value,
+      });
+    }
+  }
+  return { rows, selectedAccounts: selected };
 }
 
 async function createPickupDraftInvoice({ companyId, orderId, lineItemId, pickedUpAt }) {
@@ -818,6 +942,7 @@ module.exports = {
   listQboCustomers,
   normalizeQboItem,
   listQboItems,
+  listQboIncomeAccounts,
   getQboCustomerById,
   createQboCustomer,
   createDraftInvoice,
@@ -829,6 +954,7 @@ module.exports = {
   handleWebhookEvent,
   runCdcSync,
   getIncomeTotals,
+  getIncomeTimeSeries,
   listQboDocumentsForRentalOrder,
   listQboDocumentsUnassigned,
 };
