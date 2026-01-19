@@ -760,6 +760,17 @@ function sumReportIncomeRows(rows, selectedAccounts, selectedNames = new Set()) 
   const selected = new Set((selectedAccounts || []).map((v) => String(v)));
   let total = 0;
 
+  const parseAmount = (value) => {
+    if (value === null || value === undefined) return null;
+    const raw = String(value).trim();
+    if (!raw || raw === "-" || raw === "--") return null;
+    const negative = raw.startsWith("(") && raw.endsWith(")");
+    const cleaned = raw.replace(/[(),]/g, "");
+    const num = Number(cleaned);
+    if (!Number.isFinite(num)) return null;
+    return negative ? -num : num;
+  };
+
   const walk = (items) => {
     if (!Array.isArray(items)) return;
     for (const row of items) {
@@ -773,7 +784,7 @@ function sumReportIncomeRows(rows, selectedAccounts, selectedNames = new Set()) 
           (accountId && selected.has(String(accountId))) ||
           (nameKey && selectedNames.has(nameKey));
         if (matches) {
-          const num = Number(amount);
+          const num = parseAmount(amount);
           if (Number.isFinite(num)) total += num;
         }
       }
@@ -800,6 +811,18 @@ function parseReportColumnDate(title) {
   const cleaned = raw.replace(/^week of\s+/i, "").trim();
   const parsed = Date.parse(cleaned);
   if (Number.isFinite(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+  const rangeMatch = cleaned.match(/([A-Za-z]{3,9}\s+\d{1,2},\s*\d{4})/g);
+  if (rangeMatch && rangeMatch.length) {
+    const candidate = rangeMatch[rangeMatch.length - 1];
+    const rangeParsed = Date.parse(candidate);
+    if (Number.isFinite(rangeParsed)) return new Date(rangeParsed).toISOString().slice(0, 10);
+  }
+  const slashMatch = cleaned.match(/(\d{1,2}\/\d{1,2}\/\d{4})/g);
+  if (slashMatch && slashMatch.length) {
+    const candidate = slashMatch[slashMatch.length - 1];
+    const rangeParsed = Date.parse(candidate);
+    if (Number.isFinite(rangeParsed)) return new Date(rangeParsed).toISOString().slice(0, 10);
+  }
   const monthMatch = cleaned.match(/^([A-Za-z]+)\s+(\d{4})$/);
   if (monthMatch) {
     const monthKey = monthMatch[1].slice(0, 3).toLowerCase();
@@ -827,9 +850,43 @@ function parseReportColumnDate(title) {
   return null;
 }
 
-function extractReportBucketColumns(report) {
+function startOfUtcBucket(d, bucket) {
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return null;
+  const b = String(bucket || "month").toLowerCase();
+  if (b === "month") return new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), 1));
+  if (b === "week") {
+    const day = dt.getUTCDay();
+    const offset = (day + 6) % 7;
+    return new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate() - offset));
+  }
+  return new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
+}
+
+function addUtcBucket(d, bucket) {
+  const dt = new Date(d);
+  const b = String(bucket || "month").toLowerCase();
+  if (b === "month") return new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth() + 1, 1));
+  if (b === "week") return new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate() + 7));
+  return new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate() + 1));
+}
+
+function buildUtcBucketKeys(from, to, bucket) {
+  const keys = [];
+  const start = startOfUtcBucket(from, bucket);
+  if (!start) return keys;
+  const end = new Date(to);
+  let cur = start;
+  while (cur < end && keys.length < 2000) {
+    keys.push(cur.toISOString().slice(0, 10));
+    cur = addUtcBucket(cur, bucket);
+  }
+  return keys;
+}
+
+function extractReportBucketColumns(report, bucket, startDate, endDate) {
   const columns = Array.isArray(report?.Columns?.Column) ? report.Columns.Column : [];
-  return columns
+  const parsed = columns
     .map((col, index) => {
       const meta = col?.MetaData ?? col?.metaData;
       const startDate = extractReportColumnMetaValue(meta, "StartDate") || parseReportColumnDate(col?.ColTitle);
@@ -837,6 +894,19 @@ function extractReportBucketColumns(report) {
       return { index, startDate };
     })
     .filter(Boolean);
+  if (parsed.length) return parsed;
+
+  const startColIdx = columns.findIndex(
+    (col) => String(col?.ColTitle || "").trim().toLowerCase() === "account"
+  );
+  const totalIdx = columns.length
+    ? columns.findIndex((col) => String(col?.ColTitle || "").trim().toLowerCase() === "total")
+    : -1;
+  const baseIdx = startColIdx >= 0 ? startColIdx + 1 : 1;
+  const lastIdx = totalIdx >= 0 ? totalIdx : columns.length;
+  const keys = buildUtcBucketKeys(startDate, endDate, bucket);
+  const maxBuckets = Math.min(keys.length, Math.max(0, lastIdx - baseIdx));
+  return keys.slice(0, maxBuckets).map((key, offset) => ({ index: baseIdx + offset, startDate: key }));
 }
 
 function normalizeAccountName(value) {
@@ -904,7 +974,7 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
     end
   )}&summarize_column_by=${encodeURIComponent(summarize)}`;
   const data = await qboApiRequest({ companyId, method: "GET", path: query });
-  const columnDefs = extractReportBucketColumns(data);
+  const columnDefs = extractReportBucketColumns(data, bucketKey, start, end);
   if (!columnDefs.length) return { rows: [], selectedAccounts: selected };
 
   const selectedSet = new Set(selected.map((v) => String(v)));
@@ -930,10 +1000,14 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
     const entry = series.get(key);
     for (const col of columnDefs) {
       const raw = cols[col.index]?.value;
-      const num = Number(raw || 0);
+      if (raw === null || raw === undefined || raw === "-" || raw === "--") continue;
+      const cleaned = String(raw).replace(/[(),]/g, "");
+      const negative = String(raw).trim().startsWith("(") && String(raw).trim().endsWith(")");
+      const num = Number(cleaned);
       if (!Number.isFinite(num)) continue;
+      const value = negative ? -num : num;
       const prev = entry.values.get(col.startDate) || 0;
-      entry.values.set(col.startDate, prev + num);
+      entry.values.set(col.startDate, prev + value);
     }
   });
 
