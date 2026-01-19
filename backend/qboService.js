@@ -779,10 +779,10 @@ function sumReportIncomeRows(rows, selectedAccounts, selectedNames = new Set()) 
         const accountId = cols.find((c) => c?.id)?.id || cols[0]?.id || null;
         const accountName = cols[0]?.value || null;
         const amount = cols[1]?.value || cols[0]?.value || null;
-        const nameKey = normalizeAccountName(accountName);
+        const nameKeys = accountNameVariants(accountName);
         const matches =
           (accountId && selected.has(String(accountId))) ||
-          (nameKey && selectedNames.has(nameKey));
+          nameKeys.some((nameKey) => selectedNames.has(nameKey));
         if (matches) {
           const num = parseAmount(amount);
           if (Number.isFinite(num)) total += num;
@@ -910,9 +910,25 @@ function extractReportBucketColumns(report, bucket, startDate, endDate) {
 }
 
 function normalizeAccountName(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase();
+  let raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  raw = raw.replace(/^total for\s+/i, "").replace(/^total\s+/i, "");
+  raw = raw.replace(/\s+\(\d+\)\s*$/i, "");
+  raw = raw.replace(/\s+\([^)]+\)\s*$/i, "");
+  raw = raw.replace(/\s+/g, " ");
+  return raw.trim();
+}
+
+function accountNameVariants(value) {
+  const normalized = normalizeAccountName(value);
+  if (!normalized) return [];
+  const out = new Set([normalized]);
+  if (normalized.includes(":")) {
+    const parts = normalized.split(":").map((p) => p.trim()).filter(Boolean);
+    const last = parts[parts.length - 1];
+    if (last) out.add(last);
+  }
+  return Array.from(out.values());
 }
 
 async function resolveSelectedAccountNames({ companyId, selectedIds }) {
@@ -924,10 +940,8 @@ async function resolveSelectedAccountNames({ companyId, selectedIds }) {
     const names = new Set();
     accounts.forEach((account) => {
       if (!account?.id || !selectedSet.has(String(account.id))) return;
-      const nameKey = normalizeAccountName(account?.name);
-      if (nameKey) names.add(nameKey);
-      const fqKey = normalizeAccountName(account?.fullyQualifiedName);
-      if (fqKey) names.add(fqKey);
+      accountNameVariants(account?.name).forEach((nameKey) => names.add(nameKey));
+      accountNameVariants(account?.fullyQualifiedName).forEach((nameKey) => names.add(nameKey));
     });
     return names;
   } catch {
@@ -995,10 +1009,10 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
     const accountCell = cols.find((c) => c?.id) || cols[0] || {};
     const accountId = accountCell?.id ? String(accountCell.id) : null;
     const accountName = cols[0]?.value || accountCell?.value || null;
-    const nameKey = normalizeAccountName(accountName);
+    const nameKeys = accountNameVariants(accountName);
     const matches =
       (accountId && selectedSet.has(accountId)) ||
-      (nameKey && selectedNames.has(nameKey));
+      nameKeys.some((nameKey) => selectedNames.has(nameKey));
     if (!matches) return;
     const label = accountName || accountId;
     const key = accountId || label;
