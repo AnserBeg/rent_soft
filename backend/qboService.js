@@ -321,9 +321,7 @@ async function listQboIncomeAccounts({ companyId }) {
   let startPosition = 1;
   const maxResults = 1000;
   while (true) {
-    const query =
-      "select * from Account where Active = true and (AccountType = 'Income' or AccountType = 'Other Income') " +
-      `STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
+    const query = `select * from Account where Active = true STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
     const data = await qboApiRequest({
       companyId,
       method: "GET",
@@ -333,7 +331,10 @@ async function listQboIncomeAccounts({ companyId }) {
     const rows = Array.isArray(response.Account) ? response.Account : [];
     rows.forEach((row) => {
       const normalized = normalizeQboAccount(row);
-      if (normalized?.id) accounts.push(normalized);
+      if (!normalized?.id) return;
+      const type = String(normalized.type || "").toLowerCase();
+      if (type !== "income" && type !== "other income") return;
+      accounts.push(normalized);
     });
     if (rows.length < maxResults) break;
     startPosition += maxResults;
