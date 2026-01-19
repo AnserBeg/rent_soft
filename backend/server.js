@@ -3123,7 +3123,7 @@ app.get(
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     try {
       const items = await listQboItems({ companyId: Number(companyId) });
-      res.json({ items: items.map((item) => normalizeQboItem(item) || item).filter(Boolean) });
+      res.json({ items: items.filter(Boolean) });
     } catch (err) {
       const message = err?.message ? String(err.message) : "QBO items request failed.";
       if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });

@@ -231,13 +231,13 @@ async function listQboCustomers({ companyId }) {
 
 function normalizeQboItem(item) {
   if (!item) return null;
-  const name = item.Name || item.FullyQualifiedName || null;
+  const name = item.Name || item.FullyQualifiedName || item.name || null;
   return {
-    id: item.Id ? String(item.Id) : null,
+    id: item.Id ? String(item.Id) : item.id ? String(item.id) : null,
     name,
-    type: item.Type || null,
-    active: item.Active !== false,
-    incomeAccountRef: item?.IncomeAccountRef?.value || null,
+    type: item.Type || item.type || null,
+    active: item.Active !== undefined ? item.Active !== false : item.active !== false,
+    incomeAccountRef: item?.IncomeAccountRef?.value || item?.incomeAccountRef || null,
   };
 }
 
