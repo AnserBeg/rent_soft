@@ -755,7 +755,7 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], sin
   return out;
 }
 
-function sumReportIncomeRows(rows, selectedAccounts) {
+function sumReportIncomeRows(rows, selectedAccounts, selectedNames = new Set()) {
   if (!Array.isArray(rows) || !rows.length) return 0;
   const selected = new Set((selectedAccounts || []).map((v) => String(v)));
   let total = 0;
@@ -766,8 +766,13 @@ function sumReportIncomeRows(rows, selectedAccounts) {
       if (row?.RowType === "Row") {
         const cols = row.ColData || [];
         const accountId = cols.find((c) => c?.id)?.id || cols[0]?.id || null;
+        const accountName = cols[0]?.value || null;
         const amount = cols[1]?.value || cols[0]?.value || null;
-        if (accountId && selected.has(String(accountId))) {
+        const nameKey = normalizeAccountName(accountName);
+        const matches =
+          (accountId && selected.has(String(accountId))) ||
+          (nameKey && selectedNames.has(nameKey));
+        if (matches) {
           const num = Number(amount);
           if (Number.isFinite(num)) total += num;
         }
@@ -782,19 +787,82 @@ function sumReportIncomeRows(rows, selectedAccounts) {
 function extractReportColumnMetaValue(meta, name) {
   if (!Array.isArray(meta)) return null;
   const target = String(name || "").toLowerCase();
-  const entry = meta.find((m) => String(m?.Name || "").toLowerCase() === target);
-  return entry?.Value || null;
+  const entry = meta.find((m) => String(m?.Name ?? m?.name ?? "").toLowerCase() === target);
+  return entry?.Value ?? entry?.value ?? null;
+}
+
+function parseReportColumnDate(title) {
+  if (!title) return null;
+  const raw = String(title).trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  if (lower === "account" || lower === "total") return null;
+  const cleaned = raw.replace(/^week of\s+/i, "").trim();
+  const parsed = Date.parse(cleaned);
+  if (Number.isFinite(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+  const monthMatch = cleaned.match(/^([A-Za-z]+)\s+(\d{4})$/);
+  if (monthMatch) {
+    const monthKey = monthMatch[1].slice(0, 3).toLowerCase();
+    const monthMap = {
+      jan: 0,
+      feb: 1,
+      mar: 2,
+      apr: 3,
+      may: 4,
+      jun: 5,
+      jul: 6,
+      aug: 7,
+      sep: 8,
+      oct: 9,
+      nov: 10,
+      dec: 11,
+    };
+    if (monthMap[monthKey] !== undefined) {
+      const year = Number(monthMatch[2]);
+      if (Number.isFinite(year)) {
+        return new Date(Date.UTC(year, monthMap[monthKey], 1)).toISOString().slice(0, 10);
+      }
+    }
+  }
+  return null;
 }
 
 function extractReportBucketColumns(report) {
   const columns = Array.isArray(report?.Columns?.Column) ? report.Columns.Column : [];
   return columns
     .map((col, index) => {
-      const startDate = extractReportColumnMetaValue(col?.MetaData, "StartDate");
+      const meta = col?.MetaData ?? col?.metaData;
+      const startDate = extractReportColumnMetaValue(meta, "StartDate") || parseReportColumnDate(col?.ColTitle);
       if (!startDate) return null;
       return { index, startDate };
     })
     .filter(Boolean);
+}
+
+function normalizeAccountName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
+
+async function resolveSelectedAccountNames({ companyId, selectedIds }) {
+  const selected = Array.isArray(selectedIds) ? selectedIds : [];
+  if (!selected.length) return new Set();
+  try {
+    const accounts = await listQboIncomeAccounts({ companyId });
+    const selectedSet = new Set(selected.map((id) => String(id)));
+    const names = new Set();
+    accounts.forEach((account) => {
+      if (!account?.id || !selectedSet.has(String(account.id))) return;
+      const nameKey = normalizeAccountName(account?.name);
+      if (nameKey) names.add(nameKey);
+      const fqKey = normalizeAccountName(account?.fullyQualifiedName);
+      if (fqKey) names.add(fqKey);
+    });
+    return names;
+  } catch {
+    return new Set();
+  }
 }
 
 function walkReportRows(rows, cb) {
@@ -814,7 +882,8 @@ async function getIncomeTotals({ companyId, startDate, endDate }) {
   )}`;
   const data = await qboApiRequest({ companyId, method: "GET", path: query });
   const rows = data?.Rows?.Row || [];
-  const total = sumReportIncomeRows(rows, selected);
+  const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
+  const total = sumReportIncomeRows(rows, selected, selectedNames);
   return { total, selectedAccounts: selected };
 }
 
@@ -839,6 +908,7 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
   if (!columnDefs.length) return { rows: [], selectedAccounts: selected };
 
   const selectedSet = new Set(selected.map((v) => String(v)));
+  const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
   const series = new Map();
 
   walkReportRows(data?.Rows?.Row || [], (row) => {
@@ -846,12 +916,18 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
     if (!cols.length) return;
     const accountCell = cols.find((c) => c?.id) || cols[0] || {};
     const accountId = accountCell?.id ? String(accountCell.id) : null;
-    if (!accountId || !selectedSet.has(accountId)) return;
-    const label = accountCell?.value || accountId;
-    if (!series.has(accountId)) {
-      series.set(accountId, { key: accountId, label, values: new Map() });
+    const accountName = cols[0]?.value || accountCell?.value || null;
+    const nameKey = normalizeAccountName(accountName);
+    const matches =
+      (accountId && selectedSet.has(accountId)) ||
+      (nameKey && selectedNames.has(nameKey));
+    if (!matches) return;
+    const label = accountName || accountId;
+    const key = accountId || label;
+    if (!series.has(key)) {
+      series.set(key, { key, label, values: new Map() });
     }
-    const entry = series.get(accountId);
+    const entry = series.get(key);
     for (const col of columnDefs) {
       const raw = cols[col.index]?.value;
       const num = Number(raw || 0);
