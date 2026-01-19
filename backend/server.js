@@ -168,6 +168,8 @@ const {
   getQboCustomerById,
   createQboCustomer,
   normalizeQboCustomer,
+  listQboItems,
+  normalizeQboItem,
 } = require("./qboService");
 const { verifyWebhookSignature, computeExpiryTimestamp } = require("./qbo");
 
@@ -3107,6 +3109,23 @@ app.get(
       res.json({ customers });
     } catch (err) {
       const message = err?.message ? String(err.message) : "QBO customers request failed.";
+      if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
+      if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      res.status(500).json({ error: message });
+    }
+  })
+);
+
+app.get(
+  "/api/qbo/items",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    try {
+      const items = await listQboItems({ companyId: Number(companyId) });
+      res.json({ items: items.map((item) => normalizeQboItem(item) || item).filter(Boolean) });
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "QBO items request failed.";
       if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
       if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
       res.status(500).json({ error: message });

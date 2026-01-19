@@ -229,6 +229,41 @@ async function listQboCustomers({ companyId }) {
   return customers;
 }
 
+function normalizeQboItem(item) {
+  if (!item) return null;
+  const name = item.Name || item.FullyQualifiedName || null;
+  return {
+    id: item.Id ? String(item.Id) : null,
+    name,
+    type: item.Type || null,
+    active: item.Active !== false,
+    incomeAccountRef: item?.IncomeAccountRef?.value || null,
+  };
+}
+
+async function listQboItems({ companyId }) {
+  const items = [];
+  let startPosition = 1;
+  const maxResults = 1000;
+  while (true) {
+    const query = `select * from Item STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
+    const data = await qboApiRequest({
+      companyId,
+      method: "GET",
+      path: `query?query=${encodeURIComponent(query)}`,
+    });
+    const response = data?.QueryResponse || {};
+    const rows = Array.isArray(response.Item) ? response.Item : [];
+    rows.forEach((row) => {
+      const normalized = normalizeQboItem(row);
+      if (normalized?.id) items.push(normalized);
+    });
+    if (rows.length < maxResults) break;
+    startPosition += maxResults;
+  }
+  return items;
+}
+
 async function getQboCustomerById({ companyId, qboCustomerId }) {
   if (!qboCustomerId) return null;
   const data = await qboApiRequest({
@@ -724,6 +759,8 @@ module.exports = {
   getValidQboConnection,
   normalizeQboCustomer,
   listQboCustomers,
+  normalizeQboItem,
+  listQboItems,
   getQboCustomerById,
   createQboCustomer,
   createDraftInvoice,

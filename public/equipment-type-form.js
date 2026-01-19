@@ -11,6 +11,9 @@ const formTitle = document.getElementById("form-title");
 const deleteTypeBtn = document.getElementById("delete-type");
 const typeForm = document.getElementById("type-form");
 const categorySelect = document.getElementById("category-select");
+const qboItemSelect = document.getElementById("qbo-item-select");
+const qboItemHint = document.getElementById("qbo-item-hint");
+const qboItemRefreshBtn = document.getElementById("qbo-item-refresh");
 
 const typeImagesRow = document.getElementById("type-images");
 const clearTypeImagesBtn = document.getElementById("remove-type-image");
@@ -41,6 +44,8 @@ let stockChart = null;
 let pendingTypeFiles = [];
 let selectedTypeImage = null;
 let typeAiBusy = false;
+let qboConnected = false;
+let qboItemsCache = [];
 
 const TYPE_AI_PRESETS = {
   "clean-white":
@@ -86,6 +91,83 @@ function syncFileInputFiles(inputEl, files) {
   const dt = new DataTransfer();
   (files || []).forEach((f) => dt.items.add(f));
   inputEl.files = dt.files;
+}
+
+function setQboItemHint(message) {
+  if (!qboItemHint) return;
+  qboItemHint.textContent = message ? String(message) : "";
+}
+
+function renderQboItems() {
+  if (!qboItemSelect) return;
+  const selected = String(typeForm?.qboItemId?.value || qboItemSelect.value || "").trim();
+  const sorted = (qboItemsCache || [])
+    .slice()
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+
+  qboItemSelect.innerHTML = `<option value=\"\">Select a QBO item</option>`;
+  sorted.forEach((item) => {
+    const opt = document.createElement("option");
+    opt.value = String(item.id || "");
+    const label = item.name || `Item ${item.id || ""}`;
+    opt.textContent = item.active === false ? `${label} (inactive)` : label;
+    qboItemSelect.appendChild(opt);
+  });
+
+  if (selected) {
+    const exists = sorted.some((item) => String(item.id || "") === selected);
+    if (!exists) {
+      const opt = document.createElement("option");
+      opt.value = selected;
+      opt.textContent = "Current item (not found)";
+      opt.selected = true;
+      qboItemSelect.appendChild(opt);
+    } else {
+      qboItemSelect.value = selected;
+    }
+  }
+}
+
+async function loadQboStatus() {
+  if (!activeCompanyId || !qboItemSelect) return;
+  try {
+    const res = await fetch(`/api/qbo/status?companyId=${encodeURIComponent(String(activeCompanyId))}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load QBO status");
+    qboConnected = !!data.connected;
+    qboItemSelect.disabled = !qboConnected;
+    if (qboItemRefreshBtn) qboItemRefreshBtn.disabled = !qboConnected;
+    setQboItemHint(
+      qboConnected
+        ? "Select the matching QuickBooks item by name."
+        : "Connect QuickBooks Online to load items."
+    );
+  } catch (err) {
+    qboConnected = false;
+    if (qboItemRefreshBtn) qboItemRefreshBtn.disabled = true;
+    qboItemSelect.disabled = true;
+    setQboItemHint(err?.message ? String(err.message) : "Unable to load QBO status.");
+  }
+}
+
+async function loadQboItems() {
+  if (!activeCompanyId || !qboItemSelect) return;
+  if (!qboConnected) {
+    setQboItemHint("Connect QuickBooks Online to load items.");
+    renderQboItems();
+    return;
+  }
+  setQboItemHint("Loading QBO items...");
+  try {
+    const res = await fetch(`/api/qbo/items?companyId=${encodeURIComponent(String(activeCompanyId))}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load QBO items");
+    qboItemsCache = Array.isArray(data.items) ? data.items : [];
+    setQboItemHint(`Loaded ${qboItemsCache.length} QBO items.`);
+    renderQboItems();
+  } catch (err) {
+    setQboItemHint(err?.message ? String(err.message) : "Unable to load QBO items.");
+  }
 }
 
 function getTypeImageUrls() {
@@ -410,6 +492,7 @@ async function loadType() {
   typeForm.weeklyRate.value = item.weekly_rate || "";
   typeForm.monthlyRate.value = item.monthly_rate || "";
   if (typeForm.qboItemId) typeForm.qboItemId.value = item.qbo_item_id || "";
+  renderQboItems();
   await loadStockSeries().catch(() => null);
 }
 
@@ -480,6 +563,11 @@ function setCompany(id) {
   }
   loadCategories();
   if (editingTypeId) loadType();
+  if (qboItemSelect) {
+    loadQboStatus()
+      .then(() => loadQboItems())
+      .catch(() => null);
+  }
 }
 
 categorySelect.addEventListener("change", (e) => {
@@ -487,6 +575,13 @@ categorySelect.addEventListener("change", (e) => {
     e.target.value = "";
     openCategoryModal();
   }
+});
+
+qboItemRefreshBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  loadQboStatus()
+    .then(() => loadQboItems())
+    .catch(() => null);
 });
 
 openTypeImageModalBtn?.addEventListener("click", (e) => {

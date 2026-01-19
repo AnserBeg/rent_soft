@@ -4757,11 +4757,25 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
     [companyId]
   );
 
+  const timelineStartExpr = `
+    CASE
+      WHEN ro.status IN ('ordered', 'received', 'closed') THEN COALESCE(li.fulfilled_at, li.start_at)
+      ELSE li.start_at
+    END
+  `;
+  const timelineEndExpr = `
+    CASE
+      WHEN ro.status = 'ordered' THEN COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+      WHEN ro.status IN ('received', 'closed') THEN COALESCE(li.returned_at, li.end_at)
+      ELSE li.end_at
+    END
+  `;
+
   const params = [companyId, fromIso, toIso];
   const where = [
     "ro.company_id = $1",
-    "COALESCE(li.fulfilled_at, li.start_at) < $3::timestamptz",
-    "COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) > $2::timestamptz",
+    `${timelineStartExpr} < $3::timestamptz`,
+    `${timelineEndExpr} > $2::timestamptz`,
   ];
   if (useStatuses) {
     params.push(useStatuses);
@@ -4774,8 +4788,8 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            li.id AS line_item_id,
            li.type_id,
            et.name AS type_name,
-           COALESCE(li.fulfilled_at, li.start_at) AS start_at,
-           COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
+           ${timelineStartExpr} AS start_at,
+           ${timelineEndExpr} AS end_at,
            ro.id AS order_id,
            ro.status,
            ro.quote_number,
@@ -4800,8 +4814,8 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            li.id AS line_item_id,
            li.type_id,
            et.name AS type_name,
-           COALESCE(li.fulfilled_at, li.start_at) AS start_at,
-           COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
+           ${timelineStartExpr} AS start_at,
+           ${timelineEndExpr} AS end_at,
            ro.id AS order_id,
            ro.status,
            ro.quote_number,
