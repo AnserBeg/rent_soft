@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+
 const {
   getQboConnection,
   upsertQboConnection,
@@ -94,11 +96,47 @@ function toQboDate(value) {
   return d.toISOString().slice(0, 10);
 }
 
+const QBO_DOC_NUMBER_MAX = 21;
+
+function compactDocToken(value) {
+  return String(value || "").replace(/[^A-Za-z0-9]/g, "");
+}
+
+function compactPeriodKey(periodKey) {
+  if (!periodKey) return "";
+  return String(periodKey).replace(/[^0-9]/g, "");
+}
+
+function compactSuffix(suffix) {
+  if (!suffix) return "";
+  const raw = String(suffix || "");
+  const pickupMatch = raw.match(/^PICKUP-(\d+)/i);
+  if (pickupMatch) return `P${pickupMatch[1]}`;
+  const creditMatch = raw.match(/^CM-(\d+)/i);
+  if (creditMatch) return `CM${creditMatch[1]}`;
+  const cleaned = compactDocToken(raw);
+  return cleaned.slice(0, 8);
+}
+
 function buildDocNumber({ roNumber, orderId, periodKey, suffix }) {
   const base = roNumber || `RO-${orderId}`;
   const period = periodKey ? `-${periodKey}` : "";
   const tail = suffix ? `-${suffix}` : "";
-  return `${base}${period}${tail}`;
+  const candidate = `${base}${period}${tail}`;
+  if (candidate.length <= QBO_DOC_NUMBER_MAX) return candidate;
+
+  const orderToken = Number.isFinite(Number(orderId)) ? String(Math.floor(Number(orderId))) : "X";
+  const compactBase = `RO${orderToken}`;
+  const compactPeriod = compactPeriodKey(periodKey);
+  const compactTail = compactSuffix(suffix);
+  const compactParts = [compactBase, compactPeriod, compactTail].filter(Boolean);
+  const compactCandidate = compactParts.join("-");
+  if (compactCandidate.length <= QBO_DOC_NUMBER_MAX) return compactCandidate;
+
+  const hash = crypto.createHash("sha1").update(candidate).digest("hex").slice(0, 6).toUpperCase();
+  const maxPrefix = Math.max(1, QBO_DOC_NUMBER_MAX - hash.length - 1);
+  const prefix = compactDocToken(compactBase).slice(0, maxPrefix);
+  return `${prefix}-${hash}`;
 }
 
 function buildPrivateNote({ roNumber, orderId, periodKey }) {
