@@ -391,12 +391,27 @@ async function createDraftInvoice({
     return { ok: false, skipped: "existing_document", docNumber: payload.DocNumber };
   }
 
-  const data = await qboApiRequest({
-    companyId,
-    method: "POST",
-    path: "invoice",
-    body: payload,
-  });
+  let data;
+  try {
+    data = await qboApiRequest({
+      companyId,
+      method: "POST",
+      path: "invoice",
+      body: payload,
+    });
+  } catch (err) {
+    console.error("QBO invoice create failed", {
+      companyId,
+      orderId,
+      docNumber: payload.DocNumber,
+      lineItemIds,
+      periodStart: payload.TxnDate,
+      error: err?.message ? String(err.message) : "Unknown error",
+      status: err?.status || null,
+      payload: err?.payload || null,
+    });
+    throw err;
+  }
 
   const doc = data?.Invoice || data;
   const docFields = {
