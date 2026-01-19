@@ -367,15 +367,17 @@ async function createDraftInvoice({
     TxnDate: toQboDate(periodStart),
     PrivateNote: buildPrivateNote({ roNumber: order.roNumber, orderId, periodKey }),
     Line: lines.map((line) => {
-      const qty = Number((line.units * line.quantity).toFixed(4));
+      const qty = Number((line.units * line.quantity).toFixed(5));
+      const unitPrice = Number(line.rateAmount.toFixed(2));
+      const amount = Number((qty * unitPrice).toFixed(2));
       return {
-        Amount: Number(line.amount.toFixed(2)),
+        Amount: amount,
         DetailType: "SalesItemLineDetail",
         Description: `${line.typeName} (rental)`,
         SalesItemLineDetail: {
           ItemRef: { value: String(line.qboItemId) },
           Qty: qty,
-          UnitPrice: Number(line.rateAmount.toFixed(2)),
+          UnitPrice: unitPrice,
         },
       };
     }),
@@ -464,15 +466,17 @@ async function createDraftCreditMemo({
     TxnDate: toQboDate(periodStart),
     PrivateNote: buildPrivateNote({ roNumber: order.roNumber, orderId, periodKey }),
     Line: lines.map((line) => {
-      const qty = Number((line.units * line.quantity).toFixed(4));
+      const qty = Number((line.units * line.quantity).toFixed(5));
+      const unitPrice = Number(line.rateAmount.toFixed(2));
+      const amount = Number((qty * unitPrice).toFixed(2));
       return {
-        Amount: Number(line.amount.toFixed(2)),
+        Amount: amount,
         DetailType: "SalesItemLineDetail",
         Description: `${line.typeName} (credit)`,
         SalesItemLineDetail: {
           ItemRef: { value: String(line.qboItemId) },
           Qty: qty,
-          UnitPrice: Number(line.rateAmount.toFixed(2)),
+          UnitPrice: unitPrice,
         },
       };
     }),
