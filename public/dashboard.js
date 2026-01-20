@@ -1565,23 +1565,6 @@ function setShortfallSelectedType(typeId) {
   }
 }
 
-function renderShortfallMetric(kind, label, value) {
-  const metric = document.createElement("div");
-  metric.className = "shortfall-donut-metric";
-  metric.dataset.kind = kind;
-
-  const labelEl = document.createElement("div");
-  labelEl.className = "metric-label";
-  labelEl.textContent = label;
-
-  const valueEl = document.createElement("div");
-  valueEl.className = "metric-value";
-  valueEl.textContent = fmtCount(value);
-
-  metric.append(labelEl, valueEl);
-  return metric;
-}
-
 function renderShortfallSummaryChart() {
   if (!shortfallDonutGrid) return;
   const rows = Array.isArray(shortfallSummaryRows) ? shortfallSummaryRows : [];
@@ -1647,16 +1630,22 @@ function renderShortfallSummaryChart() {
     }
     donut.appendChild(center);
 
-    const metrics = document.createElement("div");
-    metrics.className = "shortfall-donut-metrics";
-    metrics.append(
-      renderShortfallMetric("out", "Currently out", counts.out),
-      renderShortfallMetric("reserved", "Reserved", counts.reserved),
-      renderShortfallMetric("available", "Available", counts.available),
-      renderShortfallMetric("repair", "Needs repair", counts.needsRepair)
-    );
+    const labels = [
+      { kind: "out", label: "Currently out", value: counts.out, pos: "top" },
+      { kind: "reserved", label: "Reserved", value: counts.reserved, pos: "right" },
+      { kind: "available", label: "Available", value: counts.available, pos: "bottom" },
+      { kind: "repair", label: "Needs repair", value: counts.needsRepair, pos: "left" },
+    ];
+    labels.forEach((item) => {
+      const label = document.createElement("div");
+      label.className = `shortfall-donut-label pos-${item.pos}`;
+      label.dataset.kind = item.kind;
+      label.textContent = fmtCount(item.value);
+      label.title = `${item.label}: ${fmtCount(item.value)}`;
+      donut.appendChild(label);
+    });
 
-    body.append(donut, metrics);
+    body.append(donut);
     card.append(header, body);
 
     card.addEventListener("click", () => {
