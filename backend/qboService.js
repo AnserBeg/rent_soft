@@ -1046,7 +1046,9 @@ async function getIncomeTotalsFromQuickReports({ companyId, selectedIds, startDa
   for (const accountId of selectedIds) {
     const query = `reports/AccountQuickReport?account=${encodeURIComponent(
       accountId
-    )}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
+    )}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(
+      endDate
+    )}&accounting_method=Accrual`;
     const report = await qboApiRequest({ companyId, method: "GET", path: query });
     if (debug) {
       debugReports.push({
@@ -1076,7 +1078,9 @@ async function getIncomeTimeSeriesFromQuickReports({
   for (const accountId of selectedIds) {
     const query = `reports/AccountQuickReport?account=${encodeURIComponent(
       accountId
-    )}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(endDate)}`;
+    )}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(
+      endDate
+    )}&accounting_method=Accrual`;
     const report = await qboApiRequest({ companyId, method: "GET", path: query });
     if (debug) {
       debugReports.push({
@@ -1135,7 +1139,7 @@ async function getIncomeTotals({ companyId, startDate, endDate, debug = false })
   if (!selected.length) return { total: 0, selectedAccounts: [] };
   const query = `reports/ProfitAndLoss?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(
     endDate
-  )}`;
+  )}&accounting_method=Accrual`;
   const data = await qboApiRequest({ companyId, method: "GET", path: query });
   const rows = data?.Rows?.Row || [];
   const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
@@ -1173,7 +1177,7 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
 
   const query = `reports/ProfitAndLoss?start_date=${encodeURIComponent(start)}&end_date=${encodeURIComponent(
     end
-  )}&summarize_column_by=${encodeURIComponent(summarize)}`;
+  )}&summarize_column_by=${encodeURIComponent(summarize)}&accounting_method=Accrual`;
   const data = await qboApiRequest({ companyId, method: "GET", path: query });
   const columnDefs = extractReportBucketColumns(data, bucketKey, start, end);
   if (!columnDefs.length) {

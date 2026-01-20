@@ -115,6 +115,18 @@ async function qboRequest({ host, realmId, accessToken, method = "GET", path, bo
       data = { raw: text };
     }
   }
+  if (data?.Fault?.Error?.length) {
+    const message =
+      data?.Fault?.Error?.[0]?.Message ||
+      data?.Fault?.Error?.[0]?.Detail ||
+      data?.error_description ||
+      data?.error ||
+      "QBO request failed (fault)";
+    const err = new Error(message);
+    err.status = res.status;
+    err.payload = data;
+    throw err;
+  }
   if (!res.ok) {
     const message =
       data?.Fault?.Error?.[0]?.Message ||
