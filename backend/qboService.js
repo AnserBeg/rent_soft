@@ -774,6 +774,13 @@ function getReportCellId(cell) {
   return cell?.id ?? cell?.Id ?? null;
 }
 
+function isQboUnexpectedInternalError(err) {
+  const code = err?.payload?.Fault?.Error?.[0]?.code;
+  if (code && String(code).includes("30000")) return true;
+  const message = String(err?.message || "");
+  return message.includes("(-30000)");
+}
+
 function sumReportIncomeRows(rows, selectedAccounts, selectedNames = new Set()) {
   if (!Array.isArray(rows) || !rows.length) return 0;
   const selected = new Set((selectedAccounts || []).map((v) => String(v)));
@@ -1044,12 +1051,19 @@ async function getIncomeTotalsFromQuickReports({ companyId, selectedIds, startDa
   let total = 0;
   const debugReports = [];
   for (const accountId of selectedIds) {
-    const query = `reports/AccountQuickReport?account=${encodeURIComponent(
+    const baseQuery = `reports/AccountQuickReport?account=${encodeURIComponent(
       accountId
     )}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(
       endDate
-    )}&accounting_method=Accrual`;
-    const report = await qboApiRequest({ companyId, method: "GET", path: query });
+    )}`;
+    const accrualQuery = `${baseQuery}&accounting_method=Accrual`;
+    let report;
+    try {
+      report = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
+    } catch (err) {
+      if (!isQboUnexpectedInternalError(err)) throw err;
+      report = await qboApiRequest({ companyId, method: "GET", path: baseQuery });
+    }
     if (debug) {
       debugReports.push({
         accountId: String(accountId),
@@ -1076,12 +1090,19 @@ async function getIncomeTimeSeriesFromQuickReports({
   const series = new Map();
   const debugReports = [];
   for (const accountId of selectedIds) {
-    const query = `reports/AccountQuickReport?account=${encodeURIComponent(
+    const baseQuery = `reports/AccountQuickReport?account=${encodeURIComponent(
       accountId
     )}&start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(
       endDate
-    )}&accounting_method=Accrual`;
-    const report = await qboApiRequest({ companyId, method: "GET", path: query });
+    )}`;
+    const accrualQuery = `${baseQuery}&accounting_method=Accrual`;
+    let report;
+    try {
+      report = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
+    } catch (err) {
+      if (!isQboUnexpectedInternalError(err)) throw err;
+      report = await qboApiRequest({ companyId, method: "GET", path: baseQuery });
+    }
     if (debug) {
       debugReports.push({
         accountId: String(accountId),
@@ -1137,10 +1158,17 @@ async function getIncomeTotals({ companyId, startDate, endDate, debug = false })
   const settings = await getCompanySettings(companyId);
   const selected = settings.qbo_income_account_ids || [];
   if (!selected.length) return { total: 0, selectedAccounts: [] };
-  const query = `reports/ProfitAndLoss?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(
+  const baseQuery = `reports/ProfitAndLoss?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(
     endDate
-  )}&accounting_method=Accrual`;
-  const data = await qboApiRequest({ companyId, method: "GET", path: query });
+  )}`;
+  const accrualQuery = `${baseQuery}&accounting_method=Accrual`;
+  let data;
+  try {
+    data = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
+  } catch (err) {
+    if (!isQboUnexpectedInternalError(err)) throw err;
+    data = await qboApiRequest({ companyId, method: "GET", path: baseQuery });
+  }
   const rows = data?.Rows?.Row || [];
   const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
   const total = sumReportIncomeRows(rows, selected, selectedNames);
@@ -1177,8 +1205,15 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
 
   const query = `reports/ProfitAndLoss?start_date=${encodeURIComponent(start)}&end_date=${encodeURIComponent(
     end
-  )}&summarize_column_by=${encodeURIComponent(summarize)}&accounting_method=Accrual`;
-  const data = await qboApiRequest({ companyId, method: "GET", path: query });
+  )}&summarize_column_by=${encodeURIComponent(summarize)}`;
+  const accrualQuery = `${query}&accounting_method=Accrual`;
+  let data;
+  try {
+    data = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
+  } catch (err) {
+    if (!isQboUnexpectedInternalError(err)) throw err;
+    data = await qboApiRequest({ companyId, method: "GET", path: query });
+  }
   const columnDefs = extractReportBucketColumns(data, bucketKey, start, end);
   if (!columnDefs.length) {
     const quick = await getIncomeTimeSeriesFromQuickReports({
