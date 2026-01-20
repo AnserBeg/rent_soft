@@ -267,42 +267,48 @@
 
             <p class="hint" id="shortfall-meta">Loading availability...</p>
 
-            <div class="shortfall-donut-grid" id="shortfall-donut-grid" role="list"></div>
+            <div class="shortfall-layout-grid">
+              <div class="shortfall-left-pane">
+                <div class="shortfall-donut-grid" id="shortfall-donut-grid" role="list"></div>
+              </div>
 
-            <div class="shortfall-trend-wrap is-hidden" id="shortfall-trend-wrap">
-              <div class="chart-card">
-                <div class="chart-head">
-                  <div>
-                    <div class="chart-title">Availability trend</div>
-                    <p class="hint" id="shortfall-trend-hint">Select a type to view the trend.</p>
+              <div class="shortfall-right-pane">
+                <div class="shortfall-trend-wrap is-hidden" id="shortfall-trend-wrap">
+                  <div class="chart-card">
+                    <div class="chart-head">
+                      <div>
+                        <div class="chart-title">Availability trend</div>
+                        <p class="hint" id="shortfall-trend-hint">Select a type to view the trend.</p>
+                      </div>
+                    </div>
+                    <div class="chart-canvas">
+                      <canvas id="shortfall-detail-chart"></canvas>
+                    </div>
                   </div>
                 </div>
-                <div class="chart-canvas">
-                  <canvas id="shortfall-detail-chart"></canvas>
+
+                <div class="shortfall-details" id="shortfall-details">
+                  <div class="shortfall-details-title">Shortfall details</div>
+                  <div class="hint" id="shortfall-details-meta">Hover a negative point to see contributing orders.</div>
+                  <div class="shortfall-details-body" id="shortfall-details-body"></div>
+                </div>
+
+                <div class="table-shell shortfall-demand-shell">
+                  <div class="table-head">
+                    <div>
+                      <div class="chart-title">Upcoming demand by customer</div>
+                      <p class="hint" id="shortfall-demand-meta">Loading customer demand...</p>
+                    </div>
+                    <div class="inline">
+                      <button class="ghost small" id="shortfall-demand-toggle" type="button" aria-expanded="true">
+                        Hide table
+                      </button>
+                      <span class="pill" id="shortfall-demand-count">--</span>
+                    </div>
+                  </div>
+                  <div class="table shortfall-demand-table" id="shortfall-demand-table"></div>
                 </div>
               </div>
-            </div>
-
-            <div class="shortfall-details" id="shortfall-details">
-              <div class="shortfall-details-title">Shortfall details</div>
-              <div class="hint" id="shortfall-details-meta">Hover a negative point to see contributing orders.</div>
-              <div class="shortfall-details-body" id="shortfall-details-body"></div>
-            </div>
-
-            <div class="table-shell shortfall-demand-shell">
-              <div class="table-head">
-                <div>
-                  <div class="chart-title">Upcoming demand by customer</div>
-                  <p class="hint" id="shortfall-demand-meta">Loading customer demand...</p>
-                </div>
-                <div class="inline">
-                  <button class="ghost small" id="shortfall-demand-toggle" type="button" aria-expanded="true">
-                    Hide table
-                  </button>
-                  <span class="pill" id="shortfall-demand-count">--</span>
-                </div>
-              </div>
-              <div class="table shortfall-demand-table" id="shortfall-demand-table"></div>
             </div>
           </section>
         </main>
