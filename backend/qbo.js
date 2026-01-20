@@ -116,9 +116,12 @@ async function qboRequest({ host, realmId, accessToken, method = "GET", path, bo
     }
   }
   if (data?.Fault?.Error?.length) {
+    const err0 = data?.Fault?.Error?.[0] || {};
+    const detail = err0.Detail || err0.detail || null;
     const message =
-      data?.Fault?.Error?.[0]?.Message ||
-      data?.Fault?.Error?.[0]?.Detail ||
+      detail ||
+      err0.Message ||
+      err0.message ||
       data?.error_description ||
       data?.error ||
       "QBO request failed (fault)";
@@ -128,9 +131,12 @@ async function qboRequest({ host, realmId, accessToken, method = "GET", path, bo
     throw err;
   }
   if (!res.ok) {
+    const err0 = data?.Fault?.Error?.[0] || {};
+    const detail = err0.Detail || err0.detail || null;
     const message =
-      data?.Fault?.Error?.[0]?.Message ||
-      data?.Fault?.Error?.[0]?.Detail ||
+      detail ||
+      err0.Message ||
+      err0.message ||
       data?.error_description ||
       data?.error ||
       `QBO request failed (${res.status})`;
