@@ -68,6 +68,8 @@ const shortfallMeta = document.getElementById("shortfall-meta");
 const shortfallDetails = document.getElementById("shortfall-details");
 const shortfallDetailsMeta = document.getElementById("shortfall-details-meta");
 const shortfallDetailsBody = document.getElementById("shortfall-details-body");
+const shortfallDemandShell = document.querySelector(".shortfall-demand-shell");
+const shortfallDemandToggle = document.getElementById("shortfall-demand-toggle");
 const shortfallDemandTable = document.getElementById("shortfall-demand-table");
 const shortfallDemandMeta = document.getElementById("shortfall-demand-meta");
 const shortfallDemandCount = document.getElementById("shortfall-demand-count");
@@ -2062,6 +2064,13 @@ function initShortfallUI() {
   shortfallCategory?.addEventListener("change", () => loadShortfallDashboard().catch(() => null));
   shortfallType?.addEventListener("change", () => loadShortfallDashboard().catch(() => null));
   shortfallSplitToggle?.addEventListener("change", () => loadShortfallSeries().catch(() => null));
+
+  shortfallDemandToggle?.addEventListener("click", () => {
+    if (!shortfallDemandShell || !shortfallDemandToggle) return;
+    const isCollapsed = shortfallDemandShell.classList.toggle("is-collapsed");
+    shortfallDemandToggle.textContent = isCollapsed ? "Show table" : "Hide table";
+    shortfallDemandToggle.setAttribute("aria-expanded", String(!isCollapsed));
+  });
 }
 
 async function loadRevenueDashboard() {
@@ -2926,7 +2935,7 @@ function renderShortfallDemandTable(rows, range) {
   });
 
   setShortfallDemandCount(customers.length);
-  setShortfallDemandMeta(`Upcoming demand for the next ${range?.days || 0} days.`);
+  setShortfallDemandMeta("");
 }
 
 async function loadShortfallDemandTable() {

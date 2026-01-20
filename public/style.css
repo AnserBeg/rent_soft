@@ -2570,6 +2570,14 @@ a.ghost {
   overflow: auto;
 }
 
+.shortfall-demand-shell.is-collapsed .shortfall-demand-table {
+  display: none;
+}
+
+#shortfall-demand-meta:empty {
+  display: none;
+}
+
 .shortfall-demand-table .table-row {
   align-items: flex-start;
   min-width: max-content;
