@@ -766,6 +766,14 @@ function parseReportAmount(value) {
   return negative ? -num : num;
 }
 
+function getReportCellValue(cell) {
+  return cell?.value ?? cell?.Value ?? null;
+}
+
+function getReportCellId(cell) {
+  return cell?.id ?? cell?.Id ?? null;
+}
+
 function sumReportIncomeRows(rows, selectedAccounts, selectedNames = new Set()) {
   if (!Array.isArray(rows) || !rows.length) return 0;
   const selected = new Set((selectedAccounts || []).map((v) => String(v)));
@@ -776,9 +784,11 @@ function sumReportIncomeRows(rows, selectedAccounts, selectedNames = new Set()) 
     for (const row of items) {
       if (row?.RowType === "Row") {
         const cols = row.ColData || [];
-        const accountId = cols.find((c) => c?.id)?.id || cols[0]?.id || null;
-        const accountName = cols[0]?.value || null;
-        const amount = cols[1]?.value || cols[0]?.value || null;
+        const accountCell = cols.find((c) => getReportCellId(c)) || cols[0] || null;
+        const accountId = getReportCellId(accountCell);
+        const accountName = getReportCellValue(cols[0]) || getReportCellValue(accountCell);
+        const amount =
+          getReportCellValue(cols[1]) ?? getReportCellValue(cols[0]) ?? getReportCellValue(accountCell);
         const nameKeys = accountNameVariants(accountName);
         const matches =
           (accountId && selected.has(String(accountId))) ||
@@ -971,7 +981,11 @@ async function resolveSelectedAccountLabels({ companyId, selectedIds }) {
 function extractQuickReportColumnIndex(report, matchFn) {
   const columns = Array.isArray(report?.Columns?.Column) ? report.Columns.Column : [];
   for (let i = 0; i < columns.length; i += 1) {
-    const title = String(columns[i]?.ColTitle || "").trim().toLowerCase();
+    const title = String(
+      columns[i]?.ColTitle || columns[i]?.colTitle || columns[i]?.ColType || columns[i]?.colType || ""
+    )
+      .trim()
+      .toLowerCase();
     if (matchFn(title)) return i;
   }
   return -1;
@@ -1011,8 +1025,8 @@ function collectQuickReportTransactions(report) {
   walkReportRows(report?.Rows?.Row || [], (row) => {
     const cols = Array.isArray(row?.ColData) ? row.ColData : [];
     if (!cols.length) return;
-    const dateRaw = cols[dateIdx]?.value || null;
-    const amount = parseReportAmount(cols[amountIdx]?.value);
+    const dateRaw = getReportCellValue(cols[dateIdx]);
+    const amount = parseReportAmount(getReportCellValue(cols[amountIdx]));
     if (!dateRaw || !Number.isFinite(amount)) return;
     const parsed = Date.parse(dateRaw);
     if (!Number.isFinite(parsed)) return;
@@ -1184,9 +1198,9 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
   walkReportRows(data?.Rows?.Row || [], (row) => {
     const cols = Array.isArray(row?.ColData) ? row.ColData : [];
     if (!cols.length) return;
-    const accountCell = cols.find((c) => c?.id) || cols[0] || {};
-    const accountId = accountCell?.id ? String(accountCell.id) : null;
-    const accountName = cols[0]?.value || accountCell?.value || null;
+    const accountCell = cols.find((c) => getReportCellId(c)) || cols[0] || {};
+    const accountId = getReportCellId(accountCell) ? String(getReportCellId(accountCell)) : null;
+    const accountName = getReportCellValue(cols[0]) || getReportCellValue(accountCell);
     const nameKeys = accountNameVariants(accountName);
     const matches =
       (accountId && selectedSet.has(accountId)) ||
@@ -1199,7 +1213,7 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
     }
     const entry = series.get(key);
     for (const col of columnDefs) {
-      const num = parseReportAmount(cols[col.index]?.value);
+      const num = parseReportAmount(getReportCellValue(cols[col.index]));
       if (!Number.isFinite(num)) continue;
       const prev = entry.values.get(col.startDate) || 0;
       entry.values.set(col.startDate, prev + num);
