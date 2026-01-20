@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,6 +8,7 @@
   <link rel="stylesheet" href="style.css" />
   <script src="vendor/chart.umd.js"></script>
 </head>
+
 <body class="no-top-headers">
   <div class="app-shell">
     <div class="layout">
@@ -105,7 +107,7 @@
               </div>
             </div>
 
-            <div class="two-col" style="align-items: stretch;">
+            <div>
               <div class="chart-card" style="min-height: 320px;">
                 <div class="chart-head">
                   <div class="chart-title">QBO income over time</div>
@@ -132,22 +134,8 @@
                 </div>
               </div>
 
-              <div class="chart-card" style="min-height: 320px;">
-                <div class="chart-head">
-                  <div class="chart-title">Salesperson</div>
-                  <div class="chart-actions">
-                    <label>Metric
-                      <select id="sp-metric">
-                        <option value="revenue" selected>Revenue</option>
-                        <option value="transactions">Transactions</option>
-                      </select>
-                    </label>
-                  </div>
-                </div>
-                <div class="chart-canvas">
-                  <canvas id="sp-donut"></canvas>
-                </div>
-              </div>
+
+
             </div>
           </section>
 
@@ -272,7 +260,8 @@
                     <option value="">All</option>
                   </select>
                 </label>
-                <label class="filter-pill"><input type="checkbox" id="shortfall-split-location" /> Split by location</label>
+                <label class="filter-pill"><input type="checkbox" id="shortfall-split-location" /> Split by
+                  location</label>
               </div>
             </div>
 
@@ -324,9 +313,5 @@
   <script src="session.js"></script>
   <script src="dashboard.js"></script>
 </body>
+
 </html>
-
-
-
-
-
