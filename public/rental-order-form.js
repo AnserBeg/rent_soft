@@ -640,7 +640,7 @@ function resetSideAddressPickerMapContainer() {
   if (!sideAddressPickerMapEl) return;
   try {
     sideAddressPicker.leaflet.map?.remove?.();
-  } catch {}
+  } catch { }
   sideAddressPicker.leaflet.map = null;
   sideAddressPicker.leaflet.marker = null;
   sideAddressPicker.leaflet.layers = null;
@@ -696,7 +696,7 @@ function initLeafletSideAddressPicker(center) {
         sideAddressPicker.leaflet.searchSeq = seq;
         try {
           sideAddressPicker.leaflet.searchAbort?.abort?.();
-        } catch {}
+        } catch { }
         sideAddressPicker.leaflet.searchAbort = new AbortController();
         try {
           const res = await fetch(`/api/geocode/search?q=${encodeURIComponent(q)}&limit=6`, {
@@ -1770,7 +1770,7 @@ function scheduleDraftSave() {
   draftSaveTimer = setTimeout(() => {
     try {
       localStorage.setItem(draftKey(), JSON.stringify(draft));
-    } catch (_) {}
+    } catch (_) { }
   }, 250);
 }
 
@@ -2679,13 +2679,22 @@ function renderLineItemActualModal() {
   const li = getEditingLineItemActual();
   if (!li) return;
   applyOrderedPickup(li);
-  if (lineItemActualPickupInput) lineItemActualPickupInput.value = toLocalInputValue(li.pickedUpAt);
+  const hasUnit = !!(li.bundleId || (li.inventoryIds && li.inventoryIds.length > 0));
+
+  if (lineItemActualPickupInput) {
+    lineItemActualPickupInput.value = toLocalInputValue(li.pickedUpAt);
+    lineItemActualPickupInput.disabled = !hasUnit;
+  }
   if (lineItemActualReturnInput) lineItemActualReturnInput.value = toLocalInputValue(li.returnedAt);
   if (lineItemPauseStartInput) lineItemPauseStartInput.value = "";
   if (lineItemPauseEndInput) lineItemPauseEndInput.value = "";
   renderLineItemPausePeriods(li);
   if (lineItemActualHint) {
-    lineItemActualHint.textContent = "Pick up/delivery time is required before recording a return.";
+    if (!hasUnit) {
+      lineItemActualHint.textContent = "Select a unit to enable pickup.";
+    } else {
+      lineItemActualHint.textContent = "Pick up/delivery time is required before recording a return.";
+    }
   }
 }
 
@@ -2773,7 +2782,7 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn }) {
     }
   }
 
-  await refreshAvailabilityForLineItem(li).catch(() => {});
+  await refreshAvailabilityForLineItem(li).catch(() => { });
 }
 
 function renderLineItems() {
@@ -2802,13 +2811,13 @@ function renderLineItems() {
         const selected = String(e.id) === String(selectedUnitId) ? "selected" : "";
         const bundleParts = Array.isArray(e.bundle_items)
           ? e.bundle_items
-              .map((item) => {
-                const qty = Number(item.qty || item.count || 0);
-                const name = String(item.type_name || item.typeName || "").trim();
-                if (!name) return null;
-                return `${qty || 1}x ${name}`;
-              })
-              .filter(Boolean)
+            .map((item) => {
+              const qty = Number(item.qty || item.count || 0);
+              const name = String(item.type_name || item.typeName || "").trim();
+              if (!name) return null;
+              return `${qty || 1}x ${name}`;
+            })
+            .filter(Boolean)
           : [];
         const bundleText = bundleParts.length ? ` (Bundle: ${bundleParts.join("; ")})` : "";
         const bundleId = e.bundle_id ? ` data-bundle-id="${e.bundle_id}"` : "";
@@ -2861,7 +2870,7 @@ function renderLineItems() {
       ? `<div class="hint">Bundle items: ${escapeHtml(bundleModelText)}${bundleAvailabilitySuffix}</div>`
       : "";
     const unitFieldHtml = lockUnits
-        ? `
+      ? `
           <label>
             <div class="label-head">
               <span>Units</span>
@@ -2870,7 +2879,7 @@ function renderLineItems() {
             <input value="No unit assigned until ordered." disabled />
           </label>
         `
-        : `
+      : `
           <label>
             <div class="label-head">
               <span>Unit</span>
@@ -2923,19 +2932,18 @@ function renderLineItems() {
             </label>
           </div>
           <label>Line amount
-            <input data-line-amount readonly value="${
-              (() => {
-                const calc = computeLineAmount({
-                  startLocal,
-                  endLocal,
-                  rateBasis: li.rateBasis,
-                  rateAmount: li.rateAmount,
-                  qty: lineItemQty(li),
-                });
-                if (!calc) return "";
-                return fmtMoneyNullable(calc.lineAmount);
-              })()
-            }" />
+            <input data-line-amount readonly value="${(() => {
+        const calc = computeLineAmount({
+          startLocal,
+          endLocal,
+          rateBasis: li.rateBasis,
+          rateAmount: li.rateAmount,
+          qty: lineItemQty(li),
+        });
+        if (!calc) return "";
+        return fmtMoneyNullable(calc.lineAmount);
+      })()
+      }" />
           </label>
         </div>
 
@@ -3215,7 +3223,7 @@ async function hydrateLookups() {
     loadEquipment(),
     loadBundles(),
     loadCompanySettings(),
-    draft.customerId ? loadCustomerPricing(draft.customerId).catch(() => {}) : Promise.resolve(),
+    draft.customerId ? loadCustomerPricing(draft.customerId).catch(() => { }) : Promise.resolve(),
   ]);
 }
 
@@ -3259,7 +3267,7 @@ function loadDraftFromStorage() {
         coverageHours: normalizeCoverageHours(stored.coverageHours),
       };
     }
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function initFormFieldsFromDraft() {
@@ -3385,7 +3393,7 @@ async function loadOrder() {
   updatePdfButtonState();
 
   for (const li of draft.lineItems) {
-    await refreshAvailabilityForLineItem(li).catch(() => {});
+    await refreshAvailabilityForLineItem(li).catch(() => { });
   }
   renderLineItems();
   await loadQboDocuments();
@@ -3422,13 +3430,13 @@ customerSelect.addEventListener("change", (e) => {
   }
   draft.customerId = e.target.value ? Number(e.target.value) : null;
   renderCustomerDetails();
-  loadCustomerContactOptions(draft.customerId).catch(() => {});
+  loadCustomerContactOptions(draft.customerId).catch(() => { });
   loadCustomerPricing(draft.customerId)
     .then(() => {
       applySuggestedRatesToLineItems();
       renderLineItems();
     })
-    .catch(() => {});
+    .catch(() => { });
   scheduleDraftSave();
 });
 
@@ -3818,7 +3826,7 @@ lineItemsEl.addEventListener("change", async (e) => {
         li.rateAmount = suggestedRateAmount({ customerId: draft.customerId, typeId: li.typeId, basis: li.rateBasis });
       }
     }
-    await refreshAvailabilityForLineItem(li).catch(() => {});
+    await refreshAvailabilityForLineItem(li).catch(() => { });
     renderLineItems();
     scheduleDraftSave();
   }
@@ -4076,16 +4084,16 @@ function setExtrasTab(tab) {
   });
 }
 
-  function syncExtrasDisabledState() {
-    if (noteHint) noteHint.textContent = editingOrderId ? "" : "Save the RO first to enable adding notes.";
-    if (saveNoteBtn) saveNoteBtn.disabled = !editingOrderId;
-    if (attachmentHint) attachmentHint.textContent = editingOrderId ? "" : "Save the RO first to enable uploads.";
-    if (uploadAttachmentBtn) uploadAttachmentBtn.disabled = !editingOrderId;
-    if (generalNotesImagesStatus) {
-      generalNotesImagesStatus.textContent = editingOrderId ? "" : "Save the RO first to enable uploads.";
-    }
-    if (generalNotesImagesInput) generalNotesImagesInput.disabled = !editingOrderId;
+function syncExtrasDisabledState() {
+  if (noteHint) noteHint.textContent = editingOrderId ? "" : "Save the RO first to enable adding notes.";
+  if (saveNoteBtn) saveNoteBtn.disabled = !editingOrderId;
+  if (attachmentHint) attachmentHint.textContent = editingOrderId ? "" : "Save the RO first to enable uploads.";
+  if (uploadAttachmentBtn) uploadAttachmentBtn.disabled = !editingOrderId;
+  if (generalNotesImagesStatus) {
+    generalNotesImagesStatus.textContent = editingOrderId ? "" : "Save the RO first to enable uploads.";
   }
+  if (generalNotesImagesInput) generalNotesImagesInput.disabled = !editingOrderId;
+}
 
 function openExtrasDrawer(tab) {
   if (!extrasDrawer || !extrasDrawerOverlay) return;
@@ -4149,7 +4157,7 @@ saveNoteBtn?.addEventListener("click", async (e) => {
   }
   try {
     localStorage.setItem("roUserName", userName);
-  } catch (_) {}
+  } catch (_) { }
   try {
     const res = await fetch(`/api/rental-orders/${editingOrderId}/notes`, {
       method: "POST",
@@ -4199,7 +4207,7 @@ generalNotesImagesInput?.addEventListener("change", async (e) => {
           sizeBytes: Number.isFinite(file.size) ? file.size : null,
         });
       } catch (err) {
-        await deleteUploadedImage(url).catch(() => {});
+        await deleteUploadedImage(url).catch(() => { });
         throw err;
       }
     })
@@ -4238,7 +4246,7 @@ generalNotesPreviews?.addEventListener("click", async (e) => {
     const session = window.RentSoft?.getSession?.();
     const actorName = session?.user?.name ? String(session.user.name) : null;
     const actorEmail = session?.user?.email ? String(session.user.email) : null;
-    await deleteUploadedImage(target.url).catch(() => {});
+    await deleteUploadedImage(target.url).catch(() => { });
     await fetch(`/api/rental-orders/${editingOrderId}/attachments/${id}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -4302,7 +4310,7 @@ attachmentsList.addEventListener("click", async (e) => {
     const session = window.RentSoft?.getSession?.();
     const actorName = session?.user?.name ? String(session.user.name) : null;
     const actorEmail = session?.user?.email ? String(session.user.email) : null;
-    await deleteUploadedFile(url).catch(() => {});
+    await deleteUploadedFile(url).catch(() => { });
     await fetch(`/api/rental-orders/${editingOrderId}/attachments/${id}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -4542,7 +4550,7 @@ lineItemTimeApplyAllBtn?.addEventListener("click", async (e) => {
     li.startLocal = startLocal;
     li.endLocal = endLocal;
     applyOrderedPickup(li);
-    await refreshAvailabilityForLineItem(li).catch(() => {});
+    await refreshAvailabilityForLineItem(li).catch(() => { });
   }
   draft.lineItems = mergeLineItems(draft.lineItems);
   renderLineItems();
@@ -4797,7 +4805,7 @@ function init() {
             ? "work-bench.html"
             : String(fromParam || "").toLowerCase() === "dashboard"
               ? "dashboard.html"
-            : "rental-orders.html";
+              : "rental-orders.html";
     }
 
     setCompanyMeta("");
@@ -4805,7 +4813,7 @@ function init() {
     if (!editingOrderId && startBlank) {
       try {
         localStorage.removeItem(draftKey());
-      } catch (_) {}
+      } catch (_) { }
       resetDraftForNew();
     } else {
       loadDraftFromStorage();
@@ -4833,15 +4841,15 @@ function init() {
     setCompanyMeta("Log in to continue.");
   }
 
-    if (openHistoryBtn) {
-      openHistoryBtn.style.display = editingOrderId ? "inline-flex" : "none";
-    }
-    syncExtrasDisabledState();
+  if (openHistoryBtn) {
+    openHistoryBtn.style.display = editingOrderId ? "inline-flex" : "none";
+  }
+  syncExtrasDisabledState();
 
   try {
     const existing = localStorage.getItem("roUserName");
     if (existing && noteUserInput) noteUserInput.value = existing;
-  } catch (_) {}
+  } catch (_) { }
 }
 
 init();
