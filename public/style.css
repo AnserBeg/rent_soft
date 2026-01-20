@@ -4968,8 +4968,8 @@ body.drawer-open {
 /* Shortfall Section Reorganization */
 .shortfall-layout-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 3.5fr) 8.5fr;
-  /* Left pane ~30%, Right pane ~70% */
+  grid-template-columns: minmax(460px, 4.5fr) 7.5fr;
+  /* Left pane wider for 2 cols */
   gap: 20px;
   align-items: start;
   margin-top: 16px;
