@@ -2340,8 +2340,171 @@ a.ghost {
   display: block;
 }
 
-.shortfall-card .shortfall-grid {
-  align-items: stretch;
+.shortfall-card {
+  --shortfall-out: #ef4444;
+  --shortfall-reserved: #facc15;
+  --shortfall-available: #22c55e;
+  --shortfall-repair: #3b82f6;
+  --shortfall-empty: #e2e8f0;
+}
+
+.shortfall-donut-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.shortfall-donut-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: #fff;
+  text-align: left;
+  display: grid;
+  gap: 12px;
+  cursor: pointer;
+  appearance: none;
+  font: inherit;
+  color: inherit;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+.shortfall-donut-card:hover {
+  border-color: rgba(15, 23, 42, 0.2);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+.shortfall-donut-card.is-active {
+  border-color: rgba(59, 130, 246, 0.65);
+  box-shadow: 0 16px 28px rgba(37, 99, 235, 0.15);
+}
+
+.shortfall-donut-card:focus-visible {
+  outline: 2px solid var(--secondary);
+  outline-offset: 2px;
+}
+
+.shortfall-donut-header {
+  display: grid;
+  gap: 2px;
+}
+
+.shortfall-donut-title {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.shortfall-donut-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.shortfall-donut-body {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.shortfall-donut {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(
+    var(--shortfall-out) 0 var(--p1, 0%),
+    var(--shortfall-reserved) var(--p1, 0%) var(--p2, 0%),
+    var(--shortfall-available) var(--p2, 0%) var(--p3, 0%),
+    var(--shortfall-repair) var(--p3, 0%) 100%
+  );
+  position: relative;
+}
+
+.shortfall-donut[data-empty="true"] {
+  background: conic-gradient(var(--shortfall-empty) 0 100%);
+}
+
+.shortfall-donut-center {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid var(--border);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  font-weight: 700;
+  color: var(--text);
+  box-shadow: 0 8px 14px rgba(15, 23, 42, 0.1);
+}
+
+.shortfall-donut-center img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.shortfall-donut-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(90px, 1fr));
+  gap: 8px;
+}
+
+.shortfall-donut-metric {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px 8px;
+  background: #f8fafc;
+  display: grid;
+  gap: 2px;
+}
+
+.shortfall-donut-metric .metric-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.shortfall-donut-metric .metric-value {
+  font-weight: 700;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.shortfall-donut-metric[data-kind="out"] {
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.shortfall-donut-metric[data-kind="reserved"] {
+  border-color: rgba(250, 204, 21, 0.6);
+}
+
+.shortfall-donut-metric[data-kind="available"] {
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.shortfall-donut-metric[data-kind="repair"] {
+  border-color: rgba(59, 130, 246, 0.45);
+}
+
+.shortfall-trend-wrap {
+  margin-top: 16px;
+}
+
+.shortfall-trend-wrap.is-hidden {
+  display: none;
+}
+
+@media (max-width: 680px) {
+  .shortfall-donut-body {
+    grid-template-columns: 1fr;
+    justify-items: start;
+  }
 }
 
 .shortfall-details {

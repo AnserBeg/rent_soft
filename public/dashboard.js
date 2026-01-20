@@ -60,14 +60,14 @@ const shortfallLocation = document.getElementById("shortfall-location");
 const shortfallCategory = document.getElementById("shortfall-category");
 const shortfallType = document.getElementById("shortfall-type");
 const shortfallSplitToggle = document.getElementById("shortfall-split-location");
-const shortfallSummaryCanvas = document.getElementById("shortfall-summary-chart");
-const shortfallSummaryWrap = document.getElementById("shortfall-summary-wrap");
+const shortfallDonutGrid = document.getElementById("shortfall-donut-grid");
+const shortfallTrendWrap = document.getElementById("shortfall-trend-wrap");
+const shortfallTrendHint = document.getElementById("shortfall-trend-hint");
 const shortfallDetailCanvas = document.getElementById("shortfall-detail-chart");
 const shortfallMeta = document.getElementById("shortfall-meta");
 const shortfallDetails = document.getElementById("shortfall-details");
 const shortfallDetailsMeta = document.getElementById("shortfall-details-meta");
 const shortfallDetailsBody = document.getElementById("shortfall-details-body");
-let shortfallSummaryChart = null;
 let shortfallDetailChart = null;
 let shortfallSummaryRows = [];
 let shortfallSeriesData = null;
@@ -76,6 +76,10 @@ let shortfallSelectedTypeId = null;
 let shortfallHoverKey = "";
 let shortfallDetailsCache = new Map();
 let shortfallLoadSeq = 0;
+let shortfallTypeMeta = new Map();
+let shortfallEquipmentCache = [];
+let shortfallEquipmentLoaded = false;
+let shortfallEquipmentPromise = null;
 
 const tooltip = document.getElementById("timeline-tooltip");
 let timelineMenuEl = null;
@@ -195,7 +199,7 @@ function hasUtilizationUI() {
 }
 
 function hasShortfallUI() {
-  return Boolean(shortfallSummaryCanvas && shortfallDetailCanvas);
+  return Boolean(shortfallDonutGrid && shortfallDetailCanvas);
 }
 
 const MONEY_FORMAT = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -215,6 +219,24 @@ function fmtCount(v) {
   const x = Number(v || 0);
   if (!Number.isFinite(x)) return "--";
   return String(Math.round(x));
+}
+
+function needsRepairCondition(condition) {
+  const raw = String(condition || "").toLowerCase();
+  return raw.includes("repair");
+}
+
+function typeInitials(name) {
+  const parts = String(name || "")
+    .trim()
+    .split(/\s+/g)
+    .filter(Boolean);
+  if (!parts.length) return "--";
+  return parts
+    .slice(0, 2)
+    .map((p) => p[0] || "")
+    .join("")
+    .toUpperCase();
 }
 
 function seriesColor(i) {
@@ -1415,110 +1437,251 @@ async function ensureShortfallLookups() {
     if (responses[idx - 1]?.ok) {
       const current = shortfallType.value;
       shortfallType.innerHTML = `<option value="">All</option>`;
+      shortfallTypeMeta = new Map();
       (typeData.types || []).forEach((t) => {
         const opt = document.createElement("option");
         opt.value = String(t.id);
         opt.textContent = t.name;
         shortfallType.appendChild(opt);
+        const imageUrls = Array.isArray(t.image_urls) ? t.image_urls : [];
+        const imageUrl = t.image_url || imageUrls[0] || null;
+        shortfallTypeMeta.set(String(t.id), {
+          id: t.id,
+          name: t.name,
+          categoryId: t.category_id ?? null,
+          categoryName: t.category ?? null,
+          imageUrl,
+        });
       });
       shortfallType.value = current;
     }
   }
 }
 
+async function loadShortfallEquipmentCache() {
+  if (!activeCompanyId) return [];
+  if (shortfallEquipmentLoaded) return shortfallEquipmentCache;
+  if (shortfallEquipmentPromise) return shortfallEquipmentPromise;
+
+  shortfallEquipmentPromise = fetch(`/api/equipment?companyId=${activeCompanyId}`)
+    .then(async (res) => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Unable to load equipment");
+      const rows = Array.isArray(data.equipment) ? data.equipment : [];
+      shortfallEquipmentCache = rows;
+      shortfallEquipmentLoaded = true;
+      return rows;
+    })
+    .catch((err) => {
+      shortfallEquipmentLoaded = false;
+      shortfallEquipmentCache = [];
+      throw err;
+    })
+    .finally(() => {
+      shortfallEquipmentPromise = null;
+    });
+
+  return shortfallEquipmentPromise;
+}
+
+function shortfallEquipmentMatchesFilters(eq) {
+  const eqTypeId = eq.type_id ?? eq.typeId ?? null;
+  if (!eqTypeId) return false;
+
+  if (shortfallType?.value && String(eqTypeId) !== String(shortfallType.value)) return false;
+
+  if (shortfallLocation?.value) {
+    const eqLocationId = eq.location_id ?? eq.locationId ?? null;
+    if (String(eqLocationId ?? "") !== String(shortfallLocation.value)) return false;
+  }
+
+  if (shortfallCategory?.value) {
+    const meta = shortfallTypeMeta.get(String(eqTypeId));
+    if (!meta || String(meta.categoryId ?? "") !== String(shortfallCategory.value)) return false;
+  }
+
+  return true;
+}
+
+function buildShortfallCountsByType(equipment) {
+  const countsByType = new Map();
+  (equipment || []).forEach((eq) => {
+    if (!shortfallEquipmentMatchesFilters(eq)) return;
+    const typeId = eq.type_id ?? eq.typeId ?? null;
+    if (!typeId) return;
+    const key = String(typeId);
+    const bucket = countsByType.get(key) || { out: 0, reserved: 0, available: 0, needsRepair: 0, imageUrl: null };
+    if (!bucket.imageUrl && eq.image_url) {
+      bucket.imageUrl = eq.image_url;
+    }
+    if (needsRepairCondition(eq.condition)) {
+      bucket.needsRepair += 1;
+      countsByType.set(key, bucket);
+      return;
+    }
+    const availability = String(
+      eq.availability_status ?? eq.availabilityStatus ?? eq.availability ?? eq.status ?? ""
+    ).toLowerCase();
+    if (availability.includes("out") || availability.includes("overdue") || availability.includes("rent")) {
+      bucket.out += 1;
+    } else if (availability.includes("reserve")) {
+      bucket.reserved += 1;
+    } else {
+      bucket.available += 1;
+    }
+    countsByType.set(key, bucket);
+  });
+  return countsByType;
+}
+
+function shortfallSelectedTypeName() {
+  const row = shortfallSummaryRows.find((r) => String(r.typeId) === String(shortfallSelectedTypeId));
+  if (row?.typeName) return row.typeName;
+  const meta = shortfallTypeMeta.get(String(shortfallSelectedTypeId));
+  return meta?.name || "Selected type";
+}
+
+function updateShortfallTrendVisibility() {
+  const hasSelection = Boolean(shortfallSelectedTypeId);
+  shortfallTrendWrap?.classList.toggle("is-hidden", !hasSelection);
+  if (shortfallTrendHint) {
+    shortfallTrendHint.textContent = hasSelection
+      ? `Showing trend for ${shortfallSelectedTypeName()}.`
+      : "Select a type to view the trend.";
+  }
+}
+
+function setShortfallSelectedType(typeId) {
+  const parsed = Number(typeId);
+  shortfallSelectedTypeId = Number.isFinite(parsed) ? parsed : null;
+  shortfallHoverKey = "";
+  shortfallDetailsCache.clear();
+  renderShortfallSummaryChart();
+  if (shortfallSelectedTypeId) {
+    loadShortfallSeries().catch(() => null);
+  } else {
+    shortfallSeriesData = null;
+    renderShortfallDetailChart();
+  }
+}
+
+function renderShortfallMetric(kind, label, value) {
+  const metric = document.createElement("div");
+  metric.className = "shortfall-donut-metric";
+  metric.dataset.kind = kind;
+
+  const labelEl = document.createElement("div");
+  labelEl.className = "metric-label";
+  labelEl.textContent = label;
+
+  const valueEl = document.createElement("div");
+  valueEl.className = "metric-value";
+  valueEl.textContent = fmtCount(value);
+
+  metric.append(labelEl, valueEl);
+  return metric;
+}
+
 function renderShortfallSummaryChart() {
-  if (!shortfallSummaryCanvas || typeof Chart === "undefined") return;
+  if (!shortfallDonutGrid) return;
   const rows = Array.isArray(shortfallSummaryRows) ? shortfallSummaryRows : [];
-  if (shortfallSummaryChart) shortfallSummaryChart.destroy();
+  shortfallDonutGrid.replaceChildren();
 
   if (!rows.length) {
-    const ctx = shortfallSummaryCanvas.getContext("2d");
-    ctx?.clearRect(0, 0, shortfallSummaryCanvas.width, shortfallSummaryCanvas.height);
+    updateShortfallTrendVisibility();
     return;
   }
 
-  if (shortfallSummaryWrap) {
-    const height = Math.max(260, rows.length * 28);
-    shortfallSummaryWrap.style.height = `${height}px`;
-    shortfallSummaryWrap.style.maxHeight = `${height}px`;
-  }
+  rows.forEach((row) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "shortfall-donut-card";
+    card.setAttribute("aria-pressed", String(String(row.typeId) === String(shortfallSelectedTypeId)));
+    if (String(row.typeId) === String(shortfallSelectedTypeId)) card.classList.add("is-active");
 
-  const labels = rows.map((r) => r.typeName || `Type ${r.typeId}`);
-  const values = rows.map((r) => Number(r.minCommitted || 0));
-  const selectedIndex = rows.findIndex((r) => String(r.typeId) === String(shortfallSelectedTypeId));
-  const colors = values.map((v, idx) => {
-    const base = v < 0 ? [239, 68, 68] : [37, 99, 235];
-    const alpha = idx === selectedIndex ? 0.9 : 0.55;
-    return `rgba(${base[0]}, ${base[1]}, ${base[2]}, ${alpha})`;
-  });
-  const borderColors = values.map((v) => (v < 0 ? "rgba(239, 68, 68, 0.9)" : "rgba(37, 99, 235, 0.9)"));
-  const borderWidths = values.map((_, idx) => (idx === selectedIndex ? 2 : 1));
+    const header = document.createElement("div");
+    header.className = "shortfall-donut-header";
 
-  shortfallSummaryChart = new Chart(shortfallSummaryCanvas.getContext("2d"), {
-    type: "bar",
-    data: {
-      labels,
-      datasets: [
-        {
-          label: "Committed availability",
-          data: values,
-          backgroundColor: colors,
-          borderColor: borderColors,
-          borderWidth: borderWidths,
-        },
-      ],
-    },
-    options: {
-      indexAxis: "y",
-      responsive: true,
-      maintainAspectRatio: false,
-      onClick: (evt) => {
-        const points = shortfallSummaryChart.getElementsAtEventForMode(evt, "nearest", { intersect: true }, true);
-        if (!points?.length) return;
-        const idx = points[0].index;
-        const row = shortfallSummaryRows[idx];
-        if (!row?.typeId) return;
-        shortfallSelectedTypeId = row.typeId;
-        shortfallHoverKey = "";
-        shortfallDetailsCache.clear();
-        renderShortfallSummaryChart();
-        loadShortfallSeries().catch(() => null);
-      },
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `Committed min: ${fmtCount(ctx.raw)}`,
-            afterLabel: (ctx) => {
-              const row = shortfallSummaryRows[ctx.dataIndex];
-              if (!row) return "";
-              return `Potential min: ${fmtCount(row.minPotential)}`;
-            },
-            footer: (items) => {
-              const row = shortfallSummaryRows[items?.[0]?.dataIndex];
-              if (!row) return "";
-              return `Total units: ${fmtCount(row.totalUnits)}`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: {
-          ticks: { precision: 0 },
-          grid: {
-            color: (ctx) => (ctx.tick?.value === 0 ? "rgba(148, 163, 184, 0.8)" : "rgba(226, 232, 240, 0.8)"),
-          },
-        },
-        y: { grid: { display: false } },
-      },
-    },
+    const title = document.createElement("div");
+    title.className = "shortfall-donut-title";
+    title.textContent = row.typeName || `Type ${row.typeId}`;
+
+    const meta = document.createElement("div");
+    meta.className = "shortfall-donut-meta";
+    meta.textContent = row.categoryName || "Equipment type";
+
+    header.append(title, meta);
+
+    const body = document.createElement("div");
+    body.className = "shortfall-donut-body";
+
+    const donut = document.createElement("div");
+    donut.className = "shortfall-donut";
+
+    const counts = row.counts || { out: 0, reserved: 0, available: 0, needsRepair: 0, imageUrl: null };
+    const total = counts.out + counts.reserved + counts.available + counts.needsRepair;
+    if (!total) donut.dataset.empty = "true";
+
+    const pctOut = total ? (counts.out / total) * 100 : 0;
+    const pctReserved = total ? (counts.reserved / total) * 100 : 0;
+    const pctAvailable = total ? (counts.available / total) * 100 : 0;
+    const p1 = pctOut;
+    const p2 = p1 + pctReserved;
+    const p3 = p2 + pctAvailable;
+
+    donut.style.setProperty("--p1", `${p1}%`);
+    donut.style.setProperty("--p2", `${p2}%`);
+    donut.style.setProperty("--p3", `${p3}%`);
+
+    const center = document.createElement("div");
+    center.className = "shortfall-donut-center";
+    const imageUrl = row.imageUrl || counts.imageUrl;
+    if (imageUrl) {
+      const img = document.createElement("img");
+      img.src = imageUrl;
+      img.alt = row.typeName || "Equipment image";
+      img.loading = "lazy";
+      center.appendChild(img);
+    } else {
+      center.textContent = typeInitials(row.typeName);
+    }
+    donut.appendChild(center);
+
+    const metrics = document.createElement("div");
+    metrics.className = "shortfall-donut-metrics";
+    metrics.append(
+      renderShortfallMetric("out", "Currently out", counts.out),
+      renderShortfallMetric("reserved", "Reserved", counts.reserved),
+      renderShortfallMetric("available", "Available", counts.available),
+      renderShortfallMetric("repair", "Needs repair", counts.needsRepair)
+    );
+
+    body.append(donut, metrics);
+    card.append(header, body);
+
+    card.addEventListener("click", () => {
+      if (!row?.typeId) return;
+      setShortfallSelectedType(row.typeId);
+    });
+
+    shortfallDonutGrid.appendChild(card);
   });
+
+  updateShortfallTrendVisibility();
 }
 
 function renderShortfallDetailChart() {
   if (!shortfallDetailCanvas || typeof Chart === "undefined") return;
   if (shortfallDetailChart) shortfallDetailChart.destroy();
   shortfallSeriesMeta = [];
+
+  if (!shortfallSelectedTypeId) {
+    const ctx = shortfallDetailCanvas.getContext("2d");
+    ctx?.clearRect(0, 0, shortfallDetailCanvas.width, shortfallDetailCanvas.height);
+    renderShortfallDetailsEmpty("Select a type to view shortfall details.");
+    updateShortfallTrendVisibility();
+    return;
+  }
 
   const payload = shortfallSeriesData || {};
   const dates = Array.isArray(payload.dates) ? payload.dates : [];
@@ -1528,6 +1691,7 @@ function renderShortfallDetailChart() {
     const ctx = shortfallDetailCanvas.getContext("2d");
     ctx?.clearRect(0, 0, shortfallDetailCanvas.width, shortfallDetailCanvas.height);
     renderShortfallDetailsEmpty();
+    updateShortfallTrendVisibility();
     return;
   }
 
@@ -1813,20 +1977,41 @@ async function loadShortfallDashboard() {
         return String(a.typeName || "").localeCompare(String(b.typeName || ""));
       });
 
+    const equipment = await loadShortfallEquipmentCache().catch(() => []);
+    const countsByType = buildShortfallCountsByType(equipment);
+    shortfallSummaryRows = shortfallSummaryRows.map((row) => {
+      const meta = shortfallTypeMeta.get(String(row.typeId)) || {};
+      const counts = countsByType.get(String(row.typeId)) || {
+        out: 0,
+        reserved: 0,
+        available: 0,
+        needsRepair: 0,
+        imageUrl: null,
+      };
+      return {
+        ...row,
+        counts,
+        imageUrl: meta.imageUrl || counts.imageUrl || null,
+        categoryName: row.categoryName || meta.categoryName || null,
+      };
+    });
+
     const typeFilterId = shortfallType?.value ? Number(shortfallType.value) : null;
     if (Number.isFinite(typeFilterId)) {
       shortfallSelectedTypeId = typeFilterId;
-    } else if (
-      !shortfallSelectedTypeId ||
-      !shortfallSummaryRows.some((r) => String(r.typeId) === String(shortfallSelectedTypeId))
-    ) {
-      shortfallSelectedTypeId = shortfallSummaryRows[0]?.typeId ?? null;
+    } else if (!shortfallSummaryRows.some((r) => String(r.typeId) === String(shortfallSelectedTypeId))) {
+      shortfallSelectedTypeId = null;
     }
 
     shortfallDetailsCache.clear();
     shortfallHoverKey = "";
     renderShortfallSummaryChart();
-    await loadShortfallSeries().catch(() => null);
+    if (shortfallSelectedTypeId) {
+      await loadShortfallSeries().catch(() => null);
+    } else {
+      shortfallSeriesData = null;
+      renderShortfallDetailChart();
+    }
 
     const summaryLabel = shortfallSummaryRows.length
       ? `Showing next ${range.days} days.`
@@ -2571,6 +2756,7 @@ function syncScroll() {
     scrollBody.scrollTop = timelineLeftEl.scrollTop;
     unlock();
   });
+  updateShortfallTrendVisibility();
 }
 
 function initWorkbenchShortcuts() {

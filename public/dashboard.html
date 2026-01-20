@@ -278,19 +278,15 @@
 
             <p class="hint" id="shortfall-meta">Loading availability...</p>
 
-            <div class="two-col shortfall-grid">
-              <div class="chart-card">
-                <div class="chart-head">
-                  <div class="chart-title">Worst committed availability by type</div>
-                </div>
-                <div class="chart-canvas" id="shortfall-summary-wrap">
-                  <canvas id="shortfall-summary-chart"></canvas>
-                </div>
-              </div>
+            <div class="shortfall-donut-grid" id="shortfall-donut-grid" role="list"></div>
 
+            <div class="shortfall-trend-wrap is-hidden" id="shortfall-trend-wrap">
               <div class="chart-card">
                 <div class="chart-head">
-                  <div class="chart-title">Availability trend</div>
+                  <div>
+                    <div class="chart-title">Availability trend</div>
+                    <p class="hint" id="shortfall-trend-hint">Select a type to view the trend.</p>
+                  </div>
                 </div>
                 <div class="chart-canvas">
                   <canvas id="shortfall-detail-chart"></canvas>
