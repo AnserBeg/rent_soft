@@ -68,6 +68,9 @@ const shortfallMeta = document.getElementById("shortfall-meta");
 const shortfallDetails = document.getElementById("shortfall-details");
 const shortfallDetailsMeta = document.getElementById("shortfall-details-meta");
 const shortfallDetailsBody = document.getElementById("shortfall-details-body");
+const shortfallDemandTable = document.getElementById("shortfall-demand-table");
+const shortfallDemandMeta = document.getElementById("shortfall-demand-meta");
+const shortfallDemandCount = document.getElementById("shortfall-demand-count");
 let shortfallDetailChart = null;
 let shortfallSummaryRows = [];
 let shortfallSeriesData = null;
@@ -80,6 +83,7 @@ let shortfallTypeMeta = new Map();
 let shortfallEquipmentCache = [];
 let shortfallEquipmentLoaded = false;
 let shortfallEquipmentPromise = null;
+let shortfallDemandLoadSeq = 0;
 
 const tooltip = document.getElementById("timeline-tooltip");
 let timelineMenuEl = null;
@@ -237,6 +241,16 @@ function typeInitials(name) {
     .map((p) => p[0] || "")
     .join("")
     .toUpperCase();
+}
+
+function formatShortfallDemandDate(value) {
+  if (!value) return "--";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  const now = new Date();
+  const opts = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString("en-US", opts);
 }
 
 function seriesColor(i) {
@@ -2034,6 +2048,8 @@ async function loadShortfallDashboard() {
     if (seq !== shortfallLoadSeq) return;
     setShortfallMeta(err.message || "Unable to load availability.");
   }
+
+  loadShortfallDemandTable().catch(() => null);
 }
 
 function initShortfallUI() {
@@ -2770,6 +2786,177 @@ function syncScroll() {
     unlock();
   });
   updateShortfallTrendVisibility();
+}
+
+function setShortfallDemandMeta(message) {
+  if (shortfallDemandMeta) shortfallDemandMeta.textContent = message ? String(message) : "";
+}
+
+function setShortfallDemandCount(count) {
+  if (!shortfallDemandCount) return;
+  if (!Number.isFinite(count)) {
+    shortfallDemandCount.textContent = "--";
+    return;
+  }
+  shortfallDemandCount.textContent = `${count} customers`;
+}
+
+function renderShortfallDemandTable(rows, range) {
+  if (!shortfallDemandTable) return;
+  shortfallDemandTable.replaceChildren();
+
+  const cleanRows = Array.isArray(rows) ? rows : [];
+  if (!cleanRows.length) {
+    setShortfallDemandCount(0);
+    setShortfallDemandMeta("No upcoming demand in this range.");
+    return;
+  }
+
+  const typeMap = new Map();
+  const customerMap = new Map();
+
+  cleanRows.forEach((row) => {
+    const typeId = row.typeId ?? row.type_id ?? null;
+    const typeName = row.typeName || row.type_name || (typeId ? `Type ${typeId}` : "Type");
+    if (typeId === null || typeId === undefined) return;
+    if (typeId !== null && typeId !== undefined) typeMap.set(String(typeId), typeName);
+
+    const customerId = row.customerId ?? row.customer_id ?? "unknown";
+    const customerName = row.customerName || row.customer_name || "Unknown customer";
+    const startDate = row.startDate || row.start_date || row.start_at || null;
+    const qty = Number(row.qty || row.quantity || 0);
+    if (!Number.isFinite(qty) || qty <= 0) return;
+
+    const key = String(customerId);
+    if (!customerMap.has(key)) {
+      customerMap.set(key, { customerId, customerName, earliestMs: null, byType: new Map() });
+    }
+    const cust = customerMap.get(key);
+
+    const dateMs = startDate ? Date.parse(startDate) : NaN;
+    if (Number.isFinite(dateMs)) {
+      cust.earliestMs = cust.earliestMs === null ? dateMs : Math.min(cust.earliestMs, dateMs);
+    }
+
+    const typeKey = String(typeId);
+    if (!cust.byType.has(typeKey)) cust.byType.set(typeKey, []);
+    cust.byType.get(typeKey).push({ date: startDate, qty });
+  });
+
+  const types = Array.from(typeMap.entries())
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+
+  const customers = Array.from(customerMap.values()).sort((a, b) => {
+    const aMs = a.earliestMs;
+    const bMs = b.earliestMs;
+    if (aMs === null && bMs === null) return String(a.customerName || "").localeCompare(String(b.customerName || ""));
+    if (aMs === null) return 1;
+    if (bMs === null) return -1;
+    if (aMs !== bMs) return aMs - bMs;
+    return String(a.customerName || "").localeCompare(String(b.customerName || ""));
+  });
+
+  const gridTemplate = ["minmax(200px, 1.2fr)", ...types.map(() => "minmax(150px, 1fr)")].join(" ");
+
+  const header = document.createElement("div");
+  header.className = "table-row table-header shortfall-demand-header";
+  header.style.gridTemplateColumns = gridTemplate;
+  const customerHeader = document.createElement("div");
+  customerHeader.textContent = "Customer";
+  header.appendChild(customerHeader);
+  types.forEach((t) => {
+    const cell = document.createElement("div");
+    cell.textContent = t.name;
+    header.appendChild(cell);
+  });
+  shortfallDemandTable.appendChild(header);
+
+  customers.forEach((cust) => {
+    const row = document.createElement("div");
+    row.className = "table-row shortfall-demand-row";
+    row.style.gridTemplateColumns = gridTemplate;
+
+    const customerCell = document.createElement("div");
+    customerCell.className = "shortfall-demand-customer";
+    customerCell.textContent = cust.customerName || "Unknown customer";
+    row.appendChild(customerCell);
+
+    types.forEach((t) => {
+      const cell = document.createElement("div");
+      cell.className = "shortfall-demand-cell";
+      const entries = cust.byType.get(String(t.id)) || [];
+      if (!entries.length) {
+        cell.classList.add("is-empty");
+        cell.textContent = "--";
+      } else {
+        entries
+          .slice()
+          .sort((a, b) => {
+            const aMs = Date.parse(a.date || "");
+            const bMs = Date.parse(b.date || "");
+            const aVal = Number.isFinite(aMs) ? aMs : Number.MAX_SAFE_INTEGER;
+            const bVal = Number.isFinite(bMs) ? bMs : Number.MAX_SAFE_INTEGER;
+            return aVal - bVal;
+          })
+          .forEach((entry) => {
+            const entryEl = document.createElement("div");
+            entryEl.className = "shortfall-demand-entry";
+
+            const qtyEl = document.createElement("span");
+            qtyEl.className = "entry-qty";
+            qtyEl.textContent = fmtCount(entry.qty);
+
+            const sepEl = document.createElement("span");
+            sepEl.className = "entry-sep";
+            sepEl.textContent = "by";
+
+            const dateEl = document.createElement("span");
+            dateEl.className = "entry-date";
+            dateEl.textContent = formatShortfallDemandDate(entry.date);
+
+            entryEl.append(qtyEl, sepEl, dateEl);
+            cell.appendChild(entryEl);
+          });
+      }
+      row.appendChild(cell);
+    });
+
+    shortfallDemandTable.appendChild(row);
+  });
+
+  setShortfallDemandCount(customers.length);
+  setShortfallDemandMeta(`Upcoming demand for the next ${range?.days || 0} days.`);
+}
+
+async function loadShortfallDemandTable() {
+  if (!shortfallDemandTable || !activeCompanyId) return;
+  const seq = (shortfallDemandLoadSeq += 1);
+  setShortfallDemandMeta("Loading customer demand...");
+  setShortfallDemandCount(NaN);
+
+  const range = shortfallRangeFromInputs();
+  const qs = new URLSearchParams({
+    companyId: String(activeCompanyId),
+    from: range.from,
+    to: range.to,
+  });
+  if (shortfallLocation?.value) qs.set("locationId", String(Number(shortfallLocation.value)));
+  if (shortfallCategory?.value) qs.set("categoryId", String(Number(shortfallCategory.value)));
+  if (shortfallType?.value) qs.set("typeId", String(Number(shortfallType.value)));
+
+  try {
+    const res = await fetch(`/api/availability-shortfalls/customer-demand?${qs.toString()}`);
+    const data = await res.json().catch(() => ({}));
+    if (seq !== shortfallDemandLoadSeq) return;
+    if (!res.ok) throw new Error(data.error || "Unable to load customer demand.");
+    renderShortfallDemandTable(data.rows || [], range);
+  } catch (err) {
+    if (seq !== shortfallDemandLoadSeq) return;
+    setShortfallDemandMeta(err.message || "Unable to load customer demand.");
+    setShortfallDemandCount(0);
+    if (shortfallDemandTable) shortfallDemandTable.replaceChildren();
+  }
 }
 
 function initWorkbenchShortcuts() {

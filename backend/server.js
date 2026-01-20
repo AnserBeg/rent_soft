@@ -129,6 +129,7 @@ const {
   applyWorkOrderPauseToEquipment,
   getTypeAvailabilitySeries,
   getAvailabilityShortfallsSummary,
+  getAvailabilityShortfallsCustomerDemand,
   getTypeAvailabilitySeriesWithProjection,
   getTypeAvailabilityShortfallDetails,
   getUtilizationDashboard,
@@ -3754,6 +3755,25 @@ app.get(
       return res.status(400).json({ error: "companyId, from, and to are required." });
     }
     const data = await getAvailabilityShortfallsSummary({
+      companyId,
+      from,
+      to,
+      locationId: locationId ? Number(locationId) : null,
+      categoryId: categoryId ? Number(categoryId) : null,
+      typeId: typeId ? Number(typeId) : null,
+    });
+    res.json(data);
+  })
+);
+
+app.get(
+  "/api/availability-shortfalls/customer-demand",
+  asyncHandler(async (req, res) => {
+    const { companyId, from, to, locationId, categoryId, typeId } = req.query;
+    if (!companyId || !from || !to) {
+      return res.status(400).json({ error: "companyId, from, and to are required." });
+    }
+    const data = await getAvailabilityShortfallsCustomerDemand({
       companyId,
       from,
       to,

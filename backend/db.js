@@ -5874,6 +5874,80 @@ async function getAvailabilityShortfallsSummary({
   return { rows };
 }
 
+async function getAvailabilityShortfallsCustomerDemand({
+  companyId,
+  from,
+  to,
+  locationId = null,
+  categoryId = null,
+  typeId = null,
+} = {}) {
+  const fromIso = normalizeTimestamptz(from);
+  const toIso = normalizeTimestamptz(to);
+  if (!fromIso || !toIso) return { rows: [] };
+
+  const start = new Date(fromIso);
+  const end = new Date(toIso);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return { rows: [] };
+
+  const locationIdNum = locationId === null || locationId === undefined ? null : Number(locationId);
+  const categoryIdNum = categoryId === null || categoryId === undefined ? null : Number(categoryId);
+  const typeIdNum = typeId === null || typeId === undefined ? null : Number(typeId);
+
+  const params = [companyId, fromIso, toIso];
+  const filters = [
+    "ro.company_id = $1",
+    "ro.status IN ('quote','requested','reservation')",
+    "li.start_at >= $2::timestamptz",
+    "li.start_at < $3::timestamptz",
+  ];
+  if (Number.isFinite(locationIdNum)) {
+    params.push(locationIdNum);
+    filters.push(`ro.pickup_location_id = $${params.length}`);
+  }
+  if (Number.isFinite(categoryIdNum)) {
+    params.push(categoryIdNum);
+    filters.push(`et.category_id = $${params.length}`);
+  }
+  if (Number.isFinite(typeIdNum)) {
+    params.push(typeIdNum);
+    filters.push(`li.type_id = $${params.length}`);
+  }
+
+  const res = await pool.query(
+    `
+    WITH line_totals AS (
+      SELECT li.id,
+             ro.customer_id,
+             c.company_name AS customer_name,
+             li.type_id,
+             et.name AS type_name,
+             li.start_at,
+             CASE WHEN COUNT(liv.equipment_id) > 0 THEN COUNT(liv.equipment_id) ELSE 1 END AS qty
+        FROM rental_order_line_items li
+        JOIN rental_orders ro ON ro.id = li.rental_order_id
+        JOIN customers c ON c.id = ro.customer_id
+        JOIN equipment_types et ON et.id = li.type_id AND et.company_id = ro.company_id
+   LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
+       WHERE ${filters.join(" AND ")}
+       GROUP BY li.id, ro.customer_id, c.company_name, li.type_id, et.name, li.start_at
+    )
+    SELECT customer_id,
+           customer_name,
+           type_id,
+           type_name,
+           start_at::date AS start_date,
+           SUM(qty)::int AS qty
+      FROM line_totals
+     GROUP BY customer_id, customer_name, type_id, type_name, start_at
+     ORDER BY start_at ASC, customer_name ASC, type_name ASC
+    `,
+    params
+  );
+
+  return { rows: res.rows || [] };
+}
+
 async function getTypeAvailabilitySeriesWithProjection({
   companyId,
   typeId,
@@ -11811,6 +11885,7 @@ module.exports = {
   applyWorkOrderPauseToEquipment,
   getTypeAvailabilitySeries,
   getAvailabilityShortfallsSummary,
+  getAvailabilityShortfallsCustomerDemand,
   getTypeAvailabilitySeriesWithProjection,
   getTypeAvailabilityShortfallDetails,
   getUtilizationDashboard,
