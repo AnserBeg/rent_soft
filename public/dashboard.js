@@ -162,29 +162,29 @@ function hasTimelineUI() {
 function hasBenchSummaryUI() {
   return Boolean(
     benchSearchInput ||
-      benchNewRoBtn ||
-      benchKpiAssignments ||
-      benchKpiActive ||
-      benchKpiStarting ||
-      benchKpiEnding ||
-      benchKpiOverdue ||
-      benchKpiReservations
+    benchNewRoBtn ||
+    benchKpiAssignments ||
+    benchKpiActive ||
+    benchKpiStarting ||
+    benchKpiEnding ||
+    benchKpiOverdue ||
+    benchKpiReservations
   );
 }
 
 function hasBenchStagesUI() {
   return Boolean(
     benchViewToggle &&
-      benchViewTimeline &&
-      benchViewStages &&
-      benchViewTimelineBtn &&
-      benchViewStagesBtn &&
-      benchStageRequestedTable &&
-      benchStageQuoteTable &&
-      benchStageReservationTable &&
-      benchStageOrderedTable &&
-      benchStageReceivedTable &&
-      benchStageClosedTable
+    benchViewTimeline &&
+    benchViewStages &&
+    benchViewTimelineBtn &&
+    benchViewStagesBtn &&
+    benchStageRequestedTable &&
+    benchStageQuoteTable &&
+    benchStageReservationTable &&
+    benchStageOrderedTable &&
+    benchStageReceivedTable &&
+    benchStageClosedTable
   );
 }
 
@@ -549,7 +549,7 @@ function safeStorageGet(key) {
 function safeStorageSet(key, value) {
   try {
     window.localStorage?.setItem?.(key, value);
-  } catch (_) {}
+  } catch (_) { }
 }
 
 function currentBenchViewPref() {
@@ -1598,18 +1598,18 @@ function renderShortfallSummaryChart() {
     card.setAttribute("aria-pressed", String(String(row.typeId) === String(shortfallSelectedTypeId)));
     if (String(row.typeId) === String(shortfallSelectedTypeId)) card.classList.add("is-active");
 
-    const header = document.createElement("div");
-    header.className = "shortfall-donut-header";
+    // const header = document.createElement("div");
+    // header.className = "shortfall-donut-header";
 
-    const title = document.createElement("div");
-    title.className = "shortfall-donut-title";
-    title.textContent = row.typeName || `Type ${row.typeId}`;
+    // const title = document.createElement("div");
+    // title.className = "shortfall-donut-title";
+    // title.textContent = row.typeName || `Type ${row.typeId}`;
 
-    const meta = document.createElement("div");
-    meta.className = "shortfall-donut-meta";
-    meta.textContent = row.categoryName || "Equipment type";
+    // const meta = document.createElement("div");
+    // meta.className = "shortfall-donut-meta";
+    // meta.textContent = row.categoryName || "Equipment type";
 
-    header.append(title, meta);
+    // header.append(title, meta);
 
     const body = document.createElement("div");
     body.className = "shortfall-donut-body";
@@ -1642,12 +1642,13 @@ function renderShortfallSummaryChart() {
       img.loading = "lazy";
       center.appendChild(img);
     } else {
-      center.textContent = typeInitials(row.typeName);
+      center.textContent = row.typeName || "";
     }
     donut.appendChild(center);
 
     body.append(donut);
-    card.append(header, body);
+    // card.append(header, body);
+    card.append(body);
 
     card.addEventListener("click", () => {
       if (!row?.typeId) return;
@@ -1953,13 +1954,13 @@ async function loadShortfallSeries() {
     dates: Array.isArray(data.dates) ? data.dates : [],
     series: Array.isArray(data.series)
       ? data.series.map((row) => ({
-          locationId: row.locationId ?? null,
-          locationName: row.locationName || "Location",
-          total: Number(row.total || 0),
-          committedValues: Array.isArray(row.committedValues) ? row.committedValues : [],
-          potentialValues: Array.isArray(row.potentialValues) ? row.potentialValues : [],
-          availableWithIncomingValues: Array.isArray(row.availableWithIncomingValues) ? row.availableWithIncomingValues : [],
-        }))
+        locationId: row.locationId ?? null,
+        locationName: row.locationName || "Location",
+        total: Number(row.total || 0),
+        committedValues: Array.isArray(row.committedValues) ? row.committedValues : [],
+        potentialValues: Array.isArray(row.potentialValues) ? row.potentialValues : [],
+        availableWithIncomingValues: Array.isArray(row.availableWithIncomingValues) ? row.availableWithIncomingValues : [],
+      }))
       : [],
   };
   renderShortfallDetailChart();
@@ -2731,7 +2732,7 @@ function cleanupResize(e) {
   state.barEl.classList.remove("resizing");
   try {
     state.barEl.releasePointerCapture(e.pointerId);
-  } catch (_) {}
+  } catch (_) { }
   state.barEl.removeEventListener("pointermove", onResizeMove);
 }
 

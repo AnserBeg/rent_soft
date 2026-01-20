@@ -2408,8 +2408,8 @@ a.ghost {
 }
 
 .shortfall-donut {
-  width: 128px;
-  height: 128px;
+  width: 180px;
+  height: 180px;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -2427,8 +2427,8 @@ a.ghost {
 }
 
 .shortfall-donut-center {
-  width: 64px;
-  height: 64px;
+  width: 100px;
+  height: 100px;
   border-radius: 50%;
   background: #fff;
   border: 1px solid var(--border);
@@ -2438,6 +2438,10 @@ a.ghost {
   font-weight: 700;
   color: var(--text);
   box-shadow: 0 8px 14px rgba(15, 23, 42, 0.1);
+  font-size: 13px;
+  line-height: 1.2;
+  text-align: center;
+  padding: 4px;
 }
 
 .shortfall-donut-center img {
