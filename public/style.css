@@ -2461,29 +2461,6 @@ a.ghost {
   place-items: center;
   box-shadow: 0 6px 12px rgba(15, 23, 42, 0.12);
   pointer-events: none;
-}
-
-.shortfall-donut-label.pos-top {
-  top: -2px;
-  left: 50%;
-  transform: translate(-50%, -50%);
-}
-
-.shortfall-donut-label.pos-right {
-  right: -2px;
-  top: 50%;
-  transform: translate(50%, -50%);
-}
-
-.shortfall-donut-label.pos-bottom {
-  bottom: -2px;
-  left: 50%;
-  transform: translate(-50%, 50%);
-}
-
-.shortfall-donut-label.pos-left {
-  left: -2px;
-  top: 50%;
   transform: translate(-50%, -50%);
 }
 

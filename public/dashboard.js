@@ -1630,21 +1630,6 @@ function renderShortfallSummaryChart() {
     }
     donut.appendChild(center);
 
-    const labels = [
-      { kind: "out", label: "Currently out", value: counts.out, pos: "top" },
-      { kind: "reserved", label: "Reserved", value: counts.reserved, pos: "right" },
-      { kind: "available", label: "Available", value: counts.available, pos: "bottom" },
-      { kind: "repair", label: "Needs repair", value: counts.needsRepair, pos: "left" },
-    ];
-    labels.forEach((item) => {
-      const label = document.createElement("div");
-      label.className = `shortfall-donut-label pos-${item.pos}`;
-      label.dataset.kind = item.kind;
-      label.textContent = fmtCount(item.value);
-      label.title = `${item.label}: ${fmtCount(item.value)}`;
-      donut.appendChild(label);
-    });
-
     body.append(donut);
     card.append(header, body);
 
@@ -1654,6 +1639,45 @@ function renderShortfallSummaryChart() {
     });
 
     shortfallDonutGrid.appendChild(card);
+
+    if (total > 0) {
+      const donutRect = donut.getBoundingClientRect();
+      const centerRect = center.getBoundingClientRect();
+      const outerRadius = donutRect.width ? donutRect.width / 2 : 64;
+      const innerRadius = centerRect.width ? centerRect.width / 2 : 32;
+      const labelRadius = (outerRadius + innerRadius) / 2;
+      const segments = [
+        { kind: "out", label: "Currently out", value: counts.out },
+        { kind: "reserved", label: "Reserved", value: counts.reserved },
+        { kind: "available", label: "Available", value: counts.available },
+        { kind: "repair", label: "Needs repair", value: counts.needsRepair },
+      ];
+
+      let startPct = 0;
+      segments.forEach((segment) => {
+        const value = Number(segment.value || 0);
+        if (value <= 0) {
+          startPct += 0;
+          return;
+        }
+        const pct = value / total;
+        const centerPct = startPct + pct / 2;
+        const angle = centerPct * Math.PI * 2 - Math.PI / 2;
+        const x = Math.cos(angle) * labelRadius;
+        const y = Math.sin(angle) * labelRadius;
+
+        const label = document.createElement("div");
+        label.className = "shortfall-donut-label";
+        label.dataset.kind = segment.kind;
+        label.textContent = fmtCount(value);
+        label.title = `${segment.label}: ${fmtCount(value)}`;
+        label.style.left = `calc(50% + ${x.toFixed(2)}px)`;
+        label.style.top = `calc(50% + ${y.toFixed(2)}px)`;
+        donut.appendChild(label);
+
+        startPct += pct;
+      });
+    }
   });
 
   updateShortfallTrendVisibility();
