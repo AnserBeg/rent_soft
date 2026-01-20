@@ -2007,7 +2007,7 @@ function rateBasisUnitSuffix(basis) {
   }
 }
 
-function contractDurationText(lineItems) {
+function getContractDurationStats(lineItems) {
   let earliest = null;
   let latest = null;
   (lineItems || []).forEach((li) => {
@@ -2021,12 +2021,22 @@ function contractDurationText(lineItems) {
     if (earliest === null || startMs < earliest) earliest = startMs;
     if (latest === null || endMs > latest) latest = endMs;
   });
-  if (earliest === null || latest === null) return "";
+
+  if (earliest === null || latest === null) {
+    return { days: 0, months: 0, earliest: null, latest: null };
+  }
+
   const dayMs = 24 * 60 * 60 * 1000;
   const days = Math.round((latest - earliest) / dayMs);
-  if (!Number.isFinite(days) || days <= 0) return "";
+
+  if (!Number.isFinite(days) || days <= 0) {
+    return { days: 0, months: 0, earliest, latest };
+  }
+
   const startAt = new Date(earliest).toISOString();
   const endAt = new Date(latest).toISOString();
+  // Ensure computeMonthlyUnits is available in scope or passed in if strict dependency is needed, 
+  // but it seems to be a global/module scope function based on previous context.
   const months = computeMonthlyUnits({
     startAt,
     endAt,
@@ -2035,7 +2045,15 @@ function contractDurationText(lineItems) {
     roundingGranularity: "unit",
     timeZone: billingTimeZone,
   });
-  const monthsText = Number.isFinite(months) ? ` ≈ ${months.toFixed(2)} months` : "";
+
+  return { days, months, earliest, latest };
+}
+
+function contractDurationText(lineItems) {
+  const { days, months } = getContractDurationStats(lineItems);
+  if (days <= 0) return "";
+
+  const monthsText = Number.isFinite(months) && months > 0 ? ` ≈ ${months.toFixed(2)} months` : "";
   return `${days} days${monthsText}`;
 }
 
@@ -2079,6 +2097,36 @@ function updatePricingSummary({ periodSummaries, lineItems, contractSubtotal, co
     pricingRecurringHeadlineEl.textContent = `${fmtMoney(0)} / period`;
     pricingRecurringSubtotalEl.textContent = fmtMoney(0);
     pricingRecurringGstEl.textContent = fmtMoney(0);
+  }
+
+  // Logic to hide/show the recurring pricing card
+  const pricingRecurringCard = pricingRecurringLabelEl.closest(".pricing-mini-card");
+  if (pricingRecurringCard) {
+    const { days, months } = getContractDurationStats(lineItems);
+    let showRecurring = true;
+
+    if (activeBases.length === 1) {
+      const basis = activeBases[0];
+      if (basis === "monthly") {
+        showRecurring = months > 1;
+      } else if (basis === "weekly") {
+        showRecurring = days > 7;
+      } else if (basis === "daily") {
+        showRecurring = days > 1;
+      }
+    } else if (activeBases.length === 0) {
+      // If no active bases (e.g. empty order), usually show 0 / period, or hide? 
+      // Default behavior was to show 0. We'll leave it visible so it's not jarringly empty, 
+      // or hide it if technically duration is 0. 
+      // Requirement said "if its more then 1 week or 1 day... then dont render".
+      // Implies we only care if we have a basis. If no basis, let's stick to default or hide.
+      // Let's decide to hide if duration is 0 to be cleaner, 
+      // or show if we want to prompt user.
+      // let's stick to showing it unless we specifically identifying a short contract with a basis.
+      showRecurring = true;
+    }
+
+    pricingRecurringCard.style.display = showRecurring ? "" : "none";
   }
 
   if (pricingContractLabelEl) pricingContractLabelEl.textContent = "For this contract";
