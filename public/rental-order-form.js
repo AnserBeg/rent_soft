@@ -2568,6 +2568,30 @@ function lineItemKey(li) {
   return `${typeId}|${startAt}|${endAt}|${rateBasis}|${rateAmount}`;
 }
 
+function lineItemPersistedSignature(li) {
+  const typeKey = li.bundleId ? `bundle:${li.bundleId}` : li.typeId ? `type:${li.typeId}` : "";
+  if (!typeKey) return null;
+  const startAt = fromLocalInputValue(li.startLocal);
+  const endAt = fromLocalInputValue(li.endLocal);
+  const ids = Array.isArray(li.inventoryIds)
+    ? li.inventoryIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+    : [];
+  ids.sort((a, b) => a - b);
+  return `${typeKey}|${startAt || ""}|${endAt || ""}|${ids.join(",")}`;
+}
+
+function lineItemNeedsOrderSave(li) {
+  if (!editingOrderId) return false;
+  if (!li?.lineItemId) return true;
+  if (!li?.persistedSignature) return true;
+  return lineItemPersistedSignature(li) !== li.persistedSignature;
+}
+
+function findLineItemBySignature(signature) {
+  if (!signature) return null;
+  return (draft.lineItems || []).find((li) => lineItemPersistedSignature(li) === signature) || null;
+}
+
 function mergeLineItems(items) {
   return explodeLineItems(items);
 }
@@ -3398,30 +3422,34 @@ async function loadOrder() {
     name: f.name,
     amount: f.amount,
   }));
-  draft.lineItems = (data.lineItems || []).map((li) => ({
-    tempId: uuid(),
-    lineItemId: li.id,
-    persisted: true,
-    typeId: li.typeId,
-    bundleId: li.bundleId || null,
-    bundleItems: Array.isArray(li.bundleItems) ? li.bundleItems : [],
-    bundleAvailable: null,
-    startLocal: toLocalInputValue(li.startAt),
-    endLocal: toLocalInputValue(li.endAt),
-    pickedUpAt: li.fulfilledAt || null,
-    returnedAt: li.returnedAt || null,
-    rateBasis: normalizeRateBasis(li.rateBasis) || "daily",
-    rateAmount: li.rateAmount === null || li.rateAmount === undefined ? null : Number(li.rateAmount),
-    rateManual: true,
-    inventoryIds: li.inventoryIds || [],
-    inventoryOptions: [],
-    beforeNotes: li.beforeNotes || "",
-    afterNotes: li.afterNotes || "",
-    beforeImages: li.beforeImages || [],
-    afterImages: li.afterImages || [],
-    aiDamageReport: li.aiDamageReport || "",
-    pausePeriods: Array.isArray(li.pausePeriods) ? li.pausePeriods : [],
-  }));
+  draft.lineItems = (data.lineItems || []).map((li) => {
+    const item = {
+      tempId: uuid(),
+      lineItemId: li.id,
+      persisted: true,
+      typeId: li.typeId,
+      bundleId: li.bundleId || null,
+      bundleItems: Array.isArray(li.bundleItems) ? li.bundleItems : [],
+      bundleAvailable: null,
+      startLocal: toLocalInputValue(li.startAt),
+      endLocal: toLocalInputValue(li.endAt),
+      pickedUpAt: li.fulfilledAt || null,
+      returnedAt: li.returnedAt || null,
+      rateBasis: normalizeRateBasis(li.rateBasis) || "daily",
+      rateAmount: li.rateAmount === null || li.rateAmount === undefined ? null : Number(li.rateAmount),
+      rateManual: true,
+      inventoryIds: li.inventoryIds || [],
+      inventoryOptions: [],
+      beforeNotes: li.beforeNotes || "",
+      afterNotes: li.afterNotes || "",
+      beforeImages: li.beforeImages || [],
+      afterImages: li.afterImages || [],
+      aiDamageReport: li.aiDamageReport || "",
+      pausePeriods: Array.isArray(li.pausePeriods) ? li.pausePeriods : [],
+    };
+    item.persistedSignature = lineItemPersistedSignature(item);
+    return item;
+  });
   draft.lineItems = explodeLineItems(draft.lineItems);
   draft.lineItems.forEach((li) => applyOrderedPickup(li));
 
@@ -3941,20 +3969,20 @@ lineItemsEl.addEventListener("click", async (e) => {
   }
 });
 
-saveOrderBtn.addEventListener("click", async (e) => {
-  e.preventDefault();
+async function saveOrderDraft({ onError } = {}) {
+  const reportError = typeof onError === "function" ? onError : setCompanyMeta;
   if (!activeCompanyId) {
-    setCompanyMeta("Set company first.");
-    return;
+    reportError("Set company first.");
+    return { ok: false, error: "Set company first." };
   }
   if (!draft.customerId) {
-    setCompanyMeta("Select a customer.");
-    return;
+    reportError("Select a customer.");
+    return { ok: false, error: "Select a customer." };
   }
   const validLines = (draft.lineItems || []).filter((li) => li.typeId && li.startLocal && li.endLocal);
   if (validLines.length === 0) {
-    setCompanyMeta("Add at least one line item with type and dates.");
-    return;
+    reportError("Add at least one line item with type and dates.");
+    return { ok: false, error: "Add at least one line item with type and dates." };
   }
   const lockUnits = isUnitSelectionLocked(draft.status);
   const requireUnits = isUnitSelectionRequired(draft.status);
@@ -3962,29 +3990,29 @@ saveOrderBtn.addEventListener("click", async (e) => {
     const s = new Date(li.startLocal);
     const en = new Date(li.endLocal);
     if (!(en > s)) {
-      setCompanyMeta("Line item end time must be after start time.");
-      return;
+      reportError("Line item end time must be after start time.");
+      return { ok: false, error: "Line item end time must be after start time." };
     }
     if (requireUnits) {
       if (li.bundleId) {
         if (li.bundleAvailable === false) {
-          setCompanyMeta("One or more bundles are unavailable for the selected dates.");
-          return;
+          reportError("One or more bundles are unavailable for the selected dates.");
+          return { ok: false, error: "One or more bundles are unavailable for the selected dates." };
         }
         if (!Array.isArray(li.bundleItems) || !li.bundleItems.length) {
-          setCompanyMeta("Select a bundle with at least one asset.");
-          return;
+          reportError("Select a bundle with at least one asset.");
+          return { ok: false, error: "Select a bundle with at least one asset." };
         }
         continue;
       }
       const availableQty = (li.inventoryOptions || []).length;
       if (availableQty === 0) {
-        setCompanyMeta("One or more line items have no available units for the selected dates.");
-        return;
+        reportError("One or more line items have no available units for the selected dates.");
+        return { ok: false, error: "One or more line items have no available units for the selected dates." };
       }
       if ((li.inventoryIds || []).length !== 1) {
-        setCompanyMeta("Select a unit for each line item.");
-        return;
+        reportError("Select a unit for each line item.");
+        return { ok: false, error: "Select a unit for each line item." };
       }
     }
   }
@@ -4064,9 +4092,16 @@ saveOrderBtn.addEventListener("click", async (e) => {
     } else if (editingOrderId) {
       await loadOrder();
     }
+    return { ok: true };
   } catch (err) {
-    setCompanyMeta(err.message);
+    reportError(err.message);
+    return { ok: false, error: err.message };
   }
+}
+
+saveOrderBtn.addEventListener("click", async (e) => {
+  e.preventDefault();
+  await saveOrderDraft();
 });
 
 qboSyncNowBtn?.addEventListener("click", async (e) => {
@@ -4480,7 +4515,24 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
   lineItemActualSaveBtn.disabled = true;
   if (lineItemActualHint) lineItemActualHint.textContent = "Saving actual period...";
   try {
-    await applyActualPeriodToLineItem(li, { targetPickup, targetReturn });
+    if (lineItemNeedsOrderSave(li)) {
+      const signature = lineItemPersistedSignature(li);
+      const saveResult = await saveOrderDraft({
+        onError: (message) => {
+          if (lineItemActualHint) lineItemActualHint.textContent = message;
+          else setCompanyMeta(message);
+        },
+      });
+      if (!saveResult.ok) return;
+      const refreshed = findLineItemBySignature(signature);
+      if (!refreshed) {
+        if (lineItemActualHint) lineItemActualHint.textContent = "Unable to locate updated line item after save.";
+        return;
+      }
+      await applyActualPeriodToLineItem(refreshed, { targetPickup, targetReturn });
+    } else {
+      await applyActualPeriodToLineItem(li, { targetPickup, targetReturn });
+    }
     renderLineItems();
     scheduleDraftSave();
     if (lineItemActualHint) lineItemActualHint.textContent = "Actual rental period saved.";
@@ -4502,7 +4554,18 @@ lineItemActualSaveAllBtn?.addEventListener("click", async (e) => {
   lineItemActualSaveAllBtn.disabled = true;
   if (lineItemActualHint) lineItemActualHint.textContent = "Saving actual period for all line items...";
   try {
-    for (const li of draft.lineItems || []) {
+    const needsSave = (draft.lineItems || []).some((li) => lineItemNeedsOrderSave(li));
+    if (needsSave) {
+      const saveResult = await saveOrderDraft({
+        onError: (message) => {
+          if (lineItemActualHint) lineItemActualHint.textContent = message;
+          else setCompanyMeta(message);
+        },
+      });
+      if (!saveResult.ok) return;
+    }
+    const lineItems = draft.lineItems || [];
+    for (const li of lineItems) {
       await applyActualPeriodToLineItem(li, { targetPickup, targetReturn });
     }
     renderLineItems();
