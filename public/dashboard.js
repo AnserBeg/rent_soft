@@ -1652,6 +1652,10 @@ function renderShortfallSummaryChart() {
 
     card.addEventListener("click", () => {
       if (!row?.typeId) return;
+      if (String(row.typeId) === String(shortfallSelectedTypeId)) {
+        setShortfallSelectedType(null);
+        return;
+      }
       setShortfallSelectedType(row.typeId);
     });
 
