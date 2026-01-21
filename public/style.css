@@ -2625,9 +2625,16 @@ a.ghost {
   color: var(--muted);
 }
 
+.shortfall-demand-header > div,
+.shortfall-demand-row > div {
+  min-width: 0;
+}
+
 .shortfall-demand-customer {
   font-weight: 700;
   color: var(--text);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .shortfall-demand-cell {
@@ -2636,6 +2643,8 @@ a.ghost {
   font-size: 12px;
   color: var(--text);
   white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .shortfall-demand-cell.is-empty {
@@ -2647,6 +2656,9 @@ a.ghost {
   gap: 6px;
   align-items: baseline;
   line-height: 1.2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .shortfall-demand-entry .entry-qty {
