@@ -2615,7 +2615,7 @@ a.ghost {
 
 .shortfall-demand-table .table-row {
   align-items: flex-start;
-  min-width: max-content;
+  min-width: 100%;
 }
 
 .shortfall-demand-header div {
@@ -2627,6 +2627,7 @@ a.ghost {
   overflow-wrap: anywhere;
   word-break: break-word;
   overflow: hidden;
+  hyphens: auto;
 }
 
 .shortfall-demand-header > div,
@@ -2642,6 +2643,7 @@ a.ghost {
   word-break: break-word;
   white-space: normal;
   overflow: hidden;
+  hyphens: auto;
 }
 
 .shortfall-demand-cell {
