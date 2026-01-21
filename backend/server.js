@@ -4199,10 +4199,67 @@ app.post(
           dropoffAddress,
           lineItems,
         });
-      } catch (err) {
+    } catch (err) {
       console.warn("Dropoff current-location update failed:", err?.message || err);
     }
     res.status(201).json(created);
+
+    (async () => {
+      try {
+        const cid = Number(companyId);
+        const orderId = Number(created?.id);
+        if (!Number.isFinite(cid) || !Number.isFinite(orderId)) return;
+        const settings = await getCompanySettings(cid).catch(() => null);
+        if (!settings?.qbo_enabled) {
+          console.info("QBO pickup invoices skipped (disabled)", { companyId: cid, orderId });
+          return;
+        }
+        const detail = await getRentalOrder({ companyId: cid, id: orderId }).catch(() => null);
+        const lineItems = Array.isArray(detail?.lineItems) ? detail.lineItems : [];
+        const pickedUpItems = lineItems.filter((li) => li?.fulfilledAt);
+        if (!pickedUpItems.length) return;
+        for (const lineItem of pickedUpItems) {
+          const lineItemId = Number(lineItem?.id);
+          if (!Number.isFinite(lineItemId)) continue;
+          console.info("QBO pickup invoice attempt (order create)", {
+            companyId: cid,
+            orderId,
+            lineItemId,
+            pickedUpAt: lineItem.fulfilledAt || null,
+          });
+          try {
+            const qbo = await createPickupDraftInvoice({
+              companyId: cid,
+              orderId,
+              lineItemId,
+              pickedUpAt: lineItem.fulfilledAt || new Date().toISOString(),
+            });
+            console.info("QBO pickup invoice result (order create)", {
+              companyId: cid,
+              orderId,
+              lineItemId,
+              ok: qbo?.ok ?? null,
+              skipped: qbo?.skipped ?? null,
+              error: qbo?.error ?? null,
+              docNumber: qbo?.document?.doc_number || qbo?.document?.docNumber || null,
+            });
+          } catch (err) {
+            console.error("QBO pickup invoice failed (order create)", {
+              companyId: cid,
+              orderId,
+              lineItemId,
+              error: err?.message ? String(err.message) : "QBO invoice failed.",
+            });
+          }
+        }
+      } catch (err) {
+        console.error("QBO pickup invoices failed (order create)", {
+          companyId: companyId || null,
+          orderId: created?.id || null,
+          error: err?.message ? String(err.message) : "Unknown error",
+        });
+      }
+    })();
   })
 );
 
