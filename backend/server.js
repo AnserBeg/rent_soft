@@ -288,6 +288,79 @@ function normalizePurchaseOrderStatus(value) {
   return "open";
 }
 
+async function createPickupInvoicesForOrder({ companyId, orderId, source } = {}) {
+  const cid = Number(companyId);
+  const oid = Number(orderId);
+  if (!Number.isFinite(cid) || !Number.isFinite(oid)) {
+    return { ok: false, skipped: "invalid_ids" };
+  }
+  const settings = await getCompanySettings(cid).catch(() => null);
+  if (!settings?.qbo_enabled) {
+    return { ok: false, skipped: "disabled" };
+  }
+  const detail = await getRentalOrder({ companyId: cid, id: oid }).catch(() => null);
+  const lineItems = Array.isArray(detail?.lineItems) ? detail.lineItems : [];
+  const pickedUpItems = lineItems.filter((li) => li?.fulfilledAt);
+  if (!pickedUpItems.length) {
+    return { ok: false, skipped: "no_fulfilled_items" };
+  }
+
+  const results = [];
+  for (const lineItem of pickedUpItems) {
+    const lineItemId = Number(lineItem?.id);
+    if (!Number.isFinite(lineItemId)) continue;
+    const pickedUpAt = lineItem?.fulfilledAt || null;
+    console.info("QBO pickup invoice attempt (order save)", {
+      companyId: cid,
+      orderId: oid,
+      lineItemId,
+      pickedUpAt,
+      source: source || null,
+    });
+    try {
+      const qbo = await createPickupDraftInvoice({
+        companyId: cid,
+        orderId: oid,
+        lineItemId,
+        pickedUpAt: pickedUpAt || new Date().toISOString(),
+      });
+      const result = {
+        lineItemId,
+        ok: qbo?.ok ?? null,
+        skipped: qbo?.skipped ?? null,
+        error: qbo?.error ?? null,
+        docNumber: qbo?.document?.doc_number || qbo?.document?.docNumber || null,
+      };
+      results.push(result);
+      console.info("QBO pickup invoice result (order save)", {
+        companyId: cid,
+        orderId: oid,
+        lineItemId,
+        ok: result.ok,
+        skipped: result.skipped,
+        error: result.error,
+        docNumber: result.docNumber,
+        source: source || null,
+      });
+    } catch (err) {
+      const errorMessage = err?.message ? String(err.message) : "QBO invoice failed.";
+      results.push({ lineItemId, ok: false, error: errorMessage });
+      console.error("QBO pickup invoice failed (order save)", {
+        companyId: cid,
+        orderId: oid,
+        lineItemId,
+        error: errorMessage,
+        source: source || null,
+      });
+    }
+  }
+
+  if (!results.length) {
+    return { ok: false, skipped: "no_valid_line_items" };
+  }
+  return { ok: true, results };
+}
+
 app.get(
   "/api/public-config",
   asyncHandler(async (req, res) => {
@@ -4202,64 +4275,18 @@ app.post(
     } catch (err) {
       console.warn("Dropoff current-location update failed:", err?.message || err);
     }
-    res.status(201).json(created);
-
-    (async () => {
-      try {
-        const cid = Number(companyId);
-        const orderId = Number(created?.id);
-        if (!Number.isFinite(cid) || !Number.isFinite(orderId)) return;
-        const settings = await getCompanySettings(cid).catch(() => null);
-        if (!settings?.qbo_enabled) {
-          console.info("QBO pickup invoices skipped (disabled)", { companyId: cid, orderId });
-          return;
-        }
-        const detail = await getRentalOrder({ companyId: cid, id: orderId }).catch(() => null);
-        const lineItems = Array.isArray(detail?.lineItems) ? detail.lineItems : [];
-        const pickedUpItems = lineItems.filter((li) => li?.fulfilledAt);
-        if (!pickedUpItems.length) return;
-        for (const lineItem of pickedUpItems) {
-          const lineItemId = Number(lineItem?.id);
-          if (!Number.isFinite(lineItemId)) continue;
-          console.info("QBO pickup invoice attempt (order create)", {
-            companyId: cid,
-            orderId,
-            lineItemId,
-            pickedUpAt: lineItem.fulfilledAt || null,
-          });
-          try {
-            const qbo = await createPickupDraftInvoice({
-              companyId: cid,
-              orderId,
-              lineItemId,
-              pickedUpAt: lineItem.fulfilledAt || new Date().toISOString(),
-            });
-            console.info("QBO pickup invoice result (order create)", {
-              companyId: cid,
-              orderId,
-              lineItemId,
-              ok: qbo?.ok ?? null,
-              skipped: qbo?.skipped ?? null,
-              error: qbo?.error ?? null,
-              docNumber: qbo?.document?.doc_number || qbo?.document?.docNumber || null,
-            });
-          } catch (err) {
-            console.error("QBO pickup invoice failed (order create)", {
-              companyId: cid,
-              orderId,
-              lineItemId,
-              error: err?.message ? String(err.message) : "QBO invoice failed.",
-            });
-          }
-        }
-      } catch (err) {
-        console.error("QBO pickup invoices failed (order create)", {
-          companyId: companyId || null,
-          orderId: created?.id || null,
-          error: err?.message ? String(err.message) : "Unknown error",
-        });
-      }
-    })();
+    let qbo = null;
+    try {
+      qbo = await createPickupInvoicesForOrder({ companyId, orderId: created?.id, source: "order_create" });
+    } catch (err) {
+      qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
+      console.error("QBO pickup invoices failed (order create)", {
+        companyId: companyId || null,
+        orderId: created?.id || null,
+        error: qbo.error,
+      });
+    }
+    res.status(201).json({ ...created, qbo });
   })
 );
 
@@ -4324,7 +4351,18 @@ app.put(
       throw err;
     }
     if (!updated) return res.status(404).json({ error: "Rental order not found" });
-    res.json(updated);
+    let qbo = null;
+    try {
+      qbo = await createPickupInvoicesForOrder({ companyId, orderId: Number(id), source: "order_update" });
+    } catch (err) {
+      qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
+      console.error("QBO pickup invoices failed (order update)", {
+        companyId: companyId || null,
+        orderId: id || null,
+        error: qbo.error,
+      });
+    }
+    res.json({ ...updated, qbo });
 
     (async () => {
       try {
