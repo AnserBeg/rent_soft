@@ -3787,6 +3787,15 @@ function normalizeMonthlyProrationMethod(value) {
 
 function normalizeQboAdjustmentPolicy(value) {
   const v = String(value || "").trim().toLowerCase();
+  if (
+    v === "none" ||
+    v === "no_action" ||
+    v === "no-action" ||
+    v === "no_adjustment" ||
+    v === "no-adjustment"
+  ) {
+    return "none";
+  }
   if (v === "next_invoice" || v === "next-invoice") return "next_invoice";
   return "credit_memo";
 }
