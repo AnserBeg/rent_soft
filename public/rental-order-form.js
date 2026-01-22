@@ -2371,6 +2371,30 @@ function selectedInventoryDetails(ids) {
   return (ids || []).map((id) => byId.get(String(id)) || { id, serial_number: `#${id}`, model_name: "" });
 }
 
+function selectedUnitIdForLineItem(li) {
+  if (!li || !Array.isArray(li.inventoryIds)) return null;
+  const id = li.inventoryIds.map((value) => Number(value)).find((value) => Number.isFinite(value));
+  return Number.isFinite(id) ? id : null;
+}
+
+function reservedUnitIdsForLineItem(tempId) {
+  const reserved = new Set();
+  (draft.lineItems || []).forEach((item) => {
+    if (!item) return;
+    if (tempId && item.tempId === tempId) return;
+    const id = selectedUnitIdForLineItem(item);
+    if (Number.isFinite(id)) reserved.add(id);
+  });
+  return reserved;
+}
+
+function availableUnitsForLineItem(li) {
+  const options = Array.isArray(li?.inventoryOptions) ? li.inventoryOptions : [];
+  const reserved = reservedUnitIdsForLineItem(li?.tempId);
+  if (!reserved.size) return options;
+  return options.filter((unit) => !reserved.has(Number(unit.id)));
+}
+
 function needsRepairCondition(condition) {
   const raw = String(condition || "").toLowerCase();
   return raw.includes("repair");
@@ -2875,8 +2899,9 @@ function renderLineItems() {
     const typeOptions = typesCache
       .map((t) => `<option value="${t.id}" ${String(t.id) === String(li.typeId || "") ? "selected" : ""}>${t.name}</option>`)
       .join("");
-    const availableUnits = Array.isArray(li.inventoryOptions) ? li.inventoryOptions : [];
-    const selectedUnitId = (li.inventoryIds || []).map((id) => Number(id)).find((id) => Number.isFinite(id)) || null;
+    const availableUnits = availableUnitsForLineItem(li);
+    const selectedUnitId = selectedUnitIdForLineItem(li);
+    const reservedUnitIds = reservedUnitIdsForLineItem(li.tempId);
     const selectedUnit = selectedUnitId ? selectedInventoryDetails([selectedUnitId])[0] : null;
     const unitOptions = availableUnits
       .map((e) => {
@@ -2898,7 +2923,7 @@ function renderLineItems() {
       .join("");
     const selectedUnavailable =
       selectedUnitId && !availableUnits.some((e) => String(e.id) === String(selectedUnitId))
-        ? `<option value="${selectedUnitId}" selected>Unavailable: ${unitLabel(selectedUnit || { id: selectedUnitId })}</option>`
+        ? `<option value="${selectedUnitId}" selected>${reservedUnitIds.has(selectedUnitId) ? "Already selected on another line item" : "Unavailable"}: ${unitLabel(selectedUnit || { id: selectedUnitId })}</option>`
         : "";
     const emptyHint = availableUnits.length ? "" : `<option value="" disabled>No available units for dates</option>`;
     const unitOptionsHtml = `${selectedUnavailable}<option value="">Select unit</option>${emptyHint}${unitOptions}`;
@@ -3166,7 +3191,7 @@ async function refreshAvailabilityForAllLineItems({ onError } = {}) {
 }
 
 function autoSelectUnitForLineItem(li) {
-  const inventoryOptions = Array.isArray(li.inventoryOptions) ? li.inventoryOptions : [];
+  const inventoryOptions = availableUnitsForLineItem(li);
   if (li.inventoryIds && li.inventoryIds.length) return;
   if (inventoryOptions.length === 1) {
     li.inventoryIds = [Number(inventoryOptions[0].id)];
@@ -4005,7 +4030,7 @@ async function saveOrderDraft({ onError } = {}) {
         }
         continue;
       }
-      const availableQty = (li.inventoryOptions || []).length;
+      const availableQty = availableUnitsForLineItem(li).length;
       if (availableQty === 0) {
         reportError("One or more line items have no available units for the selected dates.");
         return { ok: false, error: "One or more line items have no available units for the selected dates." };
