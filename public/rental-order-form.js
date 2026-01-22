@@ -2803,7 +2803,7 @@ function collectActualModalTargets() {
   };
 }
 
-async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn }) {
+async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn, skipPickupInvoice = false }) {
   const pickupChanged = targetPickup !== (li.pickedUpAt || null);
   const returnChanged = targetReturn !== (li.returnedAt || null);
   if (!pickupChanged && !returnChanged) return;
@@ -2824,6 +2824,7 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn }) {
         companyId: activeCompanyId,
         pickedUp: !!targetPickup,
         ...(targetPickup ? { pickedUpAt: targetPickup } : {}),
+        ...(skipPickupInvoice ? { skipInvoice: true } : {}),
         actorName,
         actorEmail,
       }),
@@ -4590,8 +4591,32 @@ lineItemActualSaveAllBtn?.addEventListener("click", async (e) => {
       if (!saveResult.ok) return;
     }
     const lineItems = draft.lineItems || [];
+    const shouldInvoice =
+      !!targetPickup && lineItems.some((li) => (li.pickedUpAt || null) !== targetPickup);
     for (const li of lineItems) {
-      await applyActualPeriodToLineItem(li, { targetPickup, targetReturn });
+      await applyActualPeriodToLineItem(li, { targetPickup, targetReturn, skipPickupInvoice: shouldInvoice });
+    }
+    if (shouldInvoice && editingOrderId) {
+      const lineItemIds = lineItems
+        .map((li) => Number(li.lineItemId))
+        .filter((lineItemId) => Number.isFinite(lineItemId));
+      if (!lineItemIds.length) {
+        throw new Error("Save the order before creating pickup invoices.");
+      }
+      const res = await fetch(
+        `/api/rental-orders/${encodeURIComponent(String(editingOrderId))}/pickup-invoice`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            companyId: activeCompanyId,
+            pickedUpAt: targetPickup,
+            lineItemIds,
+          }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Unable to create pickup invoice.");
     }
     renderLineItems();
     scheduleDraftSave();

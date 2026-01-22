@@ -160,8 +160,10 @@ const {
   buildAuthUrl,
   exchangeAuthCode,
   createPickupDraftInvoice,
+  createPickupDraftInvoiceBulk,
   createMonthlyDraftInvoice,
   createReturnCreditMemo,
+  getPickupBulkDocNumber,
   handleWebhookEvent,
   runCdcSync,
   getIncomeTotals,
@@ -304,12 +306,42 @@ async function createPickupInvoicesForOrder({ companyId, orderId, source } = {})
   if (!pickedUpItems.length) {
     return { ok: false, skipped: "no_fulfilled_items" };
   }
+  const existingDocs = await listQboDocumentsForRentalOrder({ companyId: cid, orderId: oid }).catch(() => []);
+  const existingDocNumbers = new Set(
+    (existingDocs || [])
+      .map((doc) => String(doc?.doc_number || doc?.docNumber || ""))
+      .filter(Boolean)
+  );
+  const roNumber = detail?.order?.ro_number || detail?.order?.roNumber || null;
 
   const results = [];
   for (const lineItem of pickedUpItems) {
     const lineItemId = Number(lineItem?.id);
     if (!Number.isFinite(lineItemId)) continue;
     const pickedUpAt = lineItem?.fulfilledAt || null;
+    const bulkDocNumber = getPickupBulkDocNumber({
+      roNumber,
+      orderId: oid,
+      pickedUpAt,
+      billingDay: settings.qbo_billing_day,
+    });
+    if (bulkDocNumber && existingDocNumbers.has(bulkDocNumber)) {
+      const result = {
+        lineItemId,
+        ok: false,
+        skipped: "bulk_invoice_exists",
+        docNumber: bulkDocNumber,
+      };
+      results.push(result);
+      console.info("QBO pickup invoice skipped (bulk invoice exists)", {
+        companyId: cid,
+        orderId: oid,
+        lineItemId,
+        docNumber: result.docNumber,
+        source: source || null,
+      });
+      continue;
+    }
     console.info("QBO pickup invoice attempt (order save)", {
       companyId: cid,
       orderId: oid,
@@ -3965,8 +3997,9 @@ app.put(
   "/api/rental-orders/line-items/:id/pickup",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { companyId, pickedUp, pickedUpAt, actorName, actorEmail } = req.body || {};
+    const { companyId, pickedUp, pickedUpAt, actorName, actorEmail, skipInvoice } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const skipPickupInvoice = parseBoolean(skipInvoice) === true;
     const normalizedPickedUpAt = normalizeTimestampInput(pickedUpAt);
     if (
       pickedUpAt !== undefined &&
@@ -3986,7 +4019,7 @@ app.put(
     });
     if (!result.ok) return res.status(409).json(result);
     let qbo = null;
-    if (pickedUp) {
+    if (pickedUp && !skipPickupInvoice) {
       const settings = await getCompanySettings(companyId).catch(() => null);
       if (settings?.qbo_enabled) {
         console.info("QBO pickup invoice attempt", {
@@ -4027,8 +4060,74 @@ app.put(
           lineItemId: Number(id),
         });
       }
+    } else if (pickedUp && skipPickupInvoice) {
+      console.info("QBO pickup invoice skipped (suppressed)", {
+        companyId: Number(companyId),
+        orderId: result.orderId,
+        lineItemId: Number(id),
+      });
     }
     res.json({ ...result, qbo });
+  })
+);
+
+app.post(
+  "/api/rental-orders/:id/pickup-invoice",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId, pickedUpAt, lineItemIds } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const oid = Number(id);
+    if (!Number.isFinite(oid)) return res.status(400).json({ error: "Invalid order id." });
+    const normalizedPickedUpAt = normalizeTimestampInput(pickedUpAt);
+    if (
+      pickedUpAt !== undefined &&
+      pickedUpAt !== null &&
+      pickedUpAt !== "" &&
+      normalizedPickedUpAt === null
+    ) {
+      return res.status(400).json({ error: "Invalid pickedUpAt value." });
+    }
+    const ids = Array.isArray(lineItemIds)
+      ? lineItemIds.map((lineItemId) => Number(lineItemId)).filter((lineItemId) => Number.isFinite(lineItemId))
+      : [];
+    if (!ids.length) return res.status(400).json({ error: "lineItemIds are required." });
+    const settings = await getCompanySettings(companyId).catch(() => null);
+    if (!settings?.qbo_enabled) {
+      return res.json({ ok: false, skipped: "disabled" });
+    }
+    let qbo = null;
+    console.info("QBO pickup invoice attempt (bulk)", {
+      companyId: Number(companyId),
+      orderId: oid,
+      lineItemCount: ids.length,
+      pickedUpAt: normalizedPickedUpAt || null,
+    });
+    try {
+      qbo = await createPickupDraftInvoiceBulk({
+        companyId: Number(companyId),
+        orderId: oid,
+        lineItemIds: ids,
+        pickedUpAt: normalizedPickedUpAt || null,
+      });
+      console.info("QBO pickup invoice result (bulk)", {
+        companyId: Number(companyId),
+        orderId: oid,
+        ok: qbo?.ok ?? null,
+        skipped: qbo?.skipped ?? null,
+        error: qbo?.error ?? null,
+        docNumber: qbo?.document?.doc_number || qbo?.document?.docNumber || null,
+      });
+    } catch (err) {
+      const errorMessage = err?.message ? String(err.message) : "QBO invoice failed.";
+      qbo = { ok: false, error: errorMessage };
+      console.error("QBO pickup invoice failed (bulk)", {
+        companyId: Number(companyId),
+        orderId: oid,
+        error: errorMessage,
+      });
+    }
+    res.json({ ok: true, qbo });
   })
 );
 

@@ -89,6 +89,13 @@ function getBillingPeriodForDate({ date, billingDay }) {
   return { start, end };
 }
 
+function resolvePickupPeriod({ pickedUpAt, billingDay }) {
+  const period = getBillingPeriodForDate({ date: pickedUpAt || new Date(), billingDay });
+  if (!period) return null;
+  const periodKey = formatPeriodKey({ start: period.start, billingDay });
+  return { periodStart: period.start, periodEnd: period.end, periodKey };
+}
+
 function toQboDate(value) {
   if (!value) return null;
   const d = new Date(value);
@@ -1292,19 +1299,45 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
   return { rows: quick.rows, selectedAccounts: selected };
 }
 
+const PICKUP_BULK_SUFFIX = "PICKUP-ALL";
+
+function getPickupBulkDocNumber({ roNumber, orderId, pickedUpAt, billingDay }) {
+  const periodInfo = resolvePickupPeriod({ pickedUpAt, billingDay });
+  if (!periodInfo) return null;
+  return buildDocNumber({ roNumber, orderId, periodKey: periodInfo.periodKey, suffix: PICKUP_BULK_SUFFIX });
+}
+
 async function createPickupDraftInvoice({ companyId, orderId, lineItemId, pickedUpAt }) {
   const settings = await getCompanySettings(companyId);
-  const period = getBillingPeriodForDate({ date: pickedUpAt || new Date(), billingDay: settings.qbo_billing_day });
-  if (!period) return { ok: false, error: "Unable to resolve billing period." };
-  const periodKey = formatPeriodKey({ start: period.start, billingDay: settings.qbo_billing_day });
+  const periodInfo = resolvePickupPeriod({ pickedUpAt, billingDay: settings.qbo_billing_day });
+  if (!periodInfo) return { ok: false, error: "Unable to resolve billing period." };
   return await createDraftInvoice({
     companyId,
     orderId,
     lineItemIds: [lineItemId],
-    periodStart: pickedUpAt || period.start,
-    periodEnd: period.end,
-    periodKey,
+    periodStart: pickedUpAt || periodInfo.periodStart,
+    periodEnd: periodInfo.periodEnd,
+    periodKey: periodInfo.periodKey,
     docSuffix: `PICKUP-${lineItemId}`,
+  });
+}
+
+async function createPickupDraftInvoiceBulk({ companyId, orderId, lineItemIds, pickedUpAt }) {
+  const ids = Array.isArray(lineItemIds)
+    ? lineItemIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+    : [];
+  if (!ids.length) return { ok: false, error: "lineItemIds are required." };
+  const settings = await getCompanySettings(companyId);
+  const periodInfo = resolvePickupPeriod({ pickedUpAt, billingDay: settings.qbo_billing_day });
+  if (!periodInfo) return { ok: false, error: "Unable to resolve billing period." };
+  return await createDraftInvoice({
+    companyId,
+    orderId,
+    lineItemIds: ids,
+    periodStart: pickedUpAt || periodInfo.periodStart,
+    periodEnd: periodInfo.periodEnd,
+    periodKey: periodInfo.periodKey,
+    docSuffix: PICKUP_BULK_SUFFIX,
   });
 }
 
@@ -1364,8 +1397,10 @@ module.exports = {
   createDraftInvoice,
   createDraftCreditMemo,
   createPickupDraftInvoice,
+  createPickupDraftInvoiceBulk,
   createMonthlyDraftInvoice,
   createReturnCreditMemo,
+  getPickupBulkDocNumber,
   syncQboDocumentById,
   handleWebhookEvent,
   runCdcSync,
