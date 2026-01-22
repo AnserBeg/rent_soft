@@ -137,7 +137,7 @@ let equipmentById = new Map();
 const DAY_MS = 24 * 60 * 60 * 1000;
 const COL_W = 44;
 const BAR_H = 18;
-const BAR_GAP = 6;
+const BAR_GAP = 8;
 const DEFAULT_ENDING_DAYS = 2;
 const ENDING_72H_DAYS = 3;
 const UTIL_COLORS = {
@@ -488,11 +488,24 @@ function clamp(n, min, max) {
 function computeLanes(bars) {
   const sorted = [...bars].sort((a, b) => a.startMs - b.startMs);
   const lanes = [];
+
+  // Buffers to prevent bars touching or labels overlapping neighbors.
+  const COMPACT_THRESHOLD_PX = 80;
+  const LABEL_SAFE_GAP_PX = 100; // Space for the floating label
+  const MIN_TIME_GAP_MS = 15 * 60 * 1000; // 15 min buffer
+
   sorted.forEach((b) => {
     let placed = false;
     for (let i = 0; i < lanes.length; i++) {
       const last = lanes[i][lanes[i].length - 1];
-      if (b.startMs >= last.endMs) {
+
+      let neededGapMs = MIN_TIME_GAP_MS;
+      // If the preceding bar is 'compact', it has a label hanging to the right.
+      if (last.widthPx < COMPACT_THRESHOLD_PX) {
+        neededGapMs = Math.max(neededGapMs, (LABEL_SAFE_GAP_PX / COL_W) * DAY_MS);
+      }
+
+      if (b.startMs >= last.endMs + neededGapMs) {
         lanes[i].push(b);
         b.lane = i;
         placed = true;
@@ -530,7 +543,16 @@ async function loadTimelineData(from, to, statusesParam) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to load timeline");
   rawEquipment = data.equipment || [];
-  rawAssignments = (data.assignments || []).filter((a) => !isRejectedStatus(a.status));
+
+  const seenIds = new Set();
+  const raw = Array.isArray(data.assignments) ? data.assignments : [];
+  rawAssignments = raw.filter((a) => {
+    if (!a.id) return true;
+    if (seenIds.has(a.id)) return false;
+    seenIds.add(a.id);
+    return !isRejectedStatus(a.status);
+  });
+
   equipmentLabelById = new Map((rawEquipment || []).map((e) => [String(e.id), equipmentLabel(e)]));
   equipmentById = new Map((rawEquipment || []).map((e) => [String(e.id), e]));
   companyMeta.textContent = `Loaded ${rawAssignments.length} assignments.`;
@@ -2265,6 +2287,7 @@ function renderTimeline() {
   rows.forEach((row) => {
     const left = document.createElement("div");
     left.className = "timeline-row-label";
+    left.style.minHeight = "40px";
     if (row.displayTitle || row.displaySub) {
       const title = document.createElement("div");
       title.className = "timeline-row-title";
@@ -2303,7 +2326,7 @@ function renderTimeline() {
     const bars = buildBarsForRow(row, activeEndingDays);
     const { bars: laneBars, laneCount } = computeLanes(bars);
 
-    const minLaneHeight = Math.max(32, laneCount * (BAR_H + BAR_GAP) + 10);
+    const minLaneHeight = Math.max(40, laneCount * (BAR_H + BAR_GAP) + 12);
     const minLabelHeight = Math.max(32, left.scrollHeight || 0);
     const rowHeight = Math.max(minLaneHeight, minLabelHeight);
     left.style.height = `${rowHeight}px`;

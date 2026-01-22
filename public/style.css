@@ -2018,6 +2018,14 @@ a.ghost {
   cursor: pointer;
   display: flex;
   align-items: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+}
+
+.timeline-bar:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 10;
 }
 
 .timeline-bar .timeline-bar-label {
@@ -2630,8 +2638,8 @@ a.ghost {
   hyphens: auto;
 }
 
-.shortfall-demand-header > div,
-.shortfall-demand-row > div {
+.shortfall-demand-header>div,
+.shortfall-demand-row>div {
   min-width: 0;
   overflow: hidden;
 }
