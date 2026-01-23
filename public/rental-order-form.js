@@ -4019,7 +4019,7 @@ lineItemsEl.addEventListener("click", async (e) => {
   }
 });
 
-async function saveOrderDraft({ onError } = {}) {
+async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
   const reportError = typeof onError === "function" ? onError : setCompanyMeta;
   if (!activeCompanyId) {
     reportError("Set company first.");
@@ -4093,6 +4093,7 @@ async function saveOrderDraft({ onError } = {}) {
     actorEmail,
     pickupInvoiceMode: draft.pickupInvoiceMode === "bulk" ? "bulk" : null,
     pickupInvoiceAt: draft.pickupInvoiceAt || null,
+    skipPickupInvoice: skipPickupInvoice === true,
     lineItems: validLines.map((li) => ({
       typeId: li.typeId,
       bundleId: li.bundleId || null,
@@ -4150,7 +4151,7 @@ async function saveOrderDraft({ onError } = {}) {
 
 saveOrderBtn.addEventListener("click", async (e) => {
   e.preventDefault();
-  await saveOrderDraft();
+  await saveOrderDraft({ skipPickupInvoice: !!editingOrderId });
 });
 
 qboSyncNowBtn?.addEventListener("click", async (e) => {
@@ -4576,6 +4577,7 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
           if (lineItemActualHint) lineItemActualHint.textContent = message;
           else setCompanyMeta(message);
         },
+        skipPickupInvoice: true,
       });
       if (!saveResult.ok) return;
       const refreshed = findLineItemBySignature(signature, signatureIndex ?? 0);
@@ -4619,6 +4621,7 @@ lineItemActualSaveAllBtn?.addEventListener("click", async (e) => {
           if (lineItemActualHint) lineItemActualHint.textContent = message;
           else setCompanyMeta(message);
         },
+        skipPickupInvoice: true,
       });
       if (!saveResult.ok) return;
     }

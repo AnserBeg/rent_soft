@@ -4523,6 +4523,7 @@ app.post(
       fees,
       pickupInvoiceMode,
       pickupInvoiceAt,
+      skipPickupInvoice,
       actorName,
       actorEmail,
     } = req.body;
@@ -4570,22 +4571,27 @@ app.post(
       console.warn("Dropoff current-location update failed:", err?.message || err);
     }
     let qbo = null;
-    try {
-      const normalizedPickupInvoiceMode = pickupInvoiceMode === "bulk" ? "bulk" : null;
-      qbo = await createPickupInvoicesForOrder({
-        companyId,
-        orderId: created?.id,
-        source: "order_create",
-        mode: normalizedPickupInvoiceMode,
-        pickedUpAt: pickupInvoiceAt || null,
-      });
-    } catch (err) {
-      qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
-      console.error("QBO pickup invoices failed (order create)", {
-        companyId: companyId || null,
-        orderId: created?.id || null,
-        error: qbo.error,
-      });
+    const suppressPickupInvoice = parseBoolean(skipPickupInvoice) === true;
+    if (suppressPickupInvoice) {
+      qbo = { ok: false, skipped: "suppressed" };
+    } else {
+      try {
+        const normalizedPickupInvoiceMode = pickupInvoiceMode === "bulk" ? "bulk" : null;
+        qbo = await createPickupInvoicesForOrder({
+          companyId,
+          orderId: created?.id,
+          source: "order_create",
+          mode: normalizedPickupInvoiceMode,
+          pickedUpAt: pickupInvoiceAt || null,
+        });
+      } catch (err) {
+        qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
+        console.error("QBO pickup invoices failed (order create)", {
+          companyId: companyId || null,
+          orderId: created?.id || null,
+          error: qbo.error,
+        });
+      }
     }
     res.status(201).json({ ...created, qbo });
   })
@@ -4617,6 +4623,7 @@ app.put(
       fees,
       pickupInvoiceMode,
       pickupInvoiceAt,
+      skipPickupInvoice,
       actorName,
       actorEmail,
     } = req.body;
@@ -4655,22 +4662,27 @@ app.put(
     }
     if (!updated) return res.status(404).json({ error: "Rental order not found" });
     let qbo = null;
-    try {
-      const normalizedPickupInvoiceMode = pickupInvoiceMode === "bulk" ? "bulk" : null;
-      qbo = await createPickupInvoicesForOrder({
-        companyId,
-        orderId: Number(id),
-        source: "order_update",
-        mode: normalizedPickupInvoiceMode,
-        pickedUpAt: pickupInvoiceAt || null,
-      });
-    } catch (err) {
-      qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
-      console.error("QBO pickup invoices failed (order update)", {
-        companyId: companyId || null,
-        orderId: id || null,
-        error: qbo.error,
-      });
+    const suppressPickupInvoice = parseBoolean(skipPickupInvoice) === true;
+    if (suppressPickupInvoice) {
+      qbo = { ok: false, skipped: "suppressed" };
+    } else {
+      try {
+        const normalizedPickupInvoiceMode = pickupInvoiceMode === "bulk" ? "bulk" : null;
+        qbo = await createPickupInvoicesForOrder({
+          companyId,
+          orderId: Number(id),
+          source: "order_update",
+          mode: normalizedPickupInvoiceMode,
+          pickedUpAt: pickupInvoiceAt || null,
+        });
+      } catch (err) {
+        qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
+        console.error("QBO pickup invoices failed (order update)", {
+          companyId: companyId || null,
+          orderId: id || null,
+          error: qbo.error,
+        });
+      }
     }
     res.json({ ...updated, qbo });
 
