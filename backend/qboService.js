@@ -146,11 +146,28 @@ function buildDocNumber({ roNumber, orderId, periodKey, suffix }) {
   return `${prefix}-${hash}`;
 }
 
-function buildPrivateNote({ roNumber, orderId, periodKey }) {
+function isPickupDocSuffix(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .startsWith("PICKUP-");
+}
+
+function isPickupDocNumber(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return false;
+  return /PICKUP/i.test(raw) || /-P\d+$/i.test(raw);
+}
+
+function buildPrivateNote({ roNumber, orderId, periodKey, extraTags = [] }) {
   const ro = roNumber || String(orderId);
   const pieces = [`RO=${ro}`];
   if (periodKey) pieces.push(`PERIOD=${periodKey}`);
   pieces.push("SOURCE=RENTAL_SYS");
+  for (const tag of extraTags) {
+    if (!tag) continue;
+    pieces.push(String(tag));
+  }
   return pieces.join(";");
 }
 
@@ -408,11 +425,42 @@ async function createDraftInvoice({
     };
   }
 
+  const docNumber = buildDocNumber({ roNumber: order.roNumber, orderId, periodKey, suffix: docSuffix });
+  const existingDocs = await listQboDocumentsForRentalOrder({ companyId, orderId });
+  const extraTags = [];
+  if (isPickupDocSuffix(docSuffix) && Array.isArray(lineItemIds) && lineItemIds.length) {
+    const normalizedLineItemIds = Array.from(
+      new Set(lineItemIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)))
+    );
+    if (normalizedLineItemIds.length) {
+      extraTags.push(`LINEITEMS=${normalizedLineItemIds.join(",")}`);
+    }
+  }
+  if (isPickupDocSuffix(docSuffix)) {
+    const otherPickupDocs = (existingDocs || [])
+      .filter(
+        (doc) =>
+          doc?.qbo_entity_type === "Invoice" &&
+          doc?.source === "rent_soft" &&
+          !doc?.is_voided &&
+          !doc?.is_deleted
+      )
+      .map((doc) => String(doc?.doc_number || doc?.docNumber || "").trim())
+      .filter((value) => value && value !== docNumber && isPickupDocNumber(value));
+    if (otherPickupDocs.length) {
+      const preview = otherPickupDocs.slice(0, 3);
+      extraTags.push(`OTHER_PICKUP_INVOICES=${preview.join(",")}`);
+      if (otherPickupDocs.length > preview.length) {
+        extraTags.push(`OTHER_PICKUP_INVOICE_COUNT=${otherPickupDocs.length}`);
+      }
+    }
+  }
+
   const payload = {
     CustomerRef: { value: String(order.qboCustomerId) },
-    DocNumber: buildDocNumber({ roNumber: order.roNumber, orderId, periodKey, suffix: docSuffix }),
+    DocNumber: docNumber,
     TxnDate: toQboDate(periodStart),
-    PrivateNote: buildPrivateNote({ roNumber: order.roNumber, orderId, periodKey }),
+    PrivateNote: buildPrivateNote({ roNumber: order.roNumber, orderId, periodKey, extraTags }),
     Line: lines.map((line) => {
       const qty = Number((line.units * line.quantity).toFixed(5));
       const unitPrice = Number(line.rateAmount.toFixed(2));
@@ -430,7 +478,6 @@ async function createDraftInvoice({
     }),
   };
 
-  const existingDocs = await listQboDocumentsForRentalOrder({ companyId, orderId });
   const hasDocNumber = existingDocs.some(
     (doc) => doc?.qbo_entity_type === "Invoice" && doc?.doc_number === payload.DocNumber
   );

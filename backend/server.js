@@ -284,6 +284,45 @@ function parseBoolean(value) {
   return null;
 }
 
+function extractPickupLineItemIdFromDocNumber(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const pickupMatch = raw.match(/PICKUP-(\d+)/i);
+  if (pickupMatch) return Number(pickupMatch[1]);
+  const compactMatch = raw.match(/-P(\d+)$/i);
+  if (compactMatch) return Number(compactMatch[1]);
+  return null;
+}
+
+function extractLineItemIdsFromPrivateNote(note) {
+  const raw = String(note || "").trim();
+  if (!raw) return [];
+  const match = raw.match(/LINEITEMS=([0-9,]+)/i);
+  if (!match) return [];
+  return match[1]
+    .split(",")
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value));
+}
+
+function collectPickupLineItemIdsFromDocs(docs) {
+  const ids = new Set();
+  for (const doc of docs || []) {
+    if (doc?.qbo_entity_type !== "Invoice") continue;
+    if (doc?.source && doc.source !== "rent_soft") continue;
+    if (doc?.is_voided || doc?.is_deleted) continue;
+    const docNumber = String(doc?.doc_number || doc?.docNumber || "").trim();
+    const docLineItemId = extractPickupLineItemIdFromDocNumber(docNumber);
+    if (Number.isFinite(docLineItemId)) ids.add(docLineItemId);
+    const note = doc?.raw?.PrivateNote || doc?.raw?.privateNote || "";
+    const noteIds = extractLineItemIdsFromPrivateNote(note);
+    for (const noteId of noteIds) {
+      ids.add(noteId);
+    }
+  }
+  return ids;
+}
+
 function normalizePurchaseOrderStatus(value) {
   const raw = String(value ?? "").trim().toLowerCase();
   if (raw === "closed") return "closed";
@@ -321,7 +360,16 @@ async function createPickupInvoicesForOrder({ companyId, orderId, source, mode, 
     if (!lineItemIds.length) {
       return { ok: false, skipped: "no_valid_line_items" };
     }
-    const normalizedPickedUpAt = normalizeTimestampInput(pickedUpAt) || pickedUpItems[0]?.fulfilledAt || null;
+    const existingPickupLineItemIds = collectPickupLineItemIdsFromDocs(existingDocs);
+    const filteredLineItemIds = lineItemIds.filter((lineItemId) => !existingPickupLineItemIds.has(lineItemId));
+    if (!filteredLineItemIds.length) {
+      return { ok: false, skipped: "line_items_already_invoiced", lineItemIds };
+    }
+    const filteredLineItemIdSet = new Set(filteredLineItemIds);
+    const fallbackPickedUpAt = pickedUpItems.find((item) =>
+      filteredLineItemIdSet.has(Number(item?.id))
+    )?.fulfilledAt;
+    const normalizedPickedUpAt = normalizeTimestampInput(pickedUpAt) || fallbackPickedUpAt || null;
     const bulkDocNumber = getPickupBulkDocNumber({
       roNumber,
       orderId: oid,
@@ -340,7 +388,7 @@ async function createPickupInvoicesForOrder({ companyId, orderId, source, mode, 
     console.info("QBO pickup invoice attempt (bulk order save)", {
       companyId: cid,
       orderId: oid,
-      lineItemCount: lineItemIds.length,
+      lineItemCount: filteredLineItemIds.length,
       pickedUpAt: normalizedPickedUpAt,
       source: source || null,
     });
@@ -348,11 +396,11 @@ async function createPickupInvoicesForOrder({ companyId, orderId, source, mode, 
       const qbo = await createPickupDraftInvoiceBulk({
         companyId: cid,
         orderId: oid,
-        lineItemIds,
+        lineItemIds: filteredLineItemIds,
         pickedUpAt: normalizedPickedUpAt || new Date().toISOString(),
       });
       const result = {
-        lineItemIds,
+        lineItemIds: filteredLineItemIds,
         ok: qbo?.ok ?? null,
         skipped: qbo?.skipped ?? null,
         error: qbo?.error ?? null,
@@ -4181,18 +4229,23 @@ app.post(
     if (bulkDocNumber && existingDocNumbers.has(bulkDocNumber)) {
       return res.json({ ok: false, skipped: "bulk_invoice_exists", docNumber: bulkDocNumber });
     }
+    const existingPickupLineItemIds = collectPickupLineItemIdsFromDocs(existingDocs);
+    const filteredIds = ids.filter((lineItemId) => !existingPickupLineItemIds.has(lineItemId));
+    if (!filteredIds.length) {
+      return res.json({ ok: false, skipped: "line_items_already_invoiced", lineItemIds: ids });
+    }
     let qbo = null;
     console.info("QBO pickup invoice attempt (bulk)", {
       companyId: Number(companyId),
       orderId: oid,
-      lineItemCount: ids.length,
+      lineItemCount: filteredIds.length,
       pickedUpAt: normalizedPickedUpAt || null,
     });
     try {
       qbo = await createPickupDraftInvoiceBulk({
         companyId: Number(companyId),
         orderId: oid,
-        lineItemIds: ids,
+        lineItemIds: filteredIds,
         pickedUpAt: normalizedPickedUpAt || null,
       });
       console.info("QBO pickup invoice result (bulk)", {
