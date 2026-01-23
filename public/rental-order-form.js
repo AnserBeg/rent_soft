@@ -2825,10 +2825,11 @@ function collectActualModalTargets() {
   };
 }
 
-async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn, skipPickupInvoice = false }) {
+async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn, skipPickupInvoice = false, forcePickup = false }) {
   const pickupChanged = targetPickup !== (li.pickedUpAt || null);
   const returnChanged = targetReturn !== (li.returnedAt || null);
-  if (!pickupChanged && !returnChanged) return;
+  const forcePickupUpdate = !!(forcePickup && targetPickup);
+  if (!pickupChanged && !returnChanged && !forcePickupUpdate) return;
 
   li.pickedUpAt = targetPickup || null;
   li.returnedAt = targetReturn || null;
@@ -2838,7 +2839,7 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn, ski
   const actorName = session?.user?.name ? String(session.user.name) : null;
   const actorEmail = session?.user?.email ? String(session.user.email) : null;
 
-  if (pickupChanged) {
+  if (pickupChanged || forcePickupUpdate) {
     const res = await fetch(`/api/rental-orders/line-items/${encodeURIComponent(String(li.lineItemId))}/pickup`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -4585,7 +4586,8 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
         if (lineItemActualHint) lineItemActualHint.textContent = "Unable to locate updated line item after save.";
         return;
       }
-      await applyActualPeriodToLineItem(refreshed, { targetPickup, targetReturn });
+      const forcePickup = pickupChanged && !!targetPickup;
+      await applyActualPeriodToLineItem(refreshed, { targetPickup, targetReturn, forcePickup });
     } else {
       await applyActualPeriodToLineItem(li, { targetPickup, targetReturn });
     }

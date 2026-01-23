@@ -134,18 +134,22 @@ function overrideStatusFromLineItems(status, lineItems) {
 
   const items = Array.isArray(lineItems) ? lineItems : [];
   let fulfilled = 0;
-  let out = 0;
+  let unreturned = 0;
+  let total = 0;
   for (const item of items) {
+    const startAt = normalizeTimestamptz(item?.startAt);
+    const endAt = normalizeTimestamptz(item?.endAt);
+    if (!startAt || !endAt) continue;
+    total += 1;
     const fulfilledAt = normalizeTimestamptz(item?.fulfilledAt);
-    if (!fulfilledAt) continue;
-    fulfilled += 1;
+    if (fulfilledAt) fulfilled += 1;
     const returnedAt = normalizeTimestamptz(item?.returnedAt);
-    if (!returnedAt) out += 1;
+    if (!returnedAt) unreturned += 1;
   }
 
-  if (fulfilled > 0 && out === 0) return "received";
+  if (total > 0 && unreturned === 0) return "received";
   if (fulfilled > 0 && (normalized === "requested" || normalized === "reservation")) return "ordered";
-  if (normalized === "received" && out > 0) return "ordered";
+  if (normalized === "received" && unreturned > 0) return "ordered";
   return normalized;
 }
 
@@ -5315,20 +5319,20 @@ async function setLineItemReturned({
 
       const countsRes = await client.query(
         `
-        SELECT COUNT(*) FILTER (WHERE fulfilled_at IS NOT NULL) AS fulfilled,
-               COUNT(*) FILTER (WHERE fulfilled_at IS NOT NULL AND returned_at IS NULL) AS out
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE returned_at IS NULL) AS unreturned
           FROM rental_order_line_items
          WHERE rental_order_id = $1
         `,
         [orderId]
       );
       const counts = countsRes.rows[0] || {};
-      const fulfilled = Number(counts.fulfilled || 0);
-      const out = Number(counts.out || 0);
+      const total = Number(counts.total || 0);
+      const unreturned = Number(counts.unreturned || 0);
 
-      if (fulfilled > 0 && out === 0) {
+      if (total > 0 && unreturned === 0) {
         nextStatus = "received";
-      } else if (status === "received" && out > 0) {
+      } else if (status === "received" && unreturned > 0) {
         nextStatus = "ordered";
       }
 
