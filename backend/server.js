@@ -290,7 +290,7 @@ function normalizePurchaseOrderStatus(value) {
   return "open";
 }
 
-async function createPickupInvoicesForOrder({ companyId, orderId, source } = {}) {
+async function createPickupInvoicesForOrder({ companyId, orderId, source, mode, pickedUpAt } = {}) {
   const cid = Number(companyId);
   const oid = Number(orderId);
   if (!Number.isFinite(cid) || !Number.isFinite(oid)) {
@@ -313,6 +313,72 @@ async function createPickupInvoicesForOrder({ companyId, orderId, source } = {})
       .filter(Boolean)
   );
   const roNumber = detail?.order?.ro_number || detail?.order?.roNumber || null;
+
+  if (mode === "bulk") {
+    const lineItemIds = pickedUpItems
+      .map((lineItem) => Number(lineItem?.id))
+      .filter((lineItemId) => Number.isFinite(lineItemId));
+    if (!lineItemIds.length) {
+      return { ok: false, skipped: "no_valid_line_items" };
+    }
+    const normalizedPickedUpAt = normalizeTimestampInput(pickedUpAt) || pickedUpItems[0]?.fulfilledAt || null;
+    const bulkDocNumber = getPickupBulkDocNumber({
+      roNumber,
+      orderId: oid,
+      pickedUpAt: normalizedPickedUpAt,
+      billingDay: settings.qbo_billing_day,
+    });
+    if (bulkDocNumber && existingDocNumbers.has(bulkDocNumber)) {
+      console.info("QBO pickup invoice skipped (bulk invoice exists)", {
+        companyId: cid,
+        orderId: oid,
+        docNumber: bulkDocNumber,
+        source: source || null,
+      });
+      return { ok: false, skipped: "bulk_invoice_exists", docNumber: bulkDocNumber };
+    }
+    console.info("QBO pickup invoice attempt (bulk order save)", {
+      companyId: cid,
+      orderId: oid,
+      lineItemCount: lineItemIds.length,
+      pickedUpAt: normalizedPickedUpAt,
+      source: source || null,
+    });
+    try {
+      const qbo = await createPickupDraftInvoiceBulk({
+        companyId: cid,
+        orderId: oid,
+        lineItemIds,
+        pickedUpAt: normalizedPickedUpAt || new Date().toISOString(),
+      });
+      const result = {
+        lineItemIds,
+        ok: qbo?.ok ?? null,
+        skipped: qbo?.skipped ?? null,
+        error: qbo?.error ?? null,
+        docNumber: qbo?.document?.doc_number || qbo?.document?.docNumber || null,
+      };
+      console.info("QBO pickup invoice result (bulk order save)", {
+        companyId: cid,
+        orderId: oid,
+        ok: result.ok,
+        skipped: result.skipped,
+        error: result.error,
+        docNumber: result.docNumber,
+        source: source || null,
+      });
+      return { ok: true, bulk: true, results: [result] };
+    } catch (err) {
+      const errorMessage = err?.message ? String(err.message) : "QBO invoice failed.";
+      console.error("QBO pickup invoice failed (bulk order save)", {
+        companyId: cid,
+        orderId: oid,
+        error: errorMessage,
+        source: source || null,
+      });
+      return { ok: false, error: errorMessage };
+    }
+  }
 
   const results = [];
   for (const lineItem of pickedUpItems) {
@@ -4096,6 +4162,25 @@ app.post(
     if (!settings?.qbo_enabled) {
       return res.json({ ok: false, skipped: "disabled" });
     }
+    const detail = await getRentalOrder({ companyId: Number(companyId), id: oid }).catch(() => null);
+    const roNumber = detail?.order?.ro_number || detail?.order?.roNumber || null;
+    const existingDocs = await listQboDocumentsForRentalOrder({ companyId: Number(companyId), orderId: oid }).catch(
+      () => []
+    );
+    const existingDocNumbers = new Set(
+      (existingDocs || [])
+        .map((doc) => String(doc?.doc_number || doc?.docNumber || ""))
+        .filter(Boolean)
+    );
+    const bulkDocNumber = getPickupBulkDocNumber({
+      roNumber,
+      orderId: oid,
+      pickedUpAt: normalizedPickedUpAt,
+      billingDay: settings.qbo_billing_day,
+    });
+    if (bulkDocNumber && existingDocNumbers.has(bulkDocNumber)) {
+      return res.json({ ok: false, skipped: "bulk_invoice_exists", docNumber: bulkDocNumber });
+    }
     let qbo = null;
     console.info("QBO pickup invoice attempt (bulk)", {
       companyId: Number(companyId),
@@ -4328,6 +4413,8 @@ app.post(
       siteContacts,
       lineItems,
       fees,
+      pickupInvoiceMode,
+      pickupInvoiceAt,
       actorName,
       actorEmail,
     } = req.body;
@@ -4376,7 +4463,14 @@ app.post(
     }
     let qbo = null;
     try {
-      qbo = await createPickupInvoicesForOrder({ companyId, orderId: created?.id, source: "order_create" });
+      const normalizedPickupInvoiceMode = pickupInvoiceMode === "bulk" ? "bulk" : null;
+      qbo = await createPickupInvoicesForOrder({
+        companyId,
+        orderId: created?.id,
+        source: "order_create",
+        mode: normalizedPickupInvoiceMode,
+        pickedUpAt: pickupInvoiceAt || null,
+      });
     } catch (err) {
       qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
       console.error("QBO pickup invoices failed (order create)", {
@@ -4413,6 +4507,8 @@ app.put(
       siteContacts,
       lineItems,
       fees,
+      pickupInvoiceMode,
+      pickupInvoiceAt,
       actorName,
       actorEmail,
     } = req.body;
@@ -4452,7 +4548,14 @@ app.put(
     if (!updated) return res.status(404).json({ error: "Rental order not found" });
     let qbo = null;
     try {
-      qbo = await createPickupInvoicesForOrder({ companyId, orderId: Number(id), source: "order_update" });
+      const normalizedPickupInvoiceMode = pickupInvoiceMode === "bulk" ? "bulk" : null;
+      qbo = await createPickupInvoicesForOrder({
+        companyId,
+        orderId: Number(id),
+        source: "order_update",
+        mode: normalizedPickupInvoiceMode,
+        pickedUpAt: pickupInvoiceAt || null,
+      });
     } catch (err) {
       qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
       console.error("QBO pickup invoices failed (order update)", {

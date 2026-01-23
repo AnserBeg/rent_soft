@@ -326,6 +326,8 @@ let draft = {
   lineItems: [],
   fees: [],
   isOverdue: false,
+  pickupInvoiceMode: null,
+  pickupInvoiceAt: null,
 };
 
 let generalNotesImages = [];
@@ -357,6 +359,8 @@ function resetDraftForNew() {
     lineItems: [],
     fees: [],
     isOverdue: false,
+    pickupInvoiceMode: null,
+    pickupInvoiceAt: null,
   };
 }
 
@@ -3443,6 +3447,8 @@ async function loadOrder() {
   draft.coverageHours = normalizeCoverageHours(o.coverage_hours || o.coverageHours || {});
   draft.emergencyContacts = parseContacts(o.emergency_contacts || o.emergencyContacts || []);
   draft.siteContacts = parseContacts(o.site_contacts || o.siteContacts || []);
+  draft.pickupInvoiceMode = null;
+  draft.pickupInvoiceAt = null;
   draft.fees = (data.fees || []).map((f) => ({
     id: f.id,
     name: f.name,
@@ -4067,6 +4073,8 @@ async function saveOrderDraft({ onError } = {}) {
     status: normalizeOrderStatus(draft.status || "quote"),
     actorName,
     actorEmail,
+    pickupInvoiceMode: draft.pickupInvoiceMode === "bulk" ? "bulk" : null,
+    pickupInvoiceAt: draft.pickupInvoiceAt || null,
     lineItems: validLines.map((li) => ({
       typeId: li.typeId,
       bundleId: li.bundleId || null,
@@ -4537,6 +4545,10 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
     if (lineItemActualHint) lineItemActualHint.textContent = "No changes to save.";
     return;
   }
+  if (!editingOrderId && pickupChanged) {
+    draft.pickupInvoiceMode = null;
+    draft.pickupInvoiceAt = null;
+  }
 
   lineItemActualSaveBtn.disabled = true;
   if (lineItemActualHint) lineItemActualHint.textContent = "Saving actual period...";
@@ -4577,6 +4589,10 @@ lineItemActualSaveAllBtn?.addEventListener("click", async (e) => {
     return;
   }
   const { targetPickup, targetReturn } = collectActualModalTargets();
+  if (!editingOrderId) {
+    draft.pickupInvoiceMode = targetPickup ? "bulk" : null;
+    draft.pickupInvoiceAt = targetPickup || null;
+  }
   lineItemActualSaveAllBtn.disabled = true;
   if (lineItemActualHint) lineItemActualHint.textContent = "Saving actual period for all line items...";
   try {
