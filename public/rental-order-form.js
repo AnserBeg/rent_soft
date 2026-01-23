@@ -1574,6 +1574,7 @@ function lineItemQty(li) {
 }
 
 function applyOrderedPickup(li) {
+  if (editingOrderId) return;
   if (normalizeOrderStatus(draft.status || "") !== "ordered") return;
   if (li.pickedUpAt) return;
   const startAt = fromLocalInputValue(li.startLocal);
@@ -4080,10 +4081,7 @@ async function saveOrderDraft({ onError } = {}) {
       bundleId: li.bundleId || null,
       startAt: fromLocalInputValue(li.startLocal),
       endAt: fromLocalInputValue(li.endLocal),
-      fulfilledAt:
-        normalizeOrderStatus(draft.status || "") === "ordered" && !li.pickedUpAt
-          ? fromLocalInputValue(li.startLocal)
-          : (li.pickedUpAt || null),
+      fulfilledAt: li.pickedUpAt || null,
       returnedAt: li.returnedAt || null,
       rateBasis: normalizeRateBasis(li.rateBasis),
       rateAmount: numberOrNull(li.rateAmount),

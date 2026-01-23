@@ -9256,7 +9256,7 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
   try {
     await client.query("BEGIN");
     const normalizedStatus = normalizeRentalOrderStatus(status);
-    const demandOnly = isDemandOnlyStatus(normalizedStatus);
+    const allowsInventory = allowsInventoryAssignment(normalizedStatus);
     const existingRes = await client.query(
       `SELECT quote_number, ro_number, status
          FROM rental_orders

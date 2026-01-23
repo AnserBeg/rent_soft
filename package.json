@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node backend/server.js",
     "dev": "NODE_ENV=development nodemon backend/server.js",
+    "test": "node --test",
     "install:ui": "npm --prefix aiven-rental install",
     "dev:ui": "npm --prefix aiven-rental run dev",
     "build:ui": "npm --prefix aiven-rental run build"
