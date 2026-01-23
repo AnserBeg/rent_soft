@@ -2616,9 +2616,26 @@ function lineItemNeedsOrderSave(li) {
   return lineItemPersistedSignature(li) !== li.persistedSignature;
 }
 
-function findLineItemBySignature(signature) {
+function lineItemSignatureIndex(signature, tempId) {
+  if (!signature || !tempId) return null;
+  let index = 0;
+  for (const li of draft.lineItems || []) {
+    if (lineItemPersistedSignature(li) !== signature) continue;
+    if (li.tempId === tempId) return index;
+    index += 1;
+  }
+  return null;
+}
+
+function findLineItemBySignature(signature, matchIndex = 0) {
   if (!signature) return null;
-  return (draft.lineItems || []).find((li) => lineItemPersistedSignature(li) === signature) || null;
+  let index = 0;
+  for (const li of draft.lineItems || []) {
+    if (lineItemPersistedSignature(li) !== signature) continue;
+    if (index === matchIndex) return li;
+    index += 1;
+  }
+  return null;
 }
 
 function mergeLineItems(items) {
@@ -4553,6 +4570,7 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
   try {
     if (lineItemNeedsOrderSave(li)) {
       const signature = lineItemPersistedSignature(li);
+      const signatureIndex = lineItemSignatureIndex(signature, li.tempId);
       const saveResult = await saveOrderDraft({
         onError: (message) => {
           if (lineItemActualHint) lineItemActualHint.textContent = message;
@@ -4560,7 +4578,7 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
         },
       });
       if (!saveResult.ok) return;
-      const refreshed = findLineItemBySignature(signature);
+      const refreshed = findLineItemBySignature(signature, signatureIndex ?? 0);
       if (!refreshed) {
         if (lineItemActualHint) lineItemActualHint.textContent = "Unable to locate updated line item after save.";
         return;

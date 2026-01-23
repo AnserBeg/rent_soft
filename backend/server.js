@@ -351,6 +351,7 @@ async function createPickupInvoicesForOrder({ companyId, orderId, source, mode, 
       .map((doc) => String(doc?.doc_number || doc?.docNumber || ""))
       .filter(Boolean)
   );
+  const existingPickupLineItemIds = collectPickupLineItemIdsFromDocs(existingDocs);
   const roNumber = detail?.order?.ro_number || detail?.order?.roNumber || null;
 
   if (mode === "bulk") {
@@ -432,6 +433,21 @@ async function createPickupInvoicesForOrder({ companyId, orderId, source, mode, 
   for (const lineItem of pickedUpItems) {
     const lineItemId = Number(lineItem?.id);
     if (!Number.isFinite(lineItemId)) continue;
+    if (existingPickupLineItemIds.has(lineItemId)) {
+      const result = {
+        lineItemId,
+        ok: false,
+        skipped: "line_item_already_invoiced",
+      };
+      results.push(result);
+      console.info("QBO pickup invoice skipped (line item already invoiced)", {
+        companyId: cid,
+        orderId: oid,
+        lineItemId,
+        source: source || null,
+      });
+      continue;
+    }
     const pickedUpAt = lineItem?.fulfilledAt || null;
     const bulkDocNumber = getPickupBulkDocNumber({
       roNumber,
@@ -4136,36 +4152,75 @@ app.put(
     if (pickedUp && !skipPickupInvoice) {
       const settings = await getCompanySettings(companyId).catch(() => null);
       if (settings?.qbo_enabled) {
-        console.info("QBO pickup invoice attempt", {
+        const existingDocs = await listQboDocumentsForRentalOrder({
           companyId: Number(companyId),
           orderId: result.orderId,
-          lineItemId: Number(id),
-          pickedUpAt: result.pickedUpAt || normalizedPickedUpAt || null,
-        });
-        try {
-          qbo = await createPickupDraftInvoice({
+        }).catch(() => []);
+        const existingDocNumbers = new Set(
+          (existingDocs || [])
+            .map((doc) => String(doc?.doc_number || doc?.docNumber || ""))
+            .filter(Boolean)
+        );
+        const existingPickupLineItemIds = collectPickupLineItemIdsFromDocs(existingDocs);
+        const lineItemId = Number(id);
+        const pickedUpAt = result.pickedUpAt || normalizedPickedUpAt || null;
+        if (existingPickupLineItemIds.has(lineItemId)) {
+          qbo = { ok: false, skipped: "line_item_already_invoiced" };
+          console.info("QBO pickup invoice skipped (line item already invoiced)", {
             companyId: Number(companyId),
             orderId: result.orderId,
-            lineItemId: Number(id),
-            pickedUpAt: result.pickedUpAt || normalizedPickedUpAt || new Date().toISOString(),
+            lineItemId,
           });
-          console.info("QBO pickup invoice result", {
-            companyId: Number(companyId),
+        } else {
+          const detail = await getRentalOrder({ companyId: Number(companyId), id: result.orderId }).catch(() => null);
+          const roNumber = detail?.order?.ro_number || detail?.order?.roNumber || null;
+          const bulkDocNumber = getPickupBulkDocNumber({
+            roNumber,
             orderId: result.orderId,
-            lineItemId: Number(id),
-            ok: qbo?.ok ?? null,
-            skipped: qbo?.skipped ?? null,
-            error: qbo?.error ?? null,
-            docNumber: qbo?.document?.doc_number || qbo?.document?.docNumber || null,
+            pickedUpAt,
+            billingDay: settings.qbo_billing_day,
           });
-        } catch (err) {
-          qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
-          console.error("QBO pickup invoice failed", {
-            companyId: Number(companyId),
-            orderId: result.orderId,
-            lineItemId: Number(id),
-            error: qbo.error,
-          });
+          if (bulkDocNumber && existingDocNumbers.has(bulkDocNumber)) {
+            qbo = { ok: false, skipped: "bulk_invoice_exists", docNumber: bulkDocNumber };
+            console.info("QBO pickup invoice skipped (bulk invoice exists)", {
+              companyId: Number(companyId),
+              orderId: result.orderId,
+              lineItemId,
+              docNumber: bulkDocNumber,
+            });
+          } else {
+            console.info("QBO pickup invoice attempt", {
+              companyId: Number(companyId),
+              orderId: result.orderId,
+              lineItemId: Number(id),
+              pickedUpAt,
+            });
+            try {
+              qbo = await createPickupDraftInvoice({
+                companyId: Number(companyId),
+                orderId: result.orderId,
+                lineItemId: Number(id),
+                pickedUpAt: pickedUpAt || new Date().toISOString(),
+              });
+              console.info("QBO pickup invoice result", {
+                companyId: Number(companyId),
+                orderId: result.orderId,
+                lineItemId: Number(id),
+                ok: qbo?.ok ?? null,
+                skipped: qbo?.skipped ?? null,
+                error: qbo?.error ?? null,
+                docNumber: qbo?.document?.doc_number || qbo?.document?.docNumber || null,
+              });
+            } catch (err) {
+              qbo = { ok: false, error: err?.message ? String(err.message) : "QBO invoice failed." };
+              console.error("QBO pickup invoice failed", {
+                companyId: Number(companyId),
+                orderId: result.orderId,
+                lineItemId: Number(id),
+                error: qbo.error,
+              });
+            }
+          }
         }
       } else {
         console.info("QBO pickup invoice skipped (disabled)", {
