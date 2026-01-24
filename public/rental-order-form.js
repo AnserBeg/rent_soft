@@ -1573,6 +1573,10 @@ function lineItemQty(li) {
   return (li.inventoryIds || []).length ? 1 : 0;
 }
 
+function lineItemHasUnit(li) {
+  return !!(li?.bundleId || (Array.isArray(li?.inventoryIds) && li.inventoryIds.length > 0));
+}
+
 function applyOrderedPickup(li) {
   if (editingOrderId) return;
   if (normalizeOrderStatus(draft.status || "") !== "ordered") return;
@@ -2797,7 +2801,7 @@ function renderLineItemActualModal() {
   const li = getEditingLineItemActual();
   if (!li) return;
   applyOrderedPickup(li);
-  const hasUnit = !!(li.bundleId || (li.inventoryIds && li.inventoryIds.length > 0));
+  const hasUnit = lineItemHasUnit(li);
 
   if (lineItemActualPickupInput) {
     lineItemActualPickupInput.value = toLocalInputValue(li.pickedUpAt);
@@ -4628,13 +4632,14 @@ lineItemActualSaveAllBtn?.addEventListener("click", async (e) => {
       if (!saveResult.ok) return;
     }
     const lineItems = draft.lineItems || [];
+    const pickupLineItems = lineItems.filter((li) => lineItemHasUnit(li));
     const shouldInvoice =
-      !!targetPickup && lineItems.some((li) => (li.pickedUpAt || null) !== targetPickup);
-    for (const li of lineItems) {
+      !!targetPickup && pickupLineItems.some((li) => (li.pickedUpAt || null) !== targetPickup);
+    for (const li of pickupLineItems) {
       await applyActualPeriodToLineItem(li, { targetPickup, targetReturn, skipPickupInvoice: shouldInvoice });
     }
     if (shouldInvoice && editingOrderId) {
-      const lineItemIds = lineItems
+      const lineItemIds = pickupLineItems
         .map((li) => Number(li.lineItemId))
         .filter((lineItemId) => Number.isFinite(lineItemId));
       if (!lineItemIds.length) {
