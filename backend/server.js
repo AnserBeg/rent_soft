@@ -323,6 +323,24 @@ function collectPickupLineItemIdsFromDocs(docs) {
   return ids;
 }
 
+function pickupBulkInvoiceIncludesLineItem({ docs, bulkDocNumber, lineItemId }) {
+  const docNumber = String(bulkDocNumber || "").trim();
+  const targetId = Number(lineItemId);
+  if (!docNumber || !Number.isFinite(targetId)) return null;
+  const doc = (docs || []).find((docItem) => {
+    if (docItem?.qbo_entity_type !== "Invoice") return false;
+    if (docItem?.source && docItem.source !== "rent_soft") return false;
+    if (docItem?.is_voided || docItem?.is_deleted) return false;
+    const candidate = String(docItem?.doc_number || docItem?.docNumber || "").trim();
+    return candidate === docNumber;
+  });
+  if (!doc) return null;
+  const note = doc?.raw?.PrivateNote || doc?.raw?.privateNote || "";
+  const noteIds = extractLineItemIdsFromPrivateNote(note);
+  if (!noteIds.length) return null;
+  return noteIds.includes(targetId);
+}
+
 function normalizePurchaseOrderStatus(value) {
   const raw = String(value ?? "").trim().toLowerCase();
   if (raw === "closed") return "closed";
@@ -455,7 +473,15 @@ async function createPickupInvoicesForOrder({ companyId, orderId, source, mode, 
       pickedUpAt,
       billingDay: settings.qbo_billing_day,
     });
-    if (bulkDocNumber && existingDocNumbers.has(bulkDocNumber)) {
+    const bulkBlocks =
+      bulkDocNumber &&
+      existingDocNumbers.has(bulkDocNumber) &&
+      pickupBulkInvoiceIncludesLineItem({
+        docs: existingDocs,
+        bulkDocNumber,
+        lineItemId,
+      }) !== false;
+    if (bulkBlocks) {
       const result = {
         lineItemId,
         ok: false,
@@ -4180,7 +4206,15 @@ app.put(
             pickedUpAt,
             billingDay: settings.qbo_billing_day,
           });
-          if (bulkDocNumber && existingDocNumbers.has(bulkDocNumber)) {
+          const bulkBlocks =
+            bulkDocNumber &&
+            existingDocNumbers.has(bulkDocNumber) &&
+            pickupBulkInvoiceIncludesLineItem({
+              docs: existingDocs,
+              bulkDocNumber,
+              lineItemId,
+            }) !== false;
+          if (bulkBlocks) {
             qbo = { ok: false, skipped: "bulk_invoice_exists", docNumber: bulkDocNumber };
             console.info("QBO pickup invoice skipped (bulk invoice exists)", {
               companyId: Number(companyId),
@@ -4188,7 +4222,8 @@ app.put(
               lineItemId,
               docNumber: bulkDocNumber,
             });
-          } else {
+          }
+          if (!qbo) {
             console.info("QBO pickup invoice attempt", {
               companyId: Number(companyId),
               orderId: result.orderId,
@@ -4372,7 +4407,7 @@ app.post(
   "/api/equipment/:id/work-order-pause",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { companyId, workOrderNumber, startAt, endAt } = req.body || {};
+    const { companyId, workOrderNumber, startAt, endAt, serviceStatus, orderStatus } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     if (!workOrderNumber) return res.status(400).json({ error: "workOrderNumber is required." });
     if (!startAt && !endAt) {
@@ -4384,6 +4419,8 @@ app.post(
       workOrderNumber,
       startAt,
       endAt,
+      serviceStatus: serviceStatus || null,
+      orderStatus: orderStatus || null,
     });
     res.json(result);
   })

@@ -332,18 +332,21 @@ function setSaveStatus(message) {
 
 async function syncWorkOrderPause(record) {
   if (!activeCompanyId || !record?.unitId) return;
-  if (record.serviceStatus !== "out_of_service") return;
-
+  const now = new Date().toISOString();
   const payload = {
     companyId: activeCompanyId,
     workOrderNumber: record.number,
+    serviceStatus: record.serviceStatus || "in_service",
+    orderStatus: record.orderStatus || "open",
   };
 
-  if (record.orderStatus === "closed") {
-    payload.startAt = record.createdAt || record.updatedAt || new Date().toISOString();
-    payload.endAt = record.closedAt || record.updatedAt || new Date().toISOString();
+  if (record.serviceStatus === "out_of_service") {
+    payload.startAt = record.createdAt || record.updatedAt || now;
+    if (record.orderStatus === "closed") {
+      payload.endAt = record.closedAt || record.updatedAt || now;
+    }
   } else {
-    payload.startAt = record.createdAt || record.updatedAt || new Date().toISOString();
+    payload.endAt = record.closedAt || record.updatedAt || now;
   }
 
   const res = await fetch(`/api/equipment/${encodeURIComponent(record.unitId)}/work-order-pause`, {

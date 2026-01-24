@@ -530,6 +530,26 @@ async function ensureTables() {
     await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS current_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL;`);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS equipment_out_of_service (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+        work_order_number TEXT NOT NULL,
+        start_at TIMESTAMPTZ NOT NULL,
+        end_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(company_id, equipment_id, work_order_number)
+      );
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS equipment_out_of_service_equipment_idx ON equipment_out_of_service (company_id, equipment_id);`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS equipment_out_of_service_range_idx ON equipment_out_of_service (company_id, start_at, end_at);`
+    );
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS equipment_bundles (
         id SERIAL PRIMARY KEY,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -5386,6 +5406,8 @@ async function applyWorkOrderPauseToEquipment({
   workOrderNumber,
   startAt = null,
   endAt = null,
+  serviceStatus = null,
+  orderStatus = null,
 }) {
   const cid = Number(companyId);
   const eid = Number(equipmentId);
@@ -5394,12 +5416,50 @@ async function applyWorkOrderPauseToEquipment({
   const woNumber = String(workOrderNumber || "").trim();
   if (!woNumber) throw new Error("workOrderNumber is required.");
 
+  const normalizedServiceStatus = String(serviceStatus || "").trim() || "out_of_service";
+  const normalizedOrderStatus = String(orderStatus || "").trim() || "open";
+  const isOutOfService = normalizedServiceStatus === "out_of_service";
+
   const startIso = startAt ? normalizeTimestamptz(startAt) : null;
   const endIso = endAt ? normalizeTimestamptz(endAt) : null;
   if (startAt && !startIso) throw new Error("Invalid startAt.");
   if (endAt && !endIso) throw new Error("Invalid endAt.");
   if (startIso && endIso && Date.parse(endIso) <= Date.parse(startIso)) {
     throw new Error("endAt must be after startAt.");
+  }
+
+  if (isOutOfService && !startIso) {
+    throw new Error("startAt is required when setting out_of_service.");
+  }
+
+  if (isOutOfService) {
+    await pool.query(
+      `
+      INSERT INTO equipment_out_of_service
+        (company_id, equipment_id, work_order_number, start_at, end_at, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+      ON CONFLICT (company_id, equipment_id, work_order_number)
+      DO UPDATE SET start_at = EXCLUDED.start_at, end_at = EXCLUDED.end_at, updated_at = NOW()
+      `,
+      [cid, eid, woNumber, startIso, endIso || null]
+    );
+  } else if (endIso || normalizedOrderStatus === "closed") {
+    await pool.query(
+      `
+      UPDATE equipment_out_of_service
+         SET end_at = COALESCE($4, NOW()),
+             updated_at = NOW()
+       WHERE company_id = $1
+         AND equipment_id = $2
+         AND work_order_number = $3
+         AND end_at IS NULL
+      `,
+      [cid, eid, woNumber, endIso || null]
+    );
+  }
+
+  if (!isOutOfService) {
+    return { ok: true, updatedLineItems: 0, lineItemIds: [] };
   }
 
   const res = await pool.query(
@@ -9643,7 +9703,22 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
       ) bi ON TRUE
      WHERE e.company_id = $1
        AND (ebi.bundle_id IS NULL OR e.id = eb.primary_equipment_id)
-       AND e.type_id = $2
+       AND (
+         (ebi.bundle_id IS NULL AND e.type_id = $2)
+         OR (
+           ebi.bundle_id IS NOT NULL
+           AND (
+             e.type_id = $2
+             OR EXISTS (
+               SELECT 1
+                 FROM equipment_bundle_items bi2
+                 JOIN equipment e2 ON e2.id = bi2.equipment_id
+                WHERE bi2.bundle_id = ebi.bundle_id
+                  AND e2.type_id = $2
+             )
+           )
+         )
+       )
        AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
        AND (
          ebi.bundle_id IS NULL
@@ -9664,6 +9739,21 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
               ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
          )
        )
+       AND (
+         ebi.bundle_id IS NULL
+         OR NOT EXISTS (
+           SELECT 1
+             FROM equipment_bundle_items bi2
+             JOIN equipment_out_of_service eos ON eos.equipment_id = bi2.equipment_id
+            WHERE bi2.bundle_id = ebi.bundle_id
+              AND eos.company_id = $1
+              AND tstzrange(
+                eos.start_at,
+                COALESCE(eos.end_at, 'infinity'::timestamptz),
+                '[)'
+              ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
+         )
+       )
        AND NOT EXISTS (
          SELECT 1
            FROM rental_order_line_inventory liv
@@ -9678,6 +9768,17 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
                COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
                '[)'
              ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
+        )
+       AND NOT EXISTS (
+         SELECT 1
+           FROM equipment_out_of_service eos
+          WHERE eos.company_id = $1
+            AND eos.equipment_id = e.id
+            AND tstzrange(
+              eos.start_at,
+              COALESCE(eos.end_at, 'infinity'::timestamptz),
+              '[)'
+            ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
         )
      ORDER BY e.serial_number
     `,
@@ -9741,7 +9842,24 @@ async function getBundleAvailability({ companyId, bundleId, startAt, endAt, excl
     params
   );
   const conflicts = Number(conflictRes.rows?.[0]?.conflicts || 0);
-  return { available: conflicts === 0, items };
+  if (conflicts > 0) return { available: false, items };
+
+  const serviceConflictRes = await pool.query(
+    `
+    SELECT COUNT(*)::int AS conflicts
+      FROM equipment_out_of_service eos
+     WHERE eos.company_id = $1
+       AND eos.equipment_id = ANY($2::int[])
+       AND tstzrange(
+         eos.start_at,
+         COALESCE(eos.end_at, 'infinity'::timestamptz),
+         '[)'
+       ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
+    `,
+    [companyId, equipmentIds, start, end]
+  );
+  const serviceConflicts = Number(serviceConflictRes.rows?.[0]?.conflicts || 0);
+  return { available: serviceConflicts === 0, items };
 }
 
 async function getTypeDemandAvailability({ companyId, typeId, startAt, endAt, excludeOrderId }) {
@@ -9790,8 +9908,19 @@ async function getTypeDemandAvailability({ companyId, typeId, startAt, endAt, ex
        AND type_id = $2
        AND condition NOT IN ('Lost','Unusable')
        AND (serial_number IS NULL OR serial_number NOT ILIKE 'UNALLOCATED-%')
+       AND NOT EXISTS (
+         SELECT 1
+           FROM equipment_out_of_service eos
+          WHERE eos.company_id = $1
+            AND eos.equipment_id = equipment.id
+            AND tstzrange(
+              eos.start_at,
+              COALESCE(eos.end_at, 'infinity'::timestamptz),
+              '[)'
+            ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
+       )
     `,
-    [companyId, typeId]
+    [companyId, typeId, start, end]
   );
   const totalUnits = Number(totalRes.rows?.[0]?.total_units || 0);
 

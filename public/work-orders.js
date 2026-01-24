@@ -40,13 +40,21 @@ function saveWorkOrdersToStorage(orders) {
 
 async function syncWorkOrderPause(order) {
   if (!activeCompanyId || !order?.unitId) return;
-  if (order.serviceStatus !== "out_of_service") return;
+  const now = new Date().toISOString();
   const payload = {
     companyId: activeCompanyId,
     workOrderNumber: order.number,
-    startAt: order.createdAt || order.updatedAt || new Date().toISOString(),
-    endAt: order.closedAt || order.updatedAt || new Date().toISOString(),
+    serviceStatus: order.serviceStatus || "in_service",
+    orderStatus: order.orderStatus || "open",
   };
+  if (order.serviceStatus === "out_of_service") {
+    payload.startAt = order.createdAt || order.updatedAt || now;
+    if (order.orderStatus === "closed") {
+      payload.endAt = order.closedAt || order.updatedAt || now;
+    }
+  } else {
+    payload.endAt = order.closedAt || order.updatedAt || now;
+  }
   const res = await fetch(`/api/equipment/${encodeURIComponent(order.unitId)}/work-order-pause`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
