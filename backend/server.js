@@ -388,6 +388,44 @@ const RATE_LIMIT_API_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_API_WIN
 const RATE_LIMIT_API_MAX = parseRateLimitMax(process.env.RATE_LIMIT_API_MAX, 100);
 const RATE_LIMIT_QBO_SYNC_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_QBO_SYNC_WINDOW_MS, 60 * 60 * 1000);
 const RATE_LIMIT_QBO_SYNC_MAX = parseRateLimitMax(process.env.RATE_LIMIT_QBO_SYNC_MAX, 10);
+const QBO_OAUTH_STATE_TTL_MS = parseRateLimitMs(process.env.QBO_OAUTH_STATE_TTL_MS, 10 * 60 * 1000);
+const QBO_OAUTH_STATE_MAX = parseRateLimitMax(process.env.QBO_OAUTH_STATE_MAX, 2000);
+const QBO_OAUTH_ERROR_REDIRECT = "/settings.html?qbo=error";
+const qboOauthStateStore = new Map();
+
+function pruneQboOauthStates(now = Date.now()) {
+  for (const [key, entry] of qboOauthStateStore.entries()) {
+    if (!entry || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= now) {
+      qboOauthStateStore.delete(key);
+    }
+  }
+  if (qboOauthStateStore.size <= QBO_OAUTH_STATE_MAX) return;
+  const toRemove = qboOauthStateStore.size - QBO_OAUTH_STATE_MAX;
+  const keys = Array.from(qboOauthStateStore.keys()).slice(0, toRemove);
+  keys.forEach((key) => qboOauthStateStore.delete(key));
+}
+
+function createQboOauthState({ companyId, redirect }) {
+  const state = base64Url(crypto.randomBytes(32));
+  const now = Date.now();
+  qboOauthStateStore.set(state, {
+    companyId: Number(companyId),
+    redirect: redirect || null,
+    createdAt: now,
+    expiresAt: now + QBO_OAUTH_STATE_TTL_MS,
+  });
+  pruneQboOauthStates(now);
+  return state;
+}
+
+function consumeQboOauthState(value) {
+  const state = String(value || "").trim();
+  if (!state) return null;
+  const entry = qboOauthStateStore.get(state);
+  qboOauthStateStore.delete(state);
+  if (!entry || !Number.isFinite(entry.expiresAt) || entry.expiresAt <= Date.now()) return null;
+  return entry;
+}
 
 function parseStringArray(value) {
   if (!value) return [];
@@ -3687,9 +3725,7 @@ app.get(
       return res.status(400).json({ error: "QBO_CLIENT_ID and QBO_REDIRECT_URI are required." });
     }
     const safeRedirect = sanitizeInternalRedirect(redirect);
-    const state = Buffer.from(
-      JSON.stringify({ companyId, ts: Date.now(), redirect: safeRedirect })
-    ).toString("base64url");
+    const state = createQboOauthState({ companyId, redirect: safeRedirect });
     const url = buildAuthUrl({
       clientId: config.clientId,
       redirectUri: config.redirectUri,
@@ -3704,23 +3740,18 @@ app.get(
   "/api/qbo/callback",
   asyncHandler(async (req, res) => {
     const { code, realmId, state } = req.query || {};
-    if (!code || !realmId) return res.status(400).send("Missing code or realmId.");
-    let companyId = null;
-    let redirectTo = null;
-    if (state) {
-      try {
-        const parsed = JSON.parse(Buffer.from(String(state), "base64url").toString("utf8"));
-        if (parsed?.companyId) companyId = Number(parsed.companyId);
-        if (parsed?.redirect) redirectTo = sanitizeInternalRedirect(parsed.redirect);
-      } catch {
-        companyId = null;
-      }
+    if (!state) return res.redirect(QBO_OAUTH_ERROR_REDIRECT);
+    const stateEntry = consumeQboOauthState(state);
+    const companyId = Number(stateEntry?.companyId);
+    const redirectTo = stateEntry?.redirect ? sanitizeInternalRedirect(stateEntry.redirect) : null;
+    if (!Number.isFinite(companyId) || companyId <= 0) {
+      return res.redirect(redirectTo || QBO_OAUTH_ERROR_REDIRECT);
     }
-    if (!companyId) return res.status(400).send("Missing company context.");
+    if (!code || !realmId) return res.redirect(redirectTo || QBO_OAUTH_ERROR_REDIRECT);
 
     const config = getQboConfig();
     if (!config.clientId || !config.clientSecret || !config.redirectUri) {
-      return res.status(400).send("QBO credentials are not configured.");
+      return res.redirect(redirectTo || QBO_OAUTH_ERROR_REDIRECT);
     }
 
     const token = await exchangeAuthCode({
