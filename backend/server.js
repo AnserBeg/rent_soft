@@ -187,6 +187,28 @@ const spaRoot = path.join(publicRoot, "spa");
 const defaultUploadRoot = path.join(publicRoot, "uploads");
 const uploadRoot = process.env.UPLOAD_ROOT ? path.resolve(process.env.UPLOAD_ROOT) : defaultUploadRoot;
 
+const FORCE_HTTPS = parseBoolean(process.env.FORCE_HTTPS) === true;
+const TRUST_PROXY = parseBoolean(process.env.TRUST_PROXY) === true || FORCE_HTTPS === true;
+if (TRUST_PROXY) {
+  app.set("trust proxy", 1);
+}
+
+function requestIsSecure(req) {
+  if (req.secure) return true;
+  const forwarded = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+  if (!forwarded) return false;
+  return forwarded === "https";
+}
+
+if (FORCE_HTTPS) {
+  app.use((req, res, next) => {
+    if (requestIsSecure(req)) return next();
+    const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").trim();
+    if (!host) return res.status(400).send("Bad Request");
+    return res.redirect(308, `https://${host}${req.originalUrl}`);
+  });
+}
+
 app.use(cors());
 app.use(
   express.json({
