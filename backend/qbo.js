@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 
 const DEFAULT_MINOR_VERSION = 75;
+const DEFAULT_REVOKE_URL = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke";
 
 function getQboConfig() {
   const clientId = String(process.env.QBO_CLIENT_ID || "").trim();
@@ -8,6 +9,7 @@ function getQboConfig() {
   const redirectUri = String(process.env.QBO_REDIRECT_URI || "").trim();
   const env = String(process.env.QBO_ENV || "production").trim().toLowerCase();
   const minorVersion = Number(process.env.QBO_MINOR_VERSION || DEFAULT_MINOR_VERSION);
+  const revokeUrlRaw = String(process.env.QBO_REVOKE_URL || "").trim();
   const host = env === "sandbox" ? "https://sandbox-quickbooks.api.intuit.com" : "https://quickbooks.api.intuit.com";
   return {
     clientId,
@@ -16,6 +18,7 @@ function getQboConfig() {
     env,
     host,
     minorVersion: Number.isFinite(minorVersion) ? minorVersion : DEFAULT_MINOR_VERSION,
+    revokeUrl: revokeUrlRaw || DEFAULT_REVOKE_URL,
   };
 }
 
@@ -82,6 +85,36 @@ async function refreshAccessToken({ refreshToken, clientId, clientSecret }) {
     clientId,
     clientSecret,
   });
+}
+
+async function revokeToken({ token, clientId, clientSecret, revokeUrl, tokenTypeHint } = {}) {
+  const cleanToken = String(token || "").trim();
+  if (!cleanToken) throw new Error("QBO token is required for revoke.");
+  const url = String(revokeUrl || "").trim();
+  if (!url) throw new Error("QBO revoke URL is not configured.");
+
+  const body = new URLSearchParams({ token: cleanToken });
+  if (tokenTypeHint) body.set("token_type_hint", String(tokenTypeHint));
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: buildBasicAuthHeader({ clientId, clientSecret }),
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const message = text ? `QBO revoke failed (${res.status}): ${text}` : `QBO revoke failed (${res.status})`;
+    const err = new Error(message);
+    err.status = res.status;
+    err.payload = text;
+    throw err;
+  }
+  return true;
 }
 
 function appendMinorVersion(url, minorVersion) {
@@ -168,6 +201,7 @@ module.exports = {
   buildAuthUrl,
   exchangeAuthCode,
   refreshAccessToken,
+  revokeToken,
   qboRequest,
   computeExpiryTimestamp,
   verifyWebhookSignature,

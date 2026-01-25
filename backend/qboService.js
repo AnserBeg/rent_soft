@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const {
   getQboConnection,
   upsertQboConnection,
+  deleteQboConnection,
   upsertQboDocument,
   markQboDocumentRemoved,
   listQboDocumentsForRentalOrder,
@@ -20,15 +21,159 @@ const {
   buildAuthUrl,
   exchangeAuthCode,
   refreshAccessToken,
+  revokeToken,
   qboRequest,
   computeExpiryTimestamp,
 } = require("./qbo");
 
+function parseTimestampMs(value) {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
 function isTokenExpiringSoon(expiresAt, skewMs = 60 * 1000) {
-  if (!expiresAt) return true;
-  const ms = Date.parse(expiresAt);
-  if (!Number.isFinite(ms)) return true;
+  const ms = parseTimestampMs(expiresAt);
+  if (!ms) return true;
   return ms - Date.now() <= skewMs;
+}
+
+function isTokenExpired(expiresAt, skewMs = 0) {
+  const ms = parseTimestampMs(expiresAt);
+  if (!ms) return false;
+  return ms - Date.now() <= skewMs;
+}
+
+function extractQboAuthErrorDetails(err) {
+  const status = Number(err?.status);
+  const payload = err?.payload || {};
+  const fault = Array.isArray(payload?.Fault?.Error) ? payload.Fault.Error[0] : null;
+  const faultDetail = fault?.Detail || fault?.detail || "";
+  const faultMessage = fault?.Message || fault?.message || "";
+  const faultCode = fault?.code || "";
+  const oauthError = payload?.error || payload?.error_description || "";
+  const message = err?.message || "";
+  const combined = `${oauthError} ${faultDetail} ${faultMessage} ${faultCode} ${message}`.toLowerCase();
+  return { status, combined };
+}
+
+function isAuthInvalidError(err) {
+  const { status, combined } = extractQboAuthErrorDetails(err);
+  if (status === 401 || status === 403) return true;
+  if (status === 400 && (combined.includes("invalid_grant") || combined.includes("invalid_token"))) return true;
+  if (combined.includes("token revoked") || combined.includes("token expired")) return true;
+  return false;
+}
+
+function buildQboAuthError(reason) {
+  const err = new Error("QuickBooks authorization is no longer valid. Please reconnect.");
+  err.code = "qbo_auth_expired";
+  err.status = 401;
+  err.reason = reason;
+  return err;
+}
+
+async function invalidateQboConnection({ companyId, reason, error } = {}) {
+  try {
+    await deleteQboConnection({ companyId });
+  } catch (cleanupErr) {
+    console.error("QBO connection cleanup failed", {
+      companyId,
+      reason,
+      error: cleanupErr?.message ? String(cleanupErr.message) : "Unknown error",
+    });
+  }
+  if (error) {
+    console.warn("QBO connection invalidated", {
+      companyId,
+      reason,
+      error: error?.message ? String(error.message) : "Unknown error",
+      status: error?.status || null,
+    });
+  }
+  return buildQboAuthError(reason);
+}
+
+async function refreshQboConnection({ companyId, connection, reason } = {}) {
+  const config = getQboConfig();
+  if (!config.clientId || !config.clientSecret) {
+    throw new Error("QBO_CLIENT_ID and QBO_CLIENT_SECRET are required to refresh tokens.");
+  }
+  if (!connection?.refresh_token) {
+    throw await invalidateQboConnection({ companyId, reason: reason || "missing_refresh_token" });
+  }
+
+  let refreshed;
+  try {
+    refreshed = await refreshAccessToken({
+      refreshToken: connection.refresh_token,
+      clientId: config.clientId,
+      clientSecret: config.clientSecret,
+    });
+  } catch (err) {
+    if (isAuthInvalidError(err)) {
+      throw await invalidateQboConnection({ companyId, reason: reason || "refresh_failed", error: err });
+    }
+    throw err;
+  }
+
+  if (!refreshed?.access_token) {
+    throw await invalidateQboConnection({
+      companyId,
+      reason: reason || "refresh_missing_access_token",
+      error: new Error("QBO refresh did not return an access token."),
+    });
+  }
+
+  const accessToken = refreshed.access_token;
+  const refreshToken = refreshed.refresh_token || connection.refresh_token;
+  const updated = await upsertQboConnection({
+    companyId,
+    realmId: connection.realm_id,
+    accessToken,
+    refreshToken,
+    accessTokenExpiresAt: computeExpiryTimestamp(refreshed.expires_in),
+    refreshTokenExpiresAt:
+      computeExpiryTimestamp(refreshed.x_refresh_token_expires_in) ||
+      connection.refresh_token_expires_at ||
+      null,
+    scope: refreshed.scope || connection.scope,
+    tokenType: refreshed.token_type || connection.token_type,
+  });
+
+  return {
+    ...updated,
+    access_token: accessToken,
+    refresh_token: refreshToken,
+  };
+}
+
+async function revokeQboTokens({ connection } = {}) {
+  const config = getQboConfig();
+  if (!connection) return { ok: false, skipped: "missing_connection" };
+  if (!config.clientId || !config.clientSecret || !config.revokeUrl) {
+    return { ok: false, skipped: "missing_config" };
+  }
+  const token = connection.refresh_token || connection.access_token;
+  if (!token) return { ok: false, skipped: "missing_token" };
+
+  try {
+    await revokeToken({
+      token,
+      clientId: config.clientId,
+      clientSecret: config.clientSecret,
+      revokeUrl: config.revokeUrl,
+      tokenTypeHint: connection.refresh_token ? "refresh_token" : "access_token",
+    });
+    return { ok: true };
+  } catch (err) {
+    console.warn("QBO token revocation failed", {
+      companyId: connection.company_id,
+      error: err?.message ? String(err.message) : "Unknown error",
+      status: err?.status || null,
+    });
+    return { ok: false, error: err };
+  }
 }
 
 async function getValidQboConnection(companyId) {
@@ -36,32 +181,15 @@ async function getValidQboConnection(companyId) {
   if (!connection) return null;
   if (!connection.access_token || !connection.refresh_token) return null;
 
+  if (isTokenExpired(connection.refresh_token_expires_at, 60 * 1000)) {
+    throw await invalidateQboConnection({ companyId, reason: "refresh_token_expired" });
+  }
+
   if (!isTokenExpiringSoon(connection.access_token_expires_at)) {
     return connection;
   }
 
-  const config = getQboConfig();
-  if (!config.clientId || !config.clientSecret) {
-    throw new Error("QBO_CLIENT_ID and QBO_CLIENT_SECRET are required to refresh tokens.");
-  }
-
-  const refreshed = await refreshAccessToken({
-    refreshToken: connection.refresh_token,
-    clientId: config.clientId,
-    clientSecret: config.clientSecret,
-  });
-
-  const updated = await upsertQboConnection({
-    companyId,
-    realmId: connection.realm_id,
-    accessToken: refreshed.access_token,
-    refreshToken: refreshed.refresh_token || connection.refresh_token,
-    accessTokenExpiresAt: computeExpiryTimestamp(refreshed.expires_in),
-    refreshTokenExpiresAt: computeExpiryTimestamp(refreshed.x_refresh_token_expires_in),
-    scope: refreshed.scope || connection.scope,
-    tokenType: refreshed.token_type || connection.token_type,
-  });
-  return updated;
+  return await refreshQboConnection({ companyId, connection, reason: "access_token_expiring" });
 }
 
 function formatPeriodKey({ start, billingDay }) {
@@ -223,22 +351,51 @@ function deriveStatus(doc, entityType) {
 }
 
 async function qboApiRequest({ companyId, method, path, body }) {
-  const connection = await getValidQboConnection(companyId);
+  let connection = await getValidQboConnection(companyId);
   if (!connection) {
     const err = new Error("QuickBooks Online is not connected.");
     err.code = "qbo_not_connected";
     throw err;
   }
   const config = getQboConfig();
-  return await qboRequest({
-    host: config.host,
-    realmId: connection.realm_id,
-    accessToken: connection.access_token,
-    method,
-    path,
-    body,
-    minorVersion: config.minorVersion,
-  });
+  try {
+    return await qboRequest({
+      host: config.host,
+      realmId: connection.realm_id,
+      accessToken: connection.access_token,
+      method,
+      path,
+      body,
+      minorVersion: config.minorVersion,
+    });
+  } catch (err) {
+    if (!isAuthInvalidError(err)) throw err;
+    connection = await refreshQboConnection({ companyId, connection, reason: "request_unauthorized" });
+    try {
+      return await qboRequest({
+        host: config.host,
+        realmId: connection.realm_id,
+        accessToken: connection.access_token,
+        method,
+        path,
+        body,
+        minorVersion: config.minorVersion,
+      });
+    } catch (retryErr) {
+      if (isAuthInvalidError(retryErr)) {
+        throw await invalidateQboConnection({ companyId, reason: "request_unauthorized", error: retryErr });
+      }
+      throw retryErr;
+    }
+  }
+}
+
+async function disconnectQboConnection({ companyId } = {}) {
+  const connection = await getQboConnection({ companyId }).catch(() => null);
+  if (connection) {
+    await revokeQboTokens({ connection });
+  }
+  await deleteQboConnection({ companyId });
 }
 
 function normalizeQboCustomer(customer) {
@@ -1434,6 +1591,7 @@ module.exports = {
   buildAuthUrl,
   exchangeAuthCode,
   getValidQboConnection,
+  disconnectQboConnection,
   normalizeQboCustomer,
   listQboCustomers,
   normalizeQboItem,

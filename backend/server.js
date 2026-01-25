@@ -143,7 +143,6 @@ const {
   getQboConnection,
   findCompanyIdByQboRealmId,
   upsertQboConnection,
-  deleteQboConnection,
   findCustomerIdByQboCustomerId,
   updateCustomerQboLink,
   listQboDocumentsForRentalOrder,
@@ -160,6 +159,7 @@ const {
   getQboConfig,
   buildAuthUrl,
   exchangeAuthCode,
+  disconnectQboConnection,
   createPickupDraftInvoice,
   createPickupDraftInvoiceBulk,
   createMonthlyDraftInvoice,
@@ -3750,7 +3750,7 @@ app.post(
   asyncHandler(async (req, res) => {
     const { companyId } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    await deleteQboConnection({ companyId: Number(companyId) });
+    await disconnectQboConnection({ companyId: Number(companyId) });
     res.status(204).end();
   })
 );
