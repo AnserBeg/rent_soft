@@ -44,9 +44,9 @@
 
           <label>
             Password
-            <input name="password" type="password" autocomplete="new-password" minlength="8" required />
+            <input name="password" type="password" autocomplete="new-password" minlength="8" pattern="(?=.*[A-Za-z])(?=.*[0-9]).{8,}" title="Use at least 8 characters with letters and numbers." required />
           </label>
-          <p class="hint">Use at least 8 characters, with letters, numbers, and symbols.</p>
+          <p class="hint">Use at least 8 characters, with letters and numbers.</p>
 
           <div class="info">
             Renting as an individual? <a class="ghost" href="customer-signup.html">Create a customer account</a>

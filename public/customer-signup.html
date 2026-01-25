@@ -35,9 +35,9 @@
             </div>
 
             <label>Password
-              <input name="password" type="password" minlength="8" autocomplete="new-password" required />
+              <input name="password" type="password" minlength="8" autocomplete="new-password" pattern="(?=.*[A-Za-z])(?=.*[0-9]).{8,}" title="Use at least 8 characters with letters and numbers." required />
             </label>
-            <p class="hint">Use at least 8 characters, with letters, numbers, and symbols.</p>
+            <p class="hint">Use at least 8 characters, with letters and numbers.</p>
 
             <div class="inline-actions" style="justify-content: space-between;">
               <a class="ghost" href="index.html">Back</a>

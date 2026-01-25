@@ -11,8 +11,6 @@ const dotenv = require("dotenv");
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
 dotenv.config();
 
-const MIN_PASSWORD_LENGTH = 8;
-
 const { mimeFromExtension, readImageAsInlinePart, generateDamageReportMarkdown } = require("./aiDamageReport");
 const { editImageBufferWithGemini, writeCompanyUpload } = require("./aiImageEdit");
 
@@ -118,6 +116,7 @@ const {
   getCustomerAccountByToken,
   revokeCustomerAccountSession,
   updateCustomerAccountProfile,
+  getPasswordValidationError,
   createStorefrontReservation,
   listCustomerOrdersForInternalCustomer,
   listCustomerCompaniesByEmail,
@@ -191,6 +190,7 @@ const uploadRoot = process.env.UPLOAD_ROOT ? path.resolve(process.env.UPLOAD_ROO
 
 const FORCE_HTTPS = parseBoolean(process.env.FORCE_HTTPS) === true;
 const TRUST_PROXY = parseBoolean(process.env.TRUST_PROXY) === true || FORCE_HTTPS === true;
+const SECURITY_HEADERS_DISABLED = parseBoolean(process.env.SECURITY_HEADERS_DISABLED) === true;
 const ALLOWED_HTTP_METHODS = parseHttpMethodList(process.env.ALLOWED_HTTP_METHODS, [
   "GET",
   "HEAD",
@@ -210,6 +210,10 @@ const QBO_ALLOWED_REDIRECTS = new Set(
     .filter(Boolean)
     .map((entry) => entry.split(/[?#]/)[0])
 );
+const HSTS_MAX_AGE = parseHstsMaxAge(process.env.HSTS_MAX_AGE, 60 * 60 * 24 * 180);
+const HSTS_INCLUDE_SUBDOMAINS = parseBoolean(process.env.HSTS_INCLUDE_SUBDOMAINS) !== false;
+const HSTS_PRELOAD = parseBoolean(process.env.HSTS_PRELOAD) === true;
+const CONTENT_SECURITY_POLICY = buildCspHeaderValue(process.env.CONTENT_SECURITY_POLICY);
 if (TRUST_PROXY) {
   app.set("trust proxy", 1);
 }
@@ -255,6 +259,22 @@ if (FORCE_HTTPS) {
     const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").trim();
     if (!isAllowedRedirectHost(host)) return res.status(400).send("Bad Request");
     return res.redirect(308, `https://${host}${req.originalUrl}`);
+  });
+}
+
+if (!SECURITY_HEADERS_DISABLED) {
+  app.use((req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    if (CONTENT_SECURITY_POLICY) {
+      res.setHeader("Content-Security-Policy", CONTENT_SECURITY_POLICY);
+    }
+    if ((requestIsSecure(req) || FORCE_HTTPS) && HSTS_MAX_AGE > 0) {
+      const directives = [`max-age=${HSTS_MAX_AGE}`];
+      if (HSTS_INCLUDE_SUBDOMAINS) directives.push("includeSubDomains");
+      if (HSTS_PRELOAD) directives.push("preload");
+      res.setHeader("Strict-Transport-Security", directives.join("; "));
+    }
+    return next();
   });
 }
 
@@ -358,7 +378,7 @@ app.use(
   "/uploads",
   express.static(uploadRoot, {
     setHeaders: (res, filePath) => {
-      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
       res.setHeader("Pragma", "no-cache");
       res.setHeader("Expires", "0");
       res.setHeader("X-Content-Type-Options", "nosniff");
@@ -463,6 +483,13 @@ function parseHttpMethodList(value, fallback) {
   return items.length ? Array.from(new Set(items)) : fallback;
 }
 
+function parseHstsMaxAge(value, fallback) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return Math.floor(parsed);
+}
+
 function normalizeTimestampInput(value) {
   if (value === null || value === undefined || value === "") return null;
   const parsed = new Date(value);
@@ -477,6 +504,24 @@ function parseBoolean(value) {
   if (["true", "1", "yes", "y", "on"].includes(raw)) return true;
   if (["false", "0", "no", "n", "off"].includes(raw)) return false;
   return null;
+}
+
+function buildCspHeaderValue(value) {
+  const raw = String(value || "").trim();
+  if (raw) return raw;
+  const directives = [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'self'",
+    "img-src 'self' data: blob: https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.googleapis.com https://*.gstatic.com",
+    "font-src 'self' https://fonts.gstatic.com https://*.gstatic.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://esm.sh https://cdn.esm.sh https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.gstatic.com",
+    "connect-src 'self' https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.gstatic.com https://esm.sh https://cdn.esm.sh",
+    "worker-src 'self' blob:",
+  ];
+  return directives.join("; ");
 }
 
 function extractPickupLineItemIdFromDocNumber(value) {
@@ -1309,7 +1354,7 @@ async function searchWithNominatimResult(query, limit = 6) {
 
 app.use("/api", apiLimiter);
 app.use("/api", (req, res, next) => {
-  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
   next();
@@ -1457,9 +1502,8 @@ app.post(
     const email = String(body.email || "").trim();
     const password = String(body.password || "");
     if (!name || !email || !password) return res.status(400).json({ error: "name, email, and password are required." });
-    if (password.length < MIN_PASSWORD_LENGTH) {
-      return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
-    }
+    const passwordError = getPasswordValidationError(password);
+    if (passwordError) return res.status(400).json({ error: passwordError });
 
     const created = await createCustomerAccount({ name, email, password });
     let customerForResponse = created;
@@ -1943,9 +1987,8 @@ app.post(
       canChargeDeposit: parsedDeposit === null ? null : parsedDeposit,
       documents,
     };
-    if (payload.password.length < MIN_PASSWORD_LENGTH) {
-      return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
-    }
+    const passwordError = getPasswordValidationError(payload.password);
+    if (passwordError) return res.status(400).json({ error: passwordError });
 
     const created = await createStorefrontCustomer(payload);
     const session = await authenticateStorefrontCustomer({ companyId, email: payload.email, password: payload.password });
@@ -2568,9 +2611,8 @@ app.post(
     if (!companyName || !contactEmail || !ownerName || !ownerEmail || !password) {
       return res.status(400).json({ error: "companyName, contactEmail, ownerName, ownerEmail, and password are required." });
     }
-    if (String(password || "").length < MIN_PASSWORD_LENGTH) {
-      return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
-    }
+    const passwordError = getPasswordValidationError(password);
+    if (passwordError) return res.status(400).json({ error: passwordError });
     const result = await createCompanyWithUser({
       companyName,
       contactEmail,
@@ -2589,9 +2631,8 @@ app.post(
     if (!companyId || !name || !email || !password) {
       return res.status(400).json({ error: "companyId, name, email, and password are required." });
     }
-    if (String(password || "").length < MIN_PASSWORD_LENGTH) {
-      return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
-    }
+    const passwordError = getPasswordValidationError(password);
+    if (passwordError) return res.status(400).json({ error: passwordError });
     const user = await createUser({ companyId, name, email, role, password });
     res.status(201).json(user);
   })

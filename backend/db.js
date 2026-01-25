@@ -8,6 +8,28 @@ const pool = new Pool({
 const LEGACY_SHA256_RE = /^[a-f0-9]{64}$/i;
 const PASSWORD_V2_PREFIX = "s2$";
 const MIN_PASSWORD_LENGTH = 8;
+const PASSWORD_LETTER_RE = /[A-Za-z]/;
+const PASSWORD_NUMBER_RE = /\d/;
+
+function getPasswordValidationError(password) {
+  const cleanPassword = String(password || "");
+  if (!cleanPassword) return "password is required.";
+  if (cleanPassword.length < MIN_PASSWORD_LENGTH) {
+    return `password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+  }
+  if (!PASSWORD_LETTER_RE.test(cleanPassword)) {
+    return "password must include at least one letter.";
+  }
+  if (!PASSWORD_NUMBER_RE.test(cleanPassword)) {
+    return "password must include at least one number.";
+  }
+  return null;
+}
+
+function assertValidPassword(password) {
+  const error = getPasswordValidationError(password);
+  if (error) throw new Error(error);
+}
 
 function hashLegacySha256(password) {
   return crypto.createHash("sha256").update(String(password || "")).digest("hex");
@@ -68,6 +90,16 @@ const QBO_TOKEN_ENC_PREFIX = "enc:v1:";
 let cachedQboTokenKey = null;
 let cachedQboTokenKeyLoaded = false;
 
+function normalizeQboRealmId(value) {
+  return String(value || "").trim();
+}
+
+function hashQboRealmId(value) {
+  const raw = normalizeQboRealmId(value);
+  if (!raw) return null;
+  return hashToken(raw);
+}
+
 function parseQboTokenKey(raw) {
   const clean = String(raw || "").trim();
   if (!clean) return null;
@@ -123,6 +155,36 @@ function decryptQboTokenValue(value) {
   decipher.setAuthTag(tag);
   const plaintext = Buffer.concat([decipher.update(data), decipher.final()]);
   return plaintext.toString("utf8");
+}
+
+async function backfillQboRealmHashes(client) {
+  if (!client) return;
+  let rows;
+  try {
+    const res = await client.query(
+      `SELECT company_id, realm_id, realm_id_hash FROM qbo_connections WHERE realm_id_hash IS NULL OR realm_id_hash = ''`
+    );
+    rows = res.rows || [];
+  } catch {
+    return;
+  }
+  if (!rows.length) return;
+
+  for (const row of rows) {
+    let decrypted = "";
+    try {
+      decrypted = decryptQboTokenValue(row.realm_id);
+    } catch {
+      continue;
+    }
+    if (!decrypted) continue;
+    const hash = hashToken(decrypted);
+    if (!hash) continue;
+    await client.query(`UPDATE qbo_connections SET realm_id_hash = $1 WHERE company_id = $2`, [
+      hash,
+      row.company_id,
+    ]);
+  }
 }
 
 function normalizeEmail(value) {
@@ -992,6 +1054,7 @@ async function ensureTables() {
       CREATE TABLE IF NOT EXISTS qbo_connections (
         company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
         realm_id TEXT NOT NULL,
+        realm_id_hash TEXT,
         access_token TEXT NOT NULL,
         refresh_token TEXT NOT NULL,
         access_token_expires_at TIMESTAMPTZ,
@@ -1002,6 +1065,9 @@ async function ensureTables() {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    await client.query(`ALTER TABLE qbo_connections ADD COLUMN IF NOT EXISTS realm_id_hash TEXT;`);
+    await client.query(`CREATE INDEX IF NOT EXISTS qbo_connections_realm_hash_idx ON qbo_connections (realm_id_hash);`);
+    await backfillQboRealmHashes(client);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS qbo_documents (
@@ -1401,10 +1467,7 @@ async function createCompanyWithUser({ companyName, contactEmail, ownerName, own
     if (!cleanContactEmail) throw new Error("contactEmail is required.");
     if (!cleanOwnerName) throw new Error("ownerName is required.");
     if (!cleanOwnerEmail) throw new Error("ownerEmail is required.");
-    if (!cleanPassword) throw new Error("password is required.");
-    if (cleanPassword.length < MIN_PASSWORD_LENGTH) {
-      throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
-    }
+    assertValidPassword(cleanPassword);
 
     const companyResult = await client.query(
       `INSERT INTO companies (name, contact_email) VALUES ($1, $2) RETURNING id, name`,
@@ -1442,10 +1505,7 @@ async function createUser({ companyId, name, email, role = "member", password })
     if (!companyId) throw new Error("companyId is required.");
     if (!cleanName) throw new Error("name is required.");
     if (!cleanEmail) throw new Error("email is required.");
-    if (!cleanPassword) throw new Error("password is required.");
-    if (cleanPassword.length < MIN_PASSWORD_LENGTH) {
-      throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
-    }
+    assertValidPassword(cleanPassword);
   
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1`, [cleanEmail]);
     if (existing.rows?.[0]?.id) throw new Error("An account already exists with that email.");
@@ -10246,9 +10306,7 @@ async function createStorefrontCustomer({
   const cleanName = String(name || "").trim();
   if (!cleanName) throw new Error("name is required.");
   const cleanPassword = String(password || "");
-  if (!cleanPassword || cleanPassword.length < MIN_PASSWORD_LENGTH) {
-    throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
-  }
+  assertValidPassword(cleanPassword);
 
     const existing = await pool.query(
       `SELECT id FROM storefront_customers WHERE LOWER(email) = $1 LIMIT 1`,
@@ -10642,9 +10700,7 @@ async function createCustomerAccount({
   const cleanName = String(name || "").trim();
   if (!cleanName) throw new Error("name is required.");
   const cleanPassword = String(password || "");
-  if (!cleanPassword || cleanPassword.length < MIN_PASSWORD_LENGTH) {
-    throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
-  }
+  assertValidPassword(cleanPassword);
 
   const existing = await pool.query(`SELECT id FROM customer_accounts WHERE LOWER(email) = $1 LIMIT 1`, [cleanEmail]);
   if (existing.rows?.[0]?.id) throw new Error("An account already exists with that email.");
@@ -11498,21 +11554,52 @@ async function getQboConnection({ companyId } = {}) {
   if (!row) return null;
   return {
     ...row,
+    realm_id: decryptQboTokenValue(row.realm_id),
     access_token: decryptQboTokenValue(row.access_token),
     refresh_token: decryptQboTokenValue(row.refresh_token),
   };
 }
 
 async function findCompanyIdByQboRealmId({ realmId } = {}) {
-  const raw = String(realmId || "").trim();
+  const raw = normalizeQboRealmId(realmId);
   if (!raw) return null;
-  const res = await pool.query(
+  const realmHash = hashQboRealmId(raw);
+  if (realmHash) {
+    const res = await pool.query(
+      `SELECT company_id FROM qbo_connections WHERE realm_id_hash = $1 LIMIT 1`,
+      [realmHash]
+    );
+    const row = res.rows?.[0] || null;
+    if (row?.company_id) return Number(row.company_id);
+  }
+  const legacy = await pool.query(
     `SELECT company_id FROM qbo_connections WHERE realm_id = $1 LIMIT 1`,
     [raw]
   );
-  const row = res.rows?.[0] || null;
-  if (!row?.company_id) return null;
-  return Number(row.company_id);
+  const legacyRow = legacy.rows?.[0] || null;
+  if (legacyRow?.company_id) return Number(legacyRow.company_id);
+
+  const missingHash = await pool.query(
+    `SELECT company_id, realm_id FROM qbo_connections WHERE realm_id_hash IS NULL OR realm_id_hash = ''`
+  );
+  for (const row of missingHash.rows || []) {
+    let decrypted = "";
+    try {
+      decrypted = decryptQboTokenValue(row.realm_id);
+    } catch {
+      continue;
+    }
+    if (decrypted !== raw) continue;
+    if (realmHash) {
+      await pool.query(`UPDATE qbo_connections SET realm_id_hash = $1 WHERE company_id = $2`, [
+        realmHash,
+        row.company_id,
+      ]);
+    }
+    return Number(row.company_id);
+  }
+
+  return null;
 }
 
 async function upsertQboConnection({
@@ -11527,15 +11614,19 @@ async function upsertQboConnection({
 } = {}) {
   const cid = Number(companyId);
   if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const cleanRealmId = normalizeQboRealmId(realmId);
+  const encryptedRealmId = encryptQboTokenValue(cleanRealmId);
+  const realmIdHash = hashQboRealmId(cleanRealmId);
   const encryptedAccessToken = encryptQboTokenValue(accessToken);
   const encryptedRefreshToken = encryptQboTokenValue(refreshToken);
   const res = await pool.query(
     `
     INSERT INTO qbo_connections
-      (company_id, realm_id, access_token, refresh_token, access_token_expires_at, refresh_token_expires_at, scope, token_type)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      (company_id, realm_id, realm_id_hash, access_token, refresh_token, access_token_expires_at, refresh_token_expires_at, scope, token_type)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     ON CONFLICT (company_id)
     DO UPDATE SET realm_id = EXCLUDED.realm_id,
+                  realm_id_hash = EXCLUDED.realm_id_hash,
                   access_token = EXCLUDED.access_token,
                   refresh_token = EXCLUDED.refresh_token,
                   access_token_expires_at = EXCLUDED.access_token_expires_at,
@@ -11547,7 +11638,8 @@ async function upsertQboConnection({
     `,
     [
       cid,
-      String(realmId || "").trim(),
+      encryptedRealmId,
+      realmIdHash,
       encryptedAccessToken,
       encryptedRefreshToken,
       accessTokenExpiresAt ? normalizeTimestamptz(accessTokenExpiresAt) : null,
@@ -11556,7 +11648,14 @@ async function upsertQboConnection({
       tokenType ? String(tokenType) : null,
     ]
   );
-  return res.rows[0] || null;
+  const row = res.rows[0] || null;
+  if (!row) return null;
+  return {
+    ...row,
+    realm_id: decryptQboTokenValue(row.realm_id),
+    access_token: decryptQboTokenValue(row.access_token),
+    refresh_token: decryptQboTokenValue(row.refresh_token),
+  };
 }
 
 async function deleteQboConnection({ companyId } = {}) {
@@ -12119,4 +12218,5 @@ module.exports = {
   getSalespersonClosedTransactionsTimeSeries,
   getLocationClosedTransactionsTimeSeries,
   getLocationTypeStockSummary,
+  getPasswordValidationError,
 };

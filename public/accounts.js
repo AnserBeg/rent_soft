@@ -18,6 +18,44 @@ function getFormData(form) {
   return Object.fromEntries(data.entries());
 }
 
+function renderHintRow(tbody, text) {
+  if (!tbody) return;
+  const row = document.createElement("tr");
+  const cell = document.createElement("td");
+  cell.colSpan = 4;
+  cell.className = "hint";
+  cell.textContent = text || "";
+  row.appendChild(cell);
+  tbody.replaceChildren(row);
+}
+
+function renderUsers(tbody, users) {
+  if (!tbody) return;
+  const frag = document.createDocumentFragment();
+  users.forEach((u) => {
+    const row = document.createElement("tr");
+
+    const nameCell = document.createElement("td");
+    nameCell.textContent = u?.name ? String(u.name) : "";
+    row.appendChild(nameCell);
+
+    const emailCell = document.createElement("td");
+    emailCell.textContent = u?.email ? String(u.email) : "";
+    row.appendChild(emailCell);
+
+    const roleCell = document.createElement("td");
+    roleCell.textContent = u?.role ? String(u.role) : "";
+    row.appendChild(roleCell);
+
+    const createdCell = document.createElement("td");
+    createdCell.textContent = formatDate(u?.created_at);
+    row.appendChild(createdCell);
+
+    frag.appendChild(row);
+  });
+  tbody.replaceChildren(frag);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const companyMeta = $("company-meta");
   const form = $("user-form");
@@ -32,27 +70,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function loadUsers() {
     if (!activeCompanyId || !tbody) return;
-    tbody.innerHTML = `<tr><td colspan="4" class="hint">Loading…</td></tr>`;
+    renderHintRow(tbody, "Loading...");
     const res = await fetch(`/api/users?companyId=${activeCompanyId}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to load users.");
     const users = Array.isArray(data.users) ? data.users : [];
     if (!users.length) {
-      tbody.innerHTML = `<tr><td colspan="4" class="hint">No users yet.</td></tr>`;
+      renderHintRow(tbody, "No users yet.");
       return;
     }
-    tbody.innerHTML = users
-      .map(
-        (u) => `
-        <tr>
-          <td>${String(u.name || "")}</td>
-          <td>${String(u.email || "")}</td>
-          <td>${String(u.role || "")}</td>
-          <td>${formatDate(u.created_at)}</td>
-        </tr>
-      `
-      )
-      .join("");
+    renderUsers(tbody, users);
   }
 
   form?.addEventListener("submit", async (e) => {
@@ -80,4 +107,3 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (activeCompanyId) loadUsers().catch((err) => setMeta(meta, err.message));
 });
-
