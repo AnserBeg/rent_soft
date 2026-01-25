@@ -200,6 +200,14 @@ const ALLOWED_HTTP_METHODS = parseHttpMethodList(process.env.ALLOWED_HTTP_METHOD
 const ALLOWED_REDIRECT_HOSTS = parseStringArray(process.env.ALLOWED_REDIRECT_HOSTS).map((h) =>
   String(h || "").trim().toLowerCase()
 );
+const DEFAULT_QBO_REDIRECT_PATHS = ["/settings.html", "/customers.html", "/invoices.html", "/qbo-customers.html"];
+const QBO_ALLOWED_REDIRECT_PATHS = parseStringArray(process.env.QBO_ALLOWED_REDIRECT_PATHS);
+const QBO_ALLOWED_REDIRECTS = new Set(
+  (QBO_ALLOWED_REDIRECT_PATHS.length ? QBO_ALLOWED_REDIRECT_PATHS : DEFAULT_QBO_REDIRECT_PATHS)
+    .map((entry) => normalizeInternalRedirectPath(entry))
+    .filter(Boolean)
+    .map((entry) => entry.split(/[?#]/)[0])
+);
 if (TRUST_PROXY) {
   app.set("trust proxy", 1);
 }
@@ -210,6 +218,26 @@ function isAllowedRedirectHost(host) {
   if (!/^[a-z0-9.-]+(?::\d+)?$/.test(clean)) return false;
   if (!ALLOWED_REDIRECT_HOSTS.length) return false;
   return ALLOWED_REDIRECT_HOSTS.includes(clean);
+}
+
+function normalizeInternalRedirectPath(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (/[\u0000-\u001F\u007F]/.test(raw)) return null;
+  if (raw.startsWith("//") || raw.startsWith("\\") || raw.includes("://")) return null;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return null;
+  if (raw.includes("\\")) return null;
+  let normalized = raw.startsWith("/") ? raw : `/${raw}`;
+  if (normalized.startsWith("//")) return null;
+  return normalized;
+}
+
+function sanitizeInternalRedirect(value) {
+  const normalized = normalizeInternalRedirectPath(value);
+  if (!normalized) return null;
+  const pathOnly = normalized.split(/[?#]/)[0];
+  if (QBO_ALLOWED_REDIRECTS.size && !QBO_ALLOWED_REDIRECTS.has(pathOnly)) return null;
+  return normalized;
 }
 
 function requestIsSecure(req) {
@@ -3642,8 +3670,9 @@ app.get(
     if (!config.clientId || !config.redirectUri) {
       return res.status(400).json({ error: "QBO_CLIENT_ID and QBO_REDIRECT_URI are required." });
     }
+    const safeRedirect = sanitizeInternalRedirect(redirect);
     const state = Buffer.from(
-      JSON.stringify({ companyId, ts: Date.now(), redirect: redirect ? String(redirect) : null })
+      JSON.stringify({ companyId, ts: Date.now(), redirect: safeRedirect })
     ).toString("base64url");
     const url = buildAuthUrl({
       clientId: config.clientId,
@@ -3666,7 +3695,7 @@ app.get(
       try {
         const parsed = JSON.parse(Buffer.from(String(state), "base64url").toString("utf8"));
         if (parsed?.companyId) companyId = Number(parsed.companyId);
-        if (parsed?.redirect) redirectTo = String(parsed.redirect);
+        if (parsed?.redirect) redirectTo = sanitizeInternalRedirect(parsed.redirect);
       } catch {
         companyId = null;
       }
