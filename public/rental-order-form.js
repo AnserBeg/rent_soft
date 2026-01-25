@@ -2278,11 +2278,28 @@ function renderAttachments(list) {
     const div = document.createElement("div");
     div.className = "attachment-row";
     div.dataset.attachmentId = a.id;
-    div.innerHTML = `
-      <a href="${a.url}" target="_blank" rel="noopener">${a.file_name}</a>
-      <span class="hint">${a.mime || ""}${a.size_bytes ? ` - ${Math.round(a.size_bytes / 1024)} KB` : ""}</span>
-      <button class="ghost small danger" data-remove-attachment="${a.id}" data-url="${a.url}">Remove</button>
-    `;
+
+    const link = document.createElement("a");
+    link.href = String(a.url || "");
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = String(a.file_name || "");
+    div.appendChild(link);
+
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    const sizeText = a.size_bytes ? ` - ${Math.round(a.size_bytes / 1024)} KB` : "";
+    hint.textContent = `${a.mime || ""}${sizeText}`;
+    div.appendChild(hint);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "ghost small danger";
+    removeBtn.dataset.removeAttachment = String(a.id || "");
+    removeBtn.dataset.url = String(a.url || "");
+    removeBtn.textContent = "Remove";
+    div.appendChild(removeBtn);
+
     attachmentsList.appendChild(div);
   });
 
@@ -2292,7 +2309,6 @@ function renderAttachments(list) {
     extrasFilesBadge.style.display = count > 0 ? "inline-flex" : "none";
   }
 }
-
 
 async function createGeneralNotesAttachment({ url, fileName, mime, sizeBytes }) {
   if (!editingOrderId) throw new Error("Save the RO first to enable uploads.");
@@ -5056,3 +5072,4 @@ function init() {
 }
 
 init();
+

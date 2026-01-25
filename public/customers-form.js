@@ -338,11 +338,28 @@ function renderCustomerDocuments() {
     const div = document.createElement("div");
     div.className = "attachment-row";
     div.dataset.documentId = d.id;
-    div.innerHTML = `
-      <a href="${d.url}" target="_blank" rel="noopener">${d.file_name}</a>
-      <span class="hint">${d.mime || ""}${d.size_bytes ? ` • ${Math.round(d.size_bytes / 1024)} KB` : ""}</span>
-      <button class="ghost small danger" data-remove-document="${d.id}" data-url="${d.url}">Remove</button>
-    `;
+
+    const link = document.createElement("a");
+    link.href = String(d.url || "");
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = String(d.file_name || "");
+    div.appendChild(link);
+
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    const sizeText = d.size_bytes ? ` • ${Math.round(d.size_bytes / 1024)} KB` : "";
+    hint.textContent = `${d.mime || ""}${sizeText}`;
+    div.appendChild(hint);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "ghost small danger";
+    removeBtn.dataset.removeDocument = String(d.id || "");
+    removeBtn.dataset.url = String(d.url || "");
+    removeBtn.textContent = "Remove";
+    div.appendChild(removeBtn);
+
     customerDocumentsList?.appendChild(div);
   });
 
@@ -357,11 +374,24 @@ function renderCustomerDocuments() {
   storefrontRows.forEach((d) => {
     const div = document.createElement("div");
     div.className = "attachment-row";
-    div.innerHTML = `
-      <a href="${d.url}" target="_blank" rel="noopener">${d.fileName || d.key}</a>
-      <span class="hint">${d.key}${d.mime ? ` • ${d.mime}` : ""}${d.sizeBytes ? ` • ${Math.round(Number(d.sizeBytes) / 1024)} KB` : ""}</span>
-      <span></span>
-    `;
+
+    const link = document.createElement("a");
+    link.href = String(d.url || "");
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = String(d.fileName || d.key || "");
+    div.appendChild(link);
+
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    const mimeText = d.mime ? ` • ${d.mime}` : "";
+    const sizeText = d.sizeBytes ? ` • ${Math.round(Number(d.sizeBytes) / 1024)} KB` : "";
+    hint.textContent = `${d.key || ""}${mimeText}${sizeText}`;
+    div.appendChild(hint);
+
+    const spacer = document.createElement("span");
+    div.appendChild(spacer);
+
     customerStorefrontDocumentsList?.appendChild(div);
   });
 
@@ -391,10 +421,24 @@ function renderCustomerVerification() {
     extrasCardBadge.style.display = cardOk ? "inline-flex" : "none";
   }
 
-  const rows = [];
-  rows.push(`<div class="detail-item"><div class="detail-label">Credit card</div><div class="detail-value">${cardOk ? `On file${last4 ? ` (•••• ${last4})` : ""}` : "Not on file"}</div></div>`);
-  rows.push(`<div class="detail-item"><div class="detail-label">Storefront account</div><div class="detail-value">${sf ? (email || `Customer #${sf.storefrontCustomerId}`) : "Not linked"}</div></div>`);
-  customerVerificationPanel.innerHTML = rows.join("");
+  customerVerificationPanel.replaceChildren();
+  const addRow = (label, value) => {
+    const row = document.createElement("div");
+    row.className = "detail-item";
+    const labelEl = document.createElement("div");
+    labelEl.className = "detail-label";
+    labelEl.textContent = String(label);
+    const valueEl = document.createElement("div");
+    valueEl.className = "detail-value";
+    valueEl.textContent = String(value || "");
+    row.append(labelEl, valueEl);
+    customerVerificationPanel.appendChild(row);
+  };
+
+  const cardText = cardOk ? `On file${last4 ? ` (•••• ${last4})` : ""}` : "Not on file";
+  const accountText = sf ? (email || `Customer #${sf.storefrontCustomerId}`) : "Not linked";
+  addRow("Credit card", cardText);
+  addRow("Storefront account", accountText);
 }
 
 async function loadCustomerExtras() {
@@ -437,16 +481,37 @@ function renderPricing() {
     const div = document.createElement("div");
     div.className = "table-row";
     div.dataset.typeId = row.type_id;
-    const actionCell = row.is_inherited
-      ? `<span class="hint">Inherited</span>`
-      : `<button class="ghost small" data-remove="${row.type_id}">Remove</button>`;
-    div.innerHTML = `
-      <span>${row.type_name || "--"}</span>
-      <span>${fmt(row.daily_rate)}</span>
-      <span>${fmt(row.weekly_rate)}</span>
-      <span>${fmt(row.monthly_rate)}</span>
-      ${actionCell}
-    `;
+
+    const typeSpan = document.createElement("span");
+    typeSpan.textContent = row.type_name || "--";
+    div.appendChild(typeSpan);
+
+    const dailySpan = document.createElement("span");
+    dailySpan.textContent = fmt(row.daily_rate);
+    div.appendChild(dailySpan);
+
+    const weeklySpan = document.createElement("span");
+    weeklySpan.textContent = fmt(row.weekly_rate);
+    div.appendChild(weeklySpan);
+
+    const monthlySpan = document.createElement("span");
+    monthlySpan.textContent = fmt(row.monthly_rate);
+    div.appendChild(monthlySpan);
+
+    if (row.is_inherited) {
+      const hint = document.createElement("span");
+      hint.className = "hint";
+      hint.textContent = "Inherited";
+      div.appendChild(hint);
+    } else {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "ghost small";
+      btn.dataset.remove = String(row.type_id || "");
+      btn.textContent = "Remove";
+      div.appendChild(btn);
+    }
+
     pricingTable.appendChild(div);
   });
 }
@@ -894,3 +959,4 @@ if (activeCompanyId) {
 } else {
   companyMeta.textContent = "Log in to continue.";
 }
+
