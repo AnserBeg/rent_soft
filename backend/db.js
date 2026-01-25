@@ -63,6 +63,67 @@ function hashPassword(password) {
 const hashToken = (value) =>
   crypto.createHash("sha256").update(String(value || "")).digest("hex");
 
+const QBO_TOKEN_ENC_PREFIX = "enc:v1:";
+let cachedQboTokenKey = null;
+let cachedQboTokenKeyLoaded = false;
+
+function parseQboTokenKey(raw) {
+  const clean = String(raw || "").trim();
+  if (!clean) return null;
+  if (/^[a-f0-9]{64}$/i.test(clean)) return Buffer.from(clean, "hex");
+  try {
+    const buf = Buffer.from(clean, "base64");
+    if (buf.length === 32) return buf;
+  } catch {
+    // Fall through.
+  }
+  if (Buffer.byteLength(clean, "utf8") === 32) return Buffer.from(clean, "utf8");
+  return null;
+}
+
+function getQboTokenKey() {
+  if (cachedQboTokenKeyLoaded) return cachedQboTokenKey;
+  cachedQboTokenKeyLoaded = true;
+  cachedQboTokenKey = parseQboTokenKey(process.env.QBO_TOKEN_ENCRYPTION_KEY);
+  return cachedQboTokenKey;
+}
+
+function encryptQboTokenValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith(QBO_TOKEN_ENC_PREFIX)) return raw;
+  const key = getQboTokenKey();
+  if (!key) {
+    throw new Error("QBO_TOKEN_ENCRYPTION_KEY is required to encrypt QBO tokens.");
+  }
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(raw, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${QBO_TOKEN_ENC_PREFIX}${iv.toString("base64")}.${tag.toString("base64")}.${ciphertext.toString("base64")}`;
+}
+
+function decryptQboTokenValue(value) {
+  const raw = String(value || "");
+  if (!raw) return "";
+  if (!raw.startsWith(QBO_TOKEN_ENC_PREFIX)) return raw;
+  const key = getQboTokenKey();
+  if (!key) {
+    throw new Error("QBO_TOKEN_ENCRYPTION_KEY is required to decrypt QBO tokens.");
+  }
+  const payload = raw.slice(QBO_TOKEN_ENC_PREFIX.length);
+  const parts = payload.split(".");
+  if (parts.length !== 3) throw new Error("Invalid encrypted QBO token format.");
+  const [ivB64, tagB64, dataB64] = parts;
+  const iv = Buffer.from(ivB64, "base64");
+  const tag = Buffer.from(tagB64, "base64");
+  const data = Buffer.from(dataB64, "base64");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+  const plaintext = Buffer.concat([decipher.update(data), decipher.final()]);
+  return plaintext.toString("utf8");
+}
+
 function normalizeEmail(value) {
   const clean = String(value || "").trim().toLowerCase();
   return clean || null;
@@ -11420,7 +11481,13 @@ async function getQboConnection({ companyId } = {}) {
     `,
     [cid]
   );
-  return res.rows[0] || null;
+  const row = res.rows[0] || null;
+  if (!row) return null;
+  return {
+    ...row,
+    access_token: decryptQboTokenValue(row.access_token),
+    refresh_token: decryptQboTokenValue(row.refresh_token),
+  };
 }
 
 async function findCompanyIdByQboRealmId({ realmId } = {}) {
@@ -11447,6 +11514,8 @@ async function upsertQboConnection({
 } = {}) {
   const cid = Number(companyId);
   if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const encryptedAccessToken = encryptQboTokenValue(accessToken);
+  const encryptedRefreshToken = encryptQboTokenValue(refreshToken);
   const res = await pool.query(
     `
     INSERT INTO qbo_connections
@@ -11466,8 +11535,8 @@ async function upsertQboConnection({
     [
       cid,
       String(realmId || "").trim(),
-      String(accessToken || "").trim(),
-      String(refreshToken || "").trim(),
+      encryptedAccessToken,
+      encryptedRefreshToken,
       accessTokenExpiresAt ? normalizeTimestamptz(accessTokenExpiresAt) : null,
       refreshTokenExpiresAt ? normalizeTimestamptz(refreshTokenExpiresAt) : null,
       scope ? String(scope) : null,
