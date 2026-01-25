@@ -197,8 +197,19 @@ const ALLOWED_HTTP_METHODS = parseHttpMethodList(process.env.ALLOWED_HTTP_METHOD
   "DELETE",
   "OPTIONS",
 ]);
+const ALLOWED_REDIRECT_HOSTS = parseStringArray(process.env.ALLOWED_REDIRECT_HOSTS).map((h) =>
+  String(h || "").trim().toLowerCase()
+);
 if (TRUST_PROXY) {
   app.set("trust proxy", 1);
+}
+
+function isAllowedRedirectHost(host) {
+  const clean = String(host || "").trim().toLowerCase();
+  if (!clean) return false;
+  if (!/^[a-z0-9.-]+(?::\d+)?$/.test(clean)) return false;
+  if (!ALLOWED_REDIRECT_HOSTS.length) return false;
+  return ALLOWED_REDIRECT_HOSTS.includes(clean);
 }
 
 function requestIsSecure(req) {
@@ -212,7 +223,7 @@ if (FORCE_HTTPS) {
   app.use((req, res, next) => {
     if (requestIsSecure(req)) return next();
     const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").trim();
-    if (!host) return res.status(400).send("Bad Request");
+    if (!isAllowedRedirectHost(host)) return res.status(400).send("Bad Request");
     return res.redirect(308, `https://${host}${req.originalUrl}`);
   });
 }
@@ -234,6 +245,9 @@ app.use(
     },
   })
 );
+
+const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
 app.use((req, res, next) => {
   if (req.method !== "GET" && req.method !== "HEAD") return next();
 
@@ -284,10 +298,49 @@ app.use((req, res, next) => {
 if (fs.existsSync(spaRoot)) {
   app.use(express.static(spaRoot));
 }
-app.use("/uploads", express.static(uploadRoot));
-app.use(express.static(publicRoot));
+app.use(
+  "/uploads",
+  asyncHandler(async (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.setHeader("Allow", "GET, HEAD");
+      return res.status(405).send("Method not allowed.");
+    }
 
-const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+    const { token } = getCompanyUserToken(req);
+    if (token) {
+      const session = await getCompanyUserByToken(token);
+      if (session) return next();
+    }
+
+    const authHeader = String(req.headers.authorization || "").trim();
+    const bearer = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+    if (bearer) {
+      const account = await getCustomerAccountByToken(bearer);
+      if (account) return next();
+      const storefront = await getStorefrontCustomerByToken(bearer);
+      if (storefront) return next();
+    }
+
+    return res.status(401).send("Login required.");
+  })
+);
+app.use(
+  "/uploads",
+  express.static(uploadRoot, {
+    setHeaders: (res, filePath) => {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      const ext = path.extname(filePath).toLowerCase();
+      const inline = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf"]);
+      if (!inline.has(ext)) {
+        res.setHeader("Content-Disposition", "attachment");
+      }
+    },
+  })
+);
+app.use(express.static(publicRoot));
 
 function parseRateLimitMs(value, fallback) {
   const parsed = Number(value);
@@ -641,16 +694,7 @@ function normalizeSubmissionId(value) {
 
   const match = raw.match(UUID_RE);
   if (match) return match[0];
-
-  if (raw.includes(",")) {
-    const first = raw
-      .split(",")
-      .map((part) => part.trim())
-      .find(Boolean);
-    return first || raw;
-  }
-
-  return raw;
+  return "";
 }
 
 function getOrCreateUploadSubmissionId(req) {
@@ -658,6 +702,12 @@ function getOrCreateUploadSubmissionId(req) {
   const normalized = normalizeSubmissionId(req.body?.submissionId);
   req._uploadSubmissionId = normalized || crypto.randomUUID();
   return req._uploadSubmissionId;
+}
+
+function normalizeCompanyId(value) {
+  const cid = Number(value);
+  if (!Number.isFinite(cid) || cid <= 0) return null;
+  return String(Math.trunc(cid));
 }
 
 const COMPANY_SESSION_COOKIE = "rentSoft.cu";
@@ -1756,7 +1806,7 @@ app.post(
     });
   },
   asyncHandler(async (req, res) => {
-    const companyId = String(req.body.companyId || "").trim();
+    const companyId = normalizeCompanyId(req.body.companyId);
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
 
     const submissionId = normalizeSubmissionId(req._uploadSubmissionId || req.body.submissionId);
@@ -1974,7 +2024,7 @@ function imageExtensionForMime(mime) {
 }
 
 function resolveCompanyUploadPath({ companyId, url, allowFiles = false }) {
-  const cid = String(companyId || "").trim();
+  const cid = normalizeCompanyId(companyId);
   const raw = String(url || "").trim();
   if (!cid || !raw) return null;
   const base = `/uploads/company-${cid}/`;
@@ -2013,12 +2063,48 @@ async function resolvePdfCompatibleImagePath(fullPath) {
   }
 }
 
+const BLOCKED_UPLOAD_MIMES = new Set([
+  "text/html",
+  "application/xhtml+xml",
+  "application/javascript",
+  "text/javascript",
+  "application/x-javascript",
+  "image/svg+xml",
+]);
+
+const BLOCKED_UPLOAD_EXTENSIONS = new Set([
+  ".html",
+  ".htm",
+  ".xhtml",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".svg",
+  ".svgz",
+]);
+
+function rejectUnsafeUpload(file) {
+  const mime = String(file?.mimetype || "").toLowerCase();
+  if (mime && BLOCKED_UPLOAD_MIMES.has(mime)) return true;
+  const ext = path.extname(String(file?.originalname || "")).toLowerCase();
+  return !!(ext && BLOCKED_UPLOAD_EXTENSIONS.has(ext));
+}
+
+function safeUploadPath(...parts) {
+  const full = path.resolve(uploadRoot, ...parts);
+  const rel = path.relative(uploadRoot, full);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  return full;
+}
+
 const imageUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
-      const companyId = String(req.body.companyId || "").trim();
+      const companyId = normalizeCompanyId(req.body.companyId);
       if (!companyId) return cb(new Error("companyId is required."));
-      const dir = path.join(uploadRoot, `company-${companyId}`);
+      req.body.companyId = companyId;
+      const dir = safeUploadPath(`company-${companyId}`);
+      if (!dir) return cb(new Error("Invalid upload path."));
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
@@ -2040,9 +2126,11 @@ const imageUpload = multer({
 const fileUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
-      const companyId = String(req.body.companyId || "").trim();
+      const companyId = normalizeCompanyId(req.body.companyId);
       if (!companyId) return cb(new Error("companyId is required."));
-      const dir = path.join(uploadRoot, `company-${companyId}`, "files");
+      req.body.companyId = companyId;
+      const dir = safeUploadPath(`company-${companyId}`, "files");
+      if (!dir) return cb(new Error("Invalid upload path."));
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
@@ -2053,16 +2141,22 @@ const fileUpload = multer({
     },
   }),
   limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (rejectUnsafeUpload(file)) return cb(new Error("File type is not allowed."));
+    cb(null, true);
+  },
 });
 
 const storefrontSignupUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
-      const companyId = String(req.body.companyId || "").trim();
+      const companyId = normalizeCompanyId(req.body.companyId);
       if (!companyId) return cb(new Error("companyId is required."));
+      req.body.companyId = companyId;
       const submissionId = getOrCreateUploadSubmissionId(req);
       req.body.submissionId = submissionId;
-      const dir = path.join(uploadRoot, "storefront", `company-${companyId}`, `customer-signup-${submissionId}`);
+      const dir = safeUploadPath("storefront", `company-${companyId}`, `customer-signup-${submissionId}`);
+      if (!dir) return cb(new Error("Invalid upload path."));
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
@@ -2073,16 +2167,22 @@ const storefrontSignupUpload = multer({
     },
   }),
   limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (rejectUnsafeUpload(file)) return cb(new Error("File type is not allowed."));
+    cb(null, true);
+  },
 });
 
 const storefrontCustomerProfileUpload = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => {
-      const companyId = String(req.body.companyId || "").trim();
+      const companyId = normalizeCompanyId(req.body.companyId);
       if (!companyId) return cb(new Error("companyId is required."));
+      req.body.companyId = companyId;
       const submissionId = getOrCreateUploadSubmissionId(req);
       req.body.submissionId = submissionId;
-      const dir = path.join(uploadRoot, "storefront", `company-${companyId}`, `customer-profile-${submissionId}`);
+      const dir = safeUploadPath("storefront", `company-${companyId}`, `customer-profile-${submissionId}`);
+      if (!dir) return cb(new Error("Invalid upload path."));
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
@@ -2093,6 +2193,10 @@ const storefrontCustomerProfileUpload = multer({
     },
   }),
   limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (rejectUnsafeUpload(file)) return cb(new Error("File type is not allowed."));
+    cb(null, true);
+  },
 });
 
 const customerAccountSignupUpload = multer({
@@ -2100,7 +2204,8 @@ const customerAccountSignupUpload = multer({
     destination: (req, file, cb) => {
       const submissionId = getOrCreateUploadSubmissionId(req);
       req.body.submissionId = submissionId;
-      const dir = path.join(uploadRoot, "customers", `signup-${submissionId}`);
+      const dir = safeUploadPath("customers", `signup-${submissionId}`);
+      if (!dir) return cb(new Error("Invalid upload path."));
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
@@ -2111,6 +2216,10 @@ const customerAccountSignupUpload = multer({
     },
   }),
   limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (rejectUnsafeUpload(file)) return cb(new Error("File type is not allowed."));
+    cb(null, true);
+  },
 });
 
 const customerAccountProfileUpload = multer({
@@ -2120,7 +2229,8 @@ const customerAccountProfileUpload = multer({
       if (!Number.isFinite(accountId) || accountId <= 0) return cb(new Error("Customer login required."));
       const submissionId = getOrCreateUploadSubmissionId(req);
       req.body.submissionId = submissionId;
-      const dir = path.join(uploadRoot, "customers", `account-${accountId}`, `profile-${submissionId}`);
+      const dir = safeUploadPath("customers", `account-${accountId}`, `profile-${submissionId}`);
+      if (!dir) return cb(new Error("Invalid upload path."));
       fs.mkdirSync(dir, { recursive: true });
       cb(null, dir);
     },
@@ -2131,6 +2241,10 @@ const customerAccountProfileUpload = multer({
     },
   }),
   limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (rejectUnsafeUpload(file)) return cb(new Error("File type is not allowed."));
+    cb(null, true);
+  },
 });
 
 const importUpload = multer({
@@ -2155,7 +2269,7 @@ app.post("/api/uploads/image", (req, res, next) => {
     next();
   });
 }, (req, res) => {
-  const companyId = String(req.body.companyId || "").trim();
+  const companyId = normalizeCompanyId(req.body.companyId);
   if (!companyId) return res.status(400).json({ error: "companyId is required." });
   if (!req.file?.filename) return res.status(400).json({ error: "image file is required." });
   res.status(201).json({ url: `/uploads/company-${companyId}/${req.file.filename}` });
@@ -2167,7 +2281,7 @@ app.post("/api/uploads/file", (req, res, next) => {
     next();
   });
 }, (req, res) => {
-  const companyId = String(req.body.companyId || "").trim();
+  const companyId = normalizeCompanyId(req.body.companyId);
   if (!companyId) return res.status(400).json({ error: "companyId is required." });
   if (!req.file?.filename) return res.status(400).json({ error: "file is required." });
   res.status(201).json({
@@ -2181,7 +2295,7 @@ app.post("/api/uploads/file", (req, res, next) => {
 app.delete(
   "/api/uploads/image",
   asyncHandler(async (req, res) => {
-    const companyId = String(req.body.companyId || "").trim();
+    const companyId = normalizeCompanyId(req.body.companyId);
     const url = String(req.body.url || "").trim();
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     if (!url) return res.status(400).json({ error: "url is required." });
@@ -2196,7 +2310,8 @@ app.delete(
       return res.status(400).json({ error: "Invalid image url." });
     }
 
-    const fullPath = path.join(uploadRoot, `company-${companyId}`, filename);
+    const fullPath = safeUploadPath(`company-${companyId}`, filename);
+    if (!fullPath) return res.status(400).json({ error: "Invalid image url." });
     try {
       await fs.promises.unlink(fullPath);
     } catch (err) {
@@ -2209,7 +2324,7 @@ app.delete(
 app.delete(
   "/api/uploads/file",
   asyncHandler(async (req, res) => {
-    const companyId = String(req.body.companyId || "").trim();
+    const companyId = normalizeCompanyId(req.body.companyId);
     const url = String(req.body.url || "").trim();
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     if (!url) return res.status(400).json({ error: "url is required." });
@@ -2224,7 +2339,8 @@ app.delete(
       return res.status(400).json({ error: "Invalid file url." });
     }
 
-    const fullPath = path.join(uploadRoot, `company-${companyId}`, "files", filename);
+    const fullPath = safeUploadPath(`company-${companyId}`, "files", filename);
+    if (!fullPath) return res.status(400).json({ error: "Invalid file url." });
     try {
       await fs.promises.unlink(fullPath);
     } catch (err) {
@@ -2301,7 +2417,7 @@ app.post(
     });
   },
   asyncHandler(async (req, res) => {
-    const companyId = String(req.body.companyId || "").trim();
+    const companyId = normalizeCompanyId(req.body.companyId);
     const prompt = String(req.body.prompt || "").trim();
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     if (!req.file?.buffer?.length) return res.status(400).json({ error: "image file is required." });
@@ -2327,7 +2443,7 @@ app.post(
 app.post(
   "/api/ai/image-edit-from-url",
   asyncHandler(async (req, res) => {
-    const companyId = String(req.body.companyId || "").trim();
+    const companyId = normalizeCompanyId(req.body.companyId);
     const url = String(req.body.url || "").trim();
     const prompt = String(req.body.prompt || "").trim();
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
@@ -3885,10 +4001,11 @@ app.post(
     const verifierToken = String(process.env.QBO_WEBHOOK_VERIFIER_TOKEN || "").trim();
     const signature = String(req.headers["intuit-signature"] || "").trim();
     const rawBody = req.rawBody || "";
-    if (verifierToken) {
-      const ok = verifyWebhookSignature({ payload: rawBody, signature, verifierToken });
-      if (!ok) return res.status(401).send("Invalid webhook signature.");
+    if (!verifierToken) {
+      return res.status(500).send("Webhook verifier token not configured.");
     }
+    const ok = verifyWebhookSignature({ payload: rawBody, signature, verifierToken });
+    if (!ok) return res.status(401).send("Invalid webhook signature.");
 
     const payload = req.body || {};
     const events = Array.isArray(payload.eventNotifications) ? payload.eventNotifications : [];
@@ -5713,7 +5830,19 @@ async function start() {
   });
 }
 
-start().catch((err) => {
-  console.error("Failed to start server", err);
-  process.exit(1);
-});
+if (require.main === module) {
+  start().catch((err) => {
+    console.error("Failed to start server", err);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  app,
+  start,
+  normalizeSubmissionId,
+  normalizeCompanyId,
+  rejectUnsafeUpload,
+  safeUploadPath,
+  isAllowedRedirectHost,
+};

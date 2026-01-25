@@ -87,11 +87,17 @@ async function editImageBufferWithGemini({ inputBuffer, inputMimeType, prompt })
 }
 
 async function writeCompanyUpload({ uploadRoot, companyId, buffer, mimeType }) {
-  const cid = String(companyId || "").trim();
-  if (!cid) throw new Error("companyId is required.");
+  const cidNum = Number(companyId);
+  if (!Number.isFinite(cidNum) || cidNum <= 0) throw new Error("companyId is required.");
+  const cid = String(Math.trunc(cidNum));
 
   const ext = extensionForMime(mimeType);
   const dir = path.join(uploadRoot, `company-${cid}`);
+  const safeDir = path.resolve(dir);
+  const rel = path.relative(path.resolve(uploadRoot), safeDir);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error("Invalid upload path.");
+  }
   await fs.promises.mkdir(dir, { recursive: true });
   const filename = `${crypto.randomUUID()}${ext}`;
   const fullPath = path.join(dir, filename);
@@ -103,4 +109,3 @@ module.exports = {
   editImageBufferWithGemini,
   writeCompanyUpload,
 };
-
