@@ -786,13 +786,29 @@ function base64Url(bytes) {
     .replace(/=+$/g, "");
 }
 
+let warnedInsecureCookie = false;
+
+function resolveCookieSecure() {
+  const envValue = String(process.env.COOKIE_SECURE || "").trim().toLowerCase();
+  const isProduction = String(process.env.NODE_ENV || "").trim().toLowerCase() === "production";
+  let secure = envValue === "true";
+  if (!secure && isProduction) {
+    if (!warnedInsecureCookie) {
+      console.warn("COOKIE_SECURE is not true in production; forcing Secure on cookies.");
+      warnedInsecureCookie = true;
+    }
+    secure = true;
+  }
+  return secure;
+}
+
 function buildCookie({ name, value, maxAgeMs, httpOnly = false }) {
   const parts = [`${name}=${encodeURIComponent(value || "")}`, "Path=/", "SameSite=Lax"];
   if (httpOnly) parts.push("HttpOnly");
   if (Number.isFinite(Number(maxAgeMs))) {
     parts.push(`Max-Age=${Math.max(0, Math.floor(Number(maxAgeMs) / 1000))}`);
   }
-  const secure = String(process.env.COOKIE_SECURE || "").trim().toLowerCase() === "true";
+  const secure = resolveCookieSecure();
   if (secure) parts.push("Secure");
   return parts.join("; ");
 }
