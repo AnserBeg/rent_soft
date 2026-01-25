@@ -189,6 +189,14 @@ const uploadRoot = process.env.UPLOAD_ROOT ? path.resolve(process.env.UPLOAD_ROO
 
 const FORCE_HTTPS = parseBoolean(process.env.FORCE_HTTPS) === true;
 const TRUST_PROXY = parseBoolean(process.env.TRUST_PROXY) === true || FORCE_HTTPS === true;
+const ALLOWED_HTTP_METHODS = parseHttpMethodList(process.env.ALLOWED_HTTP_METHODS, [
+  "GET",
+  "HEAD",
+  "POST",
+  "PUT",
+  "DELETE",
+  "OPTIONS",
+]);
 if (TRUST_PROXY) {
   app.set("trust proxy", 1);
 }
@@ -210,6 +218,15 @@ if (FORCE_HTTPS) {
 }
 
 app.use(cors());
+const allowedHttpMethods = new Set(ALLOWED_HTTP_METHODS);
+app.use((req, res, next) => {
+  const method = String(req.method || "").toUpperCase();
+  if (!allowedHttpMethods.has(method)) {
+    res.setHeader("Allow", ALLOWED_HTTP_METHODS.join(", "));
+    return res.status(405).json({ error: "Method not allowed." });
+  }
+  return next();
+});
 app.use(
   express.json({
     verify: (req, res, buf) => {
@@ -308,6 +325,21 @@ function parseStringArray(value) {
     return [raw];
   }
   return [];
+}
+
+function parseHttpMethodList(value, fallback) {
+  if (value === null || value === undefined) return fallback;
+  if (Array.isArray(value)) {
+    const items = value.map((item) => String(item).trim().toUpperCase()).filter(Boolean);
+    return items.length ? Array.from(new Set(items)) : fallback;
+  }
+  const raw = String(value).trim();
+  if (!raw) return fallback;
+  const items = raw
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
+  return items.length ? Array.from(new Set(items)) : fallback;
 }
 
 function normalizeTimestampInput(value) {
@@ -629,6 +661,10 @@ function getOrCreateUploadSubmissionId(req) {
 }
 
 const COMPANY_SESSION_COOKIE = "rentSoft.cu";
+const CSRF_COOKIE = "rentSoft.csrf";
+const CSRF_HEADER = "x-csrf-token";
+const CSRF_SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const DEFAULT_SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30;
 
 function parseCookies(req) {
   const header = String(req.headers.cookie || "");
@@ -644,44 +680,95 @@ function parseCookies(req) {
   return out;
 }
 
-function readCompanyUserToken(req) {
+function getCompanyUserToken(req) {
   const authHeader = String(req.headers.authorization || "").trim();
   const tokenFromHeader = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
-  if (tokenFromHeader) return tokenFromHeader;
+  if (tokenFromHeader) return { token: tokenFromHeader, source: "header" };
   const cookies = parseCookies(req);
-  return String(cookies[COMPANY_SESSION_COOKIE] || "").trim();
+  const cookieToken = String(cookies[COMPANY_SESSION_COOKIE] || "").trim();
+  if (cookieToken) return { token: cookieToken, source: "cookie" };
+  return { token: "", source: "none" };
+}
+
+function readCompanyUserToken(req) {
+  return getCompanyUserToken(req).token;
+}
+
+function readHeaderValue(value) {
+  if (Array.isArray(value)) return value[0] ? String(value[0]) : "";
+  if (value === undefined || value === null) return "";
+  return String(value);
+}
+
+function base64Url(bytes) {
+  return bytes
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function buildCookie({ name, value, maxAgeMs, httpOnly = false }) {
+  const parts = [`${name}=${encodeURIComponent(value || "")}`, "Path=/", "SameSite=Lax"];
+  if (httpOnly) parts.push("HttpOnly");
+  if (Number.isFinite(Number(maxAgeMs))) {
+    parts.push(`Max-Age=${Math.max(0, Math.floor(Number(maxAgeMs) / 1000))}`);
+  }
+  const secure = String(process.env.COOKIE_SECURE || "").trim().toLowerCase() === "true";
+  if (secure) parts.push("Secure");
+  return parts.join("; ");
+}
+
+function appendSetCookie(res, value) {
+  const existing = res.getHeader("Set-Cookie");
+  if (!existing) {
+    res.setHeader("Set-Cookie", value);
+    return;
+  }
+  const combined = Array.isArray(existing) ? existing.concat(value) : [String(existing), value];
+  res.setHeader("Set-Cookie", combined);
+}
+
+function setCsrfCookie(res, token, maxAgeMs) {
+  const cookie = buildCookie({ name: CSRF_COOKIE, value: token, maxAgeMs, httpOnly: false });
+  appendSetCookie(res, cookie);
+}
+
+function ensureCsrfCookie(req, res, maxAgeMs = DEFAULT_SESSION_MAX_AGE_MS) {
+  const cookies = parseCookies(req);
+  const sessionToken = String(cookies[COMPANY_SESSION_COOKIE] || "").trim();
+  if (!sessionToken) return;
+  const existing = String(cookies[CSRF_COOKIE] || "").trim();
+  if (existing) return;
+  const token = base64Url(crypto.randomBytes(32));
+  setCsrfCookie(res, token, maxAgeMs);
 }
 
 function setCompanySessionCookie(res, token, maxAgeMs) {
   const raw = String(token || "").trim();
-  const maxAge = Number.isFinite(Number(maxAgeMs)) ? Number(maxAgeMs) : 0;
-  const secure = String(process.env.COOKIE_SECURE || "").trim().toLowerCase() === "true";
-  const parts = [
-    `${COMPANY_SESSION_COOKIE}=${encodeURIComponent(raw)}`,
-    "Path=/",
-    "HttpOnly",
-    `Max-Age=${Math.max(0, Math.floor(maxAge / 1000))}`,
-    "SameSite=Lax",
-  ];
-  if (secure) parts.push("Secure");
-  res.setHeader("Set-Cookie", parts.join("; "));
+  const maxAge = Number.isFinite(Number(maxAgeMs)) ? Number(maxAgeMs) : DEFAULT_SESSION_MAX_AGE_MS;
+  const sessionCookie = buildCookie({ name: COMPANY_SESSION_COOKIE, value: raw, maxAgeMs: maxAge, httpOnly: true });
+  appendSetCookie(res, sessionCookie);
+  const csrfToken = base64Url(crypto.randomBytes(32));
+  setCsrfCookie(res, csrfToken, maxAge);
 }
 
 function clearCompanySessionCookie(res) {
-  const secure = String(process.env.COOKIE_SECURE || "").trim().toLowerCase() === "true";
-  const parts = [`${COMPANY_SESSION_COOKIE}=`, "Path=/", "HttpOnly", "Max-Age=0", "SameSite=Lax"];
-  if (secure) parts.push("Secure");
-  res.setHeader("Set-Cookie", parts.join("; "));
+  const sessionCookie = buildCookie({ name: COMPANY_SESSION_COOKIE, value: "", maxAgeMs: 0, httpOnly: true });
+  const csrfCookie = buildCookie({ name: CSRF_COOKIE, value: "", maxAgeMs: 0, httpOnly: false });
+  appendSetCookie(res, sessionCookie);
+  appendSetCookie(res, csrfCookie);
 }
 
 async function requireCompanyUserAuth(req, res, next) {
-  const token = readCompanyUserToken(req);
+  const { token, source } = getCompanyUserToken(req);
   if (!token) return res.status(401).json({ error: "Login required." });
   const session = await getCompanyUserByToken(token);
   if (!session) return res.status(401).json({ error: "Login required." });
 
   req.auth = {
     token,
+    tokenSource: source,
     sessionId: session.sessionId,
     expiresAt: session.expiresAt || null,
     userId: session.user.id,
@@ -1092,6 +1179,34 @@ app.use("/api", (req, res, next) => {
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
   next();
+});
+
+app.use("/api", (req, res, next) => {
+  ensureCsrfCookie(req, res);
+  const method = String(req.method || "").toUpperCase();
+  if (CSRF_SAFE_METHODS.has(method)) return next();
+
+  const apiPath = getApiPath(req);
+  const publicPath =
+    apiPath === "/api/login" ||
+    (apiPath === "/api/companies" && method === "POST") ||
+    apiPath.startsWith("/api/customers") ||
+    apiPath.startsWith("/api/storefront") ||
+    apiPath === "/api/qbo/callback" ||
+    apiPath === "/api/qbo/webhooks";
+  if (publicPath) return next();
+
+  const tokenSource = getCompanyUserToken(req).source;
+  if (tokenSource !== "cookie") return next();
+
+  const cookies = parseCookies(req);
+  const csrfCookie = String(cookies[CSRF_COOKIE] || "").trim();
+  const csrfHeader =
+    readHeaderValue(req.headers[CSRF_HEADER]) || readHeaderValue(req.headers["x-xsrf-token"]);
+  if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) {
+    return res.status(403).json({ error: "CSRF token missing or invalid." });
+  }
+  return next();
 });
 
 // Company/admin APIs are protected by a server-enforced session.

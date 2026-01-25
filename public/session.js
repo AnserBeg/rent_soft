@@ -131,13 +131,42 @@
     }, 2600);
   }
 
+  function getCookieValue(name) {
+    const raw = document.cookie || "";
+    if (!raw) return "";
+    const parts = raw.split(";");
+    for (const part of parts) {
+      const [key, ...rest] = part.split("=");
+      if (String(key || "").trim() !== name) continue;
+      return decodeURIComponent(rest.join("=").trim());
+    }
+    return "";
+  }
+
+  function isSameOrigin(url) {
+    try {
+      const target = new URL(url, window.location.origin);
+      return target.origin === window.location.origin;
+    } catch {
+      return false;
+    }
+  }
+
   const nativeFetch = window.fetch?.bind(window);
   if (nativeFetch) {
     window.fetch = async (input, init = {}) => {
       const req = input instanceof Request ? input : null;
       const method = String((init && init.method) || (req && req.method) || "GET").toUpperCase();
       const url = String((req && req.url) || input || "");
-      const res = await nativeFetch(input, init);
+      const shouldAttachCsrf =
+        !["GET", "HEAD", "OPTIONS"].includes(method) && url.includes("/api/") && isSameOrigin(url);
+      const headers = new Headers((init && init.headers) || (req && req.headers) || undefined);
+      if (shouldAttachCsrf && !headers.has("X-CSRF-Token")) {
+        const token = getCookieValue("rentSoft.csrf");
+        if (token) headers.set("X-CSRF-Token", token);
+      }
+
+      const res = await nativeFetch(input, { ...init, headers });
       if (
         res.ok &&
         (method === "POST" || method === "PUT" || method === "PATCH") &&
