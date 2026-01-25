@@ -218,6 +218,24 @@ if (TRUST_PROXY) {
   app.set("trust proxy", 1);
 }
 
+function setNoCacheHeaders(res) {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+}
+
+function isHtmlFilePath(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  return ext === ".html" || ext === ".htm" || ext === ".xhtml";
+}
+
+function isHtmlRequest(req) {
+  if (isHtmlFilePath(req.path)) return true;
+  if (path.extname(req.path)) return false;
+  const accept = String(req.headers.accept || "");
+  return accept.includes("text/html");
+}
+
 function isAllowedRedirectHost(host) {
   const clean = String(host || "").trim().toLowerCase();
   if (!clean) return false;
@@ -298,6 +316,21 @@ app.use(
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+app.use(
+  asyncHandler(async (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    if (req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) return next();
+    if (!isHtmlRequest(req)) return next();
+    const { token } = getCompanyUserToken(req);
+    if (!token) return next();
+    const session = await getCompanyUserByToken(token);
+    if (session) {
+      res.locals.noCacheHtml = true;
+    }
+    return next();
+  })
+);
+
 app.use((req, res, next) => {
   if (req.method !== "GET" && req.method !== "HEAD") return next();
 
@@ -346,7 +379,15 @@ app.use((req, res, next) => {
   next();
 });
 if (fs.existsSync(spaRoot)) {
-  app.use(express.static(spaRoot));
+  app.use(
+    express.static(spaRoot, {
+      setHeaders: (res, filePath) => {
+        if (res.locals?.noCacheHtml && isHtmlFilePath(filePath)) {
+          setNoCacheHeaders(res);
+        }
+      },
+    })
+  );
 }
 app.use(
   "/uploads",
@@ -378,9 +419,7 @@ app.use(
   "/uploads",
   express.static(uploadRoot, {
     setHeaders: (res, filePath) => {
-      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-      res.setHeader("Pragma", "no-cache");
-      res.setHeader("Expires", "0");
+      setNoCacheHeaders(res);
       res.setHeader("X-Content-Type-Options", "nosniff");
       const ext = path.extname(filePath).toLowerCase();
       const inline = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf"]);
@@ -390,7 +429,15 @@ app.use(
     },
   })
 );
-app.use(express.static(publicRoot));
+app.use(
+  express.static(publicRoot, {
+    setHeaders: (res, filePath) => {
+      if (res.locals?.noCacheHtml && isHtmlFilePath(filePath)) {
+        setNoCacheHeaders(res);
+      }
+    },
+  })
+);
 
 function parseRateLimitMs(value, fallback) {
   const parsed = Number(value);
@@ -1354,9 +1401,7 @@ async function searchWithNominatimResult(query, limit = 6) {
 
 app.use("/api", apiLimiter);
 app.use("/api", (req, res, next) => {
-  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-  res.setHeader("Pragma", "no-cache");
-  res.setHeader("Expires", "0");
+  setNoCacheHeaders(res);
   next();
 });
 
@@ -5946,6 +5991,9 @@ app.get("*", (req, res, next) => {
   const accept = String(req.headers.accept || "");
   if (!accept.includes("text/html")) return next();
 
+  if (res.locals?.noCacheHtml) {
+    setNoCacheHeaders(res);
+  }
   res.sendFile(path.join(spaRoot, "index.html"));
 });
 

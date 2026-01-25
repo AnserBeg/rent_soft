@@ -5,6 +5,12 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
+const SESSION_IDLE_DAYS = (() => {
+  const raw = Number(process.env.SESSION_IDLE_DAYS || 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(180, Math.floor(raw));
+})();
+
 const LEGACY_SHA256_RE = /^[a-f0-9]{64}$/i;
 const PASSWORD_V2_PREFIX = "s2$";
 const MIN_PASSWORD_LENGTH = 8;
@@ -350,10 +356,14 @@ async function ensureTables() {
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
         token_hash TEXT NOT NULL UNIQUE,
         created_at TIMESTAMPTZ DEFAULT NOW(),
+        last_used_at TIMESTAMPTZ DEFAULT NOW(),
         expires_at TIMESTAMPTZ NOT NULL,
         revoked_at TIMESTAMPTZ
       );
     `);
+    await client.query(
+      `ALTER TABLE company_user_sessions ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ DEFAULT NOW();`
+    );
     await client.query(`CREATE INDEX IF NOT EXISTS company_user_sessions_user_id_idx ON company_user_sessions (user_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS company_user_sessions_company_id_idx ON company_user_sessions (company_id);`);
 
@@ -575,10 +585,14 @@ async function ensureTables() {
         customer_id INTEGER NOT NULL REFERENCES storefront_customers(id) ON DELETE CASCADE,
         token_hash TEXT NOT NULL,
         created_at TIMESTAMPTZ DEFAULT NOW(),
+        last_used_at TIMESTAMPTZ DEFAULT NOW(),
         expires_at TIMESTAMPTZ NOT NULL,
         revoked_at TIMESTAMPTZ
       );
     `);
+    await client.query(
+      `ALTER TABLE storefront_customer_sessions ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ DEFAULT NOW();`
+    );
     await client.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS storefront_customer_sessions_token_unique ON storefront_customer_sessions (token_hash);`
     );
@@ -609,10 +623,14 @@ async function ensureTables() {
         customer_account_id INTEGER NOT NULL REFERENCES customer_accounts(id) ON DELETE CASCADE,
         token_hash TEXT NOT NULL UNIQUE,
         created_at TIMESTAMPTZ DEFAULT NOW(),
+        last_used_at TIMESTAMPTZ DEFAULT NOW(),
         expires_at TIMESTAMPTZ NOT NULL,
         revoked_at TIMESTAMPTZ
       );
     `);
+    await client.query(
+      `ALTER TABLE customer_account_sessions ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ DEFAULT NOW();`
+    );
     await client.query(`
       CREATE TABLE IF NOT EXISTS customer_pricing (
         id SERIAL PRIMARY KEY,
@@ -1646,8 +1664,24 @@ async function getCompanyUserByToken(token) {
   const raw = String(token || "").trim();
   if (!raw) return null;
   const tokenHash = hashToken(raw);
+  const idleDays = SESSION_IDLE_DAYS;
+  const params = [tokenHash];
+  const idleClause =
+    idleDays > 0
+      ? "AND COALESCE(s.last_used_at, s.created_at) > NOW() - ($2::text || ' days')::interval"
+      : "";
+  if (idleDays > 0) params.push(idleDays);
   const res = await pool.query(
     `
+    WITH session AS (
+      UPDATE company_user_sessions s
+      SET last_used_at = NOW()
+      WHERE s.token_hash = $1
+        AND s.revoked_at IS NULL
+        AND s.expires_at > NOW()
+        ${idleClause}
+      RETURNING s.id, s.user_id, s.company_id, s.expires_at
+    )
     SELECT
       s.id AS session_id,
       s.expires_at,
@@ -1665,13 +1699,13 @@ async function getCompanyUserByToken(token) {
       c.region,
       c.country,
       c.postal_code
-    FROM company_user_sessions s
+    FROM session s
     JOIN users u ON u.id = s.user_id
     JOIN companies c ON c.id = s.company_id
-    WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > NOW()
+    WHERE s.id IS NOT NULL
     LIMIT 1
     `,
-    [tokenHash]
+    params
   );
   const row = res.rows?.[0] || null;
   if (!row) return null;
@@ -10635,8 +10669,24 @@ async function getStorefrontCustomerByToken(token) {
   const raw = String(token || "").trim();
   if (!raw) return null;
   const tokenHash = hashToken(raw);
+  const idleDays = SESSION_IDLE_DAYS;
+  const params = [tokenHash];
+  const idleClause =
+    idleDays > 0
+      ? "AND COALESCE(s.last_used_at, s.created_at) > NOW() - ($2::text || ' days')::interval"
+      : "";
+  if (idleDays > 0) params.push(idleDays);
   const res = await pool.query(
     `
+    WITH session AS (
+      UPDATE storefront_customer_sessions s
+      SET last_used_at = NOW()
+      WHERE s.token_hash = $1
+        AND s.revoked_at IS NULL
+        AND s.expires_at > NOW()
+        ${idleClause}
+      RETURNING s.customer_id
+    )
     SELECT
       c.id,
       c.company_id,
@@ -10653,12 +10703,11 @@ async function getStorefrontCustomerByToken(token) {
       c.phone,
       c.cc_last4,
       c.documents
-    FROM storefront_customer_sessions s
+    FROM session s
     JOIN storefront_customers c ON c.id = s.customer_id
-    WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > NOW()
     LIMIT 1
     `,
-    [tokenHash]
+    params
   );
   const row = res.rows?.[0];
   if (!row) return null;
@@ -10799,8 +10848,24 @@ async function getCustomerAccountByToken(token) {
   const raw = String(token || "").trim();
   if (!raw) return null;
   const tokenHash = hashToken(raw);
+  const idleDays = SESSION_IDLE_DAYS;
+  const params = [tokenHash];
+  const idleClause =
+    idleDays > 0
+      ? "AND COALESCE(s.last_used_at, s.created_at) > NOW() - ($2::text || ' days')::interval"
+      : "";
+  if (idleDays > 0) params.push(idleDays);
   const res = await pool.query(
     `
+    WITH session AS (
+      UPDATE customer_account_sessions s
+      SET last_used_at = NOW()
+      WHERE s.token_hash = $1
+        AND s.revoked_at IS NULL
+        AND s.expires_at > NOW()
+        ${idleClause}
+      RETURNING s.customer_account_id
+    )
     SELECT
       c.id,
       c.name,
@@ -10814,12 +10879,11 @@ async function getCustomerAccountByToken(token) {
       c.phone,
       c.cc_last4,
       c.documents
-    FROM customer_account_sessions s
+    FROM session s
     JOIN customer_accounts c ON c.id = s.customer_account_id
-    WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > NOW()
     LIMIT 1
     `,
-    [tokenHash]
+    params
   );
   const row = res.rows?.[0] || null;
   if (!row) return null;
