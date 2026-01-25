@@ -1065,6 +1065,12 @@ async function searchWithNominatimResult(query, limit = 6) {
 }
 
 app.use("/api", apiLimiter);
+app.use("/api", (req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  next();
+});
 
 // Company/admin APIs are protected by a server-enforced session.
 // Public APIs: company signup, company login, storefront, and customer-account endpoints.
