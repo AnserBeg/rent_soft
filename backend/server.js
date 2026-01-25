@@ -2,6 +2,7 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const express = require("express");
+const rateLimit = require("express-rate-limit");
 const cors = require("cors");
 const multer = require("multer");
 const dotenv = require("dotenv");
@@ -248,6 +249,25 @@ app.use("/uploads", express.static(uploadRoot));
 app.use(express.static(publicRoot));
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+function parseRateLimitMs(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.max(1000, Math.floor(parsed));
+}
+
+function parseRateLimitMax(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
+const RATE_LIMIT_LOGIN_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_LOGIN_WINDOW_MS, 15 * 60 * 1000);
+const RATE_LIMIT_LOGIN_MAX = parseRateLimitMax(process.env.RATE_LIMIT_LOGIN_MAX, 5);
+const RATE_LIMIT_API_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_API_WINDOW_MS, 60 * 60 * 1000);
+const RATE_LIMIT_API_MAX = parseRateLimitMax(process.env.RATE_LIMIT_API_MAX, 100);
+const RATE_LIMIT_QBO_SYNC_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_QBO_SYNC_WINDOW_MS, 60 * 60 * 1000);
+const RATE_LIMIT_QBO_SYNC_MAX = parseRateLimitMax(process.env.RATE_LIMIT_QBO_SYNC_MAX, 10);
 
 function parseStringArray(value) {
   if (!value) return [];
@@ -678,6 +698,69 @@ async function requireCustomerAccount(req) {
   return null;
 }
 
+function getApiPath(req) {
+  return `${req.baseUrl || ""}${req.path || ""}`;
+}
+
+function buildRateLimitHandler(message) {
+  return (req, res, next, options) => {
+    const resetTime = req.rateLimit?.resetTime ? new Date(req.rateLimit.resetTime).getTime() : null;
+    const retryAfterSeconds = resetTime ? Math.max(0, Math.ceil((resetTime - Date.now()) / 1000)) : null;
+    const payload = { error: message };
+    if (retryAfterSeconds !== null) payload.retryAfterSeconds = retryAfterSeconds;
+    res.status(options.statusCode).json(payload);
+  };
+}
+
+function rateLimitKeyFromAuthOrIp(req) {
+  const token = req.auth?.token || readCompanyUserToken(req);
+  if (token) return `auth:${token}`;
+  const companyId =
+    req.auth?.companyId ||
+    (req.body && typeof req.body === "object" ? req.body.companyId : null) ||
+    (req.query && typeof req.query === "object" ? req.query.companyId : null);
+  if (companyId) return `company:${companyId}`;
+  return req.ip || req.socket?.remoteAddress || "unknown";
+}
+
+const loginLimiter = rateLimit({
+  windowMs: RATE_LIMIT_LOGIN_WINDOW_MS,
+  max: RATE_LIMIT_LOGIN_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: buildRateLimitHandler("Too many login attempts, please try again later."),
+});
+
+const apiLimiterSkipPaths = new Set([
+  "/api/login",
+  "/api/customers/login",
+  "/api/storefront/customers/login",
+  "/api/qbo/callback",
+  "/api/qbo/webhooks",
+]);
+
+const apiLimiter = rateLimit({
+  windowMs: RATE_LIMIT_API_WINDOW_MS,
+  max: RATE_LIMIT_API_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: buildRateLimitHandler("Too many requests, please try again later."),
+  skip: (req) => {
+    if (req.method === "OPTIONS") return true;
+    const apiPath = getApiPath(req);
+    return apiLimiterSkipPaths.has(apiPath);
+  },
+});
+
+const qboSyncLimiter = rateLimit({
+  windowMs: RATE_LIMIT_QBO_SYNC_WINDOW_MS,
+  max: RATE_LIMIT_QBO_SYNC_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: rateLimitKeyFromAuthOrIp,
+  handler: buildRateLimitHandler("Too many sync requests, please try again later."),
+});
+
 function buildLocationGeocodeQuery(location) {
   if (!location) return "";
   const parts = [location.street_address, location.city, location.region, location.country]
@@ -981,6 +1064,8 @@ async function searchWithNominatimResult(query, limit = 6) {
   }
 }
 
+app.use("/api", apiLimiter);
+
 // Company/admin APIs are protected by a server-enforced session.
 // Public APIs: company signup, company login, storefront, and customer-account endpoints.
 app.use(
@@ -1019,6 +1104,7 @@ app.use(
 
 app.post(
   "/api/login",
+  loginLimiter,
   asyncHandler(async (req, res) => {
     const { email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: "email and password are required." });
@@ -1171,6 +1257,7 @@ app.post(
 
 app.post(
   "/api/customers/login",
+  loginLimiter,
   asyncHandler(async (req, res) => {
     const { email, password, companyId } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: "email and password are required." });
@@ -1585,6 +1672,7 @@ app.post(
 
 app.post(
   "/api/storefront/customers/login",
+  loginLimiter,
   asyncHandler(async (req, res) => {
     const { companyId, email, password } = req.body || {};
     if (!email || !password) return res.status(400).json({ error: "email and password are required." });
@@ -3545,6 +3633,7 @@ app.post(
 
 app.post(
   "/api/qbo/customers/import-unlinked",
+  qboSyncLimiter,
   asyncHandler(async (req, res) => {
     const { companyId } = req.body || {};
     if (!companyId) {
@@ -3681,6 +3770,7 @@ app.post(
 
 app.post(
   "/api/qbo/sync",
+  qboSyncLimiter,
   asyncHandler(async (req, res) => {
     const { companyId, since, until, mode } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
@@ -3747,6 +3837,7 @@ app.get(
 
 app.post(
   "/api/qbo/billing/run",
+  qboSyncLimiter,
   asyncHandler(async (req, res) => {
     const { companyId, asOf } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
