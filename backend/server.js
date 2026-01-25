@@ -11,6 +11,8 @@ const dotenv = require("dotenv");
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
 dotenv.config();
 
+const MIN_PASSWORD_LENGTH = 8;
+
 const { mimeFromExtension, readImageAsInlinePart, generateDamageReportMarkdown } = require("./aiDamageReport");
 const { editImageBufferWithGemini, writeCompanyUpload } = require("./aiImageEdit");
 
@@ -1455,6 +1457,9 @@ app.post(
     const email = String(body.email || "").trim();
     const password = String(body.password || "");
     if (!name || !email || !password) return res.status(400).json({ error: "name, email, and password are required." });
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
+    }
 
     const created = await createCustomerAccount({ name, email, password });
     let customerForResponse = created;
@@ -1938,6 +1943,9 @@ app.post(
       canChargeDeposit: parsedDeposit === null ? null : parsedDeposit,
       documents,
     };
+    if (payload.password.length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
+    }
 
     const created = await createStorefrontCustomer(payload);
     const session = await authenticateStorefrontCustomer({ companyId, email: payload.email, password: payload.password });
@@ -2560,6 +2568,9 @@ app.post(
     if (!companyName || !contactEmail || !ownerName || !ownerEmail || !password) {
       return res.status(400).json({ error: "companyName, contactEmail, ownerName, ownerEmail, and password are required." });
     }
+    if (String(password || "").length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
+    }
     const result = await createCompanyWithUser({
       companyName,
       contactEmail,
@@ -2577,6 +2588,9 @@ app.post(
     const { companyId, name, email, role, password } = req.body;
     if (!companyId || !name || !email || !password) {
       return res.status(400).json({ error: "companyId, name, email, and password are required." });
+    }
+    if (String(password || "").length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({ error: `password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
     }
     const user = await createUser({ companyId, name, email, role, password });
     res.status(201).json(user);

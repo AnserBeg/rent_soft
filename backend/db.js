@@ -7,6 +7,7 @@ const pool = new Pool({
 
 const LEGACY_SHA256_RE = /^[a-f0-9]{64}$/i;
 const PASSWORD_V2_PREFIX = "s2$";
+const MIN_PASSWORD_LENGTH = 8;
 
 function hashLegacySha256(password) {
   return crypto.createHash("sha256").update(String(password || "")).digest("hex");
@@ -1395,11 +1396,15 @@ async function createCompanyWithUser({ companyName, contactEmail, ownerName, own
     const cleanOwnerEmail = normalizeEmail(ownerEmail);
     const cleanCompanyName = String(companyName || "").trim();
     const cleanOwnerName = String(ownerName || "").trim();
+    const cleanPassword = String(password || "");
     if (!cleanCompanyName) throw new Error("companyName is required.");
     if (!cleanContactEmail) throw new Error("contactEmail is required.");
     if (!cleanOwnerName) throw new Error("ownerName is required.");
     if (!cleanOwnerEmail) throw new Error("ownerEmail is required.");
-    if (!password) throw new Error("password is required.");
+    if (!cleanPassword) throw new Error("password is required.");
+    if (cleanPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+    }
 
     const companyResult = await client.query(
       `INSERT INTO companies (name, contact_email) VALUES ($1, $2) RETURNING id, name`,
@@ -1409,7 +1414,7 @@ async function createCompanyWithUser({ companyName, contactEmail, ownerName, own
     const userResult = await client.query(
       `INSERT INTO users (company_id, name, email, role, password_hash, can_act_as_customer)
        VALUES ($1, $2, $3, 'owner', $4, TRUE) RETURNING id, name, email, role`,
-      [company.id, cleanOwnerName, cleanOwnerEmail, hashPassword(password)]
+      [company.id, cleanOwnerName, cleanOwnerEmail, hashPassword(cleanPassword)]
     );
     const locationResult = await client.query(
       `INSERT INTO locations (company_id, name) VALUES ($1, $2) RETURNING id, name`,
@@ -1433,10 +1438,14 @@ async function createUser({ companyId, name, email, role = "member", password })
     const cleanName = String(name || "").trim();
     const cleanEmail = normalizeEmail(email);
     const cleanRole = String(role || "member").trim() || "member";
+    const cleanPassword = String(password || "");
     if (!companyId) throw new Error("companyId is required.");
     if (!cleanName) throw new Error("name is required.");
     if (!cleanEmail) throw new Error("email is required.");
-    if (!password) throw new Error("password is required.");
+    if (!cleanPassword) throw new Error("password is required.");
+    if (cleanPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+    }
   
     const existing = await pool.query(`SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1`, [cleanEmail]);
     if (existing.rows?.[0]?.id) throw new Error("An account already exists with that email.");
@@ -1444,7 +1453,7 @@ async function createUser({ companyId, name, email, role = "member", password })
     const result = await pool.query(
       `INSERT INTO users (company_id, name, email, role, password_hash)
        VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, role`,
-      [companyId, cleanName, cleanEmail, cleanRole, hashPassword(password)]
+      [companyId, cleanName, cleanEmail, cleanRole, hashPassword(cleanPassword)]
   );
   return result.rows[0];
 }
@@ -10237,7 +10246,9 @@ async function createStorefrontCustomer({
   const cleanName = String(name || "").trim();
   if (!cleanName) throw new Error("name is required.");
   const cleanPassword = String(password || "");
-  if (!cleanPassword || cleanPassword.length < 6) throw new Error("password must be at least 6 characters.");
+  if (!cleanPassword || cleanPassword.length < MIN_PASSWORD_LENGTH) {
+    throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
 
     const existing = await pool.query(
       `SELECT id FROM storefront_customers WHERE LOWER(email) = $1 LIMIT 1`,
@@ -10631,7 +10642,9 @@ async function createCustomerAccount({
   const cleanName = String(name || "").trim();
   if (!cleanName) throw new Error("name is required.");
   const cleanPassword = String(password || "");
-  if (!cleanPassword || cleanPassword.length < 6) throw new Error("password must be at least 6 characters.");
+  if (!cleanPassword || cleanPassword.length < MIN_PASSWORD_LENGTH) {
+    throw new Error(`password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+  }
 
   const existing = await pool.query(`SELECT id FROM customer_accounts WHERE LOWER(email) = $1 LIMIT 1`, [cleanEmail]);
   if (existing.rows?.[0]?.id) throw new Error("An account already exists with that email.");

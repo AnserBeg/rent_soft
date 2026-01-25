@@ -45,4 +45,8 @@ The UI is not a separate app: it’s the same HTML pages with responsive CSS (me
 - `GET /api/equipment?companyId=1`
 - `POST /api/equipment` -> `{ companyId, type, modelName, serialNumber, condition, manufacturer?, locationId?, purchasePrice? }`
 
+## Password policy
+- Minimum length: 8 characters for company users and customer accounts.
+- Recommendation: include letters, numbers, and symbols.
+
 All entities are tied to `company_id` for multitenancy. No authentication layer is included; add one before production use.
