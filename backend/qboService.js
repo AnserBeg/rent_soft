@@ -600,6 +600,7 @@ async function createDraftInvoice({
   periodKey,
   docSuffix = null,
 } = {}) {
+  const defaultTaxCode = String(getQboConfig()?.defaultTaxCode || "").trim();
   const order = await getRentalOrderQboContext({ companyId, orderId });
   if (!order) return { ok: false, error: "Rental order not found." };
   if (!order.qboCustomerId) {
@@ -667,15 +668,19 @@ async function createDraftInvoice({
       const qty = Number((line.units * line.quantity).toFixed(5));
       const unitPrice = Number(line.rateAmount.toFixed(2));
       const amount = Number((qty * unitPrice).toFixed(2));
+      const salesDetail = {
+        ItemRef: { value: String(line.qboItemId) },
+        Qty: qty,
+        UnitPrice: unitPrice,
+      };
+      if (defaultTaxCode) {
+        salesDetail.TaxCodeRef = { value: defaultTaxCode };
+      }
       return {
         Amount: amount,
         DetailType: "SalesItemLineDetail",
         Description: `${line.typeName} (rental)`,
-        SalesItemLineDetail: {
-          ItemRef: { value: String(line.qboItemId) },
-          Qty: qty,
-          UnitPrice: unitPrice,
-        },
+        SalesItemLineDetail: salesDetail,
       };
     }),
   };
@@ -743,6 +748,7 @@ async function createDraftCreditMemo({
   periodKey,
   docSuffix = "CM",
 } = {}) {
+  const defaultTaxCode = String(getQboConfig()?.defaultTaxCode || "").trim();
   const order = await getRentalOrderQboContext({ companyId, orderId });
   if (!order) return { ok: false, error: "Rental order not found." };
   if (!order.qboCustomerId) {
@@ -780,15 +786,19 @@ async function createDraftCreditMemo({
       const qty = Number((line.units * line.quantity).toFixed(5));
       const unitPrice = Number(line.rateAmount.toFixed(2));
       const amount = Number((qty * unitPrice).toFixed(2));
+      const salesDetail = {
+        ItemRef: { value: String(line.qboItemId) },
+        Qty: qty,
+        UnitPrice: unitPrice,
+      };
+      if (defaultTaxCode) {
+        salesDetail.TaxCodeRef = { value: defaultTaxCode };
+      }
       return {
         Amount: amount,
         DetailType: "SalesItemLineDetail",
         Description: `${line.typeName} (credit)`,
-        SalesItemLineDetail: {
-          ItemRef: { value: String(line.qboItemId) },
-          Qty: qty,
-          UnitPrice: unitPrice,
-        },
+        SalesItemLineDetail: salesDetail,
       };
     }),
   };

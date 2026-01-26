@@ -683,6 +683,10 @@ typeForm.addEventListener("submit", async (e) => {
   delete payload.imageFiles;
 
   if (payload.imageUrl === "") payload.imageUrl = null;
+  if (typeForm?.qboItemId) {
+    const qboValue = String(typeForm.qboItemId.value || "").trim();
+    payload.qboItemId = qboValue || null;
+  }
 
   ["dailyRate", "weeklyRate", "monthlyRate"].forEach((key) => {
     if (payload[key] === "") payload[key] = null;
