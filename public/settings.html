@@ -207,9 +207,18 @@
                   <select id="qbo-income-accounts" multiple size="5"></select>
                 </label>
               </div>
+              <div class="two-col">
+                <label>Default tax code
+                  <select id="qbo-default-tax-code"></select>
+                </label>
+              </div>
               <div class="inline-actions" style="justify-content:flex-start; gap:10px;">
                 <button class="ghost small" id="qbo-income-accounts-refresh" type="button">Load income accounts</button>
                 <span class="hint" id="qbo-income-accounts-hint">Connect QuickBooks Online to load accounts.</span>
+              </div>
+              <div class="inline-actions" style="justify-content:flex-start; gap:10px;">
+                <button class="ghost small" id="qbo-tax-codes-refresh" type="button">Load tax codes</button>
+                <span class="hint" id="qbo-tax-codes-hint">Connect QuickBooks Online to load tax codes.</span>
               </div>
               <div class="inline-actions" style="justify-content:flex-start;">
                 <button class="primary" id="save-qbo-settings" type="button" disabled>Save QBO settings</button>

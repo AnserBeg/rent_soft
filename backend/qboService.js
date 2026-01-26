@@ -533,6 +533,20 @@ function normalizeQboAccount(account) {
   };
 }
 
+function normalizeQboTaxCode(taxCode) {
+  if (!taxCode) return null;
+  const name = taxCode.Name || taxCode.name || null;
+  const code = taxCode.Code || taxCode.code || null;
+  const description = taxCode.Description || taxCode.description || null;
+  return {
+    id: taxCode.Id ? String(taxCode.Id) : taxCode.id ? String(taxCode.id) : null,
+    name,
+    code,
+    description,
+    active: taxCode.Active !== undefined ? taxCode.Active !== false : taxCode.active !== false,
+  };
+}
+
 async function listQboItems({ companyId }) {
   const items = [];
   let startPosition = 1;
@@ -582,6 +596,35 @@ async function listQboIncomeAccounts({ companyId }) {
   return accounts;
 }
 
+async function listQboTaxCodes({ companyId }) {
+  const taxCodes = [];
+  let startPosition = 1;
+  const maxResults = 1000;
+  while (true) {
+    const query = `select * from TaxCode STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
+    const data = await qboApiRequest({
+      companyId,
+      method: "GET",
+      path: `query?query=${encodeURIComponent(query)}`,
+    });
+    const response = data?.QueryResponse || {};
+    const rows = Array.isArray(response.TaxCode) ? response.TaxCode : [];
+    rows.forEach((row) => {
+      const normalized = normalizeQboTaxCode(row);
+      if (normalized?.id) taxCodes.push(normalized);
+    });
+    if (rows.length < maxResults) break;
+    startPosition += maxResults;
+  }
+  return taxCodes;
+}
+
+async function resolveDefaultTaxCode(companyId) {
+  const settings = await getCompanySettings(companyId).catch(() => null);
+  const fromSettings = String(settings?.qbo_default_tax_code || "").trim();
+  return fromSettings;
+}
+
 async function getQboCustomerById({ companyId, qboCustomerId }) {
   if (!qboCustomerId) return null;
   const data = await qboApiRequest({
@@ -614,7 +657,7 @@ async function createDraftInvoice({
   periodKey,
   docSuffix = null,
 } = {}) {
-  const defaultTaxCode = String(getQboConfig()?.defaultTaxCode || "").trim();
+  const defaultTaxCode = await resolveDefaultTaxCode(companyId);
   const order = await getRentalOrderQboContext({ companyId, orderId });
   if (!order) return { ok: false, error: "Rental order not found." };
   if (!order.qboCustomerId) {
@@ -766,7 +809,7 @@ async function createDraftCreditMemo({
   periodKey,
   docSuffix = "CM",
 } = {}) {
-  const defaultTaxCode = String(getQboConfig()?.defaultTaxCode || "").trim();
+  const defaultTaxCode = await resolveDefaultTaxCode(companyId);
   const order = await getRentalOrderQboContext({ companyId, orderId });
   if (!order) return { ok: false, error: "Rental order not found." };
   if (!order.qboCustomerId) {
@@ -1676,6 +1719,7 @@ module.exports = {
   normalizeQboItem,
   listQboItems,
   listQboIncomeAccounts,
+  listQboTaxCodes,
   getQboCustomerById,
   createQboCustomer,
   createDraftInvoice,

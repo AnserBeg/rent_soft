@@ -180,6 +180,7 @@ const {
   listQboItems,
   normalizeQboItem,
   listQboIncomeAccounts,
+  listQboTaxCodes,
 } = require("./qboService");
 const { verifyWebhookSignature, computeExpiryTimestamp, initQboDiscovery } = require("./qbo");
 
@@ -3572,11 +3573,12 @@ app.put(
           logoUrl,
           requiredStorefrontCustomerFields,
           rentalInfoFields,
-          qboEnabled,
-          qboBillingDay,
-          qboAdjustmentPolicy,
-          qboIncomeAccountIds,
-        } = req.body;
+      qboEnabled,
+      qboBillingDay,
+      qboAdjustmentPolicy,
+      qboIncomeAccountIds,
+      qboDefaultTaxCode,
+    } = req.body;
       if (!companyId) return res.status(400).json({ error: "companyId is required." });
       const settings = await upsertCompanySettings({
         companyId,
@@ -3593,11 +3595,12 @@ app.put(
           logoUrl,
           requiredStorefrontCustomerFields,
           rentalInfoFields,
-          qboEnabled: qboEnabled ?? null,
-          qboBillingDay: qboBillingDay ?? null,
-          qboAdjustmentPolicy: qboAdjustmentPolicy ?? null,
-          qboIncomeAccountIds: qboIncomeAccountIds ?? undefined,
-        });
+      qboEnabled: qboEnabled ?? null,
+      qboBillingDay: qboBillingDay ?? null,
+      qboAdjustmentPolicy: qboAdjustmentPolicy ?? null,
+      qboIncomeAccountIds: qboIncomeAccountIds ?? undefined,
+      qboDefaultTaxCode,
+    });
     res.json({ settings });
   })
 );
@@ -3889,6 +3892,23 @@ app.get(
       res.json({ accounts: accounts.filter(Boolean) });
     } catch (err) {
       const message = err?.message ? String(err.message) : "QBO income accounts request failed.";
+      if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
+      if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      res.status(500).json({ error: message });
+    }
+  })
+);
+
+app.get(
+  "/api/qbo/tax-codes",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    try {
+      const taxCodes = await listQboTaxCodes({ companyId: Number(companyId) });
+      res.json({ taxCodes: taxCodes.filter(Boolean) });
+    } catch (err) {
+      const message = err?.message ? String(err.message) : "QBO tax codes request failed.";
       if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
       if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
       res.status(500).json({ error: message });

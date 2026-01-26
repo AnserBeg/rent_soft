@@ -90,7 +90,6 @@ function getQboConfig() {
   const redirectUri = String(process.env.QBO_REDIRECT_URI || "").trim();
   const env = String(process.env.QBO_ENV || "production").trim().toLowerCase();
   const minorVersion = Number(process.env.QBO_MINOR_VERSION || DEFAULT_MINOR_VERSION);
-  const defaultTaxCode = String(process.env.QBO_DEFAULT_TAX_CODE || "").trim();
   const docNumberMode = normalizeQboDocNumberMode(process.env.QBO_DOC_NUMBER_MODE);
   const host = env === "sandbox" ? "https://sandbox-quickbooks.api.intuit.com" : "https://quickbooks.api.intuit.com";
   const endpoints = getQboEndpoints();
@@ -101,7 +100,6 @@ function getQboConfig() {
     env,
     host,
     minorVersion: Number.isFinite(minorVersion) ? minorVersion : DEFAULT_MINOR_VERSION,
-    defaultTaxCode,
     docNumberMode,
     revokeUrl: endpoints.revokeUrl,
     authUrl: endpoints.authUrl,

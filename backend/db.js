@@ -1008,6 +1008,7 @@ async function ensureTables() {
         qbo_billing_day INTEGER NOT NULL DEFAULT 1,
         qbo_adjustment_policy TEXT NOT NULL DEFAULT 'credit_memo',
         qbo_income_account_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        qbo_default_tax_code TEXT,
         tax_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         default_tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0,
         tax_registration_number TEXT,
@@ -1041,6 +1042,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_billing_day INTEGER NOT NULL DEFAULT 1;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_adjustment_policy TEXT NOT NULL DEFAULT 'credit_memo';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_income_account_ids JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_default_tax_code TEXT;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS default_tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS tax_registration_number TEXT;`);
@@ -4056,6 +4058,12 @@ function normalizeQboIncomeAccountIds(value) {
   return raw.map((v) => String(v || "").trim()).filter(Boolean);
 }
 
+function normalizeQboTaxCodeId(value) {
+  if (value === null || value === undefined) return null;
+  const raw = String(value || "").trim();
+  return raw || null;
+}
+
 function normalizeRateBasis(value) {
   const v = String(value || "").toLowerCase();
   if (v === "daily" || v === "weekly" || v === "monthly") return v;
@@ -4315,6 +4323,7 @@ async function getCompanySettings(companyId) {
             qbo_billing_day,
             qbo_adjustment_policy,
             qbo_income_account_ids,
+            qbo_default_tax_code,
             tax_enabled,
             default_tax_rate,
             tax_registration_number,
@@ -4340,6 +4349,7 @@ async function getCompanySettings(companyId) {
       qbo_billing_day: normalizeQboBillingDay(res.rows[0].qbo_billing_day),
       qbo_adjustment_policy: normalizeQboAdjustmentPolicy(res.rows[0].qbo_adjustment_policy),
       qbo_income_account_ids: normalizeQboIncomeAccountIds(res.rows[0].qbo_income_account_ids),
+      qbo_default_tax_code: normalizeQboTaxCodeId(res.rows[0].qbo_default_tax_code),
       tax_enabled: res.rows[0].tax_enabled === true,
       default_tax_rate: Number(res.rows[0].default_tax_rate || 0),
       tax_registration_number: res.rows[0].tax_registration_number || null,
@@ -4361,6 +4371,7 @@ async function getCompanySettings(companyId) {
     qbo_billing_day: 1,
     qbo_adjustment_policy: "credit_memo",
     qbo_income_account_ids: [],
+    qbo_default_tax_code: null,
     tax_enabled: false,
     default_tax_rate: 0,
     tax_registration_number: null,
@@ -4539,6 +4550,7 @@ async function upsertCompanySettings({
   qboBillingDay = null,
   qboAdjustmentPolicy = null,
   qboIncomeAccountIds = undefined,
+  qboDefaultTaxCode = undefined,
 }) {
   const current = await getCompanySettings(companyId);
   const nextMode =
@@ -4599,11 +4611,13 @@ async function upsertCompanySettings({
   const nextQboIncomeAccounts = normalizeQboIncomeAccountIds(
     qboIncomeAccountIds === undefined ? current.qbo_income_account_ids : qboIncomeAccountIds
   );
+  const nextQboDefaultTaxCode =
+    qboDefaultTaxCode === undefined ? normalizeQboTaxCodeId(current.qbo_default_tax_code) : normalizeQboTaxCodeId(qboDefaultTaxCode);
   const res = await pool.query(
     `
     INSERT INTO company_settings
-      (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17::jsonb, $18::jsonb)
+      (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb)
     ON CONFLICT (company_id)
     DO UPDATE SET billing_rounding_mode = EXCLUDED.billing_rounding_mode,
                   billing_rounding_granularity = EXCLUDED.billing_rounding_granularity,
@@ -4614,6 +4628,7 @@ async function upsertCompanySettings({
                   qbo_billing_day = EXCLUDED.qbo_billing_day,
                   qbo_adjustment_policy = EXCLUDED.qbo_adjustment_policy,
                   qbo_income_account_ids = EXCLUDED.qbo_income_account_ids,
+                  qbo_default_tax_code = EXCLUDED.qbo_default_tax_code,
                   tax_enabled = EXCLUDED.tax_enabled,
                   default_tax_rate = EXCLUDED.default_tax_rate,
                   tax_registration_number = EXCLUDED.tax_registration_number,
@@ -4633,6 +4648,7 @@ async function upsertCompanySettings({
               qbo_billing_day,
               qbo_adjustment_policy,
               qbo_income_account_ids,
+              qbo_default_tax_code,
               tax_enabled,
               default_tax_rate,
               tax_registration_number,
@@ -4653,6 +4669,7 @@ async function upsertCompanySettings({
       nextQboBillingDay,
       nextQboAdjustment,
       JSON.stringify(nextQboIncomeAccounts),
+      nextQboDefaultTaxCode,
       nextTaxEnabled,
       nextTaxRate,
       nextTaxRegistration,

@@ -38,6 +38,9 @@ const qboAdjustmentPolicySelect = document.getElementById("qbo-adjustment-policy
 const qboIncomeAccountsSelect = document.getElementById("qbo-income-accounts");
 const qboIncomeAccountsRefreshBtn = document.getElementById("qbo-income-accounts-refresh");
 const qboIncomeAccountsHint = document.getElementById("qbo-income-accounts-hint");
+const qboDefaultTaxCodeSelect = document.getElementById("qbo-default-tax-code");
+const qboTaxCodesRefreshBtn = document.getElementById("qbo-tax-codes-refresh");
+const qboTaxCodesHint = document.getElementById("qbo-tax-codes-hint");
 const qboHint = document.getElementById("qbo-hint");
 const saveQboSettingsBtn = document.getElementById("save-qbo-settings");
 
@@ -70,6 +73,9 @@ let qboConnected = false;
 let qboIncomeAccountsCache = [];
 let qboIncomeAccountsLoading = false;
 let qboIncomeAccountIds = [];
+let qboTaxCodesCache = [];
+let qboTaxCodesLoading = false;
+let qboDefaultTaxCode = "";
 
 const storefrontRequirementOptions = [
   { key: "businessName", label: "Business name" },
@@ -277,6 +283,11 @@ function setQboIncomeAccountsHint(message) {
   qboIncomeAccountsHint.textContent = String(message || "");
 }
 
+function setQboTaxCodesHint(message) {
+  if (!qboTaxCodesHint) return;
+  qboTaxCodesHint.textContent = String(message || "");
+}
+
 function setCustomerModeHint(message) {
   if (!customerModeHint) return;
   customerModeHint.textContent = String(message || "");
@@ -301,12 +312,22 @@ function setQboIncomeAccountsEnabled(enabled) {
   if (qboIncomeAccountsRefreshBtn) qboIncomeAccountsRefreshBtn.disabled = !enabled;
 }
 
+function setQboTaxCodesEnabled(enabled) {
+  if (qboDefaultTaxCodeSelect) qboDefaultTaxCodeSelect.disabled = !enabled;
+  if (qboTaxCodesRefreshBtn) qboTaxCodesRefreshBtn.disabled = !enabled;
+}
+
 function applyQboIncomeAccountSelection() {
   if (!qboIncomeAccountsSelect) return;
   const selected = new Set(qboIncomeAccountIds.map((v) => String(v)));
   Array.from(qboIncomeAccountsSelect.options).forEach((opt) => {
     opt.selected = selected.has(opt.value);
   });
+}
+
+function applyQboTaxCodeSelection() {
+  if (!qboDefaultTaxCodeSelect) return;
+  qboDefaultTaxCodeSelect.value = qboDefaultTaxCode ? String(qboDefaultTaxCode) : "";
 }
 
 function renderQboIncomeAccountsOptions(accounts) {
@@ -344,11 +365,49 @@ function renderQboIncomeAccountsOptions(accounts) {
   applyQboIncomeAccountSelection();
 }
 
+function renderQboTaxCodesOptions(taxCodes) {
+  if (!qboDefaultTaxCodeSelect) return;
+  const rows = Array.isArray(taxCodes) ? taxCodes : [];
+  qboDefaultTaxCodeSelect.innerHTML = "";
+
+  const emptyOption = document.createElement("option");
+  emptyOption.value = "";
+  emptyOption.textContent = "No default tax code";
+  qboDefaultTaxCodeSelect.appendChild(emptyOption);
+
+  const optionIds = new Set();
+  rows.forEach((taxCode) => {
+    const id = taxCode?.id ? String(taxCode.id) : null;
+    if (!id) return;
+    const name = taxCode?.name || taxCode?.code || taxCode?.description || null;
+    const label = name ? `${name}${name === id ? "" : ` (${id})`}` : `Tax code ${id}`;
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = label;
+    qboDefaultTaxCodeSelect.appendChild(option);
+    optionIds.add(id);
+  });
+
+  if (qboDefaultTaxCode && !optionIds.has(String(qboDefaultTaxCode))) {
+    const option = document.createElement("option");
+    option.value = String(qboDefaultTaxCode);
+    option.textContent = `Tax code ${qboDefaultTaxCode}`;
+    qboDefaultTaxCodeSelect.appendChild(option);
+  }
+
+  applyQboTaxCodeSelection();
+}
+
 function syncQboIncomeAccountIdsFromSelect() {
   if (!qboIncomeAccountsSelect) return;
   qboIncomeAccountIds = Array.from(qboIncomeAccountsSelect.selectedOptions)
     .map((opt) => String(opt.value))
     .filter(Boolean);
+}
+
+function syncQboDefaultTaxCodeFromSelect() {
+  if (!qboDefaultTaxCodeSelect) return;
+  qboDefaultTaxCode = String(qboDefaultTaxCodeSelect.value || "").trim();
 }
 
 function setQboSettingsFields(settings) {
@@ -361,6 +420,10 @@ function setQboSettingsFields(settings) {
     qboIncomeAccountIds = ids.map((id) => String(id)).filter(Boolean);
     renderQboIncomeAccountsOptions(qboIncomeAccountsCache);
   }
+  if (qboDefaultTaxCodeSelect) {
+    qboDefaultTaxCode = settings.qbo_default_tax_code ? String(settings.qbo_default_tax_code) : "";
+    renderQboTaxCodesOptions(qboTaxCodesCache);
+  }
 }
 
 function qboSettingsPayload() {
@@ -370,6 +433,7 @@ function qboSettingsPayload() {
     qboBillingDay: qboBillingDayInput?.value ? Number(qboBillingDayInput.value) : null,
     qboAdjustmentPolicy: qboAdjustmentPolicySelect?.value || "credit_memo",
     qboIncomeAccountIds: qboIncomeAccountIds,
+    qboDefaultTaxCode: qboDefaultTaxCode || null,
   };
 }
 
@@ -646,6 +710,44 @@ async function loadQboIncomeAccounts({ force = false } = {}) {
   }
 }
 
+async function loadQboTaxCodes({ force = false } = {}) {
+  if (!activeCompanyId || !qboDefaultTaxCodeSelect) return;
+  if (qboTaxCodesLoading) return;
+  if (!qboConnected) {
+    setQboTaxCodesEnabled(false);
+    setQboTaxCodesHint("Connect QuickBooks Online to load tax codes.");
+    renderQboTaxCodesOptions([]);
+    return;
+  }
+  if (qboTaxCodesCache.length && !force) {
+    renderQboTaxCodesOptions(qboTaxCodesCache);
+    setQboTaxCodesHint(`Loaded ${qboTaxCodesCache.length} tax codes.`);
+    setQboTaxCodesEnabled(true);
+    return;
+  }
+
+  qboTaxCodesLoading = true;
+  setQboTaxCodesEnabled(false);
+  setQboTaxCodesHint("Loading QBO tax codes...");
+  try {
+    const res = await fetch(
+      `/api/qbo/tax-codes?companyId=${encodeURIComponent(String(activeCompanyId))}`
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load QBO tax codes");
+    const taxCodes = Array.isArray(data.taxCodes) ? data.taxCodes : [];
+    qboTaxCodesCache = taxCodes;
+    renderQboTaxCodesOptions(taxCodes);
+    setQboTaxCodesHint(taxCodes.length ? `Loaded ${taxCodes.length} tax codes.` : "No tax codes found.");
+  } catch (err) {
+    setQboTaxCodesHint(err?.message ? String(err.message) : "Unable to load QBO tax codes.");
+    renderQboTaxCodesOptions(qboTaxCodesCache);
+  } finally {
+    qboTaxCodesLoading = false;
+    setQboTaxCodesEnabled(qboConnected);
+  }
+}
+
 async function loadQboStatus() {
   if (!activeCompanyId) return;
   const res = await fetch(`/api/qbo/status?companyId=${encodeURIComponent(String(activeCompanyId))}`);
@@ -662,8 +764,12 @@ async function loadQboStatus() {
     loadQboIncomeAccounts().catch((err) =>
       setQboIncomeAccountsHint(err?.message ? String(err.message) : "Unable to load QBO income accounts.")
     );
+    loadQboTaxCodes().catch((err) =>
+      setQboTaxCodesHint(err?.message ? String(err.message) : "Unable to load QBO tax codes.")
+    );
   } else {
     loadQboIncomeAccounts().catch(() => null);
+    loadQboTaxCodes().catch(() => null);
   }
   return data;
 }
@@ -862,10 +968,21 @@ qboIncomeAccountsSelect?.addEventListener("change", () => {
   syncQboIncomeAccountIdsFromSelect();
 });
 
+qboDefaultTaxCodeSelect?.addEventListener("change", () => {
+  syncQboDefaultTaxCodeFromSelect();
+});
+
 qboIncomeAccountsRefreshBtn?.addEventListener("click", async (e) => {
   e.preventDefault();
   await loadQboIncomeAccounts({ force: true }).catch((err) =>
     setQboIncomeAccountsHint(err?.message ? String(err.message) : "Unable to load QBO income accounts.")
+  );
+});
+
+qboTaxCodesRefreshBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  await loadQboTaxCodes({ force: true }).catch((err) =>
+    setQboTaxCodesHint(err?.message ? String(err.message) : "Unable to load QBO tax codes.")
   );
 });
 
