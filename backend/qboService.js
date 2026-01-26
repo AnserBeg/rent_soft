@@ -351,11 +351,9 @@ function extractRoNumberFromDoc(doc) {
       const isRoField =
         name &&
         /^(ro\s*#|ro\s*number|rental\s*order\s*(id|#|number)?)$/i.test(name);
-      if (isRoField) {
-        const roMatch = value.match(/\bRO-[A-Za-z0-9-]+\b/i);
-        if (roMatch) return roMatch[0];
-        return value;
-      }
+      const roMatch = value.match(/\bRO-[A-Za-z0-9-]+\b/i);
+      if (roMatch && (isRoField || !name)) return roMatch[0];
+      if (isRoField) return value;
     }
   }
 
