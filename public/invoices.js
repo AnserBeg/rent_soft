@@ -139,7 +139,9 @@ async function syncQbo() {
   try {
     const since = String(syncSinceInput?.value || "").trim();
     const until = String(syncUntilInput?.value || "").trim();
-    const payload = { companyId: activeCompanyId, mode: "query" };
+    const payload = { companyId: activeCompanyId };
+    const useQuery = Boolean(since || until);
+    if (useQuery) payload.mode = "query";
     if (since) payload.since = since;
     if (until) payload.until = until;
     const res = await fetch("/api/qbo/sync", {

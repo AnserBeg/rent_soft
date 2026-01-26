@@ -1041,6 +1041,25 @@ function shouldFallbackToTxnDate(err) {
   return combined.includes("metadata") || combined.includes("lastupdatedtime");
 }
 
+function normalizeCdcEntityType(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  if (lower === "invoice") return "Invoice";
+  if (lower === "creditmemo" || lower === "credit_memo" || lower === "credit memo") return "CreditMemo";
+  return raw;
+}
+
+function extractCdcDeletedItems(response) {
+  if (!response) return [];
+  const deleted =
+    (Array.isArray(response.Deleted) && response.Deleted) ||
+    (Array.isArray(response.deleted) && response.deleted) ||
+    [];
+  if (!Array.isArray(deleted) || !deleted.length) return [];
+  return deleted;
+}
+
 async function runQuerySync({ companyId, entities, sinceDate, untilDate, sinceIsDateOnly = false, untilIsDateOnly = false }) {
   const entityList = Array.isArray(entities) && entities.length ? entities : ["Invoice", "CreditMemo"];
   const results = [];
@@ -1113,6 +1132,9 @@ async function runQuerySync({ companyId, entities, sinceDate, untilDate, sinceIs
 
 async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], since = null, until = null, mode = null }) {
   const entityList = Array.isArray(entities) && entities.length ? entities : ["Invoice", "CreditMemo"];
+  const entityListNormalized = entityList
+    .map((entity) => normalizeCdcEntityType(entity) || String(entity || "").trim())
+    .filter(Boolean);
   const state = await getQboSyncState({ companyId, entityName: "CDC" });
   const defaultSince = () => {
     const d = new Date();
@@ -1138,6 +1160,7 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], sin
   }
   const out = [];
   let cdcFailed = false;
+  let cdcHadChanges = false;
 
   if (String(mode || "").toLowerCase() !== "query") {
     try {
@@ -1145,6 +1168,31 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], sin
       const query = `cdc?entities=${encodeURIComponent(entityList.join(","))}&changedSince=${encodeURIComponent(sinceIso)}`;
       const data = await qboApiRequest({ companyId, method: "GET", path: query });
       const response = data?.CDCResponse || {};
+      const deletedItems = extractCdcDeletedItems(response);
+      for (const item of deletedItems) {
+        const entityType = normalizeCdcEntityType(
+          item?.type ||
+            item?.Type ||
+            item?.entityType ||
+            item?.EntityType ||
+            item?.name ||
+            item?.Name ||
+            item?.entityName ||
+            item?.EntityName ||
+            item?.objectType ||
+            item?.ObjectType
+        );
+        const entityId = item?.id || item?.Id || item?.entityId || item?.EntityId;
+        if (!entityType || !entityId) continue;
+        if (entityListNormalized.length && !entityListNormalized.includes(entityType)) continue;
+        await markQboDocumentRemoved({
+          companyId,
+          entityType,
+          entityId,
+          isDeleted: true,
+        });
+        cdcHadChanges = true;
+      }
       for (const name of entityList) {
         const items = response[name] || [];
         for (const item of items) {
@@ -1174,6 +1222,7 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], sin
             raw: doc,
           });
           out.push(stored);
+          cdcHadChanges = true;
         }
       }
     } catch {
@@ -1181,7 +1230,7 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], sin
     }
   }
 
-  if (String(mode || "").toLowerCase() === "query" || cdcFailed || out.length === 0) {
+  if (String(mode || "").toLowerCase() === "query" || cdcFailed || (!cdcHadChanges && out.length === 0)) {
     const queried = await runQuerySync({
       companyId,
       entities: entityList,
