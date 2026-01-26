@@ -716,26 +716,41 @@ async function createDraftInvoice({
     }
   }
 
+  const lineMath = lines.map((line) => {
+    const qty = Number((line.units * line.quantity).toFixed(5));
+    const unitPrice = Number(line.rateAmount.toFixed(2));
+    // QBO validates Amount == UnitPrice * Qty using decimal math.
+    // With Qty at 5dp and UnitPrice at 2dp, use 7dp for Amount to avoid rounding mismatches.
+    const amount = Number((qty * unitPrice).toFixed(7));
+    return {
+      lineItemId: line.lineItemId,
+      typeId: line.typeId,
+      typeName: line.typeName,
+      qboItemId: line.qboItemId,
+      qty,
+      unitPrice,
+      amount,
+      units: line.units,
+      quantity: line.quantity,
+      rateAmount: line.rateAmount,
+    };
+  });
+
   const payload = {
     CustomerRef: { value: String(order.qboCustomerId) },
     TxnDate: toQboDate(periodStart),
     PrivateNote: buildPrivateNote({ roNumber: order.roNumber, orderId, periodKey, extraTags }),
-    Line: lines.map((line) => {
-      const qty = Number((line.units * line.quantity).toFixed(5));
-      const unitPrice = Number(line.rateAmount.toFixed(2));
-      // QBO validates Amount == UnitPrice * Qty using decimal math.
-      // With Qty at 5dp and UnitPrice at 2dp, use 7dp for Amount to avoid rounding mismatches.
-      const amount = Number((qty * unitPrice).toFixed(7));
+    Line: lineMath.map((line) => {
       const salesDetail = {
         ItemRef: { value: String(line.qboItemId) },
-        Qty: qty,
-        UnitPrice: unitPrice,
+        Qty: line.qty,
+        UnitPrice: line.unitPrice,
       };
       if (defaultTaxCode) {
         salesDetail.TaxCodeRef = { value: defaultTaxCode };
       }
       return {
-        Amount: amount,
+        Amount: line.amount,
         DetailType: "SalesItemLineDetail",
         Description: `${line.typeName} (rental)`,
         SalesItemLineDetail: salesDetail,
@@ -771,6 +786,7 @@ async function createDraftInvoice({
       error: err?.message ? String(err.message) : "Unknown error",
       status: err?.status || null,
       payload: err?.payload || null,
+      lineMath,
     });
     throw err;
   }
@@ -841,25 +857,40 @@ async function createDraftCreditMemo({
   const docNumber = useQboAutoDocNumber()
     ? null
     : buildDocNumber({ roNumber: order.roNumber, orderId, periodKey, suffix: docSuffix });
+  const creditLineMath = lines.map((line) => {
+    const qty = Number((line.units * line.quantity).toFixed(5));
+    const unitPrice = Number(line.rateAmount.toFixed(2));
+    // Keep Amount aligned with Qty/UnitPrice precision to satisfy QBO validation.
+    const amount = Number((qty * unitPrice).toFixed(7));
+    return {
+      lineItemId: line.lineItemId,
+      typeId: line.typeId,
+      typeName: line.typeName,
+      qboItemId: line.qboItemId,
+      qty,
+      unitPrice,
+      amount,
+      units: line.units,
+      quantity: line.quantity,
+      rateAmount: line.rateAmount,
+    };
+  });
+
   const payload = {
     CustomerRef: { value: String(order.qboCustomerId) },
     TxnDate: toQboDate(periodStart),
     PrivateNote: buildPrivateNote({ roNumber: order.roNumber, orderId, periodKey }),
-    Line: lines.map((line) => {
-      const qty = Number((line.units * line.quantity).toFixed(5));
-      const unitPrice = Number(line.rateAmount.toFixed(2));
-      // Keep Amount aligned with Qty/UnitPrice precision to satisfy QBO validation.
-      const amount = Number((qty * unitPrice).toFixed(7));
+    Line: creditLineMath.map((line) => {
       const salesDetail = {
         ItemRef: { value: String(line.qboItemId) },
-        Qty: qty,
-        UnitPrice: unitPrice,
+        Qty: line.qty,
+        UnitPrice: line.unitPrice,
       };
       if (defaultTaxCode) {
         salesDetail.TaxCodeRef = { value: defaultTaxCode };
       }
       return {
-        Amount: amount,
+        Amount: line.amount,
         DetailType: "SalesItemLineDetail",
         Description: `${line.typeName} (credit)`,
         SalesItemLineDetail: salesDetail,
