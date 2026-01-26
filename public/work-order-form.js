@@ -26,11 +26,15 @@ const markOpenBtn = document.getElementById("mark-open");
 const params = new URLSearchParams(window.location.search);
 const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
 const workOrderId = params.get("id");
+const initialUnitId = params.get("unitId");
+const initialSummary = params.get("summary");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let partsCache = [];
 let equipmentCache = [];
 let editingWorkOrder = null;
+let pendingUnitId = initialUnitId ? String(initialUnitId) : null;
+let pendingSummary = initialSummary ? String(initialSummary) : null;
 
 function keyForWorkOrders(companyId) {
   return `rentSoft.workOrders.${companyId}`;
@@ -171,6 +175,14 @@ function autoResizeTextarea(textarea) {
   if (!textarea) return;
   textarea.style.height = "auto";
   textarea.style.height = `${textarea.scrollHeight}px`;
+}
+
+function applyPrefillToForm() {
+  if (workOrderId) return;
+  if (workSummaryInput && pendingSummary && !String(workSummaryInput.value || "").trim()) {
+    workSummaryInput.value = pendingSummary;
+    autoResizeTextarea(workSummaryInput);
+  }
 }
 
 function buildPartRow(data = {}) {
@@ -412,6 +424,17 @@ async function loadEquipment() {
       option.textContent = label;
       unitSelect.appendChild(option);
     });
+    if (pendingUnitId && !editingWorkOrder) {
+      const match = Array.from(unitSelect.options).some((opt) => String(opt.value) === pendingUnitId);
+      if (!match) {
+        const option = document.createElement("option");
+        option.value = pendingUnitId;
+        option.textContent = `Unit ${pendingUnitId} (from dispatch)`;
+        unitSelect.appendChild(option);
+      }
+      unitSelect.value = pendingUnitId;
+      pendingUnitId = null;
+    }
     if (editingWorkOrder?.unitId) unitSelect.value = String(editingWorkOrder.unitId);
     unitSelect.disabled = false;
     if (unitMeta) unitMeta.textContent = equipmentCache.length ? `${equipmentCache.length} units available` : "No units found.";
@@ -442,6 +465,7 @@ function initForm() {
     if (serviceStatusSelect) serviceStatusSelect.value = "out_of_service";
   }
 
+  applyPrefillToForm();
   updateTotals();
   updateServiceHint();
   syncStatusActions();

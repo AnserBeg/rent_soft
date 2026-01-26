@@ -181,6 +181,11 @@ const lineItemActualReturnInput = document.getElementById("lineitem-actual-retur
 const lineItemActualHint = document.getElementById("lineitem-actual-hint");
 const lineItemActualSaveBtn = document.getElementById("save-lineitem-actual");
 const lineItemActualSaveAllBtn = document.getElementById("save-lineitem-actual-all");
+const lineItemReturnLocationModal = document.getElementById("lineitem-return-location-modal");
+const closeLineItemReturnLocationModalBtn = document.getElementById("close-lineitem-return-location-modal");
+const lineItemReturnLocationHint = document.getElementById("lineitem-return-location-hint");
+const lineItemReturnLocationCancelBtn = document.getElementById("cancel-lineitem-return-location");
+const lineItemReturnLocationApplyBtn = document.getElementById("apply-lineitem-return-location");
 const lineItemPauseToggleBtn = document.getElementById("toggle-lineitem-pause");
 const lineItemPauseDetails = document.getElementById("lineitem-pause-details");
 const lineItemPauseStartInput = document.getElementById("lineitem-pause-start");
@@ -217,6 +222,7 @@ let editingOrderId = initialOrderId ? Number(initialOrderId) : null;
 let editingLineItemTempId = null;
 let editingLineItemTimeTempId = null;
 let editingLineItemActualTempId = null;
+let lineItemReturnLocationResolver = null;
 
 let customersCache = [];
 let customerPricingByTypeId = new Map();
@@ -2761,6 +2767,39 @@ function closeLineItemActualModal() {
   if (lineItemActualHint) lineItemActualHint.textContent = "";
 }
 
+function getReturnLocationChoice() {
+  const inputs = Array.from(document.querySelectorAll('input[name="return-location-choice"]'));
+  const checked = inputs.find((input) => input.checked);
+  return checked ? String(checked.value || "none") : "none";
+}
+
+function setDefaultReturnLocationChoice() {
+  const inputs = Array.from(document.querySelectorAll('input[name="return-location-choice"]'));
+  inputs.forEach((input) => {
+    input.checked = String(input.value) === "none";
+  });
+}
+
+function closeReturnLocationModal(choice = "none") {
+  lineItemReturnLocationModal?.classList.remove("show");
+  if (lineItemReturnLocationHint) lineItemReturnLocationHint.textContent = "";
+  if (lineItemReturnLocationResolver) {
+    const resolve = lineItemReturnLocationResolver;
+    lineItemReturnLocationResolver = null;
+    resolve(choice);
+  }
+}
+
+function openReturnLocationModal() {
+  if (!lineItemReturnLocationModal) return Promise.resolve("none");
+  setDefaultReturnLocationChoice();
+  if (lineItemReturnLocationHint) lineItemReturnLocationHint.textContent = "";
+  lineItemReturnLocationModal.classList.add("show");
+  return new Promise((resolve) => {
+    lineItemReturnLocationResolver = resolve;
+  });
+}
+
 function getEditingLineItemActual() {
   if (!editingLineItemActualTempId) return null;
   return (draft.lineItems || []).find((x) => x.tempId === editingLineItemActualTempId) || null;
@@ -2843,6 +2882,35 @@ function collectActualModalTargets() {
     targetPickup: fromLocalInputValue(pickupValue),
     targetReturn: fromLocalInputValue(returnValue),
   };
+}
+
+function uniqueEquipmentIdsFromLineItems(items) {
+  const ids = new Set();
+  (items || []).forEach((li) => {
+    (li?.inventoryIds || []).forEach((id) => {
+      const num = Number(id);
+      if (Number.isFinite(num)) ids.add(num);
+    });
+  });
+  return Array.from(ids);
+}
+
+async function setCurrentLocationToBaseForEquipmentIds(equipmentIds) {
+  const ids = Array.isArray(equipmentIds) ? equipmentIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)) : [];
+  if (!activeCompanyId || !ids.length) return;
+  const res = await fetch("/api/equipment/current-location/base", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId: activeCompanyId, equipmentIds: ids }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to update current location.");
+  const idSet = new Set(ids);
+  equipmentCache = equipmentCache.map((eq) => {
+    if (!idSet.has(Number(eq.id))) return eq;
+    if (!eq.location_id) return eq;
+    return { ...eq, current_location_id: eq.location_id, current_location: eq.location };
+  });
 }
 
 async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn, skipPickupInvoice = false, forcePickup = false }) {
@@ -4536,6 +4604,25 @@ lineItemActualModal?.addEventListener("click", (e) => {
   }
 });
 
+closeLineItemReturnLocationModalBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  closeReturnLocationModal("none");
+});
+
+lineItemReturnLocationCancelBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  closeReturnLocationModal("none");
+});
+
+lineItemReturnLocationApplyBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  closeReturnLocationModal(getReturnLocationChoice());
+});
+
+lineItemReturnLocationModal?.addEventListener("click", (e) => {
+  if (e.target === lineItemReturnLocationModal) closeReturnLocationModal("none");
+});
+
 lineItemPauseToggleBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   if (!lineItemPauseDetails) return;
@@ -4578,6 +4665,11 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
   const { targetPickup, targetReturn } = collectActualModalTargets();
   const pickupChanged = targetPickup !== (li.pickedUpAt || null);
   const returnChanged = targetReturn !== (li.returnedAt || null);
+  const returnAdded = !!targetReturn && !li.returnedAt;
+  let returnLocationChoice = "none";
+  if (returnAdded) {
+    returnLocationChoice = await openReturnLocationModal();
+  }
   if (!pickupChanged && !returnChanged) {
     if (lineItemActualHint) lineItemActualHint.textContent = "No changes to save.";
     return;
@@ -4590,6 +4682,7 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
   lineItemActualSaveBtn.disabled = true;
   if (lineItemActualHint) lineItemActualHint.textContent = "Saving actual period...";
   try {
+    let updatedLineItem = li;
     if (lineItemNeedsOrderSave(li)) {
       const signature = lineItemPersistedSignature(li);
       const signatureIndex = lineItemSignatureIndex(signature, li.tempId);
@@ -4608,8 +4701,13 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
       }
       const forcePickup = pickupChanged && !!targetPickup;
       await applyActualPeriodToLineItem(refreshed, { targetPickup, targetReturn, forcePickup });
+      updatedLineItem = refreshed;
     } else {
       await applyActualPeriodToLineItem(li, { targetPickup, targetReturn });
+    }
+    if (returnLocationChoice === "base") {
+      const equipmentIds = uniqueEquipmentIdsFromLineItems([updatedLineItem]);
+      await setCurrentLocationToBaseForEquipmentIds(equipmentIds);
     }
     renderLineItems();
     scheduleDraftSave();
@@ -4629,6 +4727,12 @@ lineItemActualSaveAllBtn?.addEventListener("click", async (e) => {
     return;
   }
   const { targetPickup, targetReturn } = collectActualModalTargets();
+  const returnAddedAny =
+    !!targetReturn && (draft.lineItems || []).some((li) => lineItemHasUnit(li) && !li.returnedAt);
+  let returnLocationChoice = "none";
+  if (returnAddedAny) {
+    returnLocationChoice = await openReturnLocationModal();
+  }
   if (!editingOrderId) {
     draft.pickupInvoiceMode = targetPickup ? "bulk" : null;
     draft.pickupInvoiceAt = targetPickup || null;
@@ -4653,6 +4757,10 @@ lineItemActualSaveAllBtn?.addEventListener("click", async (e) => {
       !!targetPickup && pickupLineItems.some((li) => (li.pickedUpAt || null) !== targetPickup);
     for (const li of pickupLineItems) {
       await applyActualPeriodToLineItem(li, { targetPickup, targetReturn, skipPickupInvoice: shouldInvoice });
+    }
+    if (returnLocationChoice === "base") {
+      const equipmentIds = uniqueEquipmentIdsFromLineItems(pickupLineItems);
+      await setCurrentLocationToBaseForEquipmentIds(equipmentIds);
     }
     if (shouldInvoice && editingOrderId) {
       const lineItemIds = pickupLineItems

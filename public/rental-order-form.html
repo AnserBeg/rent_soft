@@ -584,6 +584,31 @@
     </div>
   </div>
 
+  <div class="modal" id="lineitem-return-location-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Update current location</h3>
+        <button class="ghost small" id="close-lineitem-return-location-modal" type="button">Close</button>
+      </div>
+      <div class="stack">
+        <p class="hint" style="margin:0;">You just added an actual return date. Choose how to update current location.</p>
+        <label>
+          <input type="radio" name="return-location-choice" value="base" />
+          Set current location to base location
+        </label>
+        <label>
+          <input type="radio" name="return-location-choice" value="none" checked />
+          Do nothing
+        </label>
+        <p class="hint" id="lineitem-return-location-hint" style="margin:0;"></p>
+        <div class="inline-actions" style="gap:8px;">
+          <button class="ghost small" id="cancel-lineitem-return-location" type="button">Cancel</button>
+          <button class="primary small" id="apply-lineitem-return-location" type="button">Continue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="modal" id="request-reject-modal">
     <div class="modal-content">
       <div class="modal-header">

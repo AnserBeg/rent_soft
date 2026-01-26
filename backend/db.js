@@ -1955,6 +1955,36 @@ async function listEquipmentCurrentLocationIdsForIds({ companyId, equipmentIds }
   }));
 }
 
+async function listEquipmentLocationIdsForIds({ companyId, equipmentIds }) {
+  const ids = Array.isArray(equipmentIds) ? equipmentIds.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : [];
+  if (!ids.length) return [];
+  const res = await pool.query(
+    `SELECT id, location_id, current_location_id
+     FROM equipment
+     WHERE company_id = $1 AND id = ANY($2::int[])`,
+    [companyId, ids]
+  );
+  return res.rows.map((r) => ({
+    id: Number(r.id),
+    location_id: r.location_id === null ? null : Number(r.location_id),
+    current_location_id: r.current_location_id === null ? null : Number(r.current_location_id),
+  }));
+}
+
+async function setEquipmentCurrentLocationToBaseForIds({ companyId, equipmentIds }) {
+  const ids = Array.isArray(equipmentIds) ? equipmentIds.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : [];
+  if (!ids.length) return 0;
+  const res = await pool.query(
+    `UPDATE equipment
+        SET current_location_id = location_id
+      WHERE company_id = $1
+        AND id = ANY($2::int[])
+        AND location_id IS NOT NULL`,
+    [companyId, ids]
+  );
+  return res.rowCount || 0;
+}
+
 async function getLocationSnapshot({ companyId, id }) {
   const locId = Number(id);
   if (!Number.isFinite(locId)) return null;
@@ -12236,11 +12266,13 @@ module.exports = {
   deleteLocation,
   getEquipmentLocationIds,
   listEquipmentCurrentLocationIdsForIds,
+  listEquipmentLocationIdsForIds,
   recordEquipmentCurrentLocationChange,
   cleanupNonBaseLocationIfUnused,
   listEquipmentCurrentLocationHistory,
   listEquipment,
   setEquipmentCurrentLocationForIds,
+  setEquipmentCurrentLocationToBaseForIds,
   createEquipment,
   updateEquipment,
   deleteEquipment,

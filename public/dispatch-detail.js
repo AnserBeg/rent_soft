@@ -30,6 +30,7 @@ const guardNotesImages = document.getElementById("guard-notes-images");
 const guardNotesPreviews = document.getElementById("guard-notes-previews");
 const guardNotesClear = document.getElementById("guard-notes-clear");
 const guardNotesStatus = document.getElementById("guard-notes-status");
+const createWorkOrderBtn = document.getElementById("create-work-order");
 const openSiteAddressPickerBtn = document.getElementById("open-site-address-picker");
 const siteAddressStatus = document.getElementById("site-address-status");
 const siteAddressPickerModal = document.getElementById("site-address-picker-modal");
@@ -935,6 +936,43 @@ function readGuardNotesFromStorage(key) {
   }
 }
 
+function buildDispatchWorkOrderSummary() {
+  const inputNote = String(guardNotesInput?.value || "").trim();
+  if (inputNote) return inputNote;
+
+  const latest = guardNotesState.length ? guardNotesState[guardNotesState.length - 1] : null;
+  if (!latest) return "";
+  const noteText = String(latest.note || "").trim();
+  const imageUrls = (latest.images || []).map((img) => img?.url).filter(Boolean);
+  const metaParts = [];
+  if (latest.userName) metaParts.push(`By ${latest.userName}`);
+  if (latest.createdAt) metaParts.push(`At ${fmtDate(latest.createdAt, true)}`);
+  const header = metaParts.length ? `Dispatch note (${metaParts.join(" · ")}):` : "Dispatch note:";
+  const details = noteText ? `${header}\n${noteText}` : header;
+  if (!imageUrls.length) return details;
+  return `${details}\nPhotos: ${imageUrls.join(", ")}`;
+}
+
+function openWorkOrderFromDispatch() {
+  if (!activeCompanyId) {
+    if (guardNotesStatus) guardNotesStatus.textContent = "No active company session.";
+    return;
+  }
+  const equipmentIdValue = selectedUnit?.assignment?.equipment_id;
+  if (!equipmentIdValue) {
+    if (guardNotesStatus) guardNotesStatus.textContent = "Select a unit to create a work order.";
+    return;
+  }
+  const summary = buildDispatchWorkOrderSummary();
+  const search = new URLSearchParams();
+  search.set("companyId", String(activeCompanyId));
+  search.set("unitId", String(equipmentIdValue));
+  if (orderId) search.set("orderId", String(orderId));
+  if (summary) search.set("summary", summary);
+  search.set("source", "dispatch");
+  window.location.href = `work-order-form.html?${search.toString()}`;
+}
+
 function renderGuardNoteImages(images) {
   const list = Array.isArray(images) ? images : [];
   if (!list.length) return "";
@@ -1589,6 +1627,11 @@ guardNotesPreviews?.addEventListener("click", (e) => {
 guardNotesClear?.addEventListener("click", () => {
   if (!selectedUnit) return;
   clearGuardNotes(selectedUnit);
+});
+
+createWorkOrderBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  openWorkOrderFromDispatch();
 });
 
 openSiteAddressPickerBtn?.addEventListener("click", (e) => {

@@ -35,11 +35,13 @@ const {
   deleteLocation,
   getEquipmentLocationIds,
   listEquipmentCurrentLocationIdsForIds,
+  listEquipmentLocationIdsForIds,
   recordEquipmentCurrentLocationChange,
   cleanupNonBaseLocationIfUnused,
   listEquipmentCurrentLocationHistory,
   listEquipment,
   setEquipmentCurrentLocationForIds,
+  setEquipmentCurrentLocationToBaseForIds,
   createEquipment,
   updateEquipment,
   deleteEquipment,
@@ -5836,6 +5838,46 @@ app.delete(
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     await deleteEquipmentBundle({ id: Number(id), companyId: Number(companyId) });
     res.status(204).end();
+  })
+);
+
+app.post(
+  "/api/equipment/current-location/base",
+  asyncHandler(async (req, res) => {
+    const { companyId, equipmentIds } = req.body || {};
+    const cid = Number(companyId);
+    if (!Number.isFinite(cid)) return res.status(400).json({ error: "companyId is required." });
+    const ids = Array.isArray(equipmentIds) ? equipmentIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)) : [];
+    if (!ids.length) return res.json({ ok: true, updated: 0 });
+
+    const rows = await listEquipmentLocationIdsForIds({ companyId: cid, equipmentIds: ids });
+    if (!rows.length) return res.json({ ok: true, updated: 0 });
+
+    const updateIds = rows.filter((row) => Number.isFinite(row.location_id)).map((row) => Number(row.id));
+    if (!updateIds.length) return res.json({ ok: true, updated: 0 });
+
+    const updated = await setEquipmentCurrentLocationToBaseForIds({ companyId: cid, equipmentIds: updateIds });
+    const cleanupIds = new Set();
+
+    for (const row of rows) {
+      if (!Number.isFinite(row.location_id)) continue;
+      if (String(row.current_location_id || "") === String(row.location_id || "")) continue;
+      await recordEquipmentCurrentLocationChange({
+        companyId: cid,
+        equipmentId: Number(row.id),
+        fromLocationId: row.current_location_id ?? null,
+        toLocationId: Number(row.location_id),
+      }).catch(() => null);
+      if (row.current_location_id && Number(row.current_location_id) !== Number(row.location_id)) {
+        cleanupIds.add(Number(row.current_location_id));
+      }
+    }
+
+    for (const oldId of cleanupIds) {
+      await cleanupNonBaseLocationIfUnused({ companyId: cid, locationId: oldId }).catch(() => null);
+    }
+
+    res.json({ ok: true, updated });
   })
 );
 
