@@ -458,6 +458,14 @@ const RATE_LIMIT_LOGIN_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_LOGIN
 const RATE_LIMIT_LOGIN_MAX = parseRateLimitMax(process.env.RATE_LIMIT_LOGIN_MAX, 5);
 const RATE_LIMIT_API_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_API_WINDOW_MS, 60 * 60 * 1000);
 const RATE_LIMIT_API_MAX = parseRateLimitMax(process.env.RATE_LIMIT_API_MAX, 100);
+const RATE_LIMIT_AUTH_ME_WINDOW_MS = parseRateLimitMs(
+  process.env.RATE_LIMIT_AUTH_ME_WINDOW_MS,
+  RATE_LIMIT_API_WINDOW_MS
+);
+const RATE_LIMIT_AUTH_ME_MAX = parseRateLimitMax(
+  process.env.RATE_LIMIT_AUTH_ME_MAX,
+  Math.max(RATE_LIMIT_API_MAX, 20000)
+);
 const RATE_LIMIT_QBO_SYNC_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_QBO_SYNC_WINDOW_MS, 60 * 60 * 1000);
 const RATE_LIMIT_QBO_SYNC_MAX = parseRateLimitMax(process.env.RATE_LIMIT_QBO_SYNC_MAX, 10);
 const QBO_OAUTH_STATE_TTL_MS = parseRateLimitMs(process.env.QBO_OAUTH_STATE_TTL_MS, 10 * 60 * 1000);
@@ -1061,6 +1069,12 @@ function rateLimitKeyFromAuthOrIp(req) {
   return req.ip || req.socket?.remoteAddress || "unknown";
 }
 
+function rateLimitKeyFromTokenOrIp(req) {
+  const token = readCompanyUserToken(req);
+  if (token) return `auth:${token}`;
+  return req.ip || req.socket?.remoteAddress || "unknown";
+}
+
 const loginLimiter = rateLimit({
   windowMs: RATE_LIMIT_LOGIN_WINDOW_MS,
   max: RATE_LIMIT_LOGIN_MAX,
@@ -1073,6 +1087,7 @@ const apiLimiterSkipPaths = new Set([
   "/api/login",
   "/api/customers/login",
   "/api/storefront/customers/login",
+  "/api/auth/me",
   "/api/qbo/callback",
   "/api/qbo/webhooks",
 ]);
@@ -1082,12 +1097,23 @@ const apiLimiter = rateLimit({
   max: RATE_LIMIT_API_MAX,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: rateLimitKeyFromTokenOrIp,
   handler: buildRateLimitHandler("Too many requests, please try again later."),
   skip: (req) => {
     if (req.method === "OPTIONS") return true;
     const apiPath = getApiPath(req);
     return apiLimiterSkipPaths.has(apiPath);
   },
+});
+
+const authMeLimiter = rateLimit({
+  windowMs: RATE_LIMIT_AUTH_ME_WINDOW_MS,
+  max: RATE_LIMIT_AUTH_ME_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: rateLimitKeyFromTokenOrIp,
+  handler: buildRateLimitHandler("Too many requests, please try again later."),
+  skip: (req) => req.method === "OPTIONS",
 });
 
 const qboSyncLimiter = rateLimit({
@@ -1503,6 +1529,7 @@ app.get(
 
 app.get(
   "/api/auth/me",
+  authMeLimiter,
   asyncHandler(async (req, res) => {
     // Auth is enforced by the /api middleware above.
     res.json({
