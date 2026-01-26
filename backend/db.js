@@ -12253,7 +12253,7 @@ async function findRentalOrderIdByRoNumber({ companyId, roNumber } = {}) {
   if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
   if (!raw) return null;
   const res = await pool.query(
-    `SELECT id FROM rental_orders WHERE company_id = $1 AND ro_number = $2 LIMIT 1`,
+    `SELECT id FROM rental_orders WHERE company_id = $1 AND UPPER(ro_number) = UPPER($2) LIMIT 1`,
     [cid, raw]
   );
   const row = res.rows?.[0] || null;

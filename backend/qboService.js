@@ -318,6 +318,34 @@ function buildPrivateNote({ roNumber, orderId, periodKey, extraTags = [] }) {
   return pieces.join(";");
 }
 
+function normalizeRoNumber(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const upper = raw.toUpperCase();
+  if (upper.startsWith("RO-")) return upper;
+  if (/^\d{2,4}-\d{3,6}$/.test(upper)) return `RO-${upper}`;
+  return upper;
+}
+
+function extractRoNumberFromText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const tag = raw.match(/RO=([A-Za-z0-9-]+)/i);
+  if (tag) {
+    const tagValue = String(tag[1] || "").trim();
+    const tagMatch = tagValue.match(/\b(RO-\d{2,4}-\d{3,6})\b/i);
+    if (tagMatch) return normalizeRoNumber(tagMatch[1]);
+    return normalizeRoNumber(tagValue);
+  }
+
+  const inlineTag = raw.match(/\bRO\s*#?\s*(\d{2,4}-\d{3,6})\b/i);
+  if (inlineTag) return normalizeRoNumber(inlineTag[1]);
+
+  const match = raw.match(/\b(RO-\d{2,4}-\d{3,6})\b/i);
+  if (match) return normalizeRoNumber(match[1]);
+  return null;
+}
+
 function extractRoNumberFromDoc(doc) {
   const candidates = [
     doc?.PrivateNote,
@@ -329,31 +357,24 @@ function extractRoNumberFromDoc(doc) {
     .filter(Boolean);
 
   for (const text of candidates) {
-    const tag = text.match(/RO=([A-Za-z0-9-]+)/i);
-    if (tag) return tag[1];
-  }
-
-  for (const text of candidates) {
-    const match = text.match(/\bRO-[A-Za-z0-9-]+\b/i);
-    if (match) {
-      return match[0].replace(/-\d{4}-\d{2}$/, "");
-    }
+    const ro = extractRoNumberFromText(text);
+    if (ro) return ro;
   }
 
   if (Array.isArray(doc?.CustomField)) {
     for (const field of doc.CustomField) {
       const value = String(field?.StringValue || "").trim();
       if (!value) continue;
-      const tag = value.match(/RO=([A-Za-z0-9-]+)/i);
-      if (tag) return tag[1];
+      const ro = extractRoNumberFromText(value);
+      if (ro) return ro;
 
       const name = String(field?.Name || field?.name || "").trim().toLowerCase();
       const isRoField =
         name &&
         /^(ro\s*#|ro\s*number|rental\s*order\s*(id|#|number)?)$/i.test(name);
-      const roMatch = value.match(/\bRO-[A-Za-z0-9-]+\b/i);
-      if (roMatch && (isRoField || !name)) return roMatch[0];
-      if (isRoField) return value;
+      const roMatch = extractRoNumberFromText(value);
+      if (roMatch && (isRoField || !name)) return roMatch;
+      if (isRoField) return normalizeRoNumber(value);
     }
   }
 
@@ -1009,7 +1030,15 @@ function toQboQueryTimestamp(date, { isDateOnly = false, boundary = "start" } = 
       d.setUTCHours(0, 0, 0, 0);
     }
   }
-  return d.toISOString();
+  return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+function shouldFallbackToTxnDate(err) {
+  const message = String(err?.message || "").toLowerCase();
+  const detail =
+    String(err?.payload?.Fault?.Error?.[0]?.Detail || err?.payload?.Fault?.Error?.[0]?.detail || "").toLowerCase();
+  const combined = `${message} ${detail}`;
+  return combined.includes("metadata") || combined.includes("lastupdatedtime");
 }
 
 async function runQuerySync({ companyId, entities, sinceDate, untilDate, sinceIsDateOnly = false, untilIsDateOnly = false }) {
@@ -1019,18 +1048,33 @@ async function runQuerySync({ companyId, entities, sinceDate, untilDate, sinceIs
   const until = untilDate || null;
   const sinceIso = toQboQueryTimestamp(since, { isDateOnly: sinceIsDateOnly, boundary: "start" });
   const untilIso = until ? toQboQueryTimestamp(until, { isDateOnly: untilIsDateOnly, boundary: "end" }) : null;
+  const sinceDateOnly = toQboDate(since);
+  const untilDateOnly = until ? toQboDate(until) : null;
   for (const name of entityList) {
     let startPosition = 1;
     const maxResults = 1000;
+    let useMetaQuery = true;
     while (true) {
-      const filters = [`MetaData.LastUpdatedTime >= '${sinceIso}'`];
-      if (untilIso) filters.push(`MetaData.LastUpdatedTime <= '${untilIso}'`);
+      const filters = useMetaQuery
+        ? [`MetaData.LastUpdatedTime >= '${sinceIso}'`]
+        : [`TxnDate >= '${sinceDateOnly}'`];
+      if (useMetaQuery && untilIso) filters.push(`MetaData.LastUpdatedTime <= '${untilIso}'`);
+      if (!useMetaQuery && untilDateOnly) filters.push(`TxnDate <= '${untilDateOnly}'`);
       const query = `select * from ${name} where ${filters.join(" AND ")} STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
-      const data = await qboApiRequest({
-        companyId,
-        method: "GET",
-        path: `query?query=${encodeURIComponent(query)}`,
-      });
+      let data;
+      try {
+        data = await qboApiRequest({
+          companyId,
+          method: "GET",
+          path: `query?query=${encodeURIComponent(query)}`,
+        });
+      } catch (err) {
+        if (useMetaQuery && startPosition === 1 && shouldFallbackToTxnDate(err)) {
+          useMetaQuery = false;
+          continue;
+        }
+        throw err;
+      }
       const response = data?.QueryResponse || {};
       const docs = Array.isArray(response[name]) ? response[name] : [];
       for (const doc of docs) {
