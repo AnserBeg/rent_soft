@@ -1,7 +1,87 @@
 const crypto = require("crypto");
 
 const DEFAULT_MINOR_VERSION = 75;
+const DEFAULT_AUTH_URL = "https://appcenter.intuit.com/connect/oauth2";
+const DEFAULT_TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const DEFAULT_REVOKE_URL = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke";
+const DEFAULT_DISCOVERY_URL = "https://developer.api.intuit.com/.well-known/openid_configuration";
+
+const discoveryState = {
+  loaded: false,
+  fetchedAt: null,
+  endpoints: {
+    authUrl: DEFAULT_AUTH_URL,
+    tokenUrl: DEFAULT_TOKEN_URL,
+    revokeUrl: DEFAULT_REVOKE_URL,
+  },
+};
+
+function getQboDiscoveryUrl() {
+  return String(process.env.QBO_DISCOVERY_URL || DEFAULT_DISCOVERY_URL).trim();
+}
+
+function getQboEndpoints() {
+  const authOverride = String(process.env.QBO_AUTH_URL || "").trim();
+  const tokenOverride = String(process.env.QBO_TOKEN_URL || "").trim();
+  const revokeOverride = String(process.env.QBO_REVOKE_URL || "").trim();
+  const endpoints = discoveryState.endpoints || {};
+  return {
+    authUrl: authOverride || endpoints.authUrl || DEFAULT_AUTH_URL,
+    tokenUrl: tokenOverride || endpoints.tokenUrl || DEFAULT_TOKEN_URL,
+    revokeUrl: revokeOverride || endpoints.revokeUrl || DEFAULT_REVOKE_URL,
+  };
+}
+
+async function initQboDiscovery() {
+  if (discoveryState.loaded) return discoveryState;
+  const url = getQboDiscoveryUrl();
+  if (!url) {
+    discoveryState.loaded = true;
+    discoveryState.fetchedAt = new Date().toISOString();
+    return discoveryState;
+  }
+
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timeout = controller ? setTimeout(() => controller.abort(), 5000) : null;
+
+  try {
+    const res = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: controller ? controller.signal : undefined,
+    });
+    if (!res.ok) {
+      throw new Error(`QBO discovery error (${res.status})`);
+    }
+    const data = await res.json().catch(() => null);
+    discoveryState.endpoints = {
+      authUrl: String(data?.authorization_endpoint || "").trim() || DEFAULT_AUTH_URL,
+      tokenUrl: String(data?.token_endpoint || "").trim() || DEFAULT_TOKEN_URL,
+      revokeUrl: String(data?.revocation_endpoint || "").trim() || DEFAULT_REVOKE_URL,
+    };
+    discoveryState.loaded = true;
+    discoveryState.fetchedAt = new Date().toISOString();
+    console.info("QBO discovery loaded", {
+      authUrl: discoveryState.endpoints.authUrl,
+      tokenUrl: discoveryState.endpoints.tokenUrl,
+      revokeUrl: discoveryState.endpoints.revokeUrl,
+    });
+  } catch (err) {
+    discoveryState.loaded = true;
+    discoveryState.fetchedAt = new Date().toISOString();
+    discoveryState.endpoints = {
+      authUrl: DEFAULT_AUTH_URL,
+      tokenUrl: DEFAULT_TOKEN_URL,
+      revokeUrl: DEFAULT_REVOKE_URL,
+    };
+    console.warn("QBO discovery failed; using default endpoints.", {
+      error: err?.message ? String(err.message) : "Unknown error",
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+
+  return discoveryState;
+}
 
 function getQboConfig() {
   const clientId = String(process.env.QBO_CLIENT_ID || "").trim();
@@ -9,8 +89,8 @@ function getQboConfig() {
   const redirectUri = String(process.env.QBO_REDIRECT_URI || "").trim();
   const env = String(process.env.QBO_ENV || "production").trim().toLowerCase();
   const minorVersion = Number(process.env.QBO_MINOR_VERSION || DEFAULT_MINOR_VERSION);
-  const revokeUrlRaw = String(process.env.QBO_REVOKE_URL || "").trim();
   const host = env === "sandbox" ? "https://sandbox-quickbooks.api.intuit.com" : "https://quickbooks.api.intuit.com";
+  const endpoints = getQboEndpoints();
   return {
     clientId,
     clientSecret,
@@ -18,11 +98,13 @@ function getQboConfig() {
     env,
     host,
     minorVersion: Number.isFinite(minorVersion) ? minorVersion : DEFAULT_MINOR_VERSION,
-    revokeUrl: revokeUrlRaw || DEFAULT_REVOKE_URL,
+    revokeUrl: endpoints.revokeUrl,
+    authUrl: endpoints.authUrl,
+    tokenUrl: endpoints.tokenUrl,
   };
 }
 
-function buildAuthUrl({ clientId, redirectUri, state, scopes } = {}) {
+function buildAuthUrl({ clientId, redirectUri, state, scopes, authUrl } = {}) {
   const scopeList = Array.isArray(scopes) && scopes.length ? scopes : ["com.intuit.quickbooks.accounting"];
   const params = new URLSearchParams({
     client_id: clientId,
@@ -31,7 +113,9 @@ function buildAuthUrl({ clientId, redirectUri, state, scopes } = {}) {
     redirect_uri: redirectUri,
     state: state || "",
   });
-  return `https://appcenter.intuit.com/connect/oauth2?${params.toString()}`;
+  const base = String(authUrl || getQboEndpoints().authUrl || DEFAULT_AUTH_URL).trim();
+  if (!base) throw new Error("QBO authorization URL is not configured.");
+  return `${base}?${params.toString()}`;
 }
 
 function buildBasicAuthHeader({ clientId, clientSecret }) {
@@ -39,7 +123,7 @@ function buildBasicAuthHeader({ clientId, clientSecret }) {
   return `Basic ${token}`;
 }
 
-async function requestToken({ grantType, code, refreshToken, redirectUri, clientId, clientSecret }) {
+async function requestToken({ grantType, code, refreshToken, redirectUri, clientId, clientSecret, tokenUrl }) {
   const body = new URLSearchParams({
     grant_type: grantType,
   });
@@ -47,7 +131,10 @@ async function requestToken({ grantType, code, refreshToken, redirectUri, client
   if (refreshToken) body.set("refresh_token", refreshToken);
   if (redirectUri) body.set("redirect_uri", redirectUri);
 
-  const res = await fetch("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", {
+  const resolvedTokenUrl = String(tokenUrl || getQboEndpoints().tokenUrl || DEFAULT_TOKEN_URL).trim();
+  if (!resolvedTokenUrl) throw new Error("QBO token URL is not configured.");
+
+  const res = await fetch(resolvedTokenUrl, {
     method: "POST",
     headers: {
       Authorization: buildBasicAuthHeader({ clientId, clientSecret }),
@@ -68,22 +155,24 @@ async function requestToken({ grantType, code, refreshToken, redirectUri, client
   return data;
 }
 
-async function exchangeAuthCode({ code, redirectUri, clientId, clientSecret }) {
+async function exchangeAuthCode({ code, redirectUri, clientId, clientSecret, tokenUrl }) {
   return await requestToken({
     grantType: "authorization_code",
     code,
     redirectUri,
     clientId,
     clientSecret,
+    tokenUrl,
   });
 }
 
-async function refreshAccessToken({ refreshToken, clientId, clientSecret }) {
+async function refreshAccessToken({ refreshToken, clientId, clientSecret, tokenUrl }) {
   return await requestToken({
     grantType: "refresh_token",
     refreshToken,
     clientId,
     clientSecret,
+    tokenUrl,
   });
 }
 
@@ -139,6 +228,11 @@ async function qboRequest({ host, realmId, accessToken, method = "GET", path, bo
   }
 
   const res = await fetch(url.toString(), { method, headers, body: payload });
+  const intuitTid =
+    res.headers?.get("intuit_tid") ||
+    res.headers?.get("intuit-tid") ||
+    res.headers?.get("intuit_tid".toUpperCase()) ||
+    null;
   const text = await res.text();
   let data = null;
   if (text) {
@@ -161,6 +255,8 @@ async function qboRequest({ host, realmId, accessToken, method = "GET", path, bo
     const err = new Error(message);
     err.status = res.status;
     err.payload = data;
+    err.intuitTid = intuitTid;
+    err.request = { method, path, realmId, host };
     throw err;
   }
   if (!res.ok) {
@@ -176,6 +272,8 @@ async function qboRequest({ host, realmId, accessToken, method = "GET", path, bo
     const err = new Error(message);
     err.status = res.status;
     err.payload = data;
+    err.intuitTid = intuitTid;
+    err.request = { method, path, realmId, host };
     throw err;
   }
   return data;
@@ -198,6 +296,7 @@ function verifyWebhookSignature({ payload, signature, verifierToken }) {
 
 module.exports = {
   getQboConfig,
+  initQboDiscovery,
   buildAuthUrl,
   exchangeAuthCode,
   refreshAccessToken,

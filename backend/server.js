@@ -150,6 +150,7 @@ const {
   listQboDocumentsUnassigned,
   listQboDocuments,
   getQboDocument,
+  listQboErrorLogs,
   listRentalOrdersWithOutItems,
   countOutItemsForOrder,
 } = require("./db");
@@ -178,7 +179,7 @@ const {
   normalizeQboItem,
   listQboIncomeAccounts,
 } = require("./qboService");
-const { verifyWebhookSignature, computeExpiryTimestamp } = require("./qbo");
+const { verifyWebhookSignature, computeExpiryTimestamp, initQboDiscovery } = require("./qbo");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -3831,6 +3832,7 @@ app.get(
       redirectUri: config.redirectUri,
       state,
       scopes: ["com.intuit.quickbooks.accounting"],
+      authUrl: config.authUrl,
     });
     res.redirect(url);
   })
@@ -3859,6 +3861,7 @@ app.get(
       redirectUri: config.redirectUri,
       clientId: config.clientId,
       clientSecret: config.clientSecret,
+      tokenUrl: config.tokenUrl,
     });
 
     await upsertQboConnection({
@@ -4353,6 +4356,21 @@ app.get(
       search,
     });
     res.json({ documents: docs });
+  })
+);
+
+app.get(
+  "/api/qbo/error-logs",
+  requireRole("owner"),
+  asyncHandler(async (req, res) => {
+    const { companyId, limit, offset } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const logs = await listQboErrorLogs({
+      companyId: Number(companyId),
+      limit,
+      offset,
+    });
+    res.json({ logs });
   })
 );
 
@@ -6003,6 +6021,7 @@ app.use((err, req, res, next) => {
 });
 
 async function start() {
+  await initQboDiscovery();
   await ensureTables();
   app.listen(PORT, () => {
     console.log(`API running on http://localhost:${PORT}`);

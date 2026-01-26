@@ -1133,6 +1133,25 @@ async function ensureTables() {
     `);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS qbo_error_logs (
+        id BIGSERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        realm_id TEXT,
+        endpoint TEXT,
+        method TEXT,
+        status INTEGER,
+        intuit_tid TEXT,
+        error_message TEXT,
+        error_payload JSONB,
+        context JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS qbo_error_logs_company_idx ON qbo_error_logs (company_id, created_at DESC);`
+    );
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS doc_sequences (
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
         doc_prefix TEXT NOT NULL,
@@ -12122,6 +12141,65 @@ async function getQboSyncState({ companyId, entityName } = {}) {
   return res.rows[0] || null;
 }
 
+function normalizeJsonbInput(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "object") return value;
+  return { value: String(value) };
+}
+
+async function logQboError({
+  companyId,
+  realmId = null,
+  endpoint = null,
+  method = null,
+  status = null,
+  intuitTid = null,
+  errorMessage = null,
+  errorPayload = null,
+  context = null,
+} = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const payload = normalizeJsonbInput(errorPayload);
+  const ctx = normalizeJsonbInput(context) || {};
+  await pool.query(
+    `
+    INSERT INTO qbo_error_logs
+      (company_id, realm_id, endpoint, method, status, intuit_tid, error_message, error_payload, context)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `,
+    [
+      cid,
+      realmId ? String(realmId) : null,
+      endpoint ? String(endpoint) : null,
+      method ? String(method).toUpperCase() : null,
+      Number.isFinite(Number(status)) ? Number(status) : null,
+      intuitTid ? String(intuitTid) : null,
+      errorMessage ? String(errorMessage) : null,
+      payload,
+      ctx,
+    ]
+  );
+}
+
+async function listQboErrorLogs({ companyId, limit = 50, offset = 0 } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const lim = Math.min(Math.max(Number(limit) || 50, 1), 500);
+  const off = Math.max(Number(offset) || 0, 0);
+  const res = await pool.query(
+    `
+    SELECT id, company_id, realm_id, endpoint, method, status, intuit_tid, error_message, error_payload, context, created_at
+      FROM qbo_error_logs
+     WHERE company_id = $1
+     ORDER BY created_at DESC
+     LIMIT $2 OFFSET $3
+    `,
+    [cid, lim, off]
+  );
+  return res.rows || [];
+}
+
 async function findRentalOrderIdByRoNumber({ companyId, roNumber } = {}) {
   const cid = Number(companyId);
   const raw = String(roNumber || "").trim();
@@ -12265,6 +12343,8 @@ module.exports = {
   buildRentalOrderBillingLines,
   upsertQboSyncState,
   getQboSyncState,
+  logQboError,
+  listQboErrorLogs,
   findRentalOrderIdByRoNumber,
   rescheduleLineItemEnd,
   setLineItemPickedUp,

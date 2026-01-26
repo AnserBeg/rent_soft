@@ -10,6 +10,7 @@ const {
   listQboDocumentsUnassigned,
   upsertQboSyncState,
   getQboSyncState,
+  logQboError,
   findRentalOrderIdByRoNumber,
   getRentalOrderQboContext,
   buildRentalOrderBillingLines,
@@ -111,6 +112,13 @@ async function refreshQboConnection({ companyId, connection, reason } = {}) {
       clientSecret: config.clientSecret,
     });
   } catch (err) {
+    await recordQboError({
+      companyId,
+      connection,
+      err,
+      stage: "refresh",
+      extraContext: { grantType: "refresh_token" },
+    });
     if (isAuthInvalidError(err)) {
       throw await invalidateQboConnection({ companyId, reason: reason || "refresh_failed", error: err });
     }
@@ -118,6 +126,13 @@ async function refreshQboConnection({ companyId, connection, reason } = {}) {
   }
 
   if (!refreshed?.access_token) {
+    await recordQboError({
+      companyId,
+      connection,
+      err: new Error("QBO refresh did not return an access token."),
+      stage: "refresh",
+      extraContext: { grantType: "refresh_token", missing: "access_token" },
+    });
     throw await invalidateQboConnection({
       companyId,
       reason: reason || "refresh_missing_access_token",
@@ -350,6 +365,34 @@ function deriveStatus(doc, entityType) {
   return "open";
 }
 
+async function recordQboError({ companyId, connection, err, method, path, stage, extraContext } = {}) {
+  if (!err) return;
+  try {
+    await logQboError({
+      companyId,
+      realmId: connection?.realm_id || err?.request?.realmId || null,
+      endpoint: path || err?.request?.path || null,
+      method: method || err?.request?.method || null,
+      status: err?.status || null,
+      intuitTid: err?.intuitTid || null,
+      errorMessage: err?.message || "QBO error",
+      errorPayload: err?.payload || null,
+      context: {
+        stage: stage || null,
+        code: err?.code || null,
+        reason: err?.reason || null,
+        stack: err?.stack ? String(err.stack) : null,
+        extra: extraContext || null,
+      },
+    });
+  } catch (logErr) {
+    console.warn("QBO error log failed", {
+      companyId,
+      error: logErr?.message ? String(logErr.message) : "Unknown error",
+    });
+  }
+}
+
 async function qboApiRequest({ companyId, method, path, body }) {
   let connection = await getValidQboConnection(companyId);
   if (!connection) {
@@ -369,6 +412,7 @@ async function qboApiRequest({ companyId, method, path, body }) {
       minorVersion: config.minorVersion,
     });
   } catch (err) {
+    await recordQboError({ companyId, connection, err, method, path, stage: "request" });
     if (!isAuthInvalidError(err)) throw err;
     connection = await refreshQboConnection({ companyId, connection, reason: "request_unauthorized" });
     try {
@@ -382,6 +426,7 @@ async function qboApiRequest({ companyId, method, path, body }) {
         minorVersion: config.minorVersion,
       });
     } catch (retryErr) {
+      await recordQboError({ companyId, connection, err: retryErr, method, path, stage: "retry" });
       if (isAuthInvalidError(retryErr)) {
         throw await invalidateQboConnection({ companyId, reason: "request_unauthorized", error: retryErr });
       }
