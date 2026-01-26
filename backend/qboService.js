@@ -988,26 +988,43 @@ async function handleWebhookEvent({ companyId, entityType, entityId, operation }
   return { ok: true, document: doc || null };
 }
 
-function parseDate(value) {
-  if (!value) return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return d;
+function parseDateInput(value) {
+  if (value === null || value === undefined) return { date: null, isDateOnly: false };
+  const raw = String(value).trim();
+  if (!raw) return { date: null, isDateOnly: false };
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return { date: null, isDateOnly: false };
+  return { date: d, isDateOnly };
 }
 
-async function runQuerySync({ companyId, entities, sinceDate, untilDate }) {
+function toQboQueryTimestamp(date, { isDateOnly = false, boundary = "start" } = {}) {
+  if (!date) return null;
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+  if (isDateOnly) {
+    if (boundary === "end") {
+      d.setUTCHours(23, 59, 59, 999);
+    } else {
+      d.setUTCHours(0, 0, 0, 0);
+    }
+  }
+  return d.toISOString();
+}
+
+async function runQuerySync({ companyId, entities, sinceDate, untilDate, sinceIsDateOnly = false, untilIsDateOnly = false }) {
   const entityList = Array.isArray(entities) && entities.length ? entities : ["Invoice", "CreditMemo"];
   const results = [];
   const since = sinceDate || new Date();
   const until = untilDate || null;
-  const sinceIso = since.toISOString().slice(0, 10);
-  const untilIso = until ? until.toISOString().slice(0, 10) : null;
+  const sinceIso = toQboQueryTimestamp(since, { isDateOnly: sinceIsDateOnly, boundary: "start" });
+  const untilIso = until ? toQboQueryTimestamp(until, { isDateOnly: untilIsDateOnly, boundary: "end" }) : null;
   for (const name of entityList) {
     let startPosition = 1;
     const maxResults = 1000;
     while (true) {
-      const filters = [`TxnDate >= '${sinceIso}'`];
-      if (untilIso) filters.push(`TxnDate <= '${untilIso}'`);
+      const filters = [`MetaData.LastUpdatedTime >= '${sinceIso}'`];
+      if (untilIso) filters.push(`MetaData.LastUpdatedTime <= '${untilIso}'`);
       const query = `select * from ${name} where ${filters.join(" AND ")} STARTPOSITION ${startPosition} MAXRESULTS ${maxResults}`;
       const data = await qboApiRequest({
         companyId,
@@ -1060,8 +1077,13 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], sin
   };
   const now = new Date();
   const useStateSince = String(mode || "").toLowerCase() !== "query";
-  let sinceDate = parseDate(since) || (useStateSince && state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : defaultSince());
-  let untilDate = parseDate(until) || null;
+  const sinceInput = parseDateInput(since);
+  const untilInput = parseDateInput(until);
+  let sinceDate =
+    sinceInput.date || (useStateSince && state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : defaultSince());
+  let untilDate = untilInput.date || null;
+  const sinceIsDateOnly = Boolean(sinceInput.date && sinceInput.isDateOnly);
+  const untilIsDateOnly = Boolean(untilInput.date && untilInput.isDateOnly);
   if (sinceDate && sinceDate > now) {
     sinceDate = defaultSince();
   }
@@ -1116,7 +1138,14 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], sin
   }
 
   if (String(mode || "").toLowerCase() === "query" || cdcFailed || out.length === 0) {
-    const queried = await runQuerySync({ companyId, entities: entityList, sinceDate, untilDate });
+    const queried = await runQuerySync({
+      companyId,
+      entities: entityList,
+      sinceDate,
+      untilDate,
+      sinceIsDateOnly,
+      untilIsDateOnly,
+    });
     out.push(...queried);
   }
 
