@@ -723,7 +723,9 @@ async function createDraftInvoice({
     Line: lines.map((line) => {
       const qty = Number((line.units * line.quantity).toFixed(5));
       const unitPrice = Number(line.rateAmount.toFixed(2));
-      const amount = Number((qty * unitPrice).toFixed(2));
+      // QBO validates Amount == UnitPrice * Qty using decimal math.
+      // With Qty at 5dp and UnitPrice at 2dp, use 7dp for Amount to avoid rounding mismatches.
+      const amount = Number((qty * unitPrice).toFixed(7));
       const salesDetail = {
         ItemRef: { value: String(line.qboItemId) },
         Qty: qty,
@@ -846,7 +848,8 @@ async function createDraftCreditMemo({
     Line: lines.map((line) => {
       const qty = Number((line.units * line.quantity).toFixed(5));
       const unitPrice = Number(line.rateAmount.toFixed(2));
-      const amount = Number((qty * unitPrice).toFixed(2));
+      // Keep Amount aligned with Qty/UnitPrice precision to satisfy QBO validation.
+      const amount = Number((qty * unitPrice).toFixed(7));
       const salesDetail = {
         ItemRef: { value: String(line.qboItemId) },
         Qty: qty,
