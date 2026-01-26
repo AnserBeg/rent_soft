@@ -248,6 +248,10 @@ function toQboDate(value) {
 
 const QBO_DOC_NUMBER_MAX = 21;
 
+function useQboAutoDocNumber() {
+  return getQboConfig()?.docNumberMode === "qbo";
+}
+
 function compactDocToken(value) {
   return String(value || "").replace(/[^A-Za-z0-9]/g, "");
 }
@@ -342,6 +346,16 @@ function extractRoNumberFromDoc(doc) {
       if (!value) continue;
       const tag = value.match(/RO=([A-Za-z0-9-]+)/i);
       if (tag) return tag[1];
+
+      const name = String(field?.Name || field?.name || "").trim().toLowerCase();
+      const isRoField =
+        name &&
+        /^(ro\s*#|ro\s*number|rental\s*order\s*(id|#|number)?)$/i.test(name);
+      if (isRoField) {
+        const roMatch = value.match(/\bRO-[A-Za-z0-9-]+\b/i);
+        if (roMatch) return roMatch[0];
+        return value;
+      }
     }
   }
 
@@ -628,7 +642,9 @@ async function createDraftInvoice({
     };
   }
 
-  const docNumber = buildDocNumber({ roNumber: order.roNumber, orderId, periodKey, suffix: docSuffix });
+  const docNumber = useQboAutoDocNumber()
+    ? null
+    : buildDocNumber({ roNumber: order.roNumber, orderId, periodKey, suffix: docSuffix });
   const existingDocs = await listQboDocumentsForRentalOrder({ companyId, orderId });
   const extraTags = [];
   if (isPickupDocSuffix(docSuffix) && Array.isArray(lineItemIds) && lineItemIds.length) {
@@ -661,7 +677,6 @@ async function createDraftInvoice({
 
   const payload = {
     CustomerRef: { value: String(order.qboCustomerId) },
-    DocNumber: docNumber,
     TxnDate: toQboDate(periodStart),
     PrivateNote: buildPrivateNote({ roNumber: order.roNumber, orderId, periodKey, extraTags }),
     Line: lines.map((line) => {
@@ -684,10 +699,13 @@ async function createDraftInvoice({
       };
     }),
   };
+  if (docNumber) {
+    payload.DocNumber = docNumber;
+  }
 
-  const hasDocNumber = existingDocs.some(
-    (doc) => doc?.qbo_entity_type === "Invoice" && doc?.doc_number === payload.DocNumber
-  );
+  const hasDocNumber =
+    docNumber &&
+    existingDocs.some((doc) => doc?.qbo_entity_type === "Invoice" && doc?.doc_number === payload.DocNumber);
   if (hasDocNumber) {
     return { ok: false, skipped: "existing_document", docNumber: payload.DocNumber };
   }
@@ -777,9 +795,11 @@ async function createDraftCreditMemo({
     };
   }
 
+  const docNumber = useQboAutoDocNumber()
+    ? null
+    : buildDocNumber({ roNumber: order.roNumber, orderId, periodKey, suffix: docSuffix });
   const payload = {
     CustomerRef: { value: String(order.qboCustomerId) },
-    DocNumber: buildDocNumber({ roNumber: order.roNumber, orderId, periodKey, suffix: docSuffix }),
     TxnDate: toQboDate(periodStart),
     PrivateNote: buildPrivateNote({ roNumber: order.roNumber, orderId, periodKey }),
     Line: lines.map((line) => {
@@ -802,11 +822,14 @@ async function createDraftCreditMemo({
       };
     }),
   };
+  if (docNumber) {
+    payload.DocNumber = docNumber;
+  }
 
   const existingDocs = await listQboDocumentsForRentalOrder({ companyId, orderId });
-  const hasDocNumber = existingDocs.some(
-    (doc) => doc?.qbo_entity_type === "CreditMemo" && doc?.doc_number === payload.DocNumber
-  );
+  const hasDocNumber =
+    docNumber &&
+    existingDocs.some((doc) => doc?.qbo_entity_type === "CreditMemo" && doc?.doc_number === payload.DocNumber);
   if (hasDocNumber) {
     return { ok: false, skipped: "existing_document", docNumber: payload.DocNumber };
   }
@@ -1561,6 +1584,7 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
 const PICKUP_BULK_SUFFIX = "PICKUP-ALL";
 
 function getPickupBulkDocNumber({ roNumber, orderId, pickedUpAt, billingDay }) {
+  if (useQboAutoDocNumber()) return null;
   const periodInfo = resolvePickupPeriod({ pickedUpAt, billingDay });
   if (!periodInfo) return null;
   return buildDocNumber({ roNumber, orderId, periodKey: periodInfo.periodKey, suffix: PICKUP_BULK_SUFFIX });

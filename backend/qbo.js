@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 
 const DEFAULT_MINOR_VERSION = 75;
+const DEFAULT_DOC_NUMBER_MODE = "rental";
 const DEFAULT_AUTH_URL = "https://appcenter.intuit.com/connect/oauth2";
 const DEFAULT_TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const DEFAULT_REVOKE_URL = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke";
@@ -90,6 +91,7 @@ function getQboConfig() {
   const env = String(process.env.QBO_ENV || "production").trim().toLowerCase();
   const minorVersion = Number(process.env.QBO_MINOR_VERSION || DEFAULT_MINOR_VERSION);
   const defaultTaxCode = String(process.env.QBO_DEFAULT_TAX_CODE || "").trim();
+  const docNumberMode = normalizeQboDocNumberMode(process.env.QBO_DOC_NUMBER_MODE);
   const host = env === "sandbox" ? "https://sandbox-quickbooks.api.intuit.com" : "https://quickbooks.api.intuit.com";
   const endpoints = getQboEndpoints();
   return {
@@ -100,10 +102,18 @@ function getQboConfig() {
     host,
     minorVersion: Number.isFinite(minorVersion) ? minorVersion : DEFAULT_MINOR_VERSION,
     defaultTaxCode,
+    docNumberMode,
     revokeUrl: endpoints.revokeUrl,
     authUrl: endpoints.authUrl,
     tokenUrl: endpoints.tokenUrl,
   };
+}
+
+function normalizeQboDocNumberMode(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "qbo" || raw === "auto" || raw === "quickbooks" || raw === "quickbooks_auto") return "qbo";
+  if (raw === "rental" || raw === "rent_soft" || raw === "custom") return "rental";
+  return DEFAULT_DOC_NUMBER_MODE;
 }
 
 function buildAuthUrl({ clientId, redirectUri, state, scopes, authUrl } = {}) {
