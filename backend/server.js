@@ -456,18 +456,6 @@ function parseRateLimitMax(value, fallback) {
 
 const RATE_LIMIT_LOGIN_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_LOGIN_WINDOW_MS, 15 * 60 * 1000);
 const RATE_LIMIT_LOGIN_MAX = parseRateLimitMax(process.env.RATE_LIMIT_LOGIN_MAX, 5);
-const RATE_LIMIT_API_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_API_WINDOW_MS, 60 * 60 * 1000);
-const RATE_LIMIT_API_MAX = parseRateLimitMax(process.env.RATE_LIMIT_API_MAX, 100);
-const RATE_LIMIT_AUTH_ME_WINDOW_MS = parseRateLimitMs(
-  process.env.RATE_LIMIT_AUTH_ME_WINDOW_MS,
-  RATE_LIMIT_API_WINDOW_MS
-);
-const RATE_LIMIT_AUTH_ME_MAX = parseRateLimitMax(
-  process.env.RATE_LIMIT_AUTH_ME_MAX,
-  Math.max(RATE_LIMIT_API_MAX, 20000)
-);
-const RATE_LIMIT_QBO_SYNC_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_QBO_SYNC_WINDOW_MS, 60 * 60 * 1000);
-const RATE_LIMIT_QBO_SYNC_MAX = parseRateLimitMax(process.env.RATE_LIMIT_QBO_SYNC_MAX, 10);
 const QBO_OAUTH_STATE_TTL_MS = parseRateLimitMs(process.env.QBO_OAUTH_STATE_TTL_MS, 10 * 60 * 1000);
 const QBO_OAUTH_STATE_MAX = parseRateLimitMax(process.env.QBO_OAUTH_STATE_MAX, 2000);
 const QBO_OAUTH_ERROR_REDIRECT = "/settings.html?qbo=error";
@@ -1058,71 +1046,12 @@ function buildRateLimitHandler(message) {
   };
 }
 
-function rateLimitKeyFromAuthOrIp(req) {
-  const token = req.auth?.token || readCompanyUserToken(req);
-  if (token) return `auth:${token}`;
-  const companyId =
-    req.auth?.companyId ||
-    (req.body && typeof req.body === "object" ? req.body.companyId : null) ||
-    (req.query && typeof req.query === "object" ? req.query.companyId : null);
-  if (companyId) return `company:${companyId}`;
-  return req.ip || req.socket?.remoteAddress || "unknown";
-}
-
-function rateLimitKeyFromTokenOrIp(req) {
-  const token = readCompanyUserToken(req);
-  if (token) return `auth:${token}`;
-  return req.ip || req.socket?.remoteAddress || "unknown";
-}
-
 const loginLimiter = rateLimit({
   windowMs: RATE_LIMIT_LOGIN_WINDOW_MS,
   max: RATE_LIMIT_LOGIN_MAX,
   standardHeaders: true,
   legacyHeaders: false,
   handler: buildRateLimitHandler("Too many login attempts, please try again later."),
-});
-
-const apiLimiterSkipPaths = new Set([
-  "/api/login",
-  "/api/customers/login",
-  "/api/storefront/customers/login",
-  "/api/auth/me",
-  "/api/qbo/callback",
-  "/api/qbo/webhooks",
-]);
-
-const apiLimiter = rateLimit({
-  windowMs: RATE_LIMIT_API_WINDOW_MS,
-  max: RATE_LIMIT_API_MAX,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: rateLimitKeyFromTokenOrIp,
-  handler: buildRateLimitHandler("Too many requests, please try again later."),
-  skip: (req) => {
-    if (req.method === "OPTIONS") return true;
-    const apiPath = getApiPath(req);
-    return apiLimiterSkipPaths.has(apiPath);
-  },
-});
-
-const authMeLimiter = rateLimit({
-  windowMs: RATE_LIMIT_AUTH_ME_WINDOW_MS,
-  max: RATE_LIMIT_AUTH_ME_MAX,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: rateLimitKeyFromTokenOrIp,
-  handler: buildRateLimitHandler("Too many requests, please try again later."),
-  skip: (req) => req.method === "OPTIONS",
-});
-
-const qboSyncLimiter = rateLimit({
-  windowMs: RATE_LIMIT_QBO_SYNC_WINDOW_MS,
-  max: RATE_LIMIT_QBO_SYNC_MAX,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: rateLimitKeyFromAuthOrIp,
-  handler: buildRateLimitHandler("Too many sync requests, please try again later."),
 });
 
 function buildLocationGeocodeQuery(location) {
@@ -1428,7 +1357,6 @@ async function searchWithNominatimResult(query, limit = 6) {
   }
 }
 
-app.use("/api", apiLimiter);
 app.use("/api", (req, res, next) => {
   setNoCacheHeaders(res);
   next();
@@ -1529,7 +1457,6 @@ app.get(
 
 app.get(
   "/api/auth/me",
-  authMeLimiter,
   asyncHandler(async (req, res) => {
     // Auth is enforced by the /api middleware above.
     res.json({
@@ -4100,7 +4027,6 @@ app.post(
 
 app.post(
   "/api/qbo/customers/import-unlinked",
-  qboSyncLimiter,
   asyncHandler(async (req, res) => {
     const { companyId } = req.body || {};
     if (!companyId) {
@@ -4238,7 +4164,6 @@ app.post(
 
 app.post(
   "/api/qbo/sync",
-  qboSyncLimiter,
   asyncHandler(async (req, res) => {
     const { companyId, since, until, mode } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
@@ -4305,7 +4230,6 @@ app.get(
 
 app.post(
   "/api/qbo/billing/run",
-  qboSyncLimiter,
   asyncHandler(async (req, res) => {
     const { companyId, asOf } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
