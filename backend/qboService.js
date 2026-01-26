@@ -1058,8 +1058,13 @@ async function runCdcSync({ companyId, entities = ["Invoice", "CreditMemo"], sin
     d.setUTCMonth(d.getUTCMonth() - 12);
     return d;
   };
-  let sinceDate = parseDate(since) || (state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : defaultSince());
+  const now = new Date();
+  const useStateSince = String(mode || "").toLowerCase() !== "query";
+  let sinceDate = parseDate(since) || (useStateSince && state?.last_cdc_timestamp ? new Date(state.last_cdc_timestamp) : defaultSince());
   let untilDate = parseDate(until) || null;
+  if (sinceDate && sinceDate > now) {
+    sinceDate = defaultSince();
+  }
   if (untilDate && sinceDate && untilDate < sinceDate) {
     const tmp = sinceDate;
     sinceDate = untilDate;
