@@ -566,7 +566,7 @@ function buildCspHeaderValue(value) {
     "font-src 'self' https://fonts.gstatic.com https://*.gstatic.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://esm.sh https://cdn.esm.sh https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.gstatic.com",
-    "connect-src 'self' https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.gstatic.com https://esm.sh https://cdn.esm.sh",
+    "connect-src 'self' https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.gstatic.com https://esm.sh https://cdn.esm.sh https://raw.githack.com",
     "worker-src 'self' blob:",
   ];
   return directives.join("; ");
