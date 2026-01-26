@@ -4620,7 +4620,7 @@ lineItemReturnLocationApplyBtn?.addEventListener("click", (e) => {
 });
 
 lineItemReturnLocationModal?.addEventListener("click", (e) => {
-  if (e.target === lineItemReturnLocationModal) closeReturnLocationModal("none");
+  if (e.target === lineItemReturnLocationModal) e.preventDefault();
 });
 
 lineItemPauseToggleBtn?.addEventListener("click", (e) => {
