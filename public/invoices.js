@@ -50,6 +50,22 @@ function docStatus(doc) {
   return doc.status || "draft";
 }
 
+function customerLabel(doc) {
+  if (!doc) return "--";
+  const raw = doc.raw || {};
+  const ref = raw.CustomerRef || {};
+  const name =
+    doc.customer_name ||
+    doc.customerName ||
+    ref.name ||
+    ref.Name ||
+    ref.displayName ||
+    ref.DisplayName;
+  if (name) return String(name);
+  const refId = doc.customer_ref || ref.value;
+  return refId ? String(refId) : "--";
+}
+
 function renderTable(rows) {
   if (!invoicesTable) return;
   invoicesTable.innerHTML = "";
@@ -57,7 +73,7 @@ function renderTable(rows) {
   const header = document.createElement("div");
   header.className = "table-row table-header";
   header.innerHTML = `
-    <span>Type</span>
+    <span>Customer</span>
     <span>Doc #</span>
     <span>RO</span>
     <span>Status</span>
@@ -77,7 +93,6 @@ function renderTable(rows) {
   rows.forEach((doc) => {
     const row = document.createElement("div");
     row.className = "table-row";
-    const typeLabel = doc.qbo_entity_type === "CreditMemo" ? "Credit memo" : "Invoice";
     const roLabel = doc.ro_number || (doc.rental_order_id ? `RO #${doc.rental_order_id}` : "Unassigned");
     const roLink =
       doc.rental_order_id
@@ -88,7 +103,7 @@ function renderTable(rows) {
         ? `<a class="ghost small" href="invoice-detail.html?id=${encodeURIComponent(String(doc.id))}&companyId=${encodeURIComponent(String(activeCompanyId || ""))}">View</a>`
         : `<span class="hint">--</span>`;
     row.innerHTML = `
-      <span>${typeLabel}</span>
+      <span>${customerLabel(doc)}</span>
       <span>${doc.doc_number || doc.qbo_entity_id || "--"}</span>
       <span>${roLink}</span>
       <span>${docStatus(doc)}</span>
