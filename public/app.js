@@ -91,7 +91,6 @@ const ALLOWED_SORT_FIELDS = new Set([
   "model_name",
   "serial_number",
   "condition",
-  "manufacturer",
   "location",
   "current_location",
   "purchase_price",
@@ -355,9 +354,8 @@ function renderEquipmentTable(rows) {
       <span class="sort ${sortField === "serial_number" ? "active" : ""}" data-sort="serial_number">Serial # ${indicator("serial_number")}</span>
       <span>Bundle</span>
       <span class="sort ${sortField === "condition" ? "active" : ""}" data-sort="condition">Condition ${indicator("condition")}</span>
-      <span class="sort ${sortField === "manufacturer" ? "active" : ""}" data-sort="manufacturer">Manufacturer ${indicator("manufacturer")}</span>
-      <span class="sort ${sortField === "location" ? "active" : ""}" data-sort="location">Base ${indicator("location")}</span>
       <span class="sort ${sortField === "current_location" ? "active" : ""}" data-sort="current_location">Current ${indicator("current_location")}</span>
+      <span class="sort ${sortField === "location" ? "active" : ""}" data-sort="location">Base ${indicator("location")}</span>
     </div>`;
 
   rows.forEach((row) => {
@@ -384,14 +382,13 @@ function renderEquipmentTable(rows) {
       <span>${row.serial_number}</span>
       <span>${row.bundle_name || "--"}</span>
       <span><span class="badge ${badge}">${row.condition}</span></span>
-      <span>${row.manufacturer || "--"}</span>
-      <span>${baseLocation}</span>
       <span>
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <span>${currentLocation}</span>
           ${needsCurrent ? `<span class="badge damage">Needs current</span>` : ""}
         </div>
       </span>
+      <span>${baseLocation}</span>
     `;
     equipmentTable.appendChild(div);
   });
