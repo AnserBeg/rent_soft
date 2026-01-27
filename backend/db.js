@@ -5798,18 +5798,32 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
   start.setHours(0, 0, 0, 0);
   const end = new Date(start.getTime() + dayCount * 24 * 60 * 60 * 1000);
 
+  const defaultLocationRes = await pool.query(
+    `SELECT id, name
+       FROM locations
+      WHERE company_id = $1
+        AND is_base_location = TRUE
+      ORDER BY id
+      LIMIT 1`,
+    [companyId]
+  );
+  const defaultLocation = defaultLocationRes.rows?.[0]
+    ? { id: Number(defaultLocationRes.rows[0].id), name: defaultLocationRes.rows[0].name }
+    : null;
+  const defaultLocationId = Number.isFinite(defaultLocation?.id) ? defaultLocation.id : null;
+
   const equipmentRes = await pool.query(
     `
     SELECT e.id,
-           COALESCE(e.current_location_id, e.location_id) AS location_id,
+           COALESCE(e.current_location_id, e.location_id, $3) AS location_id,
            l.name AS location_name
       FROM equipment e
- LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id)
+ LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id, $3)
      WHERE e.company_id = $1
        AND e.type_id = $2
        AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
     `,
-    [companyId, typeId]
+    [companyId, typeId, defaultLocationId]
   );
   const units = equipmentRes.rows.map((r) => ({
     id: Number(r.id),
@@ -5821,7 +5835,7 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     `
     WITH assigned AS (
       SELECT li.id,
-             COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id) AS location_id,
+             COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id, $5) AS location_id,
              COALESCE(l.name, 'No location') AS location_name,
              COALESCE(li.fulfilled_at, li.start_at) AS start_at,
              COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
@@ -5830,7 +5844,7 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
         JOIN rental_orders ro ON ro.id = li.rental_order_id
         JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
         JOIN equipment e ON e.id = liv.equipment_id
-   LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id)
+   LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id, $5)
        WHERE ro.company_id = $1
          AND li.type_id = $2
          AND ro.status IN ('quote','requested','reservation','ordered')
@@ -5839,7 +5853,7 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
            AND COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) > $3::timestamptz
          )
        GROUP BY li.id,
-                COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id),
+                COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id, $5),
                 l.name,
                 li.fulfilled_at,
                 li.start_at,
@@ -5848,14 +5862,14 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     ),
     unassigned AS (
       SELECT li.id,
-             ro.pickup_location_id AS location_id,
+             COALESCE(ro.pickup_location_id, $5) AS location_id,
              COALESCE(l.name, 'No location') AS location_name,
              COALESCE(li.fulfilled_at, li.start_at) AS start_at,
              COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
              1::int AS qty
         FROM rental_order_line_items li
         JOIN rental_orders ro ON ro.id = li.rental_order_id
-   LEFT JOIN locations l ON l.id = ro.pickup_location_id
+   LEFT JOIN locations l ON l.id = COALESCE(ro.pickup_location_id, $5)
        WHERE ro.company_id = $1
          AND li.type_id = $2
          AND ro.status IN ('quote','requested','reservation','ordered')
@@ -5869,7 +5883,7 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     UNION ALL
     SELECT * FROM unassigned
     `,
-    [companyId, typeId, start.toISOString(), end.toISOString()]
+    [companyId, typeId, start.toISOString(), end.toISOString(), defaultLocationId]
   );
 
   const byLocation = new Map();
@@ -5915,20 +5929,20 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
   const incomingRes = await pool.query(
     `
     SELECT po.expected_possession_date,
-           po.location_id,
+           COALESCE(po.location_id, $4) AS location_id,
            COALESCE(l.name, 'No location') AS location_name,
            COUNT(*)::int AS qty
       FROM purchase_orders po
- LEFT JOIN locations l ON l.id = po.location_id
+ LEFT JOIN locations l ON l.id = COALESCE(po.location_id, $4)
      WHERE po.company_id = $1
        AND po.type_id = $2
        AND po.status <> 'closed'
        AND po.equipment_id IS NULL
        AND po.expected_possession_date IS NOT NULL
        AND po.expected_possession_date <= $3::date
-     GROUP BY po.expected_possession_date, po.location_id, l.name
+     GROUP BY po.expected_possession_date, COALESCE(po.location_id, $4), l.name
     `,
-    [companyId, typeId, end.toISOString().slice(0, 10)]
+    [companyId, typeId, end.toISOString().slice(0, 10), defaultLocationId]
   );
 
   incomingRes.rows.forEach((row) => {
@@ -6328,6 +6342,20 @@ async function getTypeAvailabilitySeriesWithProjection({
   start.setHours(0, 0, 0, 0);
   const end = new Date(start.getTime() + dayCount * 24 * 60 * 60 * 1000);
 
+  const defaultLocationRes = await pool.query(
+    `SELECT id, name
+       FROM locations
+      WHERE company_id = $1
+        AND is_base_location = TRUE
+      ORDER BY id
+      LIMIT 1`,
+    [companyId]
+  );
+  const defaultLocation = defaultLocationRes.rows?.[0]
+    ? { id: Number(defaultLocationRes.rows[0].id), name: defaultLocationRes.rows[0].name }
+    : null;
+  const defaultLocationId = Number.isFinite(defaultLocation?.id) ? defaultLocation.id : null;
+
   const locationIdNum = locationId === null || locationId === undefined ? null : Number(locationId);
   const doSplit = Boolean(splitLocation && !Number.isFinite(locationIdNum));
 
@@ -6342,16 +6370,18 @@ async function getTypeAvailabilitySeriesWithProjection({
     equipmentFilters.push(`COALESCE(e.current_location_id, e.location_id) = $${equipmentParams.length}`);
   }
 
+  const equipmentSelectParams = [...equipmentParams, defaultLocationId];
+  const equipmentDefaultIdx = equipmentSelectParams.length;
   const equipmentRes = await pool.query(
     `
     SELECT e.id,
-           COALESCE(e.current_location_id, e.location_id) AS location_id,
+           COALESCE(e.current_location_id, e.location_id, $${equipmentDefaultIdx}) AS location_id,
            l.name AS location_name
       FROM equipment e
- LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id)
+ LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id, $${equipmentDefaultIdx})
      WHERE ${equipmentFilters.join(" AND ")}
     `,
-    equipmentParams
+    equipmentSelectParams
   );
   const units = equipmentRes.rows.map((r) => ({
     id: Number(r.id),
@@ -6402,16 +6432,18 @@ async function getTypeAvailabilitySeriesWithProjection({
   let unassignedLocationFilter = "";
   if (Number.isFinite(locationIdNum)) {
     demandParams.push(locationIdNum);
-    assignedLocationFilter = `AND COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id) = $${demandParams.length}`;
-    unassignedLocationFilter = `AND ro.pickup_location_id = $${demandParams.length}`;
+    assignedLocationFilter = `AND COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id, $${demandParams.length + 1}) = $${demandParams.length}`;
+    unassignedLocationFilter = `AND COALESCE(ro.pickup_location_id, $${demandParams.length + 1}) = $${demandParams.length}`;
   }
 
+  const demandDefaultIdx = demandParams.length + 1;
+  const demandSelectParams = [...demandParams, defaultLocationId];
   const demandRes = await pool.query(
     `
     WITH assigned AS (
       SELECT li.id,
              ro.status,
-             COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id) AS location_id,
+             COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id, $${demandDefaultIdx}) AS location_id,
              COALESCE(l.name, 'No location') AS location_name,
              COALESCE(li.fulfilled_at, li.start_at) AS start_at,
              COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
@@ -6420,12 +6452,12 @@ async function getTypeAvailabilitySeriesWithProjection({
         JOIN rental_orders ro ON ro.id = li.rental_order_id
         JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
         JOIN equipment e ON e.id = liv.equipment_id
-   LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id)
+   LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id, $${demandDefaultIdx})
        WHERE ${demandFilters.join(" AND ")}
              ${assignedLocationFilter}
        GROUP BY li.id,
                 ro.status,
-                COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id),
+                COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id, $${demandDefaultIdx}),
                 l.name,
                 li.fulfilled_at,
                 li.start_at,
@@ -6435,14 +6467,14 @@ async function getTypeAvailabilitySeriesWithProjection({
     unassigned AS (
       SELECT li.id,
              ro.status,
-             ro.pickup_location_id AS location_id,
+             COALESCE(ro.pickup_location_id, $${demandDefaultIdx}) AS location_id,
              COALESCE(l.name, 'No location') AS location_name,
              COALESCE(li.fulfilled_at, li.start_at) AS start_at,
              COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
              1::int AS qty
         FROM rental_order_line_items li
         JOIN rental_orders ro ON ro.id = li.rental_order_id
-   LEFT JOIN locations l ON l.id = ro.pickup_location_id
+   LEFT JOIN locations l ON l.id = COALESCE(ro.pickup_location_id, $${demandDefaultIdx})
        WHERE ${demandFilters.join(" AND ")}
              ${unassignedLocationFilter}
          AND NOT EXISTS (SELECT 1 FROM rental_order_line_inventory liv WHERE liv.line_item_id = li.id)
@@ -6451,7 +6483,7 @@ async function getTypeAvailabilitySeriesWithProjection({
     UNION ALL
     SELECT * FROM unassigned
     `,
-    demandParams
+    demandSelectParams
   );
 
   const committedStatuses = new Set(["reservation", "ordered"]);
@@ -6498,18 +6530,20 @@ async function getTypeAvailabilitySeriesWithProjection({
     incomingFilters.push(`po.location_id = $${incomingParams.length}`);
   }
 
+  const incomingDefaultIdx = incomingParams.length + 1;
+  const incomingSelectParams = [...incomingParams, defaultLocationId];
   const incomingRes = await pool.query(
     `
     SELECT po.expected_possession_date,
-           po.location_id,
+           COALESCE(po.location_id, $${incomingDefaultIdx}) AS location_id,
            COALESCE(l.name, 'No location') AS location_name,
            COUNT(*)::int AS qty
       FROM purchase_orders po
- LEFT JOIN locations l ON l.id = po.location_id
+ LEFT JOIN locations l ON l.id = COALESCE(po.location_id, $${incomingDefaultIdx})
      WHERE ${incomingFilters.join(" AND ")}
-     GROUP BY po.expected_possession_date, po.location_id, l.name
+     GROUP BY po.expected_possession_date, COALESCE(po.location_id, $${incomingDefaultIdx}), l.name
     `,
-    incomingParams
+    incomingSelectParams
   );
 
   incomingRes.rows.forEach((row) => {
