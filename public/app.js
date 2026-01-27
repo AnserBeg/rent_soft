@@ -23,6 +23,7 @@ const equipmentViewTableBtn = document.getElementById("equipment-view-table");
 const equipmentViewCardsBtn = document.getElementById("equipment-view-cards");
 const equipmentCards = document.getElementById("equipment-cards");
 const equipmentFormTitle = document.getElementById("equipment-form-title");
+const equipmentFormStatus = document.getElementById("equipment-form-status");
 const equipmentImageModal = document.getElementById("equipment-image-modal");
 const openEquipmentImageModalBtn = document.getElementById("open-equipment-image-modal");
 const closeEquipmentImageModalBtn = document.getElementById("close-equipment-image-modal");
@@ -83,6 +84,18 @@ let sortField = "created_at";
 let sortDir = "desc";
 let searchTerm = "";
 const VIEW_KEY = "rentsoft.equipment.view";
+const LIST_STATE_KEY = "rentsoft.equipment.listState";
+const ALLOWED_SORT_FIELDS = new Set([
+  "created_at",
+  "type",
+  "model_name",
+  "serial_number",
+  "condition",
+  "manufacturer",
+  "location",
+  "current_location",
+  "purchase_price",
+]);
 let currentView = localStorage.getItem(VIEW_KEY) || "table";
 let pendingOpenEquipmentId = initialEquipmentId ? String(initialEquipmentId) : null;
 
@@ -146,6 +159,83 @@ function safeJsonParse(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function loadEquipmentListState() {
+  const saved = safeJsonParse(localStorage.getItem(LIST_STATE_KEY), null);
+  if (!saved || typeof saved !== "object") return;
+  if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
+  if (typeof saved.sortField === "string" && ALLOWED_SORT_FIELDS.has(saved.sortField)) sortField = saved.sortField;
+  if (saved.sortDir === "asc" || saved.sortDir === "desc") sortDir = saved.sortDir;
+}
+
+function persistEquipmentListState() {
+  localStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchTerm: String(searchTerm || ""),
+      sortField,
+      sortDir,
+    })
+  );
+}
+
+loadEquipmentListState();
+if (searchInput) searchInput.value = searchTerm;
+
+function clearEquipmentHeaderStatus() {
+  if (!equipmentFormStatus) return;
+  equipmentFormStatus.textContent = "";
+  equipmentFormStatus.style.display = "none";
+}
+
+function getWorkOrderNumberForEquipment(companyId, equipmentId) {
+  const cid = Number(companyId);
+  const eid = Number(equipmentId);
+  if (!Number.isFinite(cid) || !Number.isFinite(eid)) return null;
+  const raw = localStorage.getItem(workOrdersStorageKey(cid));
+  const data = safeJsonParse(raw, []);
+  if (!Array.isArray(data)) return null;
+  const matches = data.filter((order) => Number(order?.unitId) === eid);
+  if (!matches.length) return null;
+  const open = matches.filter((order) => order?.orderStatus !== "closed");
+  const list = open.length ? open : matches;
+  list.sort((a, b) => {
+    const aTime = Date.parse(a?.updatedAt || a?.closedAt || a?.date || a?.createdAt || "");
+    const bTime = Date.parse(b?.updatedAt || b?.closedAt || b?.date || b?.createdAt || "");
+    if (Number.isFinite(aTime) && Number.isFinite(bTime)) return bTime - aTime;
+    if (Number.isFinite(aTime)) return -1;
+    if (Number.isFinite(bTime)) return 1;
+    return String(a?.number || "").localeCompare(String(b?.number || ""));
+  });
+  const order = list[0];
+  return order?.number ? String(order.number) : null;
+}
+
+function setEquipmentHeaderStatus(item) {
+  if (!equipmentFormStatus) return;
+  const status = String(item?.availability_status || "").toLowerCase();
+  const showStatus = status === "rented out" || status === "overdue" || item?.is_overdue === true;
+  if (!item || !showStatus) {
+    clearEquipmentHeaderStatus();
+    return;
+  }
+
+  let roLabel = item?.rental_order_number ? String(item.rental_order_number).trim() : "";
+  if (!roLabel && item?.rental_order_id) {
+    roLabel = `RO #${item.rental_order_id}`;
+  }
+  if (!roLabel) {
+    clearEquipmentHeaderStatus();
+    return;
+  }
+  const customerName = item?.rental_customer_name ? String(item.rental_customer_name).trim() : "";
+  const workOrderNumber = getWorkOrderNumberForEquipment(activeCompanyId, item.id);
+  const parts = [roLabel];
+  if (customerName) parts.push(customerName);
+  if (workOrderNumber) parts.push(`WO ${workOrderNumber}`);
+  equipmentFormStatus.textContent = parts.join(" | ");
+  equipmentFormStatus.style.display = "inline";
 }
 
 
@@ -1742,6 +1832,7 @@ function closeEquipmentModal() {
   }
   resetEquipmentExtrasPanels();
   setBundleControls(null);
+  clearEquipmentHeaderStatus();
 }
 
 function setBundleControls(item) {
@@ -2054,6 +2145,7 @@ equipmentTable?.addEventListener("click", (e) => {
       sortField = field;
       sortDir = "asc";
     }
+    persistEquipmentListState();
     renderEquipment(applyFilters());
     return;
   }
@@ -2142,6 +2234,7 @@ function startEditEquipment(item) {
 
   setBundleControls(item);
   if (equipmentFormTitle) equipmentFormTitle.textContent = "Edit equipment";
+  setEquipmentHeaderStatus(item);
 }
 
 equipmentForm.imageFiles?.addEventListener("change", (e) => {
@@ -2259,6 +2352,7 @@ deleteEquipmentBtn.addEventListener("click", async (e) => {
 
 searchInput?.addEventListener("input", (e) => {
   searchTerm = e.target.value;
+  persistEquipmentListState();
   renderEquipment(applyFilters());
 });
 
@@ -2268,6 +2362,7 @@ setView(currentView);
 
 if (isEquipmentFormPage) {
   renderEquipmentImages();
+  clearEquipmentHeaderStatus();
 }
 
 function openModal() {

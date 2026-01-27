@@ -2752,6 +2752,11 @@ a.ghost {
   font-size: 13px;
 }
 
+.hint.inline {
+  margin: 0;
+  font-size: 12px;
+}
+
 #customer-order-history-table .table-row {
   grid-template-columns: 1.1fr 0.85fr 1.2fr 0.75fr auto;
 }
