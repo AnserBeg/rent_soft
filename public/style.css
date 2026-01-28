@@ -3046,6 +3046,7 @@ a.ghost {
   padding: 12px 12px 14px;
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .type-card-title-row {
@@ -3053,10 +3054,12 @@ a.ghost {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
 }
 
 .type-card-title {
   font-weight: 800;
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3066,6 +3069,9 @@ a.ghost {
 .type-card-meta {
   color: var(--muted);
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .equipment-cards-grid {
@@ -3183,6 +3189,9 @@ a.ghost {
 .equipment-card-meta {
   color: var(--muted);
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .equipment-card-details {
@@ -3671,6 +3680,7 @@ a.ghost {
   font-weight: 700;
   font-size: 12px;
   line-height: 1;
+  flex-shrink: 0;
 }
 
 .drawer-overlay {
