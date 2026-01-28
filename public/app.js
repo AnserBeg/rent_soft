@@ -94,6 +94,8 @@ const ALLOWED_SORT_FIELDS = new Set([
   "location",
   "current_location",
   "purchase_price",
+  "rental_order_number",
+  "rental_customer_name",
 ]);
 let currentView = localStorage.getItem(VIEW_KEY) || "table";
 let pendingOpenEquipmentId = initialEquipmentId ? String(initialEquipmentId) : null;
@@ -351,9 +353,9 @@ function renderEquipmentTable(rows) {
       <span>Photo</span>
       <span class="sort ${sortField === "type" ? "active" : ""}" data-sort="type">Type ${indicator("type")}</span>
       <span class="sort ${sortField === "model_name" ? "active" : ""}" data-sort="model_name">Model ${indicator("model_name")}</span>
-      <span class="sort ${sortField === "serial_number" ? "active" : ""}" data-sort="serial_number">Serial # ${indicator("serial_number")}</span>
+      <span class="sort ${sortField === "rental_order_number" ? "active" : ""}" data-sort="rental_order_number">RO ${indicator("rental_order_number")}</span>
+      <span class="sort ${sortField === "rental_customer_name" ? "active" : ""}" data-sort="rental_customer_name">Customer ${indicator("rental_customer_name")}</span>
       <span>Bundle</span>
-      <span class="sort ${sortField === "condition" ? "active" : ""}" data-sort="condition">Condition ${indicator("condition")}</span>
       <span class="sort ${sortField === "current_location" ? "active" : ""}" data-sort="current_location">Current ${indicator("current_location")}</span>
       <span class="sort ${sortField === "location" ? "active" : ""}" data-sort="location">Base ${indicator("location")}</span>
     </div>`;
@@ -371,6 +373,12 @@ function renderEquipmentTable(rows) {
     const thumb = row.image_url
       ? `<img class="thumb" src="${row.image_url}" alt="" loading="lazy" referrerpolicy="no-referrer" />`
       : `<span class="thumb placeholder">--</span>`;
+
+    const availabilityStatus = String(row.availability_status || row.availabilityStatus || row.status || "").toLowerCase();
+    const isRentedOrOverdue = availabilityStatus.includes("rent") || availabilityStatus.includes("out") || availabilityStatus.includes("overdue") || row.is_overdue === true;
+    const roVal = isRentedOrOverdue ? (row.rental_order_number || row.rental_order_id || "--") : "--";
+    const custVal = isRentedOrOverdue ? (row.rental_customer_name || "--") : "--";
+
     div.innerHTML = `
       <span class="thumb-cell">${thumb}</span>
       <span>${row.type}</span>
@@ -379,12 +387,12 @@ function renderEquipmentTable(rows) {
         ${isReturnInspection ? `<span class="badge return-inspection" style="margin-left:6px;">Return inspection</span>` : ""}
         ${!isReturnInspection && isOutOfService ? `<span class="badge out-of-service" style="margin-left:6px;">Out of service</span>` : ""}
       </span>
-      <span>${row.serial_number}</span>
+      <span>${roVal}</span>
+      <span>${custVal}</span>
       <span>${row.bundle_name || "--"}</span>
-      <span><span class="badge ${badge}">${row.condition}</span></span>
       <span>
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-          <span>${currentLocation}</span>
+          ${needsCurrent ? "" : `<span>${currentLocation}</span>`}
           ${needsCurrent ? `<span class="badge damage">Needs current</span>` : ""}
         </div>
       </span>
@@ -478,10 +486,9 @@ function renderEquipmentCards(rows) {
     details.className = "equipment-card-details";
     const needsCurrent = row.needs_current_location_update === true;
     details.innerHTML = `
-      <div><span class="equipment-card-k">Serial</span><span class="equipment-card-v">${row.serial_number || "--"}</span></div>
       <div><span class="equipment-card-k">Bundle</span><span class="equipment-card-v">${row.bundle_name || "--"}</span></div>
       <div><span class="equipment-card-k">Base</span><span class="equipment-card-v">${row.location || "--"}</span></div>
-      <div><span class="equipment-card-k">Current</span><span class="equipment-card-v">${row.current_location || "--"}${needsCurrent ? ` <span class="badge damage">Needs current</span>` : ""}</span></div>
+      <div><span class="equipment-card-k">Current</span><span class="equipment-card-v">${needsCurrent ? "" : (row.current_location || "--")}${needsCurrent ? ` <span class="badge damage">Needs current</span>` : ""}</span></div>
     `;
 
     body.appendChild(titleRow);
@@ -615,6 +622,8 @@ function applyFilters() {
         r.current_location,
         r.bundle_name,
         r.notes,
+        r.rental_order_number,
+        r.rental_customer_name,
       ]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(term))
@@ -1091,7 +1100,7 @@ function resetPickerMapContainer() {
   if (!currentLocationPickerMapEl) return;
   try {
     currentLocationPicker.leaflet.map?.remove?.();
-  } catch {}
+  } catch { }
   currentLocationPicker.leaflet.map = null;
   currentLocationPicker.leaflet.marker = null;
   currentLocationPicker.leaflet.layers = null;
@@ -1103,7 +1112,7 @@ function resetPickerMapContainer() {
   // Leaflet leaves internal bookkeeping on the element; clear it so re-init works.
   try {
     delete currentLocationPickerMapEl._leaflet_id;
-  } catch {}
+  } catch { }
 
   currentLocationPickerMapEl.replaceChildren();
 }
@@ -1149,7 +1158,7 @@ function initLeafletPicker(center) {
         currentLocationPicker.leaflet.searchSeq = seq;
         try {
           currentLocationPicker.leaflet.searchAbort?.abort?.();
-        } catch {}
+        } catch { }
         currentLocationPicker.leaflet.searchAbort = new AbortController();
         try {
           const res = await fetch(`/api/geocode/search?q=${encodeURIComponent(q)}&limit=6`, {

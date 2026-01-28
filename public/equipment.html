@@ -1,12 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Aiven Rental - Assets</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=2" />
   <link rel="stylesheet" href="vendor/leaflet.css" />
 </head>
+
 <body class="no-top-headers">
   <div class="app-shell">
     <div class="layout">
@@ -80,7 +82,7 @@
 
         <main class="grid">
           <section class="card wide">
-              <div class="card-header">
+            <div class="card-header">
               <div>
                 <h2>Assets</h2>
               </div>
@@ -95,8 +97,10 @@
                 <p></p>
                 <div class="inline">
                   <div class="view-toggle" role="group" aria-label="View toggle">
-                    <button type="button" class="view-toggle-btn" id="equipment-view-table" data-view="table">Table</button>
-                    <button type="button" class="view-toggle-btn" id="equipment-view-cards" data-view="cards">Cards</button>
+                    <button type="button" class="view-toggle-btn" id="equipment-view-table"
+                      data-view="table">Table</button>
+                    <button type="button" class="view-toggle-btn" id="equipment-view-cards"
+                      data-view="cards">Cards</button>
                   </div>
                   <input id="search" class="search-input" />
                   <button id="refresh" class="ghost small">Refresh</button>
@@ -153,7 +157,8 @@
         <input name="imageUrl" type="hidden" />
         <div class="image-tools">
           <div class="thumb-row" id="equipment-images"></div>
-          <button type="button" class="ghost small danger" id="remove-equipment-image" style="display:none;">Clear images</button>
+          <button type="button" class="ghost small danger" id="remove-equipment-image" style="display:none;">Clear
+            images</button>
         </div>
         <div class="ai-image-tools" id="equipment-ai-tools" hidden>
           <div class="ai-image-tools-row">
@@ -167,7 +172,8 @@
               </select>
             </label>
             <label>Prompt
-              <textarea id="equipment-ai-prompt" class="compact-textarea" placeholder="Describe how to clean up this image..."></textarea>
+              <textarea id="equipment-ai-prompt" class="compact-textarea"
+                placeholder="Describe how to clean up this image..."></textarea>
             </label>
             <button type="button" class="ghost small" id="equipment-ai-apply">Apply AI to selected</button>
           </div>
@@ -202,7 +208,8 @@
           </select>
         </label>
         <div class="inline-actions" style="justify-content:flex-start;">
-          <button type="button" class="ghost small" id="open-current-location-picker">Pick current location on map</button>
+          <button type="button" class="ghost small" id="open-current-location-picker">Pick current location on
+            map</button>
           <button type="button" class="ghost small danger" id="clear-current-location">Clear current location</button>
         </div>
         <details id="equipment-location-history" style="margin-top:6px;" hidden>
@@ -281,7 +288,8 @@
           </label>
         </div>
         <div id="current-location-picker-map" class="map-picker"></div>
-        <p class="hint" id="current-location-picker-meta">Tip: click the map to drop a pin. We'll start centered on your current device location (if permitted).</p>
+        <p class="hint" id="current-location-picker-meta">Tip: click the map to drop a pin. We'll start centered on your
+          current device location (if permitted).</p>
         <div class="inline-actions" style="justify-content:flex-end;">
           <button class="primary" id="save-current-location-picker" type="button">Use this location</button>
         </div>
@@ -291,9 +299,7 @@
 
   <script src="session.js"></script>
   <script src="vendor/leaflet.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=2"></script>
 </body>
+
 </html>
-
-
-
