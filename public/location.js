@@ -44,6 +44,13 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
+function toCoord(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 const MAP_TILE_SOURCES = {
   street: {
     url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -252,9 +259,9 @@ async function init() {
   if (isBaseCheckbox) isBaseCheckbox.checked = loc?.is_base_location !== false;
 
   ensureMap();
-  const initialLat = Number(loc?.latitude);
-  const initialLng = Number(loc?.longitude);
-  if (Number.isFinite(initialLat) && Number.isFinite(initialLng)) {
+  const initialLat = toCoord(loc?.latitude);
+  const initialLng = toCoord(loc?.longitude);
+  if (initialLat !== null && initialLng !== null) {
     setMapPoint(initialLat, initialLng, 15);
   }
 
@@ -293,9 +300,9 @@ async function init() {
           if (c && cityInput) cityInput.value = c;
           if (r && regionInput) regionInput.value = r;
           if (co && countryInput) countryInput.value = co;
-          const pLat = Number(picked?.latitude);
-          const pLng = Number(picked?.longitude);
-          if (Number.isFinite(pLat) && Number.isFinite(pLng)) {
+          const pLat = toCoord(picked?.latitude);
+          const pLng = toCoord(picked?.longitude);
+          if (pLat !== null && pLng !== null) {
             ensureMap();
             setMapPoint(pLat, pLng, 17);
           }
@@ -320,9 +327,9 @@ async function init() {
         try {
           const results = await searchGeocode(query, 1);
           const first = results?.[0];
-          const pLat = Number(first?.latitude);
-          const pLng = Number(first?.longitude);
-          if (!Number.isFinite(pLat) || !Number.isFinite(pLng)) return;
+          const pLat = toCoord(first?.latitude);
+          const pLng = toCoord(first?.longitude);
+          if (pLat === null || pLng === null) return;
           ensureMap();
           setMapPoint(pLat, pLng, 15);
         } catch {
@@ -495,9 +502,9 @@ async function init() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Unable to save location");
       if (titleEl) titleEl.textContent = data.location?.name || name;
-      const savedLat = Number(data.location?.latitude);
-      const savedLng = Number(data.location?.longitude);
-      if (Number.isFinite(savedLat) && Number.isFinite(savedLng)) {
+      const savedLat = toCoord(data.location?.latitude);
+      const savedLng = toCoord(data.location?.longitude);
+      if (savedLat !== null && savedLng !== null) {
         ensureMap();
         setMapPoint(savedLat, savedLng, 15);
       }

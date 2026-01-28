@@ -71,6 +71,13 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
+function toCoord(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 const MAP_TILE_SOURCES = {
   street: {
     url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -297,12 +304,12 @@ function renderUnitsMap(rows) {
   if (!leafletMap || !leafletLayer || !window.L) return;
 
   const coordSource = (eq) => {
-    const cLat = Number(eq?.current_location_latitude);
-    const cLng = Number(eq?.current_location_longitude);
-    if (Number.isFinite(cLat) && Number.isFinite(cLng)) return { lat: cLat, lng: cLng, source: "current" };
-    const bLat = Number(eq?.location_latitude);
-    const bLng = Number(eq?.location_longitude);
-    if (Number.isFinite(bLat) && Number.isFinite(bLng)) return { lat: bLat, lng: bLng, source: "base" };
+    const cLat = toCoord(eq?.current_location_latitude);
+    const cLng = toCoord(eq?.current_location_longitude);
+    if (cLat !== null && cLng !== null) return { lat: cLat, lng: cLng, source: "current" };
+    const bLat = toCoord(eq?.location_latitude);
+    const bLng = toCoord(eq?.location_longitude);
+    if (bLat !== null && bLng !== null) return { lat: bLat, lng: bLng, source: "base" };
     return null;
   };
 
@@ -390,7 +397,7 @@ function renderLocationsMap(rows) {
 
   leafletLayer.clearLayers();
 
-  const hasCoord = (loc) => Number.isFinite(Number(loc?.latitude)) && Number.isFinite(Number(loc?.longitude));
+  const hasCoord = (loc) => toCoord(loc?.latitude) !== null && toCoord(loc?.longitude) !== null;
   const mapped = rows.filter(hasCoord);
   const missing = rows.length - mapped.length;
 
@@ -402,8 +409,9 @@ function renderLocationsMap(rows) {
 
   const points = [];
   mapped.forEach((loc) => {
-    const lat = Number(loc.latitude);
-    const lng = Number(loc.longitude);
+    const lat = toCoord(loc?.latitude);
+    const lng = toCoord(loc?.longitude);
+    if (lat === null || lng === null) return;
     points.push([lat, lng]);
     const name = escapeHtml(loc.name || `#${loc.id}`);
     const address = escapeHtml(formatAddress(loc) || "--");
@@ -466,7 +474,7 @@ function renderLocations(rows) {
     </div>`;
 
   rows.forEach((loc) => {
-    const hasCoord = Number.isFinite(Number(loc?.latitude)) && Number.isFinite(Number(loc?.longitude));
+    const hasCoord = toCoord(loc?.latitude) !== null && toCoord(loc?.longitude) !== null;
     const hasAddress = Boolean(formatAddress(loc));
     const div = document.createElement("div");
     div.className = "table-row";
@@ -606,8 +614,8 @@ document.addEventListener("DOMContentLoaded", () => {
         renderAddSuggestions(results, (picked) => {
           hideAddSuggestions();
           addSelected = {
-            lat: Number(picked?.latitude),
-            lng: Number(picked?.longitude),
+            lat: toCoord(picked?.latitude),
+            lng: toCoord(picked?.longitude),
             label: picked?.label ? String(picked.label) : null,
             provider: "nominatim",
           };
@@ -629,7 +637,7 @@ document.addEventListener("DOMContentLoaded", () => {
             set("country", payload.country || "");
           }
 
-          if (Number.isFinite(addSelected.lat) && Number.isFinite(addSelected.lng)) {
+          if (addSelected.lat !== null && addSelected.lng !== null) {
             ensureAddMap();
             setAddMapPoint(addSelected.lat, addSelected.lng, 17);
           }
@@ -657,9 +665,9 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!query || query.length < 6) return;
         const results = await searchGeocode(query, 1);
         const first = results?.[0];
-        const pLat = Number(first?.latitude);
-        const pLng = Number(first?.longitude);
-        if (!Number.isFinite(pLat) || !Number.isFinite(pLng)) return;
+        const pLat = toCoord(first?.latitude);
+        const pLng = toCoord(first?.longitude);
+        if (pLat === null || pLng === null) return;
         addSelected = { lat: pLat, lng: pLng, label: first?.label ? String(first.label) : null, provider: "nominatim" };
         ensureAddMap();
         setAddMapPoint(pLat, pLng, 15);
