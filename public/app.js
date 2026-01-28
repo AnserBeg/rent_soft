@@ -355,7 +355,6 @@ function renderEquipmentTable(rows) {
       <span class="sort ${sortField === "model_name" ? "active" : ""}" data-sort="model_name">Model ${indicator("model_name")}</span>
       <span class="sort ${sortField === "rental_order_number" ? "active" : ""}" data-sort="rental_order_number">RO ${indicator("rental_order_number")}</span>
       <span class="sort ${sortField === "rental_customer_name" ? "active" : ""}" data-sort="rental_customer_name">Customer ${indicator("rental_customer_name")}</span>
-      <span>Bundle</span>
       <span class="sort ${sortField === "current_location" ? "active" : ""}" data-sort="current_location">Current ${indicator("current_location")}</span>
       <span class="sort ${sortField === "location" ? "active" : ""}" data-sort="location">Base ${indicator("location")}</span>
     </div>`;
@@ -389,7 +388,6 @@ function renderEquipmentTable(rows) {
       </span>
       <span>${roVal}</span>
       <span>${custVal}</span>
-      <span>${row.bundle_name || "--"}</span>
       <span>
         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           ${needsCurrent ? "" : `<span>${currentLocation}</span>`}
@@ -486,7 +484,6 @@ function renderEquipmentCards(rows) {
     details.className = "equipment-card-details";
     const needsCurrent = row.needs_current_location_update === true;
     details.innerHTML = `
-      <div><span class="equipment-card-k">Bundle</span><span class="equipment-card-v">${row.bundle_name || "--"}</span></div>
       <div><span class="equipment-card-k">Base</span><span class="equipment-card-v">${row.location || "--"}</span></div>
       <div><span class="equipment-card-k">Current</span><span class="equipment-card-v">${needsCurrent ? "" : (row.current_location || "--")}${needsCurrent ? ` <span class="badge damage">Needs current</span>` : ""}</span></div>
     `;
