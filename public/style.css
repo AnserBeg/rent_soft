@@ -1737,7 +1737,7 @@ a.ghost {
 }
 
 .bench-stage-shell .table {
-  max-height: min(520px, 66vh);
+  max-height: none;
 }
 
 .bench-stage-table .table-row {
@@ -2609,8 +2609,8 @@ a.ghost {
 }
 
 .shortfall-demand-table {
-  max-height: 360px;
-  overflow: auto;
+  max-height: none;
+  /* Removed overflow to allow page scrolling */
 }
 
 .shortfall-demand-shell.is-collapsed .shortfall-demand-table {
@@ -2810,7 +2810,8 @@ a.ghost {
   margin-top: 16px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  overflow: hidden;
+  overflow: visible;
+  /* Changed from hidden to allow sticky headers */
   background: #fff;
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.06);
   width: 100%;
@@ -2823,6 +2824,8 @@ a.ghost {
   padding: 10px 12px;
   background: #f5f7fb;
   border-bottom: 1px solid var(--border);
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
   gap: 10px;
 }
 
@@ -2991,8 +2994,7 @@ a.ghost {
 }
 
 .table {
-  max-height: min(580px, 66vh);
-  overflow: auto;
+  /* Removed max-height and overflow: auto to allow page scrolling */
   width: 100%;
   position: relative;
   isolation: isolate;
@@ -3258,7 +3260,8 @@ a.ghost {
   font-weight: 600;
   background: #f1f4fa;
   position: sticky;
-  top: 0;
+  top: 58px;
+  /* Offset for sticky topbar */
   z-index: 5;
 }
 
