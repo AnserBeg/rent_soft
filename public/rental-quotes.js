@@ -14,6 +14,8 @@ const filterConverted = document.getElementById("filter-converted");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let quotesCache = [];
+let sortField = "created_at";
+let sortDir = "desc";
 let searchTerm = "";
 const LIST_STATE_KEY = "rentsoft.rental-quotes.listState";
 const ALLOWED_SORT_FIELDS = new Set(["quote", "status", "customer", "sales", "start_at", "end_at", "equipment_count", "fee_total", "ro_number", "created_at"]);

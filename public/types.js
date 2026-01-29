@@ -16,6 +16,8 @@ const typesCards = document.getElementById("types-cards");
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let typesCache = [];
 let typesWithCounts = [];
+let sortField = "name";
+let sortDir = "asc";
 let searchTerm = "";
 
 const LIST_STATE_KEY = "rentsoft.types.listState";

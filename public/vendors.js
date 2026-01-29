@@ -9,6 +9,8 @@ const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyI
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let vendorsCache = [];
+let sortField = "company_name";
+let sortDir = "asc";
 let searchTerm = "";
 
 const LIST_STATE_KEY = "rentsoft.vendors.listState";

@@ -25,6 +25,8 @@ const importResult = document.getElementById("import-result");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let ordersCache = [];
+let sortField = "created_at";
+let sortDir = "desc";
 let searchTerm = "";
 
 const LIST_STATE_KEY = "rentsoft.rental-orders.listState";
@@ -485,4 +487,3 @@ backfillLegacyRatesBtn?.addEventListener("click", async (e) => {
     backfillLegacyRatesBtn.disabled = false;
   }
 });
-

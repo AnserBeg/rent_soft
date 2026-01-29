@@ -19,6 +19,8 @@ const meta = document.getElementById("add-sales-meta");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let salesCache = [];
+let sortField = "name";
+let sortDir = "asc";
 let searchTerm = "";
 
 const LIST_STATE_KEY = "rentsoft.sales-people.listState";

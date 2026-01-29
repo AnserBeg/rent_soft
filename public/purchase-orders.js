@@ -11,6 +11,8 @@ const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyI
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let purchaseOrdersCache = [];
+let sortField = "id";
+let sortDir = "desc";
 let searchTerm = "";
 
 const LIST_STATE_KEY = "rentsoft.purchase-orders.listState";
