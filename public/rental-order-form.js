@@ -324,6 +324,7 @@ function applyMinuteStep(input, stepMinutes = TIME_STEP_MINUTES) {
 
 const TIME_PICKER_MINUTES = [0, 15, 30, 45];
 const timePickerInstances = new WeakMap();
+const timePickerOverlays = new WeakMap();
 let activeTimePicker = null;
 
 function parseTimeParts(value) {
@@ -722,7 +723,11 @@ function createTimePickerInstance(input) {
 function positionTimePicker(instance) {
   const rect = instance.input.getBoundingClientRect();
   const popover = instance.popover;
-  const width = popover.offsetWidth || 300;
+  const minWidth = instance.type === "time" ? 200 : 260;
+  const maxWidth = instance.type === "time" ? 240 : 320;
+  const targetWidth = Math.min(Math.max(rect.width, minWidth), maxWidth);
+  popover.style.width = `${targetWidth}px`;
+  const width = popover.offsetWidth || targetWidth;
   const height = popover.offsetHeight || 320;
   let left = rect.left;
   let top = rect.bottom + 6;
@@ -791,18 +796,52 @@ function refreshTimePickerForInput(input) {
   positionTimePicker(activeTimePicker);
 }
 
+function syncTimeOverlayState(input) {
+  const overlay = timePickerOverlays.get(input);
+  if (!overlay) return;
+  overlay.disabled = Boolean(input.disabled);
+}
+
 function bindTimePickerInput(input) {
   if (!input) return;
   const type = (input.getAttribute?.("type") || input.type || "").toLowerCase();
   if (type !== "time" && type !== "datetime-local") return;
-  const openFromEvent = (e) => {
-    if (e.button !== undefined && e.button !== 0) return;
+  if (!timePickerOverlays.has(input)) {
+    const wrapper = document.createElement("span");
+    wrapper.className = "rs-time-wrap";
+    const parent = input.parentNode;
+    if (parent) {
+      parent.insertBefore(wrapper, input);
+      wrapper.appendChild(input);
+      const overlay = document.createElement("button");
+      overlay.type = "button";
+      overlay.className = "rs-time-overlay";
+      overlay.setAttribute("aria-label", input.getAttribute("aria-label") || "Select time");
+      overlay.addEventListener("click", (e) => {
+        e.preventDefault();
+        openTimePicker(input);
+      });
+      overlay.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openTimePicker(input);
+        }
+      });
+      wrapper.appendChild(overlay);
+      input.classList.add("rs-time-input");
+      input.setAttribute("aria-hidden", "true");
+      input.tabIndex = -1;
+      input.readOnly = true;
+      input.style.pointerEvents = "none";
+      timePickerOverlays.set(input, overlay);
+    }
+  }
+  syncTimeOverlayState(input);
+  input.addEventListener("focus", (e) => {
     e.preventDefault();
+    if (document.activeElement === input) input.blur();
     openTimePicker(input);
-  };
-  input.addEventListener("pointerdown", openFromEvent);
-  input.addEventListener("mousedown", openFromEvent);
-  input.addEventListener("touchstart", openFromEvent, { passive: false });
+  });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -1558,10 +1597,12 @@ function setCoverageInputs(value) {
     const entry = raw[day] || {};
     if (coverageInputs[day]?.start) {
       coverageInputs[day].start.value = typeof entry.start === "string" ? entry.start : "";
+      syncTimeOverlayState(coverageInputs[day].start);
       refreshTimePickerForInput(coverageInputs[day].start);
     }
     if (coverageInputs[day]?.end) {
       coverageInputs[day].end.value = typeof entry.end === "string" ? entry.end : "";
+      syncTimeOverlayState(coverageInputs[day].end);
       refreshTimePickerForInput(coverageInputs[day].end);
     }
   });
@@ -3322,10 +3363,12 @@ function renderLineItemTimeModal() {
   if (!li) return;
   if (lineItemStartInput) {
     lineItemStartInput.value = li.startLocal || "";
+    syncTimeOverlayState(lineItemStartInput);
     refreshTimePickerForInput(lineItemStartInput);
   }
   if (lineItemEndInput) {
     lineItemEndInput.value = li.endLocal || "";
+    syncTimeOverlayState(lineItemEndInput);
     refreshTimePickerForInput(lineItemEndInput);
   }
 }
@@ -3436,18 +3479,22 @@ function renderLineItemActualModal() {
   if (lineItemActualPickupInput) {
     lineItemActualPickupInput.value = toLocalInputValue(li.pickedUpAt);
     lineItemActualPickupInput.disabled = !hasUnit;
+    syncTimeOverlayState(lineItemActualPickupInput);
     refreshTimePickerForInput(lineItemActualPickupInput);
   }
   if (lineItemActualReturnInput) {
     lineItemActualReturnInput.value = toLocalInputValue(li.returnedAt);
+    syncTimeOverlayState(lineItemActualReturnInput);
     refreshTimePickerForInput(lineItemActualReturnInput);
   }
   if (lineItemPauseStartInput) {
     lineItemPauseStartInput.value = "";
+    syncTimeOverlayState(lineItemPauseStartInput);
     refreshTimePickerForInput(lineItemPauseStartInput);
   }
   if (lineItemPauseEndInput) {
     lineItemPauseEndInput.value = "";
+    syncTimeOverlayState(lineItemPauseEndInput);
     refreshTimePickerForInput(lineItemPauseEndInput);
   }
   renderLineItemPausePeriods(li);
@@ -4454,11 +4501,13 @@ initTimePickers(minuteStepInputs);
 coverageInputsList.forEach((el) => {
   el.addEventListener("change", () => {
     snapInputToMinuteStep(el);
+    syncTimeOverlayState(el);
     refreshTimePickerForInput(el);
     syncRentalInfoDraft();
   });
   el.addEventListener("blur", () => {
     snapInputToMinuteStep(el);
+    syncTimeOverlayState(el);
     refreshTimePickerForInput(el);
   });
 });
@@ -4477,6 +4526,7 @@ copyMondayCoverageBtn?.addEventListener("click", (e) => {
   });
   coverageInputsList.forEach((el) => {
     snapInputToMinuteStep(el);
+    syncTimeOverlayState(el);
     refreshTimePickerForInput(el);
   });
   syncRentalInfoDraft();
@@ -5255,7 +5305,10 @@ lineItemPauseToggleBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   if (!lineItemPauseDetails) return;
   lineItemPauseDetails.open = !lineItemPauseDetails.open;
-  if (lineItemPauseDetails.open) lineItemPauseStartInput?.focus();
+  if (lineItemPauseDetails.open) {
+    const overlay = lineItemPauseStartInput ? timePickerOverlays.get(lineItemPauseStartInput) : null;
+    if (overlay) overlay.focus();
+  }
 });
 
 lineItemPauseAddBtn?.addEventListener("click", (e) => {
