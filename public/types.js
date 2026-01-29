@@ -16,9 +16,33 @@ const typesCards = document.getElementById("types-cards");
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let typesCache = [];
 let typesWithCounts = [];
-let sortField = "name";
-let sortDir = "asc";
 let searchTerm = "";
+
+const LIST_STATE_KEY = "rentsoft.types.listState";
+const ALLOWED_SORT_FIELDS = new Set(["name", "category", "daily_rate", "weekly_rate", "monthly_rate", "count"]);
+
+function loadListState() {
+  const raw = localStorage.getItem(LIST_STATE_KEY);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
+    if (typeof saved.sortField === "string" && ALLOWED_SORT_FIELDS.has(saved.sortField)) sortField = saved.sortField;
+    if (saved.sortDir === "asc" || saved.sortDir === "desc") sortDir = saved.sortDir;
+  } catch { }
+}
+
+function persistListState() {
+  localStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchTerm: String(searchTerm || ""),
+      sortField,
+      sortDir,
+    })
+  );
+}
+
 const VIEW_KEY = "rentsoft.types.view";
 let currentView = localStorage.getItem(VIEW_KEY) || "table";
 
@@ -258,6 +282,7 @@ typesTable.addEventListener("click", (e) => {
       sortDir = "asc";
     }
     render();
+    persistListState();
     return;
   }
 
@@ -278,6 +303,7 @@ typesCards?.addEventListener("click", (e) => {
 searchInput?.addEventListener("input", (e) => {
   searchTerm = String(e.target.value || "");
   render();
+  persistListState();
 });
 
 viewTableBtn?.addEventListener("click", () => setView("table"));
@@ -288,6 +314,13 @@ setView(currentView);
 if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
   companyMeta.textContent = `Using company #${activeCompanyId}`;
+
+  loadListState();
+  if (searchInput) {
+    if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
+    searchInput.value = searchTerm;
+  }
+
   loadTypeStats();
 } else {
   companyMeta.textContent = "Log in to view equipment types.";

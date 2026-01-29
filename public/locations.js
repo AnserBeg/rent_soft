@@ -140,7 +140,7 @@ function setView(nextView) {
   activeView = nextView === "map" ? "map" : "table";
   try {
     localStorage.setItem("locationsView", activeView);
-  } catch {}
+  } catch { }
 
   const isTable = activeView === "table";
   if (tableEl) tableEl.style.display = isTable ? "" : "none";
@@ -450,11 +450,11 @@ function hideModal() {
   addSelected = null;
   try {
     addAddressState.abort?.abort?.();
-  } catch {}
+  } catch { }
   if (addLeafletMarker) {
     try {
       addLeafletMarker.remove?.();
-    } catch {}
+    } catch { }
     addLeafletMarker = null;
   }
   addLeafletMap?.setView?.([20, 0], 2);
@@ -580,7 +580,7 @@ document.addEventListener("DOMContentLoaded", () => {
       mapMode = mapModeSelect.value === "locations" ? "locations" : "units";
       try {
         localStorage.setItem("locationsMapMode", mapMode);
-      } catch {}
+      } catch { }
       refreshMap().catch((err) => {
         if (mapMeta) mapMeta.textContent = err?.message || String(err);
       });
@@ -605,7 +605,7 @@ document.addEventListener("DOMContentLoaded", () => {
       addAddressState.seq = seq;
       try {
         addAddressState.abort?.abort?.();
-      } catch {}
+      } catch { }
       addAddressState.abort = new AbortController();
       try {
         const results = await searchGeocode(q, 6, { signal: addAddressState.abort.signal });
@@ -775,6 +775,7 @@ document.addEventListener("DOMContentLoaded", () => {
     window.location.href = `location.html?id=${encodeURIComponent(id)}`;
   });
 
+  if (searchInput) searchTerm = String(searchInput.value || "");
   loadLocations().catch((err) => {
     if (pageMeta) pageMeta.textContent = err.message || String(err);
   });

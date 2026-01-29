@@ -25,9 +25,47 @@ const importResult = document.getElementById("import-result");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let ordersCache = [];
-let sortField = "created_at";
-let sortDir = "desc";
 let searchTerm = "";
+
+const LIST_STATE_KEY = "rentsoft.rental-orders.listState";
+const ALLOWED_SORT_FIELDS = new Set(["doc", "status", "customer", "po", "sales", "start_at", "end_at", "total", "created_at"]);
+
+function loadListState() {
+  const raw = localStorage.getItem(LIST_STATE_KEY);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
+    if (typeof saved.sortField === "string" && ALLOWED_SORT_FIELDS.has(saved.sortField)) sortField = saved.sortField;
+    if (saved.sortDir === "asc" || saved.sortDir === "desc") sortDir = saved.sortDir;
+    if (typeof saved.filters === "object" && saved.filters) {
+      if (filterRequested) filterRequested.checked = !!saved.filters.requested;
+      if (filterReservation) filterReservation.checked = !!saved.filters.reservation;
+      if (filterOrdered) filterOrdered.checked = !!saved.filters.ordered;
+      if (filterReceived) filterReceived.checked = !!saved.filters.received;
+      if (filterClosed) filterClosed.checked = !!saved.filters.closed;
+    }
+  } catch { }
+}
+
+function persistListState() {
+  localStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchTerm: String(searchTerm || ""),
+      sortField,
+      sortDir,
+      filters: {
+        requested: !!filterRequested?.checked,
+        reservation: !!filterReservation?.checked,
+        ordered: !!filterOrdered?.checked,
+        received: !!filterReceived?.checked,
+        closed: !!filterClosed?.checked,
+      }
+    })
+  );
+}
+
 
 function fmtMoney(v) {
   if (v === null || v === undefined) return "--";
@@ -268,6 +306,7 @@ ordersTable.addEventListener("click", (e) => {
       sortDir = sort === "doc" || sort === "customer" || sort === "po" || sort === "sales" || sort === "status" ? "asc" : "desc";
     }
     renderOrders(applyFilters());
+    persistListState();
     return;
   }
 
@@ -281,18 +320,29 @@ ordersTable.addEventListener("click", (e) => {
 if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
   companyMeta.textContent = `Using company #${activeCompanyId}`;
+
+  loadListState();
+  if (searchInput) {
+    if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
+    searchInput.value = searchTerm;
+  }
+
   loadOrders();
 } else {
   companyMeta.textContent = "Log in to view rental orders.";
 }
 
 [filterRequested, filterReservation, filterOrdered, filterReceived, filterClosed].filter(Boolean).forEach((el) => {
-  el.addEventListener("change", () => loadOrders());
+  el.addEventListener("change", () => {
+    loadOrders();
+    persistListState();
+  });
 });
 
 searchInput?.addEventListener("input", (e) => {
   searchTerm = String(e.target.value || "");
   renderOrders(applyFilters());
+  persistListState();
 });
 
 function openLegacyImport() {
@@ -368,9 +418,9 @@ runImportBtn?.addEventListener("click", async (e) => {
     if (importResult) {
       const errorTail = errors
         ? `\nFirst errors:\n${(data.errors || [])
-            .slice(0, 5)
-            .map((x) => `- ${x.contractNumber || "?"}: ${x.error || "Error"}`)
-            .join("\n")}`
+          .slice(0, 5)
+          .map((x) => `- ${x.contractNumber || "?"}: ${x.error || "Error"}`)
+          .join("\n")}`
         : "";
       importResult.textContent = `Import complete: orders created ${created}, skipped ${skipped}, customers ${customers}, equipment ${equipment}, placeholders ${placeholders}, inferred ends ${inferredEnds}${errors ? `, errors ${errors}` : ""}.${errorTail}`;
     }

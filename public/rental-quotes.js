@@ -14,9 +14,42 @@ const filterConverted = document.getElementById("filter-converted");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let quotesCache = [];
-let sortField = "created_at";
-let sortDir = "desc";
 let searchTerm = "";
+const LIST_STATE_KEY = "rentsoft.rental-quotes.listState";
+const ALLOWED_SORT_FIELDS = new Set(["quote", "status", "customer", "sales", "start_at", "end_at", "equipment_count", "fee_total", "ro_number", "created_at"]);
+
+function loadListState() {
+  const raw = localStorage.getItem(LIST_STATE_KEY);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
+    if (typeof saved.sortField === "string" && ALLOWED_SORT_FIELDS.has(saved.sortField)) sortField = saved.sortField;
+    if (saved.sortDir === "asc" || saved.sortDir === "desc") sortDir = saved.sortDir;
+    if (typeof saved.filters === "object" && saved.filters) {
+      if (filterActive) filterActive.checked = !!saved.filters.active;
+      if (filterRejected) filterRejected.checked = !!saved.filters.rejected;
+      if (filterConverted) filterConverted.checked = !!saved.filters.converted;
+    }
+  } catch { }
+}
+
+function persistListState() {
+  localStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchTerm: String(searchTerm || ""),
+      sortField,
+      sortDir,
+      filters: {
+        active: !!filterActive?.checked,
+        rejected: !!filterRejected?.checked,
+        converted: !!filterConverted?.checked,
+      }
+    })
+  );
+}
+
 
 function fmtMoney(v) {
   if (v === null || v === undefined) return "--";
@@ -385,6 +418,7 @@ quotesTable.addEventListener("click", (e) => {
       sortDir = sort === "quote" || sort === "customer" || sort === "sales" || sort === "status" || sort === "ro_number" ? "asc" : "desc";
     }
     renderQuotes(applyFilters());
+    persistListState();
     return;
   }
 
@@ -396,17 +430,28 @@ quotesTable.addEventListener("click", (e) => {
 });
 
 [filterActive, filterRejected, filterConverted].filter(Boolean).forEach((el) => {
-  el.addEventListener("change", () => renderQuotes(applyFilters()));
+  el.addEventListener("change", () => {
+    renderQuotes(applyFilters());
+    persistListState();
+  });
 });
 
 searchInput?.addEventListener("input", (e) => {
   searchTerm = String(e.target.value || "");
   renderQuotes(applyFilters());
+  persistListState();
 });
 
 if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
   companyMeta.textContent = `Using company #${activeCompanyId}`;
+
+  loadListState();
+  if (searchInput) {
+    if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
+    searchInput.value = searchTerm;
+  }
+
   loadQuotes();
 } else {
   companyMeta.textContent = "Log in to view quotes.";

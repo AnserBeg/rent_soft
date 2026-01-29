@@ -19,9 +19,33 @@ const meta = document.getElementById("add-sales-meta");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let salesCache = [];
-let sortField = "name";
-let sortDir = "asc";
 let searchTerm = "";
+
+const LIST_STATE_KEY = "rentsoft.sales-people.listState";
+const ALLOWED_SORT_FIELDS = new Set(["name", "email", "phone"]);
+
+function loadListState() {
+  const raw = localStorage.getItem(LIST_STATE_KEY);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
+    if (typeof saved.sortField === "string" && ALLOWED_SORT_FIELDS.has(saved.sortField)) sortField = saved.sortField;
+    if (saved.sortDir === "asc" || saved.sortDir === "desc") sortDir = saved.sortDir;
+  } catch { }
+}
+
+function persistListState() {
+  localStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchTerm: String(searchTerm || ""),
+      sortField,
+      sortDir,
+    })
+  );
+}
+
 
 function escapeHtml(s) {
   return String(s || "")
@@ -184,10 +208,10 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        if (imageUrl) await deleteUploadedImage({ companyId: activeCompanyId, url: imageUrl }).catch(() => {});
+        if (imageUrl) await deleteUploadedImage({ companyId: activeCompanyId, url: imageUrl }).catch(() => { });
         throw new Error(data.error || "Unable to add sales person");
       }
-      if (res.status !== 201 && imageUrl) await deleteUploadedImage({ companyId: activeCompanyId, url: imageUrl }).catch(() => {});
+      if (res.status !== 201 && imageUrl) await deleteUploadedImage({ companyId: activeCompanyId, url: imageUrl }).catch(() => { });
       hideModal();
       await loadSalesPeople();
     } catch (err) {
@@ -200,6 +224,7 @@ document.addEventListener("DOMContentLoaded", () => {
   searchInput?.addEventListener("input", () => {
     searchTerm = String(searchInput.value || "");
     renderSalesPeople(applyFilters());
+    persistListState();
   });
 
   tableEl?.addEventListener("click", async (e) => {
@@ -212,6 +237,7 @@ document.addEventListener("DOMContentLoaded", () => {
         sortDir = "asc";
       }
       renderSalesPeople(applyFilters());
+      persistListState();
       return;
     }
 
@@ -240,6 +266,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!id) return;
     window.location.href = `sales-person.html?id=${encodeURIComponent(id)}`;
   });
+
+  loadListState();
+  if (searchInput) {
+    if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
+    searchInput.value = searchTerm;
+  }
 
   loadSalesPeople().catch((err) => {
     if (pageMeta) pageMeta.textContent = err.message || String(err);

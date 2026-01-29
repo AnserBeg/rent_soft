@@ -182,7 +182,10 @@ function persistEquipmentListState() {
 }
 
 loadEquipmentListState();
-if (searchInput) searchInput.value = searchTerm;
+if (searchInput) {
+  if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
+  searchInput.value = searchTerm;
+}
 
 function clearEquipmentHeaderStatus() {
   if (!equipmentFormStatus) return;

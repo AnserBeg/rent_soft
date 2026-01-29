@@ -9,9 +9,33 @@ const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyI
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let vendorsCache = [];
-let sortField = "company_name";
-let sortDir = "asc";
 let searchTerm = "";
+
+const LIST_STATE_KEY = "rentsoft.vendors.listState";
+const ALLOWED_SORT_FIELDS = new Set(["company_name", "contact_name", "email", "phone", "city", "region", "country", "postal_code"]);
+
+function loadListState() {
+  const raw = localStorage.getItem(LIST_STATE_KEY);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
+    if (typeof saved.sortField === "string" && ALLOWED_SORT_FIELDS.has(saved.sortField)) sortField = saved.sortField;
+    if (saved.sortDir === "asc" || saved.sortDir === "desc") sortDir = saved.sortDir;
+  } catch { }
+}
+
+function persistListState() {
+  localStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchTerm: String(searchTerm || ""),
+      sortField,
+      sortDir,
+    })
+  );
+}
+
 
 function renderVendors(rows) {
   const indicator = (field) => {
@@ -119,6 +143,7 @@ vendorsTable.addEventListener("click", (e) => {
       sortDir = "asc";
     }
     renderVendors(applyFilters());
+    persistListState();
     return;
   }
 
@@ -132,11 +157,19 @@ vendorsTable.addEventListener("click", (e) => {
 searchInput?.addEventListener("input", (e) => {
   searchTerm = String(e.target.value || "");
   renderVendors(applyFilters());
+  persistListState();
 });
 
 if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
   companyMeta.textContent = `Using company #${activeCompanyId}`;
+
+  loadListState();
+  if (searchInput) {
+    if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
+    searchInput.value = searchTerm;
+  }
+
   loadVendors();
 } else {
   companyMeta.textContent = "Log in to view vendors.";

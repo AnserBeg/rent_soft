@@ -11,9 +11,41 @@ const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyI
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let purchaseOrdersCache = [];
-let sortField = "id";
-let sortDir = "desc";
 let searchTerm = "";
+
+const LIST_STATE_KEY = "rentsoft.purchase-orders.listState";
+const ALLOWED_SORT_FIELDS = new Set(["id", "vendor_name", "type_name", "expected_possession_date", "status", "model_name", "serial_number", "location_name", "purchase_price"]);
+
+function loadListState() {
+  const raw = localStorage.getItem(LIST_STATE_KEY);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
+    if (typeof saved.sortField === "string" && ALLOWED_SORT_FIELDS.has(saved.sortField)) sortField = saved.sortField;
+    if (saved.sortDir === "asc" || saved.sortDir === "desc") sortDir = saved.sortDir;
+    if (typeof saved.filters === "object" && saved.filters) {
+      if (filterOpen) filterOpen.checked = !!saved.filters.open;
+      if (filterClosed) filterClosed.checked = !!saved.filters.closed;
+    }
+  } catch { }
+}
+
+function persistListState() {
+  localStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchTerm: String(searchTerm || ""),
+      sortField,
+      sortDir,
+      filters: {
+        open: !!filterOpen?.checked,
+        closed: !!filterClosed?.checked,
+      }
+    })
+  );
+}
+
 
 function fmtMoney(value) {
   const num = Number(value);
@@ -154,6 +186,7 @@ purchaseOrdersTable?.addEventListener("click", (e) => {
       sortDir = "asc";
     }
     renderPurchaseOrders(applyFilters());
+    persistListState();
     return;
   }
 
@@ -167,14 +200,28 @@ purchaseOrdersTable?.addEventListener("click", (e) => {
 searchInput?.addEventListener("input", (e) => {
   searchTerm = String(e.target.value || "");
   renderPurchaseOrders(applyFilters());
+  persistListState();
 });
 
-filterOpen?.addEventListener("change", () => renderPurchaseOrders(applyFilters()));
-filterClosed?.addEventListener("change", () => renderPurchaseOrders(applyFilters()));
+filterOpen?.addEventListener("change", () => {
+  renderPurchaseOrders(applyFilters());
+  persistListState();
+});
+filterClosed?.addEventListener("change", () => {
+  renderPurchaseOrders(applyFilters());
+  persistListState();
+});
 
 if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
   companyMeta.textContent = `Using company #${activeCompanyId}`;
+
+  loadListState();
+  if (searchInput) {
+    if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
+    searchInput.value = searchTerm;
+  }
+
   loadPurchaseOrders();
 } else {
   companyMeta.textContent = "Log in to view purchase orders.";

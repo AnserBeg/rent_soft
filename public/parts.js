@@ -16,6 +16,27 @@ const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyI
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let partsCache = [];
 let searchTerm = "";
+
+const LIST_STATE_KEY = "rentsoft.parts.listState";
+
+function loadListState() {
+  const raw = localStorage.getItem(LIST_STATE_KEY);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
+  } catch { }
+}
+
+function persistListState() {
+  localStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchTerm: String(searchTerm || ""),
+    })
+  );
+}
+
 let editingPartKey = null;
 
 function keyForParts(companyId) {
@@ -150,6 +171,7 @@ newPartBtn?.addEventListener("click", (e) => {
 searchInput?.addEventListener("input", (e) => {
   searchTerm = String(e.target.value || "");
   renderParts(applyFilters());
+  persistListState();
 });
 
 partsTable?.addEventListener("click", (e) => {
@@ -232,6 +254,13 @@ partForm?.addEventListener("submit", (e) => {
 if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
   companyMeta.textContent = `Using company #${activeCompanyId}`;
+
+  loadListState();
+  if (searchInput) {
+    if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
+    searchInput.value = searchTerm;
+  }
+
   loadParts();
 } else {
   companyMeta.textContent = "Log in to view parts.";

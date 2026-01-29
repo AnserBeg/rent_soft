@@ -3850,8 +3850,26 @@ const coverageInputsList = coverageDayKeys.flatMap((day) => {
   if (!entry) return [];
   return [entry.start, entry.end].filter(Boolean);
 });
-[...rentalInfoInputs, ...coverageInputsList].forEach((el) => {
+[...rentalInfoInputs].forEach((el) => {
   el.addEventListener("input", syncRentalInfoDraft);
+});
+coverageInputsList.forEach((el) => {
+  el.addEventListener("change", syncRentalInfoDraft);
+});
+
+const copyMondayCoverageBtn = document.getElementById("copy-monday-coverage");
+copyMondayCoverageBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  const start = coverageInputs.mon.start.value;
+  const end = coverageInputs.mon.end.value;
+  ["tue", "wed", "thu", "fri", "sat", "sun"].forEach((day) => {
+    const entry = coverageInputs[day];
+    if (entry) {
+      if (entry.start) entry.start.value = start;
+      if (entry.end) entry.end.value = end;
+    }
+  });
+  syncRentalInfoDraft();
 });
 
 addEmergencyContactRowBtn?.addEventListener("click", (e) => {

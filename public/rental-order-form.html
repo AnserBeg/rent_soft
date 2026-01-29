@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,6 +8,7 @@
   <link rel="stylesheet" href="style.css" />
   <link rel="stylesheet" href="vendor/leaflet.css" />
 </head>
+
 <body>
   <div class="app-shell">
     <div class="layout">
@@ -92,7 +94,8 @@
                   <button class="ghost danger small" id="quote-reject" type="button">Reject</button>
                   <button class="ghost small" id="quote-undo" type="button">Undo</button>
                 </div>
-                <div class="inline-actions" id="request-actions" style="display:none; gap:8px; justify-content:flex-end;">
+                <div class="inline-actions" id="request-actions"
+                  style="display:none; gap:8px; justify-content:flex-end;">
                   <button class="primary small" id="request-approve" type="button">Approve</button>
                   <button class="ghost danger small" id="request-reject" type="button">Reject</button>
                   <button class="ghost small" id="request-undo" type="button">Undo</button>
@@ -245,51 +248,55 @@
                 <h2>Rental information</h2>
               </div>
             </div>
-              <div class="stack">
-                <div data-rental-info-field="siteAddress">
-                  <label>Site address
-                    <input id="site-address" type="text" />
-                  </label>
-                  <div class="inline-actions" style="justify-content:flex-start;">
-                    <button type="button" class="ghost small" id="open-side-address-picker">Pick site address on map</button>
-                  </div>
+            <div class="stack">
+              <div data-rental-info-field="siteAddress">
+                <label>Site address
+                  <input id="site-address" type="text" />
+                </label>
+                <div class="inline-actions" style="justify-content:flex-start;">
+                  <button type="button" class="ghost small" id="open-side-address-picker">Pick site address on
+                    map</button>
                 </div>
-                <div data-rental-info-field="criticalAreas">
-                  <label>Critical Areas on Site
-                    <textarea id="critical-areas"></textarea>
-                  </label>
+              </div>
+              <div data-rental-info-field="criticalAreas">
+                <label>Critical Areas on Site
+                  <textarea id="critical-areas"></textarea>
+                </label>
+              </div>
+              <div data-rental-info-field="generalNotes">
+                <label>General notes
+                  <textarea id="general-notes"></textarea>
+                </label>
+                <div class="inline-actions" style="justify-content:flex-start; margin-top:8px;">
+                  <label class="ghost small" for="general-notes-images">Add photos</label>
+                  <input id="general-notes-images" type="file" accept="image/*" multiple hidden />
+                  <span class="hint" id="general-notes-images-status"></span>
                 </div>
-                <div data-rental-info-field="generalNotes">
-                  <label>General notes
-                    <textarea id="general-notes"></textarea>
-                  </label>
-                  <div class="inline-actions" style="justify-content:flex-start; margin-top:8px;">
-                    <label class="ghost small" for="general-notes-images">Add photos</label>
-                    <input id="general-notes-images" type="file" accept="image/*" multiple hidden />
-                    <span class="hint" id="general-notes-images-status"></span>
-                  </div>
-                  <div class="guard-notes-previews" id="general-notes-previews"></div>
+                <div class="guard-notes-previews" id="general-notes-previews"></div>
+              </div>
+              <div class="contact-block" data-rental-info-field="emergencyContacts">
+                <div class="contact-header">
+                  <strong>Emergency contacts</strong>
+                  <button type="button" class="ghost small" id="add-emergency-contact-row">+ Add contact</button>
                 </div>
-                <div class="contact-block" data-rental-info-field="emergencyContacts">
-                  <div class="contact-header">
-                    <strong>Emergency contacts</strong>
-                    <button type="button" class="ghost small" id="add-emergency-contact-row">+ Add contact</button>
-                  </div>
-                  <div class="contacts-list stack" id="emergency-contacts-list"></div>
+                <div class="contacts-list stack" id="emergency-contacts-list"></div>
+              </div>
+              <div class="contact-block" data-rental-info-field="siteContacts">
+                <div class="contact-header">
+                  <strong>Site contacts</strong>
+                  <button type="button" class="ghost small" id="add-site-contact-row">+ Add contact</button>
                 </div>
-                <div class="contact-block" data-rental-info-field="siteContacts">
-                  <div class="contact-header">
-                    <strong>Site contacts</strong>
-                    <button type="button" class="ghost small" id="add-site-contact-row">+ Add contact</button>
-                  </div>
-                  <div class="contacts-list stack" id="site-contacts-list"></div>
-                </div>
-                <div class="coverage-block" data-rental-info-field="coverageHours">
-                  <div class="coverage-header">
-                    <strong>Hours of coverage required</strong>
+                <div class="contacts-list stack" id="site-contacts-list"></div>
+              </div>
+              <div class="coverage-block" data-rental-info-field="coverageHours">
+                <div class="coverage-header">
+                  <strong>Hours of coverage required</strong>
+                  <div class="inline-actions" style="gap:12px;">
                     <span class="hint">Use 24-hour time</span>
+                    <button type="button" class="ghost small" id="copy-monday-coverage">Copy Mon to all</button>
                   </div>
-                  <table class="coverage-table">
+                </div>
+                <table class="coverage-table">
                   <thead>
                     <tr>
                       <th>Mon</th>
@@ -515,7 +522,8 @@
           </div>
         </div>
         <label>
-          <textarea id="lineitem-ai-report" placeholder="Generate an AI report to compare Before vs After images." style="min-height:180px;"></textarea>
+          <textarea id="lineitem-ai-report" placeholder="Generate an AI report to compare Before vs After images."
+            style="min-height:180px;"></textarea>
         </label>
       </div>
     </div>
@@ -575,7 +583,8 @@
             </div>
           </details>
         </div>
-        <p class="hint" id="lineitem-actual-hint" style="margin:0;">Pick up date is required before recording returns.</p>
+        <p class="hint" id="lineitem-actual-hint" style="margin:0;">Pick up date is required before recording returns.
+        </p>
         <div class="inline-actions" style="gap:8px;">
           <button class="ghost small" id="save-lineitem-actual" type="button">Save</button>
           <button class="primary small" id="save-lineitem-actual-all" type="button">Save &amp; apply to all</button>
@@ -591,7 +600,8 @@
         <button class="ghost small" id="close-lineitem-return-location-modal" type="button">Close</button>
       </div>
       <div class="stack">
-        <p class="hint" style="margin:0;">You just added an actual return date. Choose how to update current location.</p>
+        <p class="hint" style="margin:0;">You just added an actual return date. Choose how to update current location.
+        </p>
         <label>
           <input type="radio" name="return-location-choice" value="base" />
           Set current location to base location
@@ -614,13 +624,15 @@
       <div class="modal-header">
         <div>
           <h3 style="margin:0;">Reject request</h3>
-          <p class="hint" style="margin:6px 0 0;">Optionally add a reason. The customer will receive an email and a PDF copy of their request.</p>
+          <p class="hint" style="margin:6px 0 0;">Optionally add a reason. The customer will receive an email and a PDF
+            copy of their request.</p>
         </div>
         <button class="ghost small" id="close-request-reject-modal" type="button">Close</button>
       </div>
       <div class="stack">
         <label>Reason (optional)
-          <textarea id="request-reject-note" placeholder="Add a note for the customer..." style="min-height:120px;"></textarea>
+          <textarea id="request-reject-note" placeholder="Add a note for the customer..."
+            style="min-height:120px;"></textarea>
         </label>
         <div class="inline-actions" style="justify-content:flex-end;">
           <button class="ghost" id="cancel-request-reject" type="button">Cancel</button>
@@ -654,7 +666,8 @@
           </label>
         </div>
         <div id="side-address-picker-map" class="map-picker"></div>
-        <p class="hint" id="side-address-picker-meta">Tip: click the map to drop a pin. We'll start centered on your current device location (if permitted).</p>
+        <p class="hint" id="side-address-picker-meta">Tip: click the map to drop a pin. We'll start centered on your
+          current device location (if permitted).</p>
         <div class="inline-actions" style="justify-content:flex-end;">
           <button class="primary" id="save-side-address-picker" type="button">Use this address</button>
         </div>
@@ -666,9 +679,5 @@
   <script src="vendor/leaflet.js"></script>
   <script src="rental-order-form.js"></script>
 </body>
+
 </html>
-
-
-
-
-

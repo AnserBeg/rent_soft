@@ -13,6 +13,27 @@ let equipmentById = new Map();
 let activeUnits = [];
 let searchTerm = "";
 
+const LIST_STATE_KEY = "rentsoft.dispatch.listState";
+
+function loadListState() {
+  const raw = localStorage.getItem(LIST_STATE_KEY);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
+  } catch { }
+}
+
+function persistListState() {
+  localStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchTerm: String(searchTerm || ""),
+    })
+  );
+}
+
+
 function fmtDate(value, withTime = false) {
   if (!value) return "--";
   const d = new Date(value);
@@ -221,7 +242,7 @@ dispatchTable?.addEventListener("click", (e) => {
       orderId: row.assignment?.order_id || null,
     };
     localStorage.setItem("rentSoft.dispatch.lastSelection", JSON.stringify(payload));
-  } catch {}
+  } catch { }
   const nextParams = new URLSearchParams();
   if (activeCompanyId) nextParams.set("companyId", String(activeCompanyId));
   if (row.assignment?.equipment_id) nextParams.set("equipmentId", String(row.assignment.equipment_id));
@@ -235,10 +256,24 @@ refreshBtn?.addEventListener("click", () => loadActiveUnits());
 searchInput?.addEventListener("input", (e) => {
   searchTerm = String(e.target.value || "").trim();
   renderTable(applyFilters(activeUnits));
+  persistListState();
 });
 
-filterOverdue?.addEventListener("change", () => renderTable(applyFilters(activeUnits)));
+filterOverdue?.addEventListener("change", () => {
+  renderTable(applyFilters(activeUnits));
+  persistListState();
+});
 
 document.addEventListener("DOMContentLoaded", () => {
+  loadListState();
+  if (searchInput) {
+    // If searchTerm was loaded from localStorage, update the input field
+    // Otherwise, if input has a value, use it as initial searchTerm
+    if (searchTerm) {
+      searchInput.value = searchTerm;
+    } else if (searchInput.value) {
+      searchTerm = String(searchInput.value).trim();
+    }
+  }
   loadActiveUnits();
 });

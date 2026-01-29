@@ -32,6 +32,32 @@ let searchTerm = "";
 let qboSearchTerm = "";
 let qboLocalSearchTerm = "";
 
+const LIST_STATE_KEY = "rentsoft.customers.listState";
+const ALLOWED_SORT_FIELDS = new Set(["company_name", "parent_company_name", "contact_name", "email", "phone", "city", "region", "country", "postal_code", "follow_up_date", "sales"]);
+
+function loadListState() {
+  const raw = localStorage.getItem(LIST_STATE_KEY);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
+    if (typeof saved.sortField === "string" && ALLOWED_SORT_FIELDS.has(saved.sortField)) sortField = saved.sortField;
+    if (saved.sortDir === "asc" || saved.sortDir === "desc") sortDir = saved.sortDir;
+  } catch { }
+}
+
+function persistListState() {
+  localStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchTerm: String(searchTerm || ""),
+      sortField,
+      sortDir,
+    })
+  );
+}
+
+
 function renderCustomers(rows) {
   const indicator = (field) => {
     if (sortField !== field) return "";
@@ -720,6 +746,7 @@ customersTable.addEventListener("click", (e) => {
       sortDir = "asc";
     }
     renderCustomers(applyFilters());
+    persistListState();
     return;
   }
 
@@ -733,6 +760,7 @@ customersTable.addEventListener("click", (e) => {
 searchInput?.addEventListener("input", (e) => {
   searchTerm = String(e.target.value || "");
   renderCustomers(applyFilters());
+  persistListState();
 });
 
 // Init
@@ -744,6 +772,13 @@ if (activeCompanyId) {
   if (hasQboPanel && new URLSearchParams(window.location.search).get("qbo") === "connected") {
     setQboHint("QuickBooks connected.");
   }
+
+  loadListState();
+  if (searchInput) {
+    if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
+    searchInput.value = searchTerm;
+  }
+
   loadSales();
   loadCustomers();
   if (hasQboPanel) {

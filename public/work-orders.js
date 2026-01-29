@@ -13,6 +13,29 @@ let workOrdersCache = [];
 let searchTerm = "";
 let showClosed = false;
 
+const LIST_STATE_KEY = "rentsoft.work-orders.listState";
+
+function loadListState() {
+  const raw = localStorage.getItem(LIST_STATE_KEY);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
+    if (typeof saved.showClosed === "boolean") showClosed = saved.showClosed;
+  } catch { }
+}
+
+function persistListState() {
+  localStorage.setItem(
+    LIST_STATE_KEY,
+    JSON.stringify({
+      searchTerm: String(searchTerm || ""),
+      showClosed: !!showClosed,
+    })
+  );
+}
+
+
 function keyForWorkOrders(companyId) {
   return `rentSoft.workOrders.${companyId}`;
 }
@@ -169,6 +192,7 @@ newWorkOrderBtn?.addEventListener("click", (e) => {
 searchInput?.addEventListener("input", (e) => {
   searchTerm = String(e.target.value || "");
   renderWorkOrders(applyFilters());
+  persistListState();
 });
 
 workOrdersTable?.addEventListener("click", (e) => {
@@ -190,14 +214,23 @@ workOrdersTable?.addEventListener("click", (e) => {
 showClosedInput?.addEventListener("change", (e) => {
   showClosed = !!e.target.checked;
   renderWorkOrders(applyFilters());
+  persistListState();
 });
 
 if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
   companyMeta.textContent = "";
+
+  loadListState();
   if (showClosedInput) {
-    showClosed = !!showClosedInput.checked;
+    if (showClosedInput.checked && !showClosed) showClosed = true;
+    showClosedInput.checked = showClosed;
   }
+  if (searchInput) {
+    if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
+    searchInput.value = searchTerm;
+  }
+
   loadWorkOrders();
 } else {
   companyMeta.textContent = "Log in to view work orders.";
