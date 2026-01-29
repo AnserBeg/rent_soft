@@ -690,36 +690,128 @@ textarea:focus {
   min-width: 0;
 }
 
-.rs-hidden-native {
-  display: none !important;
+.rs-time-popover {
+  position: fixed;
+  z-index: 1200;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 22px 60px rgba(15, 23, 42, 0.18);
+  padding: 12px;
+  min-width: 280px;
 }
 
-.rs-time-picker,
-.rs-datetime-picker {
-  display: grid;
-  gap: 6px;
+.rs-time-popover.is-time-only {
+  min-width: 220px;
 }
 
-.rs-time-controls {
+.rs-time-panel {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  gap: 6px;
+  gap: 12px;
+}
+
+.rs-date-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.rs-date-header {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
-.rs-time-controls.is-12h {
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) minmax(0, 1fr);
+.rs-date-label {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 14px;
 }
 
-.rs-time-controls select,
-.rs-time-controls input {
-  min-width: 0;
+.rs-date-nav {
+  border: 1px solid var(--border);
+  background: #f8fafc;
+  border-radius: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
 }
 
-.rs-time-sep {
-  font-size: 12px;
-  color: var(--muted);
+.rs-date-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
   text-align: center;
+}
+
+.rs-date-head {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.rs-date-cell {
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.rs-date-cell.is-outside {
+  color: #94a3b8;
+}
+
+.rs-date-cell.is-today {
+  border: 1px solid var(--accent);
+}
+
+.rs-date-cell.is-selected {
+  background: var(--accent);
+  color: #fff;
+}
+
+.rs-date-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rs-time-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.rs-time-columns.is-12h {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.rs-time-col {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 4px;
+}
+
+.rs-time-option {
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.rs-time-option.is-selected {
+  background: var(--accent);
+  color: #fff;
 }
 
 .line-item-toprow {

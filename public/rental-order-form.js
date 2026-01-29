@@ -322,46 +322,9 @@ function applyMinuteStep(input, stepMinutes = TIME_STEP_MINUTES) {
   }
 }
 
-const customTimePickers = new WeakMap();
-
-function buildSelectOption(value, label) {
-  const option = document.createElement("option");
-  option.value = value;
-  option.textContent = label;
-  return option;
-}
-
-function buildSelect({ options, placeholder, ariaLabel }) {
-  const select = document.createElement("select");
-  if (placeholder) {
-    select.appendChild(buildSelectOption("", placeholder));
-  }
-  options.forEach((opt) => {
-    select.appendChild(buildSelectOption(opt.value, opt.label));
-  });
-  if (ariaLabel) select.setAttribute("aria-label", ariaLabel);
-  return select;
-}
-
-function buildHourOptions(hourFormat) {
-  const options = [];
-  if (hourFormat === "12") {
-    for (let i = 1; i <= 12; i += 1) {
-      const label = pad2(i);
-      options.push({ value: label, label });
-    }
-  } else {
-    for (let i = 0; i < 24; i += 1) {
-      const label = pad2(i);
-      options.push({ value: label, label });
-    }
-  }
-  return options;
-}
-
-function buildMinuteOptions() {
-  return [0, 15, 30, 45].map((m) => ({ value: pad2(m), label: pad2(m) }));
-}
+const TIME_PICKER_MINUTES = [0, 15, 30, 45];
+const timePickerInstances = new WeakMap();
+let activeTimePicker = null;
 
 function parseTimeParts(value) {
   const match = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(String(value || ""));
@@ -370,6 +333,20 @@ function parseTimeParts(value) {
   const minutes = Number(match[2]);
   if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
   return { hours, minutes };
+}
+
+function parseDateParts(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ""));
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  return { year, month, day };
+}
+
+function toISODate(date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 }
 
 function to12HourParts(hour24) {
@@ -382,183 +359,461 @@ function to12HourParts(hour24) {
 
 function to24HourValue(hour12, meridiem) {
   let hour = Number(hour12);
-  if (!Number.isFinite(hour)) return "00";
+  if (!Number.isFinite(hour)) return 0;
   const mer = String(meridiem || "AM").toUpperCase();
   if (mer === "PM" && hour !== 12) hour += 12;
   if (mer === "AM" && hour === 12) hour = 0;
-  return pad2(hour);
+  return hour;
 }
 
-function refreshCustomTimePickerForInput(input) {
-  if (!input) return;
-  const picker = customTimePickers.get(input);
-  if (!picker) return;
-  const rawType = picker.type;
-  let rawValue = input.value || "";
-  if (rawType === "datetime-local") {
-    const snapped = snapDatetimeLocalValue(rawValue);
-    if (snapped && snapped !== rawValue) {
-      input.value = snapped;
-      rawValue = snapped;
-    }
-  } else if (rawType === "time") {
-    const snapped = snapTimeValue(rawValue);
-    if (snapped && snapped !== rawValue) {
-      input.value = snapped;
-      rawValue = snapped;
-    }
-  }
-
-  const disabled = Boolean(input.disabled);
-  [picker.dateInput, picker.hourSelect, picker.minuteSelect, picker.meridiemSelect]
-    .filter(Boolean)
-    .forEach((el) => {
-      el.disabled = disabled;
-    });
-
-  if (!rawValue) {
-    if (picker.dateInput) picker.dateInput.value = "";
-    picker.hourSelect.value = "";
-    picker.minuteSelect.value = "";
-    if (picker.meridiemSelect) picker.meridiemSelect.value = "AM";
-    return;
-  }
-
-  if (rawType === "datetime-local") {
-    const parts = String(rawValue).split("T");
-    const datePart = parts[0] || "";
-    const timePart = parts[1] || "";
-    if (picker.dateInput) picker.dateInput.value = datePart;
-    const time = parseTimeParts(timePart);
-    if (!time) {
-      picker.hourSelect.value = "";
-      picker.minuteSelect.value = "";
-      if (picker.meridiemSelect) picker.meridiemSelect.value = "AM";
-      return;
-    }
-    if (picker.hourFormat === "12") {
-      const parts12 = to12HourParts(time.hours);
-      picker.hourSelect.value = parts12.hour;
-      picker.minuteSelect.value = pad2(time.minutes);
-      if (picker.meridiemSelect) picker.meridiemSelect.value = parts12.meridiem;
-    } else {
-      picker.hourSelect.value = pad2(time.hours);
-      picker.minuteSelect.value = pad2(time.minutes);
-    }
-    return;
-  }
-
-  const timeOnly = parseTimeParts(rawValue);
-  if (!timeOnly) {
-    picker.hourSelect.value = "";
-    picker.minuteSelect.value = "";
-    return;
-  }
-  picker.hourSelect.value = pad2(timeOnly.hours);
-  picker.minuteSelect.value = pad2(timeOnly.minutes);
+function getRoundedTimeParts() {
+  const now = new Date();
+  const minutes = now.getMinutes();
+  const rounded = Math.round(minutes / 15) * 15;
+  const hourCarry = rounded === 60 ? 1 : 0;
+  const hour = (now.getHours() + hourCarry) % 24;
+  const minute = rounded === 60 ? 0 : rounded;
+  return { hours: hour, minutes: minute };
 }
 
-function enhanceTimeInput(input) {
-  if (!input || customTimePickers.has(input)) return;
-  const rawType = (input.getAttribute?.("type") || input.type || "").toLowerCase();
-  if (rawType !== "time" && rawType !== "datetime-local") return;
-
-  const hourFormat = rawType === "datetime-local" ? "12" : "24";
-  const wrapper = document.createElement("div");
-  wrapper.className = rawType === "datetime-local" ? "rs-datetime-picker" : "rs-time-picker";
-
-  input.hidden = true;
-  input.setAttribute("aria-hidden", "true");
-  input.tabIndex = -1;
-  input.classList.add("rs-hidden-native");
-
-  const labelText = input.getAttribute("aria-label") || "";
-  const hourSelect = buildSelect({
-    options: buildHourOptions(hourFormat),
-    placeholder: "HH",
-    ariaLabel: labelText ? `${labelText} hour` : "Hour",
-  });
-  const minuteSelect = buildSelect({
-    options: buildMinuteOptions(),
-    placeholder: "MM",
-    ariaLabel: labelText ? `${labelText} minute` : "Minute",
-  });
-
-  let meridiemSelect = null;
-  if (hourFormat === "12") {
-    meridiemSelect = buildSelect({
-      options: [
-        { value: "AM", label: "AM" },
-        { value: "PM", label: "PM" },
-      ],
-      ariaLabel: labelText ? `${labelText} AM/PM` : "AM or PM",
-    });
-  }
-
-  const timeControls = document.createElement("div");
-  timeControls.className = "rs-time-controls";
-  if (hourFormat === "12") timeControls.classList.add("is-12h");
-  timeControls.appendChild(hourSelect);
-  const sep = document.createElement("span");
-  sep.className = "rs-time-sep";
-  sep.textContent = ":";
-  timeControls.appendChild(sep);
-  timeControls.appendChild(minuteSelect);
-  if (meridiemSelect) timeControls.appendChild(meridiemSelect);
-
-  let dateInput = null;
-  if (rawType === "datetime-local") {
-    dateInput = document.createElement("input");
-    dateInput.type = "date";
-    dateInput.className = "rs-date-input";
-    dateInput.setAttribute("aria-label", labelText ? `${labelText} date` : "Date");
-    wrapper.appendChild(dateInput);
-  }
-  wrapper.appendChild(timeControls);
-
-  input.insertAdjacentElement("afterend", wrapper);
-
-  const updateInputValue = () => {
-    const hourValue = hourSelect.value;
-    const minuteValue = minuteSelect.value;
-    const dateValue = dateInput ? dateInput.value : "";
-    if (!hourValue || !minuteValue || (dateInput && !dateValue)) {
-      if (input.value) {
-        input.value = "";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true }));
+function ensurePickerState(instance) {
+  const raw = String(instance.input.value || "");
+  if (instance.type === "time") {
+    const parsed = parseTimeParts(raw);
+    if (parsed) {
+      const snapped = snapTimeValueWithDayDelta(`${pad2(parsed.hours)}:${pad2(parsed.minutes)}`);
+      if (snapped) {
+        const snappedParts = parseTimeParts(snapped.value);
+        instance.selectedHour = snappedParts ? snappedParts.hours : parsed.hours;
+        instance.selectedMinute = snappedParts ? snappedParts.minutes : parsed.minutes;
+      } else {
+        instance.selectedHour = parsed.hours;
+        instance.selectedMinute = parsed.minutes;
       }
-      return;
+    } else {
+      const fallback = getRoundedTimeParts();
+      instance.selectedHour = fallback.hours;
+      instance.selectedMinute = fallback.minutes;
     }
-    const hour24 = hourFormat === "12" ? to24HourValue(hourValue, meridiemSelect?.value) : hourValue;
-    const timeValue = `${pad2(Number(hour24))}:${minuteValue}`;
-    const nextValue = dateInput ? `${dateValue}T${timeValue}` : timeValue;
-    if (nextValue !== input.value) {
-      input.value = nextValue;
+    return;
+  }
+
+  const [datePart, timePart] = raw.split("T");
+  const parsedDate = parseDateParts(datePart);
+  const parsedTime = parseTimeParts(timePart);
+  const fallbackTime = getRoundedTimeParts();
+  let baseDate = parsedDate ? new Date(parsedDate.year, parsedDate.month - 1, parsedDate.day) : new Date();
+
+  if (parsedTime) {
+    const snapped = snapTimeValueWithDayDelta(`${pad2(parsedTime.hours)}:${pad2(parsedTime.minutes)}`);
+    if (snapped) {
+      const snappedParts = parseTimeParts(snapped.value);
+      if (snappedParts) {
+        instance.selectedHour = snappedParts.hours;
+        instance.selectedMinute = snappedParts.minutes;
+      }
+      if (snapped.dayDelta) {
+        baseDate = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + snapped.dayDelta);
+      }
+    } else {
+      instance.selectedHour = parsedTime.hours;
+      instance.selectedMinute = parsedTime.minutes;
+    }
+  } else {
+    instance.selectedHour = fallbackTime.hours;
+    instance.selectedMinute = fallbackTime.minutes;
+  }
+
+  instance.selectedDate = baseDate;
+  instance.viewDate = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1);
+}
+
+function updateInputFromPicker(instance) {
+  const input = instance.input;
+  if (instance.type === "time") {
+    const value = `${pad2(instance.selectedHour)}:${pad2(instance.selectedMinute)}`;
+    if (input.value !== value) {
+      input.value = value;
       input.dispatchEvent(new Event("input", { bubbles: true }));
       input.dispatchEvent(new Event("change", { bubbles: true }));
     }
-  };
+    return;
+  }
 
-  [hourSelect, minuteSelect, meridiemSelect, dateInput].filter(Boolean).forEach((el) => {
-    el.addEventListener("change", updateInputValue);
-  });
-
-  customTimePickers.set(input, {
-    type: rawType,
-    hourFormat,
-    wrapper,
-    dateInput,
-    hourSelect,
-    minuteSelect,
-    meridiemSelect,
-  });
-
-  refreshCustomTimePickerForInput(input);
+  if (!instance.selectedDate) return;
+  const dateValue = toISODate(instance.selectedDate);
+  const timeValue = `${pad2(instance.selectedHour)}:${pad2(instance.selectedMinute)}`;
+  const nextValue = `${dateValue}T${timeValue}`;
+  if (input.value !== nextValue) {
+    input.value = nextValue;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
 }
 
-function initCustomTimePickers(inputs) {
-  (inputs || []).forEach((input) => enhanceTimeInput(input));
+function buildColumnOption(label, isSelected, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "rs-time-option";
+  if (isSelected) btn.classList.add("is-selected");
+  btn.textContent = label;
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    onClick();
+  });
+  return btn;
+}
+
+function renderTimeColumns(instance) {
+  const { hourCol, minuteCol, meridiemCol, hourFormat, selectedHour, selectedMinute } = instance;
+  if (!hourCol || !minuteCol) return;
+  hourCol.innerHTML = "";
+  minuteCol.innerHTML = "";
+  if (meridiemCol) meridiemCol.innerHTML = "";
+
+  const minuteLabels = TIME_PICKER_MINUTES.map((m) => pad2(m));
+  let hourLabels = [];
+  let selectedHourLabel = "";
+
+  if (hourFormat === "12") {
+    hourLabels = Array.from({ length: 12 }, (_, i) => pad2(i + 1));
+    const parts12 = to12HourParts(selectedHour);
+    selectedHourLabel = parts12.hour;
+    instance.selectedMeridiem = parts12.meridiem;
+  } else {
+    hourLabels = Array.from({ length: 24 }, (_, i) => pad2(i));
+    selectedHourLabel = pad2(selectedHour);
+  }
+
+  hourLabels.forEach((label) => {
+    hourCol.appendChild(
+      buildColumnOption(label, label === selectedHourLabel, () => {
+        if (hourFormat === "12") {
+          instance.selectedHour = to24HourValue(label, instance.selectedMeridiem);
+        } else {
+          instance.selectedHour = Number(label);
+        }
+        updateInputFromPicker(instance);
+        renderTimeColumns(instance);
+      })
+    );
+  });
+
+  minuteLabels.forEach((label) => {
+    minuteCol.appendChild(
+      buildColumnOption(label, label === pad2(selectedMinute), () => {
+        instance.selectedMinute = Number(label);
+        updateInputFromPicker(instance);
+        renderTimeColumns(instance);
+      })
+    );
+  });
+
+  if (meridiemCol) {
+    ["AM", "PM"].forEach((label) => {
+      meridiemCol.appendChild(
+        buildColumnOption(label, label === instance.selectedMeridiem, () => {
+          instance.selectedMeridiem = label;
+          instance.selectedHour = to24HourValue(to12HourParts(selectedHour).hour, label);
+          updateInputFromPicker(instance);
+          renderTimeColumns(instance);
+        })
+      );
+    });
+  }
+}
+
+function buildDateCell(instance, date, isOutside) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "rs-date-cell";
+  if (isOutside) btn.classList.add("is-outside");
+  const today = new Date();
+  if (
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  ) {
+    btn.classList.add("is-today");
+  }
+  if (
+    instance.selectedDate &&
+    date.getFullYear() === instance.selectedDate.getFullYear() &&
+    date.getMonth() === instance.selectedDate.getMonth() &&
+    date.getDate() === instance.selectedDate.getDate()
+  ) {
+    btn.classList.add("is-selected");
+  }
+  btn.textContent = String(date.getDate());
+  btn.addEventListener("click", (e) => {
+    e.preventDefault();
+    instance.selectedDate = date;
+    instance.viewDate = new Date(date.getFullYear(), date.getMonth(), 1);
+    updateInputFromPicker(instance);
+    renderDatePanel(instance);
+  });
+  return btn;
+}
+
+function renderDatePanel(instance) {
+  if (!instance.dateGrid || !instance.monthLabel) return;
+  const view = instance.viewDate || new Date();
+  const year = view.getFullYear();
+  const month = view.getMonth();
+  instance.monthLabel.textContent = view.toLocaleString(undefined, { month: "long", year: "numeric" });
+
+  const firstDay = new Date(year, month, 1);
+  const startOffset = firstDay.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const daysInPrevMonth = new Date(year, month, 0).getDate();
+
+  instance.dateGrid.innerHTML = "";
+  ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].forEach((label) => {
+    const head = document.createElement("div");
+    head.className = "rs-date-head";
+    head.textContent = label;
+    instance.dateGrid.appendChild(head);
+  });
+
+  const totalCells = 42;
+  for (let i = 0; i < totalCells; i += 1) {
+    const dayNumber = i - startOffset + 1;
+    let date;
+    let isOutside = false;
+    if (dayNumber < 1) {
+      date = new Date(year, month - 1, daysInPrevMonth + dayNumber);
+      isOutside = true;
+    } else if (dayNumber > daysInMonth) {
+      date = new Date(year, month + 1, dayNumber - daysInMonth);
+      isOutside = true;
+    } else {
+      date = new Date(year, month, dayNumber);
+    }
+    instance.dateGrid.appendChild(buildDateCell(instance, date, isOutside));
+  }
+}
+
+function createTimePickerInstance(input) {
+  const type = (input.getAttribute?.("type") || input.type || "").toLowerCase();
+  const hourFormat = type === "datetime-local" ? "12" : "24";
+  const popover = document.createElement("div");
+  popover.className = "rs-time-popover";
+  if (type === "time") popover.classList.add("is-time-only");
+
+  const panel = document.createElement("div");
+  panel.className = "rs-time-panel";
+  popover.appendChild(panel);
+
+  let dateGrid = null;
+  let monthLabel = null;
+
+  if (type === "datetime-local") {
+    const datePanel = document.createElement("div");
+    datePanel.className = "rs-date-panel";
+
+    const header = document.createElement("div");
+    header.className = "rs-date-header";
+    const prevBtn = document.createElement("button");
+    prevBtn.type = "button";
+    prevBtn.className = "rs-date-nav";
+    prevBtn.textContent = "‹";
+    const nextBtn = document.createElement("button");
+    nextBtn.type = "button";
+    nextBtn.className = "rs-date-nav";
+    nextBtn.textContent = "›";
+    monthLabel = document.createElement("div");
+    monthLabel.className = "rs-date-label";
+    header.appendChild(prevBtn);
+    header.appendChild(monthLabel);
+    header.appendChild(nextBtn);
+
+    dateGrid = document.createElement("div");
+    dateGrid.className = "rs-date-grid";
+
+    const footer = document.createElement("div");
+    footer.className = "rs-date-footer";
+    const clearBtn = document.createElement("button");
+    clearBtn.type = "button";
+    clearBtn.className = "ghost small";
+    clearBtn.textContent = "Clear";
+    const todayBtn = document.createElement("button");
+    todayBtn.type = "button";
+    todayBtn.className = "ghost small";
+    todayBtn.textContent = "Today";
+    footer.appendChild(clearBtn);
+    footer.appendChild(todayBtn);
+
+    datePanel.appendChild(header);
+    datePanel.appendChild(dateGrid);
+    datePanel.appendChild(footer);
+    panel.appendChild(datePanel);
+
+    prevBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const view = instance.viewDate || new Date();
+      instance.viewDate = new Date(view.getFullYear(), view.getMonth() - 1, 1);
+      renderDatePanel(instance);
+    });
+    nextBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const view = instance.viewDate || new Date();
+      instance.viewDate = new Date(view.getFullYear(), view.getMonth() + 1, 1);
+      renderDatePanel(instance);
+    });
+    clearBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      input.value = "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      closeActiveTimePicker();
+    });
+    todayBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      instance.selectedDate = new Date();
+      instance.viewDate = new Date(instance.selectedDate.getFullYear(), instance.selectedDate.getMonth(), 1);
+      updateInputFromPicker(instance);
+      renderDatePanel(instance);
+    });
+  }
+
+  const timePanel = document.createElement("div");
+  timePanel.className = "rs-time-columns";
+  if (hourFormat === "12") timePanel.classList.add("is-12h");
+
+  const hourCol = document.createElement("div");
+  hourCol.className = "rs-time-col";
+  const minuteCol = document.createElement("div");
+  minuteCol.className = "rs-time-col";
+  let meridiemCol = null;
+  timePanel.appendChild(hourCol);
+  timePanel.appendChild(minuteCol);
+  if (hourFormat === "12") {
+    meridiemCol = document.createElement("div");
+    meridiemCol.className = "rs-time-col";
+    timePanel.appendChild(meridiemCol);
+  }
+  panel.appendChild(timePanel);
+
+  const instance = {
+    input,
+    type,
+    hourFormat,
+    popover,
+    panel,
+    dateGrid,
+    monthLabel,
+    hourCol,
+    minuteCol,
+    meridiemCol,
+    selectedDate: null,
+    selectedHour: 0,
+    selectedMinute: 0,
+    selectedMeridiem: "AM",
+    viewDate: null,
+  };
+
+  timePickerInstances.set(input, instance);
+  ensurePickerState(instance);
+  renderDatePanel(instance);
+  renderTimeColumns(instance);
+  return instance;
+}
+
+function positionTimePicker(instance) {
+  const rect = instance.input.getBoundingClientRect();
+  const popover = instance.popover;
+  const width = popover.offsetWidth || 300;
+  const height = popover.offsetHeight || 320;
+  let left = rect.left;
+  let top = rect.bottom + 6;
+  const maxLeft = window.innerWidth - width - 8;
+  if (left > maxLeft) left = Math.max(8, maxLeft);
+  if (top + height > window.innerHeight && rect.top - height - 6 > 0) {
+    top = rect.top - height - 6;
+  }
+  popover.style.left = `${Math.max(8, left)}px`;
+  popover.style.top = `${Math.max(8, top)}px`;
+}
+
+function closeActiveTimePicker() {
+  if (!activeTimePicker) return;
+  activeTimePicker.popover.remove();
+  activeTimePicker = null;
+  document.removeEventListener("mousedown", handleOutsideTimePicker);
+  document.removeEventListener("keydown", handleTimePickerEscape);
+  window.removeEventListener("scroll", handleTimePickerScroll, true);
+  window.removeEventListener("resize", handleTimePickerResize);
+}
+
+function handleOutsideTimePicker(e) {
+  if (!activeTimePicker) return;
+  if (activeTimePicker.popover.contains(e.target)) return;
+  if (e.target === activeTimePicker.input) return;
+  closeActiveTimePicker();
+}
+
+function handleTimePickerEscape(e) {
+  if (e.key === "Escape") closeActiveTimePicker();
+}
+
+function handleTimePickerScroll() {
+  if (!activeTimePicker) return;
+  positionTimePicker(activeTimePicker);
+}
+
+function handleTimePickerResize() {
+  if (!activeTimePicker) return;
+  positionTimePicker(activeTimePicker);
+}
+
+function openTimePicker(input) {
+  if (!input || input.disabled) return;
+  if (activeTimePicker?.input === input) return;
+  closeActiveTimePicker();
+  const instance = timePickerInstances.get(input) || createTimePickerInstance(input);
+  ensurePickerState(instance);
+  renderDatePanel(instance);
+  renderTimeColumns(instance);
+  document.body.appendChild(instance.popover);
+  positionTimePicker(instance);
+  activeTimePicker = instance;
+  document.addEventListener("mousedown", handleOutsideTimePicker);
+  document.addEventListener("keydown", handleTimePickerEscape);
+  window.addEventListener("scroll", handleTimePickerScroll, true);
+  window.addEventListener("resize", handleTimePickerResize);
+}
+
+function refreshTimePickerForInput(input) {
+  if (!activeTimePicker || activeTimePicker.input !== input) return;
+  ensurePickerState(activeTimePicker);
+  renderDatePanel(activeTimePicker);
+  renderTimeColumns(activeTimePicker);
+  positionTimePicker(activeTimePicker);
+}
+
+function bindTimePickerInput(input) {
+  if (!input) return;
+  const type = (input.getAttribute?.("type") || input.type || "").toLowerCase();
+  if (type !== "time" && type !== "datetime-local") return;
+  const openFromEvent = (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    openTimePicker(input);
+  };
+  input.addEventListener("pointerdown", openFromEvent);
+  input.addEventListener("mousedown", openFromEvent);
+  input.addEventListener("touchstart", openFromEvent, { passive: false });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openTimePicker(input);
+    }
+  });
+  input.addEventListener("input", () => refreshTimePickerForInput(input));
+}
+
+function initTimePickers(inputs) {
+  (inputs || []).forEach((input) => bindTimePickerInput(input));
 }
 
 function normalizeRentalInfoFields(value) {
@@ -1303,11 +1558,11 @@ function setCoverageInputs(value) {
     const entry = raw[day] || {};
     if (coverageInputs[day]?.start) {
       coverageInputs[day].start.value = typeof entry.start === "string" ? entry.start : "";
-      refreshCustomTimePickerForInput(coverageInputs[day].start);
+      refreshTimePickerForInput(coverageInputs[day].start);
     }
     if (coverageInputs[day]?.end) {
       coverageInputs[day].end.value = typeof entry.end === "string" ? entry.end : "";
-      refreshCustomTimePickerForInput(coverageInputs[day].end);
+      refreshTimePickerForInput(coverageInputs[day].end);
     }
   });
 }
@@ -3067,11 +3322,11 @@ function renderLineItemTimeModal() {
   if (!li) return;
   if (lineItemStartInput) {
     lineItemStartInput.value = li.startLocal || "";
-    refreshCustomTimePickerForInput(lineItemStartInput);
+    refreshTimePickerForInput(lineItemStartInput);
   }
   if (lineItemEndInput) {
     lineItemEndInput.value = li.endLocal || "";
-    refreshCustomTimePickerForInput(lineItemEndInput);
+    refreshTimePickerForInput(lineItemEndInput);
   }
 }
 
@@ -3181,19 +3436,19 @@ function renderLineItemActualModal() {
   if (lineItemActualPickupInput) {
     lineItemActualPickupInput.value = toLocalInputValue(li.pickedUpAt);
     lineItemActualPickupInput.disabled = !hasUnit;
-    refreshCustomTimePickerForInput(lineItemActualPickupInput);
+    refreshTimePickerForInput(lineItemActualPickupInput);
   }
   if (lineItemActualReturnInput) {
     lineItemActualReturnInput.value = toLocalInputValue(li.returnedAt);
-    refreshCustomTimePickerForInput(lineItemActualReturnInput);
+    refreshTimePickerForInput(lineItemActualReturnInput);
   }
   if (lineItemPauseStartInput) {
     lineItemPauseStartInput.value = "";
-    refreshCustomTimePickerForInput(lineItemPauseStartInput);
+    refreshTimePickerForInput(lineItemPauseStartInput);
   }
   if (lineItemPauseEndInput) {
     lineItemPauseEndInput.value = "";
-    refreshCustomTimePickerForInput(lineItemPauseEndInput);
+    refreshTimePickerForInput(lineItemPauseEndInput);
   }
   renderLineItemPausePeriods(li);
   if (lineItemActualHint) {
@@ -4192,16 +4447,20 @@ const minuteStepInputs = [
   ...coverageInputsList,
 ].filter(Boolean);
 minuteStepInputs.forEach((el) => applyMinuteStep(el));
-initCustomTimePickers(minuteStepInputs);
+initTimePickers(minuteStepInputs);
 [...rentalInfoInputs].forEach((el) => {
   el.addEventListener("input", syncRentalInfoDraft);
 });
 coverageInputsList.forEach((el) => {
   el.addEventListener("change", () => {
     snapInputToMinuteStep(el);
+    refreshTimePickerForInput(el);
     syncRentalInfoDraft();
   });
-  el.addEventListener("blur", () => snapInputToMinuteStep(el));
+  el.addEventListener("blur", () => {
+    snapInputToMinuteStep(el);
+    refreshTimePickerForInput(el);
+  });
 });
 
 const copyMondayCoverageBtn = document.getElementById("copy-monday-coverage");
@@ -4218,7 +4477,7 @@ copyMondayCoverageBtn?.addEventListener("click", (e) => {
   });
   coverageInputsList.forEach((el) => {
     snapInputToMinuteStep(el);
-    refreshCustomTimePickerForInput(el);
+    refreshTimePickerForInput(el);
   });
   syncRentalInfoDraft();
 });
