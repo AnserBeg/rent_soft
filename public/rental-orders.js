@@ -217,6 +217,14 @@ function renderOrders(rows) {
       <span>History</span>
     </div>`;
 
+  if (!rows || rows.length === 0) {
+    ordersTable.innerHTML += `
+      <div class="table-row" style="grid-template-columns: 1fr; padding: 2rem; justify-items: center; color: var(--text-secondary);">
+        No rental orders found.
+      </div>`;
+    return;
+  }
+
   rows.forEach((row) => {
     const div = document.createElement("div");
     div.className = "table-row";
@@ -317,20 +325,30 @@ ordersTable.addEventListener("click", (e) => {
   window.location.href = `rental-order-form.html?id=${id}`;
 });
 
-if (activeCompanyId) {
-  window.RentSoft?.setCompanyId?.(activeCompanyId);
-  companyMeta.textContent = `Using company #${activeCompanyId}`;
-
-  loadListState();
-  if (searchInput) {
-    if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
-    searchInput.value = searchTerm;
+function init() {
+  if (!activeCompanyId) {
+    const p = new URLSearchParams(window.location.search);
+    const cId = p.get("companyId") || window.RentSoft?.getCompanyId?.();
+    if (cId) activeCompanyId = Number(cId);
   }
 
-  loadOrders();
-} else {
-  companyMeta.textContent = "Log in to view rental orders.";
+  if (activeCompanyId) {
+    window.RentSoft?.setCompanyId?.(activeCompanyId);
+    companyMeta.textContent = `Using company #${activeCompanyId}`;
+
+    loadListState();
+    if (searchInput) {
+      if (searchInput.value && !searchTerm) searchTerm = searchInput.value;
+      searchInput.value = searchTerm;
+    }
+
+    loadOrders();
+  } else {
+    companyMeta.textContent = "Log in to view rental orders.";
+  }
 }
+
+document.addEventListener("DOMContentLoaded", init);
 
 [filterRequested, filterReservation, filterOrdered, filterReceived, filterClosed].filter(Boolean).forEach((el) => {
   el.addEventListener("change", () => {
