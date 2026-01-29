@@ -249,6 +249,79 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   coverageHours: { enabled: true, required: true },
 };
 
+const TIME_STEP_MINUTES = 15;
+
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function snapTimeValueWithDayDelta(value, stepMinutes = TIME_STEP_MINUTES) {
+  if (!value) return null;
+  const match = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(value));
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = match[3] ? Number(match[3]) : 0;
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59) return null;
+  const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+  const stepSeconds = Math.max(1, Math.round(stepMinutes * 60));
+  const roundedSeconds = Math.round(totalSeconds / stepSeconds) * stepSeconds;
+  const daySeconds = 24 * 3600;
+  const dayDelta = Math.floor(roundedSeconds / daySeconds);
+  const normalizedSeconds = ((roundedSeconds % daySeconds) + daySeconds) % daySeconds;
+  const snappedHours = Math.floor(normalizedSeconds / 3600);
+  const snappedMinutes = Math.floor((normalizedSeconds % 3600) / 60);
+  return { value: `${pad2(snappedHours)}:${pad2(snappedMinutes)}`, dayDelta };
+}
+
+function snapTimeValue(value, stepMinutes = TIME_STEP_MINUTES) {
+  const snapped = snapTimeValueWithDayDelta(value, stepMinutes);
+  return snapped ? snapped.value : value;
+}
+
+function snapDatetimeLocalValue(value, stepMinutes = TIME_STEP_MINUTES) {
+  if (!value) return value;
+  const parts = String(value).split("T");
+  if (parts.length !== 2) return value;
+  const [datePart, timePart] = parts;
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+  if (!dateMatch) return value;
+  const snappedTime = snapTimeValueWithDayDelta(timePart, stepMinutes);
+  if (!snappedTime) return value;
+  let nextDate = datePart;
+  if (snappedTime.dayDelta) {
+    const baseDate = new Date(Number(dateMatch[1]), Number(dateMatch[2]) - 1, Number(dateMatch[3]));
+    if (!Number.isNaN(baseDate.getTime())) {
+      baseDate.setDate(baseDate.getDate() + snappedTime.dayDelta);
+      nextDate = `${baseDate.getFullYear()}-${pad2(baseDate.getMonth() + 1)}-${pad2(baseDate.getDate())}`;
+    }
+  }
+  return `${nextDate}T${snappedTime.value}`;
+}
+
+function snapInputToMinuteStep(input, stepMinutes = TIME_STEP_MINUTES) {
+  if (!input || !input.value) return;
+  const rawType = (input.getAttribute?.("type") || input.type || "").toLowerCase();
+  let nextValue = input.value;
+  if (rawType === "time") {
+    nextValue = snapTimeValue(input.value, stepMinutes);
+  } else if (rawType === "datetime-local") {
+    nextValue = snapDatetimeLocalValue(input.value, stepMinutes);
+  }
+  if (nextValue && nextValue !== input.value) {
+    input.value = nextValue;
+  }
+}
+
+function applyMinuteStep(input, stepMinutes = TIME_STEP_MINUTES) {
+  if (!input) return;
+  const rawType = (input.getAttribute?.("type") || input.type || "").toLowerCase();
+  if (rawType === "time" || rawType === "datetime-local") {
+    input.step = String(Math.max(1, Math.round(stepMinutes * 60)));
+  }
+}
+
 function normalizeRentalInfoFields(value) {
   let raw = value;
   if (typeof raw === "string") {
@@ -2876,6 +2949,8 @@ function renderLineItemActualModal() {
 }
 
 function collectActualModalTargets() {
+  snapInputToMinuteStep(lineItemActualPickupInput);
+  snapInputToMinuteStep(lineItemActualReturnInput);
   const pickupValue = lineItemActualPickupInput?.value || "";
   const returnValue = lineItemActualReturnInput?.value || "";
   return {
@@ -3850,11 +3925,25 @@ const coverageInputsList = coverageDayKeys.flatMap((day) => {
   if (!entry) return [];
   return [entry.start, entry.end].filter(Boolean);
 });
+const minuteStepInputs = [
+  lineItemStartInput,
+  lineItemEndInput,
+  lineItemActualPickupInput,
+  lineItemActualReturnInput,
+  lineItemPauseStartInput,
+  lineItemPauseEndInput,
+  ...coverageInputsList,
+].filter(Boolean);
+minuteStepInputs.forEach((el) => applyMinuteStep(el));
 [...rentalInfoInputs].forEach((el) => {
   el.addEventListener("input", syncRentalInfoDraft);
 });
 coverageInputsList.forEach((el) => {
-  el.addEventListener("change", syncRentalInfoDraft);
+  el.addEventListener("change", () => {
+    snapInputToMinuteStep(el);
+    syncRentalInfoDraft();
+  });
+  el.addEventListener("blur", () => snapInputToMinuteStep(el));
 });
 
 const copyMondayCoverageBtn = document.getElementById("copy-monday-coverage");
@@ -3869,6 +3958,7 @@ copyMondayCoverageBtn?.addEventListener("click", (e) => {
       if (entry.end) entry.end.value = end;
     }
   });
+  coverageInputsList.forEach((el) => snapInputToMinuteStep(el));
   syncRentalInfoDraft();
 });
 
@@ -4652,6 +4742,8 @@ lineItemPauseAddBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   const li = getEditingLineItemActual();
   if (!li) return;
+  snapInputToMinuteStep(lineItemPauseStartInput);
+  snapInputToMinuteStep(lineItemPauseEndInput);
   const startLocal = lineItemPauseStartInput?.value || "";
   const endLocal = lineItemPauseEndInput?.value || "";
   const startAt = fromLocalInputValue(startLocal);
@@ -4826,6 +4918,8 @@ let lineItemTimeRefreshTimer = null;
 async function syncLineItemTimeFromModal({ immediate = false, reportErrors = false, force = false } = {}) {
   const li = getEditingLineItemTime();
   if (!li) return;
+  snapInputToMinuteStep(lineItemStartInput);
+  snapInputToMinuteStep(lineItemEndInput);
   const startLocal = lineItemStartInput?.value || "";
   const endLocalInput = lineItemEndInput?.value || "";
   const endLocal = endLocalInput || (startLocal ? addHoursToLocalValue(startLocal, 24) : "");
@@ -4888,6 +4982,8 @@ lineItemTimeSaveBtn?.addEventListener("click", async (e) => {
 
 lineItemTimeApplyAllBtn?.addEventListener("click", async (e) => {
   e.preventDefault();
+  snapInputToMinuteStep(lineItemStartInput);
+  snapInputToMinuteStep(lineItemEndInput);
   const startLocal = lineItemStartInput?.value || "";
   const endLocal = lineItemEndInput?.value || "";
   if (!startLocal || !endLocal) return;
