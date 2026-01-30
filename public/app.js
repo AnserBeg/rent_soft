@@ -426,8 +426,23 @@ function renderEquipmentTable(rows) {
     const isReservedOrRequested = availabilityStatus.includes("reserved") || availabilityStatus.includes("request");
     const isRentedOrOverdue =
       availabilityStatus.includes("rent") || availabilityStatus.includes("out") || availabilityStatus.includes("overdue") || row.is_overdue === true;
-    const roVal = isRentedOrOverdue || isReservedOrRequested ? getRentalOrderLabel(row) || "--" : "--";
-    const custVal = isRentedOrOverdue || isReservedOrRequested ? (row.rental_customer_name || "--") : "--";
+    const showRentalInfo = isRentedOrOverdue || isReservedOrRequested;
+    const roLabel = showRentalInfo ? getRentalOrderLabel(row) || "" : "";
+    const roId = showRentalInfo ? Number(row.rental_order_id) : null;
+    const customerName = showRentalInfo ? (row.rental_customer_name || "") : "";
+    const customerId = showRentalInfo ? Number(row.rental_customer_id) : null;
+    const roCell =
+      roLabel && Number.isFinite(roId) && roId > 0
+        ? `<a class="ghost small table-link" href="rental-order-form.html?id=${encodeURIComponent(String(roId))}" title="Open rental order">${roLabel}</a>`
+        : roLabel
+          ? roLabel
+          : `<span class="hint">--</span>`;
+    const customerCell =
+      customerName && Number.isFinite(customerId) && customerId > 0
+        ? `<a class="ghost small table-link" href="customers-form.html?id=${encodeURIComponent(String(customerId))}" title="Open customer">${customerName}</a>`
+        : customerName
+          ? customerName
+          : `<span class="hint">--</span>`;
     const statusInfo = getEquipmentStatusInfo(row, { isReturnInspection, isOutOfService });
     const statusTag = `<span class="status-tag ${statusInfo.key}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(
       statusInfo.label
@@ -441,8 +456,8 @@ function renderEquipmentTable(rows) {
         ${isReturnInspection ? `<span class="badge return-inspection" style="margin-left:6px;">Return inspection</span>` : ""}
         ${!isReturnInspection && isOutOfService ? `<span class="badge out-of-service" style="margin-left:6px;">Out of service</span>` : ""}
       </span>
-      <span>${roVal}</span>
-      <span>${custVal}</span>
+      <span>${roCell}</span>
+      <span>${customerCell}</span>
       <span>${statusTag}</span>
       <span>${baseLocation}</span>
     `;
@@ -2220,6 +2235,7 @@ if (currentLocationPickerMapStyle) {
 }
 
 equipmentTable?.addEventListener("click", (e) => {
+  if (e.target.closest("a")) return;
   const sortEl = e.target.closest(".sort");
   if (sortEl) {
     const field = sortEl.dataset.sort;

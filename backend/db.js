@@ -2265,7 +2265,8 @@ async function listEquipment(companyId) {
            COALESCE(av.has_overdue, FALSE) AS is_overdue,
            COALESCE(active_ro.order_id, reserved_ro.order_id) AS rental_order_id,
            COALESCE(active_ro.ro_number, reserved_ro.ro_number) AS rental_order_number,
-           COALESCE(active_ro.customer_name, reserved_ro.customer_name) AS rental_customer_name
+           COALESCE(active_ro.customer_name, reserved_ro.customer_name) AS rental_customer_name,
+           COALESCE(active_ro.customer_id, reserved_ro.customer_id) AS rental_customer_id
     FROM equipment e
     LEFT JOIN locations l ON e.location_id = l.id
     LEFT JOIN locations cl ON e.current_location_id = cl.id
@@ -2291,6 +2292,7 @@ async function listEquipment(companyId) {
     LEFT JOIN LATERAL (
       SELECT ro.id AS order_id,
              ro.ro_number,
+             ro.customer_id,
              c.company_name AS customer_name,
              li.end_at,
              li.returned_at
@@ -2317,6 +2319,7 @@ async function listEquipment(companyId) {
     LEFT JOIN LATERAL (
       SELECT ro.id AS order_id,
              ro.ro_number,
+             ro.customer_id,
              c.company_name AS customer_name,
              li.start_at,
              li.end_at
