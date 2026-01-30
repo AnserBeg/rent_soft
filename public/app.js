@@ -92,7 +92,7 @@ const ALLOWED_SORT_FIELDS = new Set([
   "serial_number",
   "condition",
   "location",
-  "current_location",
+  "availability_status",
   "purchase_price",
   "rental_order_number",
   "rental_customer_name",
@@ -216,6 +216,54 @@ function getWorkOrderNumberForEquipment(companyId, equipmentId) {
   return order?.number ? String(order.number) : null;
 }
 
+function getRentalOrderLabel(item) {
+  let roLabel = item?.rental_order_number ? String(item.rental_order_number).trim() : "";
+  if (!roLabel && item?.rental_order_id) {
+    roLabel = `RO #${item.rental_order_id}`;
+  }
+  return roLabel;
+}
+
+function getEquipmentStatusInfo(item, options = {}) {
+  const isReturnInspection = options.isReturnInspection === true;
+  const isOutOfService = options.isOutOfService === true;
+  const raw =
+    item?.availability_status ??
+    item?.availabilityStatus ??
+    item?.availability ??
+    item?.status ??
+    item?.state ??
+    item?.rental_status;
+  const normalized = String(raw || "").toLowerCase();
+  const isOverdue = item?.is_overdue === true || normalized.includes("overdue");
+  const isReserved = normalized.includes("reserved") || normalized.includes("request");
+  const isRented = normalized.includes("rent") || normalized.includes("out");
+
+  let key = "available";
+  let label = "Available";
+
+  if (isReturnInspection) {
+    key = "return-inspection";
+    label = "Return inspection";
+  } else if (isOutOfService) {
+    key = "out-of-service";
+    label = "Out of service";
+  } else if (isOverdue) {
+    key = "overdue";
+    label = "Overdue";
+  } else if (isReserved) {
+    key = "reserved";
+    label = "Reserved";
+  } else if (isRented) {
+    key = "rented";
+    label = "Rented out";
+  }
+
+  const roLabel = key === "reserved" ? getRentalOrderLabel(item) : "";
+  const labelWithRo = roLabel ? `${label} (${roLabel})` : label;
+  return { key, label, labelWithRo, roLabel };
+}
+
 function setEquipmentHeaderStatus(item) {
   if (!equipmentFormStatus) return;
   const status = String(item?.availability_status || "").toLowerCase();
@@ -225,10 +273,7 @@ function setEquipmentHeaderStatus(item) {
     return;
   }
 
-  let roLabel = item?.rental_order_number ? String(item.rental_order_number).trim() : "";
-  if (!roLabel && item?.rental_order_id) {
-    roLabel = `RO #${item.rental_order_id}`;
-  }
+  let roLabel = getRentalOrderLabel(item);
   if (!roLabel) {
     clearEquipmentHeaderStatus();
     return;
@@ -358,15 +403,13 @@ function renderEquipmentTable(rows) {
       <span class="sort ${sortField === "model_name" ? "active" : ""}" data-sort="model_name">Model ${indicator("model_name")}</span>
       <span class="sort ${sortField === "rental_order_number" ? "active" : ""}" data-sort="rental_order_number">RO ${indicator("rental_order_number")}</span>
       <span class="sort ${sortField === "rental_customer_name" ? "active" : ""}" data-sort="rental_customer_name">Customer ${indicator("rental_customer_name")}</span>
-      <span class="sort ${sortField === "current_location" ? "active" : ""}" data-sort="current_location">Current ${indicator("current_location")}</span>
+      <span class="sort ${sortField === "availability_status" ? "active" : ""}" data-sort="availability_status">Status ${indicator("availability_status")}</span>
       <span class="sort ${sortField === "location" ? "active" : ""}" data-sort="location">Base ${indicator("location")}</span>
     </div>`;
 
   rows.forEach((row) => {
     const badge = conditionClasses[row.condition] || "normal";
     const baseLocation = row.location || "--";
-    const currentLocation = row.current_location || "--";
-    const needsCurrent = row.needs_current_location_update === true;
     const div = document.createElement("div");
     const isReturnInspection = returnInspectionMap.has(String(row.id));
     const isOutOfService = isReturnInspection || outOfServiceMap.has(String(row.id));
@@ -376,10 +419,18 @@ function renderEquipmentTable(rows) {
       ? `<img class="thumb" src="${row.image_url}" alt="" loading="lazy" referrerpolicy="no-referrer" />`
       : `<span class="thumb placeholder">--</span>`;
 
-    const availabilityStatus = String(row.availability_status || row.availabilityStatus || row.status || "").toLowerCase();
-    const isRentedOrOverdue = availabilityStatus.includes("rent") || availabilityStatus.includes("out") || availabilityStatus.includes("overdue") || row.is_overdue === true;
-    const roVal = isRentedOrOverdue ? (row.rental_order_number || row.rental_order_id || "--") : "--";
-    const custVal = isRentedOrOverdue ? (row.rental_customer_name || "--") : "--";
+    const availabilityStatus = String(
+      row.availability_status || row.availabilityStatus || row.status || row.state || row.rental_status || ""
+    ).toLowerCase();
+    const isReservedOrRequested = availabilityStatus.includes("reserved") || availabilityStatus.includes("request");
+    const isRentedOrOverdue =
+      availabilityStatus.includes("rent") || availabilityStatus.includes("out") || availabilityStatus.includes("overdue") || row.is_overdue === true;
+    const roVal = isRentedOrOverdue || isReservedOrRequested ? getRentalOrderLabel(row) || "--" : "--";
+    const custVal = isRentedOrOverdue || isReservedOrRequested ? (row.rental_customer_name || "--") : "--";
+    const statusInfo = getEquipmentStatusInfo(row, { isReturnInspection, isOutOfService });
+    const statusTag = `<span class="status-tag ${statusInfo.key}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(
+      statusInfo.labelWithRo
+    )}</span>`;
 
     div.innerHTML = `
       <span class="thumb-cell">${thumb}</span>
@@ -391,12 +442,7 @@ function renderEquipmentTable(rows) {
       </span>
       <span>${roVal}</span>
       <span>${custVal}</span>
-      <span>
-        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-          ${needsCurrent ? "" : `<span>${currentLocation}</span>`}
-          ${needsCurrent ? `<span class="badge damage">Needs current</span>` : ""}
-        </div>
-      </span>
+      <span>${statusTag}</span>
       <span>${baseLocation}</span>
     `;
     equipmentTable.appendChild(div);
@@ -442,27 +488,26 @@ function renderEquipmentCards(rows) {
     title.className = "equipment-card-title";
     title.textContent = row.model_name || row.serial_number || "--";
 
-    const getAvailability = () => {
-      const raw =
-        row.availability_status ?? row.availabilityStatus ?? row.availability ?? row.status ?? row.state ?? row.rental_status;
-      const normalized = String(raw || "").toLowerCase();
-      if (row.is_overdue === true || normalized.includes("overdue")) return { key: "overdue", label: "Overdue" };
-      if (normalized.includes("reserved")) return { key: "reserved", label: "Reserved" };
-      if (normalized.includes("rent") || normalized.includes("out")) return { key: "rented", label: "Rented out" };
-      return { key: "available", label: "Available" };
-    };
-
-    const availability = getAvailability();
+    const availability = getEquipmentStatusInfo(row, { isReturnInspection, isOutOfService });
     const status = document.createElement("span");
     if (isReturnInspection) {
       status.className = "status-tag return-inspection";
-      status.innerHTML = `<span class="status-dot" aria-hidden="true"></span>Return inspection`;
+      const dot = document.createElement("span");
+      dot.className = "status-dot";
+      dot.setAttribute("aria-hidden", "true");
+      status.append(dot, document.createTextNode("Return inspection"));
     } else if (isOutOfService) {
       status.className = "status-tag out-of-service";
-      status.innerHTML = `<span class="status-dot" aria-hidden="true"></span>Out of service`;
+      const dot = document.createElement("span");
+      dot.className = "status-dot";
+      dot.setAttribute("aria-hidden", "true");
+      status.append(dot, document.createTextNode("Out of service"));
     } else {
       status.className = `status-tag ${availability.key}`;
-      status.innerHTML = `<span class="status-dot" aria-hidden="true"></span>${availability.label}`;
+      const dot = document.createElement("span");
+      dot.className = "status-dot";
+      dot.setAttribute("aria-hidden", "true");
+      status.append(dot, document.createTextNode(availability.labelWithRo));
     }
 
     titleRow.appendChild(title);
@@ -485,10 +530,8 @@ function renderEquipmentCards(rows) {
 
     const details = document.createElement("div");
     details.className = "equipment-card-details";
-    const needsCurrent = row.needs_current_location_update === true;
     details.innerHTML = `
       <div><span class="equipment-card-k">Base</span><span class="equipment-card-v">${row.location || "--"}</span></div>
-      <div><span class="equipment-card-k">Current</span><span class="equipment-card-v">${needsCurrent ? "" : (row.current_location || "--")}${needsCurrent ? ` <span class="badge damage">Needs current</span>` : ""}</span></div>
     `;
 
     body.appendChild(titleRow);
@@ -620,6 +663,11 @@ function applyFilters() {
         r.manufacturer,
         r.location,
         r.current_location,
+        r.availability_status,
+        r.availabilityStatus,
+        r.status,
+        r.state,
+        r.rental_status,
         r.bundle_name,
         r.notes,
         r.rental_order_number,
@@ -635,6 +683,16 @@ function applyFilters() {
       switch (sortField) {
         case "purchase_price":
           return row.purchase_price === null ? -Infinity : Number(row.purchase_price);
+        case "availability_status": {
+          const raw =
+            row.availability_status ??
+            row.availabilityStatus ??
+            row.availability ??
+            row.status ??
+            row.state ??
+            row.rental_status;
+          return String(raw || "").toLowerCase();
+        }
         default:
           return (row[sortField] || "").toString().toLowerCase();
       }
