@@ -680,13 +680,33 @@ function bestDateCandidate(candidates, nowMs) {
   return { dist: bestDist, ms: best.ms, type: best.type };
 }
 
+function adjustedStartForStatus(status, startMs, nowMs) {
+  if (status === "reservation" && Number.isFinite(startMs) && startMs < nowMs) {
+    return nowMs;
+  }
+  return startMs;
+}
+
+function dateSortCandidate(status, startMsRaw, endMs, nowMs) {
+  const s = String(status || "").toLowerCase();
+  const startMs = adjustedStartForStatus(s, startMsRaw, nowMs);
+  const hasStart = Number.isFinite(startMs);
+  const hasEnd = Number.isFinite(endMs);
+  const started = Number.isFinite(startMsRaw) && startMsRaw <= nowMs;
+  const useEnd = s === "received" || s === "closed" || (s === "ordered" && started);
+
+  if (useEnd && hasEnd) return { ms: endMs, type: "end" };
+  if (hasStart) return { ms: startMs, type: "start" };
+  if (hasEnd) return { ms: endMs, type: "end" };
+  return null;
+}
+
 function benchOrderDateSortKey(row, nowMs) {
   const startMs = parseDateMs(row.start_at);
   const endMs = parseDateMs(row.end_at);
-  const candidates = [];
-  if (Number.isFinite(endMs)) candidates.push({ ms: endMs, type: "end" });
-  if (Number.isFinite(startMs)) candidates.push({ ms: startMs, type: "start" });
-  return bestDateCandidate(candidates, nowMs);
+  const candidate = dateSortCandidate(row.status, startMs, endMs, nowMs);
+  if (!candidate) return { dist: Number.POSITIVE_INFINITY, ms: Number.POSITIVE_INFINITY, type: "end" };
+  return { dist: Math.abs(candidate.ms - nowMs), ms: candidate.ms, type: candidate.type };
 }
 
 function sortBenchOrderRows(rows) {
@@ -706,8 +726,8 @@ function timelineRowDateSortKey(row, nowMs) {
   (row.bars || []).forEach((a) => {
     const startMs = parseDateMs(a.start_at);
     const endMs = parseDateMs(a.end_at);
-    if (Number.isFinite(startMs)) candidates.push({ ms: startMs, type: "start" });
-    if (Number.isFinite(endMs)) candidates.push({ ms: endMs, type: "end" });
+    const candidate = dateSortCandidate(a.status, startMs, endMs, nowMs);
+    if (candidate) candidates.push(candidate);
   });
   return bestDateCandidate(candidates, nowMs);
 }
