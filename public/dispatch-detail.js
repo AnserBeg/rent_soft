@@ -450,7 +450,7 @@ function resetSiteAddressPickerMapContainer() {
   if (!siteAddressPickerMapEl) return;
   try {
     siteAddressPicker.leaflet.map?.remove?.();
-  } catch {}
+  } catch { }
   siteAddressPicker.leaflet.map = null;
   siteAddressPicker.leaflet.marker = null;
   siteAddressPicker.leaflet.layers = null;
@@ -506,7 +506,7 @@ function initLeafletSiteAddressPicker(center) {
         siteAddressPicker.leaflet.searchSeq = seq;
         try {
           siteAddressPicker.leaflet.searchAbort?.abort?.();
-        } catch {}
+        } catch { }
         siteAddressPicker.leaflet.searchAbort = new AbortController();
         try {
           const res = await fetch(`/api/geocode/search?q=${encodeURIComponent(q)}&limit=6`, {
@@ -795,7 +795,6 @@ function renderUnitDetail(row) {
   const eq = row?.equipment || {};
   unitDetails.innerHTML = `
     ${detailItem("Unit", equipmentLabel(eq))}
-    ${detailItem("Unit ID", eq.id ?? "--")}
     ${detailItem("Serial", eq.serial_number || "--")}
     ${detailItem("Model", eq.model_name || "--")}
     ${detailItem("Type", eq.type_name || eq.type || "--")}
@@ -1345,7 +1344,7 @@ async function buildFallbackRowFromOrder() {
       if (res.ok) {
         equipment = (data.equipment || []).find((e) => String(e.id) === String(equipmentIdValue)) || null;
       }
-    } catch {}
+    } catch { }
   }
 
   const firstLine = lineItems[0] || {};

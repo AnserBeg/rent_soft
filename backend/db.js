@@ -2383,6 +2383,14 @@ async function updateEquipment({
   purchasePrice,
   notes,
 }) {
+  const existingRes = await pool.query(
+    `SELECT id, type_id FROM equipment WHERE id = $1 AND company_id = $2 LIMIT 1`,
+    [id, companyId]
+  );
+  const existing = existingRes.rows[0];
+  if (!existing) return null;
+  const prevTypeId = existing.type_id === null || existing.type_id === undefined ? null : Number(existing.type_id);
+  const nextTypeId = typeId === null || typeId === undefined ? null : Number(typeId);
   const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean).map(String) : [];
   const primaryUrl = urls[0] || imageUrl || null;
   const result = await pool.query(
@@ -2418,7 +2426,36 @@ async function updateEquipment({
       companyId,
     ]
   );
-  return result.rows[0];
+  const updated = result.rows[0];
+  if (updated && prevTypeId !== nextTypeId) {
+    await syncLineItemTypesForEquipment({
+      companyId,
+      equipmentId: updated.id,
+      typeId: nextTypeId,
+    });
+  }
+  return updated;
+}
+
+async function syncLineItemTypesForEquipment({ companyId, equipmentId, typeId }) {
+  if (!companyId || !equipmentId) return 0;
+  if (typeId === null || typeId === undefined) return 0;
+  const res = await pool.query(
+    `
+    UPDATE rental_order_line_items li
+       SET type_id = $1
+      FROM rental_order_line_inventory liv
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+     WHERE liv.line_item_id = li.id
+       AND liv.equipment_id = $2
+       AND ro.company_id = $3
+       AND ro.status <> 'closed'
+       AND (SELECT COUNT(*) FROM rental_order_line_inventory liv2 WHERE liv2.line_item_id = li.id) = 1
+       AND li.type_id IS DISTINCT FROM $1
+    `,
+    [typeId, equipmentId, companyId]
+  );
+  return res.rowCount || 0;
 }
 
 async function deleteEquipment({ id, companyId }) {
