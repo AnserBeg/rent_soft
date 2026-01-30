@@ -2251,9 +2251,9 @@ async function listEquipment(companyId) {
            END AS needs_current_location_update
           ,
            COALESCE(av.has_overdue, FALSE) AS is_overdue,
-           active_ro.order_id AS rental_order_id,
-           active_ro.ro_number AS rental_order_number,
-           active_ro.customer_name AS rental_customer_name
+           COALESCE(active_ro.order_id, reserved_ro.order_id) AS rental_order_id,
+           COALESCE(active_ro.ro_number, reserved_ro.ro_number) AS rental_order_number,
+           COALESCE(active_ro.customer_name, reserved_ro.customer_name) AS rental_customer_name
     FROM equipment e
     LEFT JOIN locations l ON e.location_id = l.id
     LEFT JOIN locations cl ON e.current_location_id = cl.id
@@ -2302,6 +2302,24 @@ async function listEquipment(companyId) {
          ro.id DESC
        LIMIT 1
     ) active_ro ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT ro.id AS order_id,
+             ro.ro_number,
+             c.company_name AS customer_name,
+             li.start_at,
+             li.end_at
+        FROM rental_order_line_inventory liv
+        JOIN rental_order_line_items li ON li.id = liv.line_item_id
+        JOIN rental_orders ro ON ro.id = li.rental_order_id
+        JOIN customers c ON c.id = ro.customer_id
+       WHERE liv.equipment_id = e.id
+         AND ro.company_id = $1
+         AND ro.status IN ('reservation','requested')
+         AND li.start_at <= NOW()
+         AND li.end_at > NOW()
+       ORDER BY li.start_at DESC, ro.id DESC
+       LIMIT 1
+    ) reserved_ro ON TRUE
     WHERE e.company_id = $1
       AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
     ORDER BY e.created_at DESC;
