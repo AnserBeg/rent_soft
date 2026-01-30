@@ -1162,21 +1162,43 @@ function setCurrentLocationPickerMapStyle(style) {
   }
 }
 
+function isGoogleMapsReady() {
+  return typeof window.google?.maps?.Map === "function";
+}
+
+function waitForGoogleMapsReady({ timeoutMs = 4000, intervalMs = 50 } = {}) {
+  if (isGoogleMapsReady()) return Promise.resolve(true);
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const tick = () => {
+      if (isGoogleMapsReady()) return resolve(true);
+      if (Date.now() - start >= timeoutMs) return reject(new Error("Google Maps not ready."));
+      setTimeout(tick, intervalMs);
+    };
+    tick();
+  });
+}
+
 function loadGoogleMaps(apiKey) {
   if (!apiKey) return Promise.resolve(false);
-  if (window.google?.maps?.Map) return Promise.resolve(true);
+  if (isGoogleMapsReady()) return Promise.resolve(true);
   if (window.__rentsoftGoogleMapsLoading) return window.__rentsoftGoogleMapsLoading;
 
   window.__rentsoftGoogleMapsLoading = new Promise((resolve, reject) => {
     const id = "rentsoft-google-maps";
     const existing = document.getElementById(id);
-    if (existing) return resolve(true);
+    if (existing) {
+      waitForGoogleMapsReady().then(() => resolve(true)).catch(reject);
+      return;
+    }
     const s = document.createElement("script");
     s.id = id;
     s.async = true;
     s.defer = true;
     s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places&loading=async`;
-    s.onload = () => resolve(true);
+    s.onload = () => {
+      waitForGoogleMapsReady().then(() => resolve(true)).catch(reject);
+    };
     s.onerror = () => reject(new Error("Failed to load Google Maps script (network/CSP)."));
     document.head.appendChild(s);
   });
@@ -1457,7 +1479,7 @@ async function openCurrentLocationPicker() {
 
   const config = await getPublicConfig().catch(() => ({}));
   const key = config?.googleMapsApiKey ? String(config.googleMapsApiKey) : "";
-  const hasGoogle = !!window.google?.maps?.Map;
+  const hasGoogle = isGoogleMapsReady();
   if (!key && !hasGoogle) {
     resetPickerMapContainer();
     if (currentLocationPickerMeta) {
