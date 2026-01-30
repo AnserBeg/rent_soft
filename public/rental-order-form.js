@@ -910,7 +910,7 @@ function applyRentalInfoConfig(config) {
   });
 }
 let sideAddressPicker = {
-  mode: "leaflet",
+  mode: "google",
   mapStyle: "street",
   google: {
     map: null,
@@ -1741,44 +1741,38 @@ async function openSideAddressPicker() {
 
   const config = await getPublicConfig().catch(() => ({}));
   const key = config?.googleMapsApiKey ? String(config.googleMapsApiKey) : "";
-
-  if (key) {
-    try {
-      if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = "Loading Google Maps...";
-      await loadGoogleMaps(key);
-      resetSideAddressPickerMapContainer();
-      sideAddressPicker.mode = "google";
-      initGoogleSideAddressPicker(center);
-      if (sideAddressPickerMeta) {
-        const places = window.google?.maps?.places;
-        const hasSvc = !!places?.AutocompleteService;
-        const msg = hasSvc ? "Search (Google Places) or click to drop a pin." : "Click to drop a pin (Places library missing).";
-        sideAddressPickerMeta.textContent = msg;
-      }
-      if (!applySideAddressPickerDraftSelection()) {
-        await applySideAddressPickerTextSelection();
-      }
-      return;
-    } catch (err) {
-      if (sideAddressPickerMeta) {
-        sideAddressPickerMeta.textContent =
-          `Google Maps failed to load: ${err?.message || String(err)}. ` +
-          "Falling back to pin-drop. Check browser console for: InvalidKeyMapError / RefererNotAllowedMapError / ApiNotActivatedMapError / BillingNotEnabledMapError.";
-      }
+  const hasGoogle = !!window.google?.maps?.Map;
+  if (!key && !hasGoogle) {
+    resetSideAddressPickerMapContainer();
+    if (sideAddressPickerMeta) {
+      sideAddressPickerMeta.textContent =
+        "Google Maps API key is required. Set GOOGLE_MAPS_API_KEY and reload to use the map picker.";
     }
+    return;
   }
 
-  resetSideAddressPickerMapContainer();
-  sideAddressPicker.mode = "leaflet";
-  initLeafletSideAddressPicker(center);
-  if (sideAddressPickerMeta) {
-    sideAddressPickerMeta.textContent =
-      key
-        ? "Search (OpenStreetMap) or click the map to drop a pin (Google failed to load)."
-        : "Search (OpenStreetMap) or click the map to drop a pin.";
-  }
-  if (!applySideAddressPickerDraftSelection()) {
-    await applySideAddressPickerTextSelection();
+  try {
+    if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = "Loading Google Maps...";
+    if (!hasGoogle) await loadGoogleMaps(key);
+    resetSideAddressPickerMapContainer();
+    sideAddressPicker.mode = "google";
+    initGoogleSideAddressPicker(center);
+    if (sideAddressPickerMeta) {
+      const places = window.google?.maps?.places;
+      const hasSvc = !!places?.AutocompleteService;
+      const msg = hasSvc ? "Search (Google Places) or click to drop a pin." : "Click to drop a pin (Places library missing).";
+      sideAddressPickerMeta.textContent = msg;
+    }
+    if (!applySideAddressPickerDraftSelection()) {
+      await applySideAddressPickerTextSelection();
+    }
+  } catch (err) {
+    resetSideAddressPickerMapContainer();
+    if (sideAddressPickerMeta) {
+      sideAddressPickerMeta.textContent =
+        `Google Maps failed to load: ${err?.message || String(err)}. ` +
+        "Check browser console for: InvalidKeyMapError / RefererNotAllowedMapError / ApiNotActivatedMapError / BillingNotEnabledMapError.";
+    }
   }
 }
 

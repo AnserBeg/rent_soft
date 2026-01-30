@@ -113,7 +113,7 @@ let editingBundleId = null;
 let bundleSeedEquipmentId = null;
 
 let currentLocationPicker = {
-  mode: "leaflet",
+  mode: "google",
   mapStyle: "street",
   google: {
     map: null,
@@ -1457,38 +1457,35 @@ async function openCurrentLocationPicker() {
 
   const config = await getPublicConfig().catch(() => ({}));
   const key = config?.googleMapsApiKey ? String(config.googleMapsApiKey) : "";
-
-  if (key) {
-    try {
-      if (currentLocationPickerMeta) currentLocationPickerMeta.textContent = "Loading Google Maps...";
-      await loadGoogleMaps(key);
-      resetPickerMapContainer();
-      currentLocationPicker.mode = "google";
-      initGooglePicker(center);
-      if (currentLocationPickerMeta) {
-        const places = window.google?.maps?.places;
-        const hasSvc = !!places?.AutocompleteService;
-        const msg = hasSvc ? "Search (Google Places) or click to drop a pin." : "Click to drop a pin (Places library missing).";
-        currentLocationPickerMeta.textContent = msg;
-      }
-      return;
-    } catch (err) {
-      if (currentLocationPickerMeta) {
-        currentLocationPickerMeta.textContent =
-          `Google Maps failed to load: ${err?.message || String(err)}. ` +
-          "Falling back to pin-drop. Check browser console for: InvalidKeyMapError / RefererNotAllowedMapError / ApiNotActivatedMapError / BillingNotEnabledMapError.";
-      }
+  const hasGoogle = !!window.google?.maps?.Map;
+  if (!key && !hasGoogle) {
+    resetPickerMapContainer();
+    if (currentLocationPickerMeta) {
+      currentLocationPickerMeta.textContent =
+        "Google Maps API key is required. Set GOOGLE_MAPS_API_KEY and reload to use the map picker.";
     }
+    return;
   }
 
-  resetPickerMapContainer();
-  currentLocationPicker.mode = "leaflet";
-  initLeafletPicker(center);
-  if (currentLocationPickerMeta) {
-    currentLocationPickerMeta.textContent =
-      key
-        ? "Search (OpenStreetMap) or click the map to drop a pin (Google failed to load)."
-        : "Search (OpenStreetMap) or click the map to drop a pin.";
+  try {
+    if (currentLocationPickerMeta) currentLocationPickerMeta.textContent = "Loading Google Maps...";
+    if (!hasGoogle) await loadGoogleMaps(key);
+    resetPickerMapContainer();
+    currentLocationPicker.mode = "google";
+    initGooglePicker(center);
+    if (currentLocationPickerMeta) {
+      const places = window.google?.maps?.places;
+      const hasSvc = !!places?.AutocompleteService;
+      const msg = hasSvc ? "Search (Google Places) or click to drop a pin." : "Click to drop a pin (Places library missing).";
+      currentLocationPickerMeta.textContent = msg;
+    }
+  } catch (err) {
+    resetPickerMapContainer();
+    if (currentLocationPickerMeta) {
+      currentLocationPickerMeta.textContent =
+        `Google Maps failed to load: ${err?.message || String(err)}. ` +
+        "Check browser console for: InvalidKeyMapError / RefererNotAllowedMapError / ApiNotActivatedMapError / BillingNotEnabledMapError.";
+    }
   }
 }
 
