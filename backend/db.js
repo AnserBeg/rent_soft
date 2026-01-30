@@ -863,6 +863,7 @@ async function ensureTables() {
         logistics_instructions TEXT,
         special_instructions TEXT,
         critical_areas TEXT,
+        notification_circumstances JSONB NOT NULL DEFAULT '[]'::jsonb,
         coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb,
         emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
         site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -888,6 +889,9 @@ async function ensureTables() {
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS logistics_instructions TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS special_instructions TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS critical_areas TEXT;`);
+    await client.query(
+      `ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS notification_circumstances JSONB NOT NULL DEFAULT '[]'::jsonb;`
+    );
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
@@ -1016,7 +1020,7 @@ async function ensureTables() {
         auto_apply_customer_credit BOOLEAN NOT NULL DEFAULT TRUE,
         auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE,
         required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
-        rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
+        rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
         email_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         email_smtp_provider TEXT NOT NULL DEFAULT 'custom',
         email_smtp_host TEXT,
@@ -1050,7 +1054,9 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS auto_apply_customer_credit BOOLEAN NOT NULL DEFAULT TRUE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb;`);
-    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"coverageHours":{"enabled":true,"required":true}}'::jsonb;`);
+    await client.query(
+      `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb;`
+    );
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_smtp_provider TEXT NOT NULL DEFAULT 'custom';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_smtp_host TEXT;`);
@@ -3273,6 +3279,38 @@ function normalizeCoverageHours(value) {
   return normalized;
 }
 
+function normalizeNotificationCircumstances(value) {
+  let raw = [];
+  if (Array.isArray(value)) {
+    raw = value;
+  } else if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      raw = [];
+    } else {
+      try {
+        const parsed = JSON.parse(trimmed);
+        raw = Array.isArray(parsed) ? parsed : [trimmed];
+      } catch {
+        raw = [trimmed];
+      }
+    }
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  raw.forEach((entry) => {
+    if (entry === null || entry === undefined) return;
+    const text = String(entry).trim();
+    if (!text) return;
+    const key = text.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    normalized.push(text);
+  });
+  return normalized;
+}
+
 function normalizeOrderAttachments({ companyId, attachments, category = null } = {}) {
   const cid = Number(companyId);
   if (!Number.isFinite(cid) || cid <= 0) return [];
@@ -4821,6 +4859,7 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
   siteContacts: { enabled: true, required: true },
+  notificationCircumstances: { enabled: true, required: false },
   coverageHours: { enabled: true, required: true },
 };
 
@@ -7802,6 +7841,7 @@ async function createRentalOrder({
   logisticsInstructions,
   specialInstructions,
   criticalAreas,
+  notificationCircumstances,
   coverageHours,
   emergencyContacts,
   siteContacts,
@@ -7811,12 +7851,13 @@ async function createRentalOrder({
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-      const settings = await getCompanySettings(companyId);
-      const effectiveStatus = overrideStatusFromLineItems(status, lineItems);
-      const demandOnly = isDemandOnlyStatus(effectiveStatus);
-      const allowsInventory = allowsInventoryAssignment(effectiveStatus);
+    const settings = await getCompanySettings(companyId);
+    const effectiveStatus = overrideStatusFromLineItems(status, lineItems);
+    const demandOnly = isDemandOnlyStatus(effectiveStatus);
+    const allowsInventory = allowsInventoryAssignment(effectiveStatus);
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
+    const notificationCircumstancesValue = normalizeNotificationCircumstances(notificationCircumstances);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
     const effectiveDate = createdAt ? new Date(createdAt) : new Date();
       const quoteNumber = isQuoteStatus(effectiveStatus) ? await nextDocumentNumber(client, companyId, "QO", effectiveDate) : null;
@@ -7857,8 +7898,9 @@ async function createRentalOrder({
       `
       INSERT INTO rental_orders
         (company_id, quote_number, ro_number, external_contract_number, legacy_data, customer_id, customer_po, salesperson_id, fulfillment_method, status,
-         terms, general_notes, pickup_location_id, dropoff_address, site_address, logistics_instructions, special_instructions, critical_areas, coverage_hours, emergency_contacts, site_contacts, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20::jsonb,$21::jsonb,COALESCE($22::timestamptz, NOW()),COALESCE($22::timestamptz, NOW()))
+         terms, general_notes, pickup_location_id, dropoff_address, site_address, logistics_instructions, special_instructions, critical_areas,
+         notification_circumstances, coverage_hours, emergency_contacts, site_contacts, created_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20::jsonb,$21::jsonb,$22::jsonb,COALESCE($23::timestamptz, NOW()),COALESCE($23::timestamptz, NOW()))
       RETURNING id, quote_number, ro_number
       `,
       [
@@ -7880,6 +7922,7 @@ async function createRentalOrder({
         logisticsInstructions || null,
         specialInstructions || null,
         criticalAreas || null,
+        JSON.stringify(notificationCircumstancesValue),
         JSON.stringify(coverageHoursValue),
         JSON.stringify(emergencyContactList),
         JSON.stringify(siteContactList),
@@ -9435,6 +9478,7 @@ async function updateRentalOrder({
   logisticsInstructions,
   specialInstructions,
   criticalAreas,
+  notificationCircumstances,
   coverageHours,
   emergencyContacts,
   siteContacts,
@@ -9450,6 +9494,7 @@ async function updateRentalOrder({
       const allowsInventory = allowsInventoryAssignment(effectiveStatus);
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
+    const notificationCircumstancesValue = normalizeNotificationCircumstances(notificationCircumstances);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
     const bundleCache = new Map();
     const getBundleData = async (bundleId) => {
@@ -9521,11 +9566,12 @@ async function updateRentalOrder({
              logistics_instructions = $13,
              special_instructions = $14,
              critical_areas = $15,
-             coverage_hours = $16::jsonb,
-             emergency_contacts = $17::jsonb,
-             site_contacts = $18::jsonb,
+             notification_circumstances = $16::jsonb,
+             coverage_hours = $17::jsonb,
+             emergency_contacts = $18::jsonb,
+             site_contacts = $19::jsonb,
              updated_at = NOW()
-       WHERE id = $19 AND company_id = $20
+       WHERE id = $20 AND company_id = $21
        RETURNING id, quote_number, ro_number
       `,
       [
@@ -9544,6 +9590,7 @@ async function updateRentalOrder({
         logisticsInstructions || null,
         specialInstructions || null,
         criticalAreas || null,
+        JSON.stringify(notificationCircumstancesValue),
         JSON.stringify(coverageHoursValue),
         JSON.stringify(emergencyContactList),
         JSON.stringify(siteContactList),
@@ -11521,6 +11568,7 @@ async function createStorefrontReservation({
   siteAddress,
   deliveryInstructions,
   criticalAreas,
+  notificationCircumstances,
   generalNotes,
   generalNotesImages,
   emergencyContacts,
@@ -11583,6 +11631,9 @@ async function createStorefrontReservation({
   const useRentalInfoField = (key) => rentalInfoFields?.[key]?.enabled !== false;
   const siteAddressValue = useRentalInfoField("siteAddress") ? String(siteAddress || "").trim() || null : null;
   const criticalAreasValue = useRentalInfoField("criticalAreas") ? String(criticalAreas || "").trim() || null : null;
+  const notificationCircumstancesValue = useRentalInfoField("notificationCircumstances")
+    ? normalizeNotificationCircumstances(notificationCircumstances)
+    : [];
   const generalNotesValue = useRentalInfoField("generalNotes") ? String(generalNotes || "").trim() || null : null;
   const emergencyContactList = useRentalInfoField("emergencyContacts") ? normalizeOrderContacts(emergencyContacts) : [];
   const siteContactList = useRentalInfoField("siteContacts") ? normalizeOrderContacts(siteContacts) : [];
@@ -11608,6 +11659,13 @@ async function createStorefrontReservation({
   }
   if (rentalInfoFields?.criticalAreas?.enabled && rentalInfoFields?.criticalAreas?.required && !criticalAreasValue) {
     missingRentalInfo.push("Critical areas on site");
+  }
+  if (
+    rentalInfoFields?.notificationCircumstances?.enabled &&
+    rentalInfoFields?.notificationCircumstances?.required &&
+    !notificationCircumstancesValue.length
+  ) {
+    missingRentalInfo.push("Notification circumstance");
   }
   if (rentalInfoFields?.generalNotes?.enabled && rentalInfoFields?.generalNotes?.required && !generalNotesValue) {
     missingRentalInfo.push("General notes");
@@ -11701,6 +11759,7 @@ async function createStorefrontReservation({
     terms: typeRow.terms || null,
     generalNotes: combinedGeneralNotes,
     criticalAreas: criticalAreasValue,
+    notificationCircumstances: notificationCircumstancesValue,
     coverageHours: coverageHoursValue,
     emergencyContacts: emergencyContactList,
     siteContacts: siteContactList,

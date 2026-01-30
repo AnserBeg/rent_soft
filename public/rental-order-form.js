@@ -1077,6 +1077,42 @@ function collectNotificationCircumstances() {
   return values;
 }
 
+function applyNotificationCircumstances(values) {
+  if (!notificationCircumstancesContainer) return;
+  const list = Array.isArray(values) ? values : [];
+  const checkboxes = notificationCircumstancesContainer.querySelectorAll('input[type="checkbox"]');
+  const byValue = new Map();
+  checkboxes.forEach((cb) => {
+    cb.checked = false;
+    byValue.set(String(cb.value || "").toLowerCase(), cb);
+  });
+
+  let otherSelected = false;
+  let otherText = "";
+  list.forEach((entry) => {
+    const text = String(entry || "").trim();
+    if (!text) return;
+    const otherMatch = text.match(/^other\s*:\s*(.+)$/i);
+    if (otherMatch) {
+      otherSelected = true;
+      if (!otherText) otherText = otherMatch[1].trim();
+      return;
+    }
+    if (text.toLowerCase() === "other") {
+      otherSelected = true;
+      return;
+    }
+    const cb = byValue.get(text.toLowerCase());
+    if (cb) cb.checked = true;
+  });
+
+  if (notificationOtherCheckbox) notificationOtherCheckbox.checked = otherSelected;
+  if (notificationOtherInput) {
+    notificationOtherInput.value = otherText;
+    notificationOtherInput.style.display = otherSelected ? "" : "none";
+  }
+}
+
 async function getPublicConfig() {
   const res = await fetch("/api/public-config");
   const data = await res.json().catch(() => ({}));
@@ -4302,6 +4338,7 @@ function loadDraftFromStorage() {
         criticalAreas: typeof stored.criticalAreas === "string" ? stored.criticalAreas : "",
         generalNotes: typeof stored.generalNotes === "string" ? stored.generalNotes : "",
         coverageHours: normalizeCoverageHours(stored.coverageHours),
+        notificationCircumstances: Array.isArray(stored.notificationCircumstances) ? stored.notificationCircumstances : [],
       };
     }
   } catch (_) { }
@@ -4322,6 +4359,7 @@ function initFormFieldsFromDraft() {
   if (criticalAreasInput) criticalAreasInput.value = draft.criticalAreas || "";
   if (generalNotesInput) generalNotesInput.value = draft.generalNotes || "";
   setCoverageInputs(draft.coverageHours || {});
+  applyNotificationCircumstances(draft.notificationCircumstances || []);
   setContactRows(emergencyContactsList, draft.emergencyContacts || [], emergencyContactOptions);
   setContactRows(siteContactsList, draft.siteContacts || [], siteContactOptions);
   setPickupPreview();
@@ -4352,6 +4390,7 @@ function syncRentalInfoDraft() {
   draft.criticalAreas = criticalAreasInput?.value || "";
   draft.generalNotes = generalNotesInput?.value || "";
   draft.coverageHours = collectCoverageHoursFromInputs();
+  draft.notificationCircumstances = collectNotificationCircumstances();
   scheduleDraftSave();
   syncTermsBadgeFromInputs();
 }
@@ -4379,6 +4418,10 @@ async function loadOrder() {
   draft.siteAddress = o.site_address || o.siteAddress || "";
   draft.criticalAreas = o.critical_areas || o.criticalAreas || "";
   draft.generalNotes = o.general_notes || o.generalNotes || "";
+  const rawNotificationCircumstances = o.notification_circumstances || o.notificationCircumstances || [];
+  draft.notificationCircumstances = Array.isArray(rawNotificationCircumstances)
+    ? rawNotificationCircumstances
+    : safeJsonParse(rawNotificationCircumstances, []);
   draft.coverageHours = normalizeCoverageHours(o.coverage_hours || o.coverageHours || {});
   draft.emergencyContacts = parseContacts(o.emergency_contacts || o.emergencyContacts || []);
   draft.siteContacts = parseContacts(o.site_contacts || o.siteContacts || []);
@@ -6070,10 +6113,12 @@ if (notificationOtherCheckbox && notificationOtherInput) {
     } else {
       notificationOtherInput.style.display = "none";
     }
+    draft.notificationCircumstances = collectNotificationCircumstances();
     scheduleDraftSave();
   });
 
   notificationOtherInput.addEventListener("input", () => {
+    draft.notificationCircumstances = collectNotificationCircumstances();
     scheduleDraftSave();
   });
 }
@@ -6083,6 +6128,7 @@ if (notificationCircumstancesContainer) {
   checkboxes.forEach((cb) => {
     if (cb !== notificationOtherCheckbox) {
       cb.addEventListener("change", () => {
+        draft.notificationCircumstances = collectNotificationCircumstances();
         scheduleDraftSave();
       });
     }
