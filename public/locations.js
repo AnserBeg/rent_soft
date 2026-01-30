@@ -50,17 +50,22 @@ let mapMode = (() => {
   }
 })();
 
-let leafletMap = null;
-let leafletLayer = null;
+let googleMap = null;
+let mapMarkers = [];
+let mapInfoWindow = null;
 let mapStyle = "street";
-let mapLayers = {};
 
-let addLeafletMap = null;
-let addLeafletMarker = null;
+let addGoogleMap = null;
+let addGoogleMarker = null;
+let addPlacesService = null;
+let addAutocompleteService = null;
+let addGeocoder = null;
 let addSelected = null;
 let addMapStyle = "street";
-let addMapLayers = {};
 const addAddressState = { debounceTimer: null, previewTimer: null, abort: null, seq: 0 };
+
+let googleMapsApiKey = "";
+let googleMapsLoadError = null;
 
 function escapeHtml(s) {
   return String(s || "")
@@ -78,22 +83,138 @@ function toCoord(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-const MAP_TILE_SOURCES = {
-  street: {
-    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    options: {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    },
-  },
-  satellite: {
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    options: {
-      maxZoom: 19,
-      attribution: "Tiles &copy; Esri",
-    },
-  },
-};
+function isGoogleMapsReady() {
+  return typeof window.google?.maps?.Map === "function";
+}
+
+function waitForGoogleMapsReady({ timeoutMs = 4000, intervalMs = 50 } = {}) {
+  if (isGoogleMapsReady()) return Promise.resolve(true);
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const tick = () => {
+      if (isGoogleMapsReady()) return resolve(true);
+      if (Date.now() - start >= timeoutMs) return reject(new Error("Google Maps not ready."));
+      setTimeout(tick, intervalMs);
+    };
+    tick();
+  });
+}
+
+function loadGoogleMaps(apiKey) {
+  if (!apiKey) return Promise.resolve(false);
+  if (isGoogleMapsReady()) return Promise.resolve(true);
+  if (window.__rentsoftGoogleMapsLoading) return window.__rentsoftGoogleMapsLoading;
+
+  window.__rentsoftGoogleMapsLoading = new Promise((resolve, reject) => {
+    const id = "rentsoft-google-maps";
+    const existing = document.getElementById(id);
+    if (existing) {
+      waitForGoogleMapsReady().then(() => resolve(true)).catch(reject);
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = id;
+    s.async = true;
+    s.defer = true;
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places&loading=async`;
+    s.onload = () => {
+      waitForGoogleMapsReady().then(() => resolve(true)).catch(reject);
+    };
+    s.onerror = () => reject(new Error("Failed to load Google Maps script (network/CSP)."));
+    document.head.appendChild(s);
+  });
+  return window.__rentsoftGoogleMapsLoading;
+}
+
+async function getPublicConfig() {
+  const res = await fetch("/api/public-config");
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load config");
+  return data || {};
+}
+
+function parsePredictionText(prediction) {
+  const main = prediction?.structured_formatting?.main_text || prediction?.description || "";
+  const secondary = prediction?.structured_formatting?.secondary_text || "";
+  return { main: String(main || ""), secondary: String(secondary || "") };
+}
+
+function parseAddressComponents(components) {
+  const parts = Array.isArray(components) ? components : [];
+  const get = (type) => parts.find((c) => Array.isArray(c.types) && c.types.includes(type));
+  const streetNumber = get("street_number")?.long_name || "";
+  const route = get("route")?.long_name || "";
+  const city =
+    get("locality")?.long_name ||
+    get("postal_town")?.long_name ||
+    get("administrative_area_level_2")?.long_name ||
+    "";
+  const region = get("administrative_area_level_1")?.short_name || get("administrative_area_level_1")?.long_name || "";
+  const country = get("country")?.long_name || "";
+  const street = [streetNumber, route].filter(Boolean).join(" ").trim() || route || "";
+  return { street, city, region, country };
+}
+
+function requestPlacePredictions(service, input, map) {
+  if (!service || !window.google?.maps?.places) {
+    return Promise.reject(new Error("Google Places library not available."));
+  }
+  const locationBias = map?.getBounds?.() || undefined;
+  return new Promise((resolve, reject) => {
+    service.getPlacePredictions(
+      { input: String(input || ""), locationBias },
+      (predictions, status) => {
+        if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) return resolve([]);
+        if (status !== window.google.maps.places.PlacesServiceStatus.OK) {
+          return reject(new Error(`Places predictions failed: ${status || "Unknown"}`));
+        }
+        resolve(predictions || []);
+      }
+    );
+  });
+}
+
+function fetchPlaceDetails(service, placeId, label) {
+  if (!service || !window.google?.maps?.places) {
+    return Promise.reject(new Error("Google Places library not available."));
+  }
+  return new Promise((resolve, reject) => {
+    service.getDetails(
+      { placeId, fields: ["geometry", "formatted_address", "name", "address_component"] },
+      (place, status) => {
+        if (status !== window.google.maps.places.PlacesServiceStatus.OK || !place?.geometry?.location) {
+          return reject(new Error(`Places details failed: ${status || "Unknown"}`));
+        }
+        const lat = place.geometry.location.lat();
+        const lng = place.geometry.location.lng();
+        resolve({
+          lat,
+          lng,
+          label: place.formatted_address || place.name || label || "Pinned location",
+          components: place.address_components || [],
+        });
+      }
+    );
+  });
+}
+
+function geocodeAddress(geocoder, query) {
+  if (!geocoder) return Promise.reject(new Error("Google Geocoder not available."));
+  return new Promise((resolve, reject) => {
+    geocoder.geocode({ address: String(query || "") }, (results, status) => {
+      if (status !== "OK" || !results?.length) return reject(new Error(`Geocode failed: ${status || "Unknown"}`));
+      const first = results[0];
+      const loc = first?.geometry?.location;
+      if (!loc) return reject(new Error("Geocode returned no location."));
+      resolve({
+        lat: loc.lat(),
+        lng: loc.lng(),
+        label: first.formatted_address || query || "",
+        components: first.address_components || [],
+      });
+    });
+  });
+}
 
 function normalizeMapStyle(value) {
   return value === "satellite" ? "satellite" : "street";
@@ -104,15 +225,8 @@ function applyAddMapStyle(nextStyle) {
   if (addMapStyleSelect && addMapStyleSelect.value !== addMapStyle) {
     addMapStyleSelect.value = addMapStyle;
   }
-  if (!addLeafletMap || !window.L) return;
-  if (!addMapLayers[addMapStyle]) {
-    const cfg = MAP_TILE_SOURCES[addMapStyle];
-    addMapLayers[addMapStyle] = window.L.tileLayer(cfg.url, cfg.options);
-  }
-  Object.values(addMapLayers).forEach((layer) => {
-    if (addLeafletMap.hasLayer(layer)) addLeafletMap.removeLayer(layer);
-  });
-  addMapLayers[addMapStyle].addTo(addLeafletMap);
+  if (!addGoogleMap || !isGoogleMapsReady()) return;
+  addGoogleMap.setMapTypeId(addMapStyle === "satellite" ? "satellite" : "roadmap");
 }
 
 function applyMainMapStyle(nextStyle) {
@@ -120,15 +234,8 @@ function applyMainMapStyle(nextStyle) {
   if (mapStyleSelect && mapStyleSelect.value !== mapStyle) {
     mapStyleSelect.value = mapStyle;
   }
-  if (!leafletMap || !window.L) return;
-  if (!mapLayers[mapStyle]) {
-    const cfg = MAP_TILE_SOURCES[mapStyle];
-    mapLayers[mapStyle] = window.L.tileLayer(cfg.url, cfg.options);
-  }
-  Object.values(mapLayers).forEach((layer) => {
-    if (leafletMap.hasLayer(layer)) leafletMap.removeLayer(layer);
-  });
-  mapLayers[mapStyle].addTo(leafletMap);
+  if (!googleMap || !isGoogleMapsReady()) return;
+  googleMap.setMapTypeId(mapStyle === "satellite" ? "satellite" : "roadmap");
 }
 
 function formatAddress(loc) {
@@ -164,24 +271,50 @@ function setView(nextView) {
 
 function ensureAddMap() {
   if (!addMapEl) return;
-  if (addLeafletMap) {
-    setTimeout(() => addLeafletMap?.invalidateSize?.(), 50);
+  if (!isGoogleMapsReady()) {
+    if (meta && googleMapsLoadError) meta.textContent = googleMapsLoadError.message || String(googleMapsLoadError);
     return;
   }
-  if (!window.L) return;
+  if (addGoogleMap) {
+    setTimeout(() => window.google?.maps?.event?.trigger?.(addGoogleMap, "resize"), 50);
+    return;
+  }
 
-  addLeafletMap = window.L.map(addMapEl, { scrollWheelZoom: true });
+  addGoogleMap = new window.google.maps.Map(addMapEl, {
+    center: { lat: 20, lng: 0 },
+    zoom: 2,
+    mapTypeId: addMapStyle === "satellite" ? "satellite" : "roadmap",
+    mapTypeControl: false,
+    streetViewControl: false,
+    fullscreenControl: false,
+  });
+  addPlacesService = new window.google.maps.places.PlacesService(addGoogleMap);
+  addAutocompleteService = new window.google.maps.places.AutocompleteService();
+  addGeocoder = new window.google.maps.Geocoder();
+
+  addGoogleMap.addListener("click", (e) => {
+    const lat = e?.latLng?.lat?.();
+    const lng = e?.latLng?.lng?.();
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    addSelected = { lat, lng, label: `${lat.toFixed(6)}, ${lng.toFixed(6)}`, provider: "manual_pin" };
+    setAddMapPoint(lat, lng, 17);
+    if (meta) meta.textContent = "Pinned location (not saved yet).";
+  });
+
   applyAddMapStyle(addMapStyle);
-  addLeafletMap.setView([20, 0], 2);
-  setTimeout(() => addLeafletMap?.invalidateSize?.(), 50);
+  setTimeout(() => window.google?.maps?.event?.trigger?.(addGoogleMap, "resize"), 50);
 }
 
 function setAddMapPoint(lat, lng, zoom = 16) {
-  if (!addLeafletMap || !window.L) return;
+  if (!addGoogleMap || !isGoogleMapsReady()) return;
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-  if (!addLeafletMarker) addLeafletMarker = window.L.marker([lat, lng]).addTo(addLeafletMap);
-  else addLeafletMarker.setLatLng([lat, lng]);
-  addLeafletMap.setView([lat, lng], zoom);
+  if (!addGoogleMarker) {
+    addGoogleMarker = new window.google.maps.Marker({ position: { lat, lng }, map: addGoogleMap });
+  } else {
+    addGoogleMarker.setPosition({ lat, lng });
+  }
+  addGoogleMap.setCenter({ lat, lng });
+  addGoogleMap.setZoom(zoom);
 }
 
 function hideAddSuggestions() {
@@ -199,27 +332,41 @@ function renderAddSuggestions(results, onPick) {
     return;
   }
   rows.slice(0, 8).forEach((r) => {
-    const primary = r?.street || r?.label || "";
-    const secondary = [r?.city, r?.region, r?.country].filter(Boolean).join(", ");
+    const { main, secondary } = parsePredictionText(r);
     const btn = document.createElement("button");
     btn.type = "button";
     btn.innerHTML = `
-      <div class="rs-autocomplete-primary">${escapeHtml(primary)}</div>
+      <div class="rs-autocomplete-primary">${escapeHtml(main)}</div>
       ${secondary ? `<div class="rs-autocomplete-secondary">${escapeHtml(secondary)}</div>` : ""}
     `;
-    btn.addEventListener("click", () => onPick(r));
+    let picked = false;
+    const pick = () => {
+      if (picked) return;
+      picked = true;
+      onPick(r);
+    };
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      pick();
+    });
+    btn.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      pick();
+    });
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      pick();
+    });
     addAddressSuggestions.appendChild(btn);
   });
   addAddressSuggestions.hidden = false;
 }
 
-async function searchGeocode(query, limit = 6, { signal } = {}) {
+async function searchGeocode(query, limit = 6) {
   const q = String(query || "").trim();
   if (!q) return [];
-  const res = await fetch(`/api/geocode/search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(limit)}`, { signal });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Unable to search");
-  return Array.isArray(data.results) ? data.results : [];
+  const preds = await requestPlacePredictions(addAutocompleteService, q, addGoogleMap);
+  return preds.slice(0, limit);
 }
 
 function buildFormAddressQuery(payload) {
@@ -231,22 +378,26 @@ function buildFormAddressQuery(payload) {
 
 function ensureMap() {
   if (!mapEl || !mapShell) return;
-  if (leafletMap) {
-    setTimeout(() => leafletMap?.invalidateSize?.(), 50);
+  if (!isGoogleMapsReady()) {
+    if (mapMeta && googleMapsLoadError) mapMeta.textContent = googleMapsLoadError.message || String(googleMapsLoadError);
     return;
   }
-  if (!window.L) {
-    if (mapMeta) mapMeta.textContent = "Map library not available.";
+  if (googleMap) {
+    setTimeout(() => window.google?.maps?.event?.trigger?.(googleMap, "resize"), 50);
     return;
   }
 
-  leafletMap = window.L.map(mapEl, { scrollWheelZoom: true });
+  googleMap = new window.google.maps.Map(mapEl, {
+    center: { lat: 20, lng: 0 },
+    zoom: 2,
+    mapTypeId: mapStyle === "satellite" ? "satellite" : "roadmap",
+    mapTypeControl: false,
+    streetViewControl: false,
+    fullscreenControl: false,
+  });
+  mapInfoWindow = new window.google.maps.InfoWindow();
   applyMainMapStyle(mapStyle);
-
-  leafletLayer = window.L.layerGroup().addTo(leafletMap);
-  leafletMap.setView([20, 0], 2);
-
-  setTimeout(() => leafletMap?.invalidateSize?.(), 50);
+  setTimeout(() => window.google?.maps?.event?.trigger?.(googleMap, "resize"), 50);
 }
 
 function mulberry32(seed) {
@@ -297,11 +448,11 @@ async function refreshMap() {
   ensureMap();
   if (mapMode === "units") await loadEquipmentForMap();
   renderMap();
-  setTimeout(() => leafletMap?.invalidateSize?.(), 50);
+  setTimeout(() => window.google?.maps?.event?.trigger?.(googleMap, "resize"), 50);
 }
 
 function renderUnitsMap(rows) {
-  if (!leafletMap || !leafletLayer || !window.L) return;
+  if (!googleMap || !isGoogleMapsReady()) return;
 
   const coordSource = (eq) => {
     const cLat = toCoord(eq?.current_location_latitude);
@@ -320,69 +471,81 @@ function renderUnitsMap(rows) {
   if (mapMeta) {
     if (!rows.length) mapMeta.textContent = "No units to show.";
     else if (!mapped.length) mapMeta.textContent = "No units have mapped locations yet. Assign a base/current location to a geocoded location.";
-    else mapMeta.textContent = `${mapped.length} units mapped — ${missing} missing coordinates`;
+    else mapMeta.textContent = `${mapped.length} units mapped - ${missing} missing coordinates`;
   }
 
   const statusColors = {
-    notRented: { stroke: "#6b7280", fill: "rgba(107, 114, 128, 0.30)" }, // gray
-    rented: { stroke: "#16a34a", fill: "rgba(22, 163, 74, 0.30)" }, // green
-    overdue: { stroke: "#ef4444", fill: "rgba(239, 68, 68, 0.30)" }, // red
+    notRented: { stroke: "#6b7280", fill: "rgba(107, 114, 128, 0.30)" },
+    rented: { stroke: "#16a34a", fill: "rgba(22, 163, 74, 0.30)" },
+    overdue: { stroke: "#ef4444", fill: "rgba(239, 68, 68, 0.30)" },
   };
 
-  const points = [];
+  const bounds = new window.google.maps.LatLngBounds();
+  let hasBounds = false;
   mapped.forEach((eq) => {
     const src = coordSource(eq);
     if (!src) return;
     const lat = src.lat;
     const lng = src.lng;
     const [jLat, jLng] = jitterLatLng(lat, lng, Number(eq.id) || 1);
-    points.push([jLat, jLng]);
+    bounds.extend({ lat: jLat, lng: jLng });
+    hasBounds = true;
 
-    const title = escapeHtml(`${eq.type || "Unit"} — ${eq.model_name || "--"}`);
+    const title = escapeHtml(`${eq.type || "Unit"} - ${eq.model_name || "--"}`);
     const serial = escapeHtml(eq.serial_number || "--");
     const baseLocation = escapeHtml(eq.location || "--");
     const currentLocation = escapeHtml(eq.current_location || "--");
     const status = escapeHtml(eq.availability_status || "Unknown");
     const href = `equipment.html?equipmentId=${encodeURIComponent(eq.id)}`;
-    const locLine =
-      src.source === "current" ? `Current: ${currentLocation}` : `Base: ${baseLocation}`;
+    const locLine = src.source === "current" ? `Current: ${currentLocation}` : `Base: ${baseLocation}`;
 
     const isOverdue = eq?.is_overdue === true;
     const availability = String(eq.availability_status || "");
     const isRented = availability.toLowerCase().includes("rent") || availability.toLowerCase().includes("out");
     const palette = isOverdue ? statusColors.overdue : (isRented ? statusColors.rented : statusColors.notRented);
-    const marker = window.L.circleMarker([jLat, jLng], {
-      radius: 8,
-      color: palette.stroke,
-      weight: 2,
-      fillColor: palette.fill,
-      fillOpacity: 1,
-    }).bindPopup(
-      `<div style="display:grid; gap:6px;">
-        <div style="font-weight:800;">${title}</div>
-        <div class="hint">Serial: ${serial}</div>
-        <div class="hint">${locLine}</div>
-        ${src.source === "current" ? `<div class="hint">Base: ${baseLocation}</div>` : `<div class="hint">Current: ${currentLocation}</div>`}
-        <div class="hint">Status: ${isOverdue ? "Overdue" : status}</div>
-        <div><a href="${href}">Open in Stock</a></div>
-      </div>`
-    );
-    marker.addTo(leafletLayer);
+    const marker = new window.google.maps.Marker({
+      position: { lat: jLat, lng: jLng },
+      map: googleMap,
+      icon: {
+        path: window.google.maps.SymbolPath.CIRCLE,
+        scale: 8,
+        fillColor: palette.fill,
+        fillOpacity: 1,
+        strokeColor: palette.stroke,
+        strokeWeight: 2,
+      },
+    });
+    marker.addListener("click", () => {
+      if (!mapInfoWindow) return;
+      mapInfoWindow.setContent(
+        `<div style="display:grid; gap:6px;">
+          <div style="font-weight:800;">${title}</div>
+          <div class="hint">Serial: ${serial}</div>
+          <div class="hint">${locLine}</div>
+          ${src.source === "current" ? `<div class="hint">Base: ${baseLocation}</div>` : `<div class="hint">Current: ${currentLocation}</div>`}
+          <div class="hint">Status: ${isOverdue ? "Overdue" : status}</div>
+          <div><a href="${href}">Open in Stock</a></div>
+        </div>`
+      );
+      mapInfoWindow.open({ anchor: marker, map: googleMap });
+    });
+    mapMarkers.push(marker);
   });
 
-  if (points.length) {
-    const bounds = window.L.latLngBounds(points);
-    leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 });
+  if (hasBounds) {
+    googleMap.fitBounds(bounds, { padding: 30, maxZoom: 16 });
   } else {
-    leafletMap.setView([20, 0], 2);
+    googleMap.setCenter({ lat: 20, lng: 0 });
+    googleMap.setZoom(2);
   }
 }
 
 function renderMap() {
   if (activeView !== "map") return;
-  if (!leafletMap || !leafletLayer || !window.L) return;
+  if (!googleMap || !isGoogleMapsReady()) return;
 
-  leafletLayer.clearLayers();
+  mapMarkers.forEach((m) => m.setMap(null));
+  mapMarkers = [];
 
   if (mapMode === "units") {
     renderUnitsMap(applyUnitFilters());
@@ -393,9 +556,7 @@ function renderMap() {
 
 function renderLocationsMap(rows) {
   if (activeView !== "map") return;
-  if (!leafletMap || !leafletLayer || !window.L) return;
-
-  leafletLayer.clearLayers();
+  if (!googleMap || !isGoogleMapsReady()) return;
 
   const hasCoord = (loc) => toCoord(loc?.latitude) !== null && toCoord(loc?.longitude) !== null;
   const mapped = rows.filter(hasCoord);
@@ -404,33 +565,40 @@ function renderLocationsMap(rows) {
   if (mapMeta) {
     if (!rows.length) mapMeta.textContent = "No locations to show.";
     else if (!mapped.length) mapMeta.textContent = "No mapped locations yet. Add an address, then click Geocode in the table view.";
-    else mapMeta.textContent = `${mapped.length} mapped • ${missing} missing coordinates`;
+    else mapMeta.textContent = `${mapped.length} mapped � ${missing} missing coordinates`;
   }
 
-  const points = [];
+  const bounds = new window.google.maps.LatLngBounds();
+  let hasBounds = false;
   mapped.forEach((loc) => {
     const lat = toCoord(loc?.latitude);
     const lng = toCoord(loc?.longitude);
     if (lat === null || lng === null) return;
-    points.push([lat, lng]);
+    bounds.extend({ lat, lng });
+    hasBounds = true;
     const name = escapeHtml(loc.name || `#${loc.id}`);
     const address = escapeHtml(formatAddress(loc) || "--");
     const href = `location.html?id=${encodeURIComponent(loc.id)}`;
-    const marker = window.L.marker([lat, lng]).bindPopup(
-      `<div style="display:grid; gap:6px;">
-        <div style="font-weight:800;">${name}</div>
-        <div class="hint">${address}</div>
-        <div><a href="${href}">Open</a></div>
-      </div>`
-    );
-    marker.addTo(leafletLayer);
+    const marker = new window.google.maps.Marker({ position: { lat, lng }, map: googleMap });
+    marker.addListener("click", () => {
+      if (!mapInfoWindow) return;
+      mapInfoWindow.setContent(
+        `<div style="display:grid; gap:6px;">
+          <div style="font-weight:800;">${name}</div>
+          <div class="hint">${address}</div>
+          <div><a href="${href}">Open</a></div>
+        </div>`
+      );
+      mapInfoWindow.open({ anchor: marker, map: googleMap });
+    });
+    mapMarkers.push(marker);
   });
 
-  if (points.length) {
-    const bounds = window.L.latLngBounds(points);
-    leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
+  if (hasBounds) {
+    googleMap.fitBounds(bounds, { padding: 30, maxZoom: 14 });
   } else {
-    leafletMap.setView([20, 0], 2);
+    googleMap.setCenter({ lat: 20, lng: 0 });
+    googleMap.setZoom(2);
   }
 }
 
@@ -438,7 +606,7 @@ function showModal() {
   if (!modal) return;
   modal.style.display = "flex";
   ensureAddMap();
-  setTimeout(() => addLeafletMap?.invalidateSize?.(), 50);
+  setTimeout(() => window.google?.maps?.event?.trigger?.(addGoogleMap, "resize"), 50);
 }
 
 function hideModal() {
@@ -451,13 +619,16 @@ function hideModal() {
   try {
     addAddressState.abort?.abort?.();
   } catch { }
-  if (addLeafletMarker) {
+  if (addGoogleMarker) {
     try {
-      addLeafletMarker.remove?.();
+      addGoogleMarker.setMap(null);
     } catch { }
-    addLeafletMarker = null;
+    addGoogleMarker = null;
   }
-  addLeafletMap?.setView?.([20, 0], 2);
+  if (addGoogleMap) {
+    addGoogleMap.setCenter({ lat: 20, lng: 0 });
+    addGoogleMap.setZoom(2);
+  }
 }
 
 function renderLocations(rows) {
@@ -548,15 +719,30 @@ async function geocodeLocationById(id) {
   return data.location;
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   const session = window.RentSoft?.getSession?.();
   const companyId = window.RentSoft?.getCompanyId?.();
   if (!session || !companyId) {
     if (pageMeta) pageMeta.textContent = "Log in and select a company to view locations.";
     return;
   }
-  activeCompanyId = Number(companyId);
+    activeCompanyId = Number(companyId);
   window.RentSoft?.setCompanyId?.(activeCompanyId);
+
+  try {
+    const config = await getPublicConfig().catch(() => ({}));
+    googleMapsApiKey = config?.googleMapsApiKey ? String(config.googleMapsApiKey) : "";
+    const hasGoogle = isGoogleMapsReady();
+    if (!googleMapsApiKey && !hasGoogle) {
+      throw new Error("Google Maps API key is required. Set GOOGLE_MAPS_API_KEY to use maps.");
+    }
+    if (!hasGoogle) await loadGoogleMaps(googleMapsApiKey);
+  } catch (err) {
+    googleMapsLoadError = err;
+    const msg = err?.message || String(err);
+    if (mapMeta) mapMeta.textContent = msg;
+    if (meta) meta.textContent = msg;
+  }
 
   if (pageMeta) pageMeta.textContent = "";
 
@@ -587,7 +773,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  openAdd?.addEventListener("click", () => showModal());
+    openAdd?.addEventListener("click", () => showModal());
   closeAdd?.addEventListener("click", () => hideModal());
   modal?.addEventListener("click", (e) => {
     if (e.target === modal) hideModal();
@@ -608,40 +794,40 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch { }
       addAddressState.abort = new AbortController();
       try {
-        const results = await searchGeocode(q, 6, { signal: addAddressState.abort.signal });
+        const results = await searchGeocode(q, 6);
         if (seq !== addAddressState.seq) return;
         if (String(addAddressSearchInput.value || "").trim() !== q) return;
-        renderAddSuggestions(results, (picked) => {
+        renderAddSuggestions(results, async (picked) => {
           hideAddSuggestions();
-          addSelected = {
-            lat: toCoord(picked?.latitude),
-            lng: toCoord(picked?.longitude),
-            label: picked?.label ? String(picked.label) : null,
-            provider: "nominatim",
-          };
-
-          const payload = getFormData(form);
-          if (picked?.street) payload.streetAddress = String(picked.street);
-          if (picked?.city) payload.city = String(picked.city);
-          if (picked?.region) payload.region = String(picked.region);
-          if (picked?.country) payload.country = String(picked.country);
-
-          if (form?.elements?.namedItem) {
-            const set = (name, value) => {
-              const el = form.elements.namedItem(name);
-              if (el && "value" in el) el.value = value || "";
+          const placeId = picked?.place_id;
+          if (!placeId) return;
+          try {
+            const details = await fetchPlaceDetails(addPlacesService, placeId, picked?.description || "");
+            const parts = parseAddressComponents(details.components);
+            addSelected = {
+              lat: Number(details.lat),
+              lng: Number(details.lng),
+              label: details.label || null,
+              provider: "google_places",
             };
-            set("streetAddress", payload.streetAddress || "");
-            set("city", payload.city || "");
-            set("region", payload.region || "");
-            set("country", payload.country || "");
-          }
 
-          if (addSelected.lat !== null && addSelected.lng !== null) {
+            if (form?.elements?.namedItem) {
+              const set = (name, value) => {
+                const el = form.elements.namedItem(name);
+                if (el && "value" in el) el.value = value || "";
+              };
+              set("streetAddress", parts.street || "");
+              set("city", parts.city || "");
+              set("region", parts.region || "");
+              set("country", parts.country || "");
+            }
+
             ensureAddMap();
             setAddMapPoint(addSelected.lat, addSelected.lng, 17);
+            if (meta) meta.textContent = "Address selected (not saved yet).";
+          } catch (err) {
+            if (meta) meta.textContent = err?.message || String(err);
           }
-          if (meta) meta.textContent = "Address selected (not saved yet).";
         });
       } catch (err) {
         if (err?.name === "AbortError") return;
@@ -663,14 +849,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const payload = getFormData(form);
         const query = buildFormAddressQuery(payload);
         if (!query || query.length < 6) return;
-        const results = await searchGeocode(query, 1);
-        const first = results?.[0];
-        const pLat = toCoord(first?.latitude);
-        const pLng = toCoord(first?.longitude);
-        if (pLat === null || pLng === null) return;
-        addSelected = { lat: pLat, lng: pLng, label: first?.label ? String(first.label) : null, provider: "nominatim" };
+        const details = await geocodeAddress(addGeocoder, query);
+        if (!Number.isFinite(details?.lat) || !Number.isFinite(details?.lng)) return;
+        addSelected = { lat: details.lat, lng: details.lng, label: details.label || null, provider: "google_geocode" };
         ensureAddMap();
-        setAddMapPoint(pLat, pLng, 15);
+        setAddMapPoint(details.lat, details.lng, 15);
       } catch {
         // ignore preview failures
       }
@@ -696,10 +879,20 @@ document.addEventListener("DOMContentLoaded", () => {
           country: payload.country || null,
           latitude: hasSelected ? addSelected.lat : null,
           longitude: hasSelected ? addSelected.lng : null,
-          geocodeProvider: hasSelected ? (addSelected.provider || "nominatim") : null,
+          geocodeProvider: hasSelected ? (addSelected.provider || "google_maps") : null,
           geocodeQuery: hasSelected ? (addSelected.label || null) : null,
         }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Unable to add location");
+      hideModal();
+      await loadLocations();
+    } catch (err) {
+      if (meta) meta.textContent = err.message || String(err);
+    } finally {
+      if (submit) submit.disabled = false;
+    }
+  });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Unable to add location");
       hideModal();
@@ -780,3 +973,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (pageMeta) pageMeta.textContent = err.message || String(err);
   });
 });
+
+
+
+
+
+
+
+

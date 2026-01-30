@@ -28,10 +28,14 @@ let chart = null;
 let typeStockChart = null;
 let typeStockRows = [];
 
-let leafletMap = null;
-let leafletMarker = null;
+let googleMap = null;
+let googleMarker = null;
 let mapStyle = "street";
-let leafletLayers = {};
+let googleAutocompleteService = null;
+let googlePlacesService = null;
+let googleGeocoder = null;
+let googleMapsApiKey = "";
+let googleMapsLoadError = null;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -51,22 +55,55 @@ function toCoord(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-const MAP_TILE_SOURCES = {
-  street: {
-    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    options: {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    },
-  },
-  satellite: {
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    options: {
-      maxZoom: 19,
-      attribution: "Tiles &copy; Esri",
-    },
-  },
-};
+function isGoogleMapsReady() {
+  return typeof window.google?.maps?.Map === "function";
+}
+
+function waitForGoogleMapsReady({ timeoutMs = 4000, intervalMs = 50 } = {}) {
+  if (isGoogleMapsReady()) return Promise.resolve(true);
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const tick = () => {
+      if (isGoogleMapsReady()) return resolve(true);
+      if (Date.now() - start >= timeoutMs) return reject(new Error("Google Maps not ready."));
+      setTimeout(tick, intervalMs);
+    };
+    tick();
+  });
+}
+
+function loadGoogleMaps(apiKey) {
+  if (!apiKey) return Promise.resolve(false);
+  if (isGoogleMapsReady()) return Promise.resolve(true);
+  if (window.__rentsoftGoogleMapsLoading) return window.__rentsoftGoogleMapsLoading;
+
+  window.__rentsoftGoogleMapsLoading = new Promise((resolve, reject) => {
+    const id = "rentsoft-google-maps";
+    const existing = document.getElementById(id);
+    if (existing) {
+      waitForGoogleMapsReady().then(() => resolve(true)).catch(reject);
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = id;
+    s.async = true;
+    s.defer = true;
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places&loading=async`;
+    s.onload = () => {
+      waitForGoogleMapsReady().then(() => resolve(true)).catch(reject);
+    };
+    s.onerror = () => reject(new Error("Failed to load Google Maps script (network/CSP)."));
+    document.head.appendChild(s);
+  });
+  return window.__rentsoftGoogleMapsLoading;
+}
+
+async function getPublicConfig() {
+  const res = await fetch("/api/public-config");
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load config");
+  return data || {};
+}
 
 function normalizeMapStyle(value) {
   return value === "satellite" ? "satellite" : "street";
@@ -77,29 +114,30 @@ function applyMapStyle(nextStyle) {
   if (mapStyleSelect && mapStyleSelect.value !== mapStyle) {
     mapStyleSelect.value = mapStyle;
   }
-  if (!leafletMap || !window.L) return;
-  if (!leafletLayers[mapStyle]) {
-    const cfg = MAP_TILE_SOURCES[mapStyle];
-    leafletLayers[mapStyle] = window.L.tileLayer(cfg.url, cfg.options);
-  }
-  Object.values(leafletLayers).forEach((layer) => {
-    if (leafletMap.hasLayer(layer)) leafletMap.removeLayer(layer);
-  });
-  leafletLayers[mapStyle].addTo(leafletMap);
+  if (!googleMap || !isGoogleMapsReady()) return;
+  googleMap.setMapTypeId(mapStyle === "satellite" ? "satellite" : "roadmap");
 }
 
 function ensureMap() {
   if (!mapEl) return;
-  if (leafletMap) {
-    setTimeout(() => leafletMap?.invalidateSize?.(), 50);
+  if (googleMap) {
+    setTimeout(() => window.google?.maps?.event?.trigger?.(googleMap, "resize"), 50);
     return;
   }
-  if (!window.L) return;
+  if (!isGoogleMapsReady()) return;
 
-  leafletMap = window.L.map(mapEl, { scrollWheelZoom: true });
-  applyMapStyle(mapStyle);
-  leafletMap.setView([20, 0], 2);
-  setTimeout(() => leafletMap?.invalidateSize?.(), 50);
+  googleMap = new window.google.maps.Map(mapEl, {
+    center: { lat: 20, lng: 0 },
+    zoom: 2,
+    mapTypeId: mapStyle === "satellite" ? "satellite" : "roadmap",
+    mapTypeControl: false,
+    streetViewControl: false,
+    fullscreenControl: false,
+  });
+  googleAutocompleteService = new window.google.maps.places.AutocompleteService();
+  googlePlacesService = new window.google.maps.places.PlacesService(googleMap);
+  googleGeocoder = new window.google.maps.Geocoder();
+  setTimeout(() => window.google?.maps?.event?.trigger?.(googleMap, "resize"), 50);
 }
 
 if (mapStyleSelect) {
@@ -108,14 +146,15 @@ if (mapStyleSelect) {
 }
 
 function setMapPoint(lat, lng, zoom = 17) {
-  if (!leafletMap || !window.L) return;
+  if (!googleMap || !isGoogleMapsReady()) return;
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-  if (!leafletMarker) {
-    leafletMarker = window.L.marker([lat, lng]).addTo(leafletMap);
+  if (!googleMarker) {
+    googleMarker = new window.google.maps.Marker({ position: { lat, lng }, map: googleMap });
   } else {
-    leafletMarker.setLatLng([lat, lng]);
+    googleMarker.setPosition({ lat, lng });
   }
-  leafletMap.setView([lat, lng], zoom);
+  googleMap.setCenter({ lat, lng });
+  googleMap.setZoom(zoom);
 }
 
 function hideSuggestions() {
@@ -133,18 +172,117 @@ function renderSuggestions(results, onPick) {
     return;
   }
   rows.slice(0, 8).forEach((r) => {
-    const primary = r?.street || r?.label || "";
-    const secondary = [r?.city, r?.region, r?.country].filter(Boolean).join(", ");
+    const { main, secondary } = parsePredictionText(r);
     const btn = document.createElement("button");
     btn.type = "button";
     btn.innerHTML = `
-      <div class="rs-autocomplete-primary">${escapeHtml(primary)}</div>
+      <div class="rs-autocomplete-primary">${escapeHtml(main)}</div>
       ${secondary ? `<div class="rs-autocomplete-secondary">${escapeHtml(secondary)}</div>` : ""}
     `;
-    btn.addEventListener("click", () => onPick(r));
+    let picked = false;
+    const pick = () => {
+      if (picked) return;
+      picked = true;
+      onPick(r);
+    };
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      pick();
+    });
+    btn.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      pick();
+    });
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      pick();
+    });
     addressSuggestions.appendChild(btn);
   });
   addressSuggestions.hidden = false;
+}
+
+function parsePredictionText(prediction) {
+  const main = prediction?.structured_formatting?.main_text || prediction?.description || "";
+  const secondary = prediction?.structured_formatting?.secondary_text || "";
+  return { main: String(main || ""), secondary: String(secondary || "") };
+}
+
+function parseAddressComponents(components) {
+  const parts = Array.isArray(components) ? components : [];
+  const get = (type) => parts.find((c) => Array.isArray(c.types) && c.types.includes(type));
+  const streetNumber = get("street_number")?.long_name || "";
+  const route = get("route")?.long_name || "";
+  const city =
+    get("locality")?.long_name ||
+    get("postal_town")?.long_name ||
+    get("administrative_area_level_2")?.long_name ||
+    "";
+  const region = get("administrative_area_level_1")?.short_name || get("administrative_area_level_1")?.long_name || "";
+  const country = get("country")?.long_name || "";
+  const street = [streetNumber, route].filter(Boolean).join(" ").trim() || route || "";
+  return { street, city, region, country };
+}
+
+function requestPlacePredictions(input, map) {
+  if (!googleAutocompleteService || !window.google?.maps?.places) {
+    return Promise.reject(new Error("Google Places library not available."));
+  }
+  const locationBias = map?.getBounds?.() || undefined;
+  return new Promise((resolve, reject) => {
+    googleAutocompleteService.getPlacePredictions(
+      { input: String(input || ""), locationBias },
+      (predictions, status) => {
+        if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) return resolve([]);
+        if (status !== window.google.maps.places.PlacesServiceStatus.OK) {
+          return reject(new Error(`Places predictions failed: ${status || "Unknown"}`));
+        }
+        resolve(predictions || []);
+      }
+    );
+  });
+}
+
+function fetchPlaceDetails(placeId, label) {
+  if (!googlePlacesService || !window.google?.maps?.places) {
+    return Promise.reject(new Error("Google Places library not available."));
+  }
+  return new Promise((resolve, reject) => {
+    googlePlacesService.getDetails(
+      { placeId, fields: ["geometry", "formatted_address", "name", "address_component"] },
+      (place, status) => {
+        if (status !== window.google.maps.places.PlacesServiceStatus.OK || !place?.geometry?.location) {
+          return reject(new Error(`Places details failed: ${status || "Unknown"}`));
+        }
+        const lat = place.geometry.location.lat();
+        const lng = place.geometry.location.lng();
+        resolve({
+          lat,
+          lng,
+          label: place.formatted_address || place.name || label || "Pinned location",
+          components: place.address_components || [],
+        });
+      }
+    );
+  });
+}
+
+function geocodeAddress(query) {
+  if (!googleGeocoder) return Promise.reject(new Error("Google Geocoder not available."));
+  return new Promise((resolve, reject) => {
+    googleGeocoder.geocode({ address: String(query || "") }, (results, status) => {
+      if (status !== "OK" || !results?.length) return reject(new Error(`Geocode failed: ${status || "Unknown"}`));
+      const first = results[0];
+      const loc = first?.geometry?.location;
+      if (!loc) return reject(new Error("Geocode returned no location."));
+      resolve({
+        lat: loc.lat(),
+        lng: loc.lng(),
+        label: first.formatted_address || query || "",
+        components: first.address_components || [],
+      });
+    });
+  });
 }
 
 function buildAddressQuery() {
@@ -157,13 +295,11 @@ function buildAddressQuery() {
   return parts.join(", ");
 }
 
-async function searchGeocode(query, limit = 6, { signal } = {}) {
+async function searchGeocode(query, limit = 6) {
   const q = String(query || "").trim();
   if (!q) return [];
-  const res = await fetch(`/api/geocode/search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(limit)}`, { signal });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Unable to search");
-  return Array.isArray(data.results) ? data.results : [];
+  const results = await requestPlacePredictions(q, googleMap);
+  return results.slice(0, limit);
 }
 
 function startOfLocalDay(d) {
@@ -242,6 +378,19 @@ async function init() {
   const companyName = session?.company?.name ? String(session.company.name) : null;
   if (companyMeta) companyMeta.textContent = companyName ? `${companyName} (Company #${companyId})` : `Company #${companyId}`;
 
+  try {
+    const config = await getPublicConfig().catch(() => ({}));
+    googleMapsApiKey = config?.googleMapsApiKey ? String(config.googleMapsApiKey) : "";
+    const hasGoogle = isGoogleMapsReady();
+    if (!googleMapsApiKey && !hasGoogle) {
+      throw new Error("Google Maps API key is required. Set GOOGLE_MAPS_API_KEY to use the map picker.");
+    }
+    if (!hasGoogle) await loadGoogleMaps(googleMapsApiKey);
+  } catch (err) {
+    googleMapsLoadError = err;
+    if (formMeta) formMeta.textContent = err?.message || String(err);
+  }
+
   const rangeDays = Number(rangeDaysSelect?.value) || 365;
   const rangeStart = startOfLocalDay(new Date(Date.now() - rangeDays * DAY_MS));
   if (rangeStartInput) rangeStartInput.value = toLocalDateInputValue(rangeStart);
@@ -287,26 +436,26 @@ async function init() {
       } catch {}
       addressState.abort = new AbortController();
       try {
-        const results = await searchGeocode(q, 6, { signal: addressState.abort.signal });
+        const results = await searchGeocode(q, 6);
         if (seq !== addressState.seq) return;
         if (String(addressSearchInput.value || "").trim() !== q) return;
-        renderSuggestions(results, (picked) => {
+        renderSuggestions(results, async (picked) => {
           hideSuggestions();
-          const s = picked?.street ? String(picked.street) : "";
-          const c = picked?.city ? String(picked.city) : "";
-          const r = picked?.region ? String(picked.region) : "";
-          const co = picked?.country ? String(picked.country) : "";
-          if (s && streetInput) streetInput.value = s;
-          if (c && cityInput) cityInput.value = c;
-          if (r && regionInput) regionInput.value = r;
-          if (co && countryInput) countryInput.value = co;
-          const pLat = toCoord(picked?.latitude);
-          const pLng = toCoord(picked?.longitude);
-          if (pLat !== null && pLng !== null) {
+          const placeId = picked?.place_id;
+          if (!placeId) return;
+          try {
+            const details = await fetchPlaceDetails(placeId, picked?.description || "");
+            const parts = parseAddressComponents(details.components);
+            if (streetInput) streetInput.value = parts.street || "";
+            if (cityInput) cityInput.value = parts.city || "";
+            if (regionInput) regionInput.value = parts.region || "";
+            if (countryInput) countryInput.value = parts.country || "";
             ensureMap();
-            setMapPoint(pLat, pLng, 17);
+            setMapPoint(details.lat, details.lng, 17);
+            if (formMeta) formMeta.textContent = "Address selected (not saved yet).";
+          } catch (err) {
+            if (formMeta) formMeta.textContent = err?.message || String(err);
           }
-          if (formMeta) formMeta.textContent = "Address selected (not saved yet).";
         });
       } catch (err) {
         if (err?.name === "AbortError") return;
@@ -325,13 +474,10 @@ async function init() {
         const query = buildAddressQuery();
         if (!query || query.length < 6) return;
         try {
-          const results = await searchGeocode(query, 1);
-          const first = results?.[0];
-          const pLat = toCoord(first?.latitude);
-          const pLng = toCoord(first?.longitude);
-          if (pLat === null || pLng === null) return;
+          const details = await geocodeAddress(query);
+          if (!Number.isFinite(details?.lat) || !Number.isFinite(details?.lng)) return;
           ensureMap();
-          setMapPoint(pLat, pLng, 15);
+          setMapPoint(details.lat, details.lng, 15);
         } catch {
           // ignore preview failures; user can still save and/or use search box.
         }
