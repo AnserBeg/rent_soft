@@ -599,7 +599,11 @@ function createTimePickerInstance(input) {
   const hourFormat = type === "datetime-local" ? "12" : "24";
   const popover = document.createElement("div");
   popover.className = "rs-time-popover";
-  if (type === "time") popover.classList.add("is-time-only");
+  if (type === "time") {
+    popover.classList.add("is-time-only");
+  } else {
+    popover.classList.add("has-date");
+  }
 
   const panel = document.createElement("div");
   panel.className = "rs-time-panel";
@@ -723,21 +727,31 @@ function createTimePickerInstance(input) {
 function positionTimePicker(instance) {
   const rect = instance.input.getBoundingClientRect();
   const popover = instance.popover;
-  const minWidth = instance.type === "time" ? 200 : 260;
-  const maxWidth = instance.type === "time" ? 240 : 320;
+  const minWidth = instance.type === "time" ? 200 : 360;
+  const maxWidth = instance.type === "time" ? 240 : 460;
   const targetWidth = Math.min(Math.max(rect.width, minWidth), maxWidth);
   popover.style.width = `${targetWidth}px`;
   const width = popover.offsetWidth || targetWidth;
   const height = popover.offsetHeight || 320;
+  const viewportW = window.innerWidth;
+  const viewportH = window.innerHeight;
+  const padding = 8;
   let left = rect.left;
   let top = rect.bottom + 6;
-  const maxLeft = window.innerWidth - width - 8;
-  if (left > maxLeft) left = Math.max(8, maxLeft);
-  if (top + height > window.innerHeight && rect.top - height - 6 > 0) {
-    top = rect.top - height - 6;
+  const maxLeft = viewportW - width - padding;
+  if (left > maxLeft) left = maxLeft;
+  if (left < padding) left = padding;
+  if (top + height > viewportH - padding) {
+    const altTop = rect.top - height - 6;
+    if (altTop >= padding) {
+      top = altTop;
+    } else {
+      top = Math.max(padding, viewportH - height - padding);
+    }
   }
-  popover.style.left = `${Math.max(8, left)}px`;
-  popover.style.top = `${Math.max(8, top)}px`;
+  if (top < padding) top = padding;
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
 }
 
 function closeActiveTimePicker() {

@@ -700,6 +700,8 @@ textarea:focus {
   padding: 8px;
   min-width: 200px;
   max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: auto;
 }
 
 .rs-time-popover.is-time-only {
@@ -711,9 +713,15 @@ textarea:focus {
   gap: 12px;
 }
 
+.rs-time-popover.has-date .rs-time-panel {
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
+  align-items: start;
+}
+
 .rs-date-panel {
   display: grid;
   gap: 8px;
+  min-width: 220px;
 }
 
 .rs-date-header {
@@ -783,6 +791,7 @@ textarea:focus {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  min-width: 160px;
 }
 
 .rs-time-columns.is-12h {
