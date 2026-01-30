@@ -5122,6 +5122,13 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
       ELSE li.end_at
     END
   `;
+  const timelineEndRawExpr = `
+    CASE
+      WHEN ro.status = 'ordered' THEN COALESCE(li.returned_at, li.end_at)
+      WHEN ro.status IN ('received', 'closed') THEN COALESCE(li.returned_at, li.end_at)
+      ELSE li.end_at
+    END
+  `;
 
   const params = [companyId, fromIso, toIso];
   const where = [
@@ -5142,6 +5149,7 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            et.name AS type_name,
            ${timelineStartExpr} AS start_at,
            ${timelineEndExpr} AS end_at,
+           ${timelineEndRawExpr} AS end_at_raw,
            ro.id AS order_id,
            ro.status,
            ro.quote_number,
@@ -5168,6 +5176,7 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            et.name AS type_name,
            ${timelineStartExpr} AS start_at,
            ${timelineEndExpr} AS end_at,
+           ${timelineEndRawExpr} AS end_at_raw,
            ro.id AS order_id,
            ro.status,
            ro.quote_number,

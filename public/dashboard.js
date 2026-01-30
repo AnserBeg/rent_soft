@@ -441,7 +441,8 @@ function currentAssignments() {
 function barStateFor(assignment, endingDays) {
   const now = Date.now();
   const startMs = Date.parse(assignment.start_at);
-  const endMs = Date.parse(assignment.end_at);
+  const endRaw = assignment.end_at_raw || assignment.end_at;
+  const endMs = Date.parse(endRaw);
   const s = String(assignment.status || "").toLowerCase();
   const endingSoonMs = Math.max(1, Number(endingDays) || 2) * DAY_MS;
   const isOverdue = s === "ordered" && Number.isFinite(endMs) && endMs < now;
@@ -2402,21 +2403,24 @@ function renderBenchSummary() {
 function buildBarsForRow(row, endingDays) {
   const fromMs = rangeStartDate.getTime();
   const toMs = fromMs + rangeDays * DAY_MS;
-  return (row.bars || [])
-    .map((a) => {
-      const startMs = Date.parse(a.start_at);
-      const endMs = Date.parse(a.end_at);
-      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
-      if (endMs <= fromMs || startMs >= toMs) return null;
-      const clampedStart = clamp(startMs, fromMs, toMs);
-      const clampedEnd = clamp(endMs, fromMs, toMs);
-      if (clampedEnd <= clampedStart) return null;
-      const leftPx = ((clampedStart - fromMs) / DAY_MS) * COL_W;
-      const widthPx = Math.max(6, ((clampedEnd - clampedStart) / DAY_MS) * COL_W);
-      const state = barStateFor(a, endingDays);
-      const durationDays = Math.max(1, Math.ceil((endMs - startMs) / DAY_MS));
-      return {
-        ...a,
+    return (row.bars || [])
+      .map((a) => {
+        const startMs = Date.parse(a.start_at);
+        const endMsDisplay = Date.parse(a.end_at);
+        const endMsRaw = Date.parse(a.end_at_raw || a.end_at);
+        const endMs = Number.isFinite(endMsDisplay) ? endMsDisplay : endMsRaw;
+        if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+        if (endMs <= fromMs || startMs >= toMs) return null;
+        const clampedStart = clamp(startMs, fromMs, toMs);
+        const clampedEnd = clamp(endMs, fromMs, toMs);
+        if (clampedEnd <= clampedStart) return null;
+        const leftPx = ((clampedStart - fromMs) / DAY_MS) * COL_W;
+        const widthPx = Math.max(6, ((clampedEnd - clampedStart) / DAY_MS) * COL_W);
+        const state = barStateFor(a, endingDays);
+        const durationEndMs = Number.isFinite(endMsRaw) ? endMsRaw : endMs;
+        const durationDays = Math.max(1, Math.ceil((durationEndMs - startMs) / DAY_MS));
+        return {
+          ...a,
         startMs,
         endMs,
         leftPx,
@@ -2509,7 +2513,7 @@ function renderBar(b, endingDays) {
 function endingBadgeText(b, endingDays) {
   const s = String(b.status || "").toLowerCase();
   if (s !== "ordered") return "";
-  const endMs = Date.parse(b.end_at);
+  const endMs = Date.parse(b.end_at_raw || b.end_at);
   if (!Number.isFinite(endMs)) return "";
 
   const now = Date.now();
@@ -2539,13 +2543,13 @@ function showTooltip(e, b, endingDays) {
   tooltip.innerHTML = `
     <div class="tt-title">${docNumber(b)} • ${statusLabel(b.status)}</div>
     <div class="tt-sub">Customer: ${b.customer_name || "--"}</div>
-    <div class="tt-sub">Pickup: ${b.pickup_location_name || "--"}</div>
-    <div class="tt-sub">Type: ${b.type_name || "--"}</div>
-    ${equip ? `<div class="tt-sub">Unit: ${equip}</div>` : ""}
-    <div class="tt-sub">Start: ${fmtDateTime(b.start_at)}</div>
-    <div class="tt-sub">Return: ${fmtDateTime(b.end_at)}</div>
-    ${state.base === "overdue" ? `<div class="tt-warn">Overdue</div>` : state.base === "ending" ? `<div class="tt-warn">Ending soon</div>` : ""}
-  `;
+      <div class="tt-sub">Pickup: ${b.pickup_location_name || "--"}</div>
+      <div class="tt-sub">Type: ${b.type_name || "--"}</div>
+      ${equip ? `<div class="tt-sub">Unit: ${equip}</div>` : ""}
+      <div class="tt-sub">Start: ${fmtDateTime(b.start_at)}</div>
+      <div class="tt-sub">Return: ${fmtDateTime(b.end_at_raw || b.end_at)}</div>
+      ${state.base === "overdue" ? `<div class="tt-warn">Overdue</div>` : state.base === "ending" ? `<div class="tt-warn">Ending soon</div>` : ""}
+    `;
   tooltip.style.display = "block";
   moveTooltip(e);
 }
