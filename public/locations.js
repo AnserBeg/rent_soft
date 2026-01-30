@@ -533,10 +533,10 @@ function renderUnitsMap(rows) {
   });
 
       if (hasBounds) {
-    googleMap.fitBounds(bounds, { padding: 160, maxZoom: 16 });
+    googleMap.fitBounds(bounds, { padding: 120, maxZoom: 16 });
     setTimeout(() => {
       const z = googleMap.getZoom();
-      if (Number.isFinite(z)) googleMap.setZoom(Math.max(z - 3, 2));
+      if (Number.isFinite(z)) googleMap.setZoom(Math.max(z - 2, 2));
     }, 0);
   } else {
     googleMap.setCenter({ lat: 20, lng: 0 });
@@ -599,10 +599,10 @@ function renderLocationsMap(rows) {
   });
 
       if (hasBounds) {
-    googleMap.fitBounds(bounds, { padding: 160, maxZoom: 14 });
+    googleMap.fitBounds(bounds, { padding: 120, maxZoom: 14 });
     setTimeout(() => {
       const z = googleMap.getZoom();
-      if (Number.isFinite(z)) googleMap.setZoom(Math.max(z - 3, 2));
+      if (Number.isFinite(z)) googleMap.setZoom(Math.max(z - 2, 2));
     }, 0);
   } else {
     googleMap.setCenter({ lat: 20, lng: 0 });
@@ -971,6 +971,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (pageMeta) pageMeta.textContent = err.message || String(err);
   });
 });
+
 
 
 
