@@ -260,8 +260,7 @@ function getEquipmentStatusInfo(item, options = {}) {
   }
 
   const roLabel = key === "reserved" ? getRentalOrderLabel(item) : "";
-  const labelWithRo = roLabel ? `${label} (${roLabel})` : label;
-  return { key, label, labelWithRo, roLabel };
+  return { key, label, roLabel };
 }
 
 function setEquipmentHeaderStatus(item) {
@@ -429,7 +428,7 @@ function renderEquipmentTable(rows) {
     const custVal = isRentedOrOverdue || isReservedOrRequested ? (row.rental_customer_name || "--") : "--";
     const statusInfo = getEquipmentStatusInfo(row, { isReturnInspection, isOutOfService });
     const statusTag = `<span class="status-tag ${statusInfo.key}"><span class="status-dot" aria-hidden="true"></span>${escapeHtml(
-      statusInfo.labelWithRo
+      statusInfo.label
     )}</span>`;
 
     div.innerHTML = `
@@ -507,7 +506,7 @@ function renderEquipmentCards(rows) {
       const dot = document.createElement("span");
       dot.className = "status-dot";
       dot.setAttribute("aria-hidden", "true");
-      status.append(dot, document.createTextNode(availability.labelWithRo));
+      status.append(dot, document.createTextNode(availability.label));
     }
 
     titleRow.appendChild(title);
