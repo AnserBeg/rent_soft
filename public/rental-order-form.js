@@ -78,12 +78,16 @@ const generalNotesInput = document.getElementById("general-notes");
 const generalNotesImagesInput = document.getElementById("general-notes-images");
 const generalNotesImagesStatus = document.getElementById("general-notes-images-status");
 const generalNotesPreviews = document.getElementById("general-notes-previews");
+const notificationCircumstancesContainer = document.getElementById("notification-circumstances-container");
+const notificationOtherCheckbox = document.getElementById("notification-circumstance-other-cb");
+const notificationOtherInput = document.getElementById("notification-circumstance-other-input");
 const rentalInfoFieldContainers = {
   siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
   criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
   generalNotes: document.querySelector('[data-rental-info-field="generalNotes"]'),
   emergencyContacts: document.querySelector('[data-rental-info-field="emergencyContacts"]'),
   siteContacts: document.querySelector('[data-rental-info-field="siteContacts"]'),
+  notificationCircumstances: document.querySelector('[data-rental-info-field="notificationCircumstances"]'),
   coverageHours: document.querySelector('[data-rental-info-field="coverageHours"]'),
 };
 const openSideAddressPickerBtn = document.getElementById("open-side-address-picker");
@@ -925,6 +929,7 @@ let sideAddressPicker = {
     debounceTimer: null,
     searchBound: false,
   },
+  geocodeSeq: 0,
   selected: null, // { lat, lng, provider, query }
 };
 let sideAddressInputBound = false;
@@ -951,6 +956,7 @@ let draft = {
   coverageHours: {},
   emergencyContacts: [],
   siteContacts: [],
+  notificationCircumstances: [],
   lineItems: [],
   fees: [],
   isOverdue: false,
@@ -984,6 +990,7 @@ function resetDraftForNew() {
     coverageHours: {},
     emergencyContacts: [],
     siteContacts: [],
+    notificationCircumstances: [],
     lineItems: [],
     fees: [],
     isOverdue: false,
@@ -1039,6 +1046,37 @@ function toFiniteCoordinate(value) {
   return Number.isFinite(num) ? num : null;
 }
 
+function parseLatLngFromText(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const parts = raw.split(",").map((v) => v.trim());
+  if (parts.length !== 2) return null;
+  const lat = toFiniteCoordinate(parts[0]);
+  const lng = toFiniteCoordinate(parts[1]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return { lat, lng };
+}
+
+function collectNotificationCircumstances() {
+  if (!notificationCircumstancesContainer) return [];
+  const checkboxes = notificationCircumstancesContainer.querySelectorAll('input[type="checkbox"]:checked');
+  const values = [];
+  checkboxes.forEach((cb) => {
+    if (cb.value === "Other") {
+      const otherVal = (notificationOtherInput?.value || "").trim();
+      if (otherVal) {
+        values.push(`Other: ${otherVal}`);
+      } else {
+        values.push("Other");
+      }
+    } else {
+      values.push(cb.value);
+    }
+  });
+  return values;
+}
+
 async function getPublicConfig() {
   const res = await fetch("/api/public-config");
   const data = await res.json().catch(() => ({}));
@@ -1063,6 +1101,7 @@ function closeSideAddressPickerModal() {
   }
   sideAddressPicker.google.searchSeq = (sideAddressPicker.google.searchSeq || 0) + 1;
   sideAddressPicker.google.pickSeq = (sideAddressPicker.google.pickSeq || 0) + 1;
+  sideAddressPicker.geocodeSeq = (sideAddressPicker.geocodeSeq || 0) + 1;
   if (sideAddressPicker.leaflet.debounceTimer) {
     clearTimeout(sideAddressPicker.leaflet.debounceTimer);
     sideAddressPicker.leaflet.debounceTimer = null;
@@ -1221,10 +1260,116 @@ function setSideAddressPickerMapStyle(style) {
   }
 }
 
+async function applySideAddressPickerTextSelection() {
+  if (sideAddressPicker.google.marker || sideAddressPicker.leaflet.marker) return true;
+  const query = String(draft.siteAddressQuery || draft.siteAddress || sideAddressPickerInput?.value || "").trim();
+  if (!query) return false;
+
+  const parsedCoords = parseLatLngFromText(query);
+  if (parsedCoords) {
+    const { lat, lng } = parsedCoords;
+    const label = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    if (sideAddressPicker.mode === "google" && sideAddressPicker.google.map) {
+      if (!sideAddressPicker.google.marker) {
+        sideAddressPicker.google.marker = new window.google.maps.Marker({
+          position: { lat, lng },
+          map: sideAddressPicker.google.map,
+          draggable: true,
+        });
+        sideAddressPicker.google.marker.addListener("dragend", (evt) => {
+          const dLat = evt?.latLng?.lat?.();
+          const dLng = evt?.latLng?.lng?.();
+          if (!Number.isFinite(dLat) || !Number.isFinite(dLng)) return;
+          setSideAddressSelected(dLat, dLng, { provider: "manual_pin" });
+        });
+      } else {
+        sideAddressPicker.google.marker.setPosition({ lat, lng });
+      }
+      sideAddressPicker.google.map.setCenter({ lat, lng });
+      sideAddressPicker.google.map.setZoom(17);
+      setSideAddressSelected(lat, lng, { provider: "manual_text", query: label });
+      return true;
+    }
+    if (sideAddressPicker.mode === "leaflet" && sideAddressPicker.leaflet.map) {
+      const map = sideAddressPicker.leaflet.map;
+      if (!sideAddressPicker.leaflet.marker) {
+        sideAddressPicker.leaflet.marker = window.L.marker([lat, lng], { draggable: true }).addTo(map);
+        sideAddressPicker.leaflet.marker.on("dragend", () => {
+          const ll = sideAddressPicker.leaflet.marker?.getLatLng?.();
+          if (!ll || !Number.isFinite(ll.lat) || !Number.isFinite(ll.lng)) return;
+          setSideAddressSelected(ll.lat, ll.lng, { provider: "manual_pin" });
+        });
+      } else {
+        sideAddressPicker.leaflet.marker.setLatLng([lat, lng]);
+      }
+      map.setView([lat, lng], 17);
+      setSideAddressSelected(lat, lng, { provider: "manual_text", query: label });
+      return true;
+    }
+    return false;
+  }
+
+  const seq = (sideAddressPicker.geocodeSeq || 0) + 1;
+  sideAddressPicker.geocodeSeq = seq;
+  try {
+    const res = await fetch(`/api/geocode/search?q=${encodeURIComponent(query)}&limit=1`);
+    const data = await res.json().catch(() => ({}));
+    if (seq !== sideAddressPicker.geocodeSeq) return false;
+    if (!res.ok) return false;
+    const first = Array.isArray(data.results) ? data.results[0] : null;
+    if (!first) return false;
+    const lat = toFiniteCoordinate(first.latitude);
+    const lng = toFiniteCoordinate(first.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+    const label = String(first.label || query).trim();
+
+    if (sideAddressPicker.mode === "google" && sideAddressPicker.google.map) {
+      if (!sideAddressPicker.google.marker) {
+        sideAddressPicker.google.marker = new window.google.maps.Marker({
+          position: { lat, lng },
+          map: sideAddressPicker.google.map,
+          draggable: true,
+        });
+        sideAddressPicker.google.marker.addListener("dragend", (evt) => {
+          const dLat = evt?.latLng?.lat?.();
+          const dLng = evt?.latLng?.lng?.();
+          if (!Number.isFinite(dLat) || !Number.isFinite(dLng)) return;
+          setSideAddressSelected(dLat, dLng, { provider: "manual_pin" });
+        });
+      } else {
+        sideAddressPicker.google.marker.setPosition({ lat, lng });
+      }
+      sideAddressPicker.google.map.setCenter({ lat, lng });
+      sideAddressPicker.google.map.setZoom(17);
+      setSideAddressSelected(lat, lng, { provider: "nominatim", query: label });
+      return true;
+    }
+
+    if (sideAddressPicker.mode === "leaflet" && sideAddressPicker.leaflet.map) {
+      const map = sideAddressPicker.leaflet.map;
+      if (!sideAddressPicker.leaflet.marker) {
+        sideAddressPicker.leaflet.marker = window.L.marker([lat, lng], { draggable: true }).addTo(map);
+        sideAddressPicker.leaflet.marker.on("dragend", () => {
+          const ll = sideAddressPicker.leaflet.marker?.getLatLng?.();
+          if (!ll || !Number.isFinite(ll.lat) || !Number.isFinite(ll.lng)) return;
+          setSideAddressSelected(ll.lat, ll.lng, { provider: "manual_pin" });
+        });
+      } else {
+        sideAddressPicker.leaflet.marker.setLatLng([lat, lng]);
+      }
+      map.setView([lat, lng], 17);
+      setSideAddressSelected(lat, lng, { provider: "nominatim", query: label });
+      return true;
+    }
+  } catch { }
+
+  return false;
+}
+
 function applySideAddressPickerDraftSelection() {
   const lat = toFiniteCoordinate(draft.siteAddressLat);
   const lng = toFiniteCoordinate(draft.siteAddressLng);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
   const label = String(draft.siteAddressQuery || draft.siteAddress || "").trim();
 
   if (sideAddressPicker.mode === "google" && sideAddressPicker.google.map) {
@@ -1246,7 +1391,7 @@ function applySideAddressPickerDraftSelection() {
     sideAddressPicker.google.map.setCenter({ lat, lng });
     sideAddressPicker.google.map.setZoom(17);
     setSideAddressSelected(lat, lng, { provider: "draft", query: label || null });
-    return;
+    return true;
   }
 
   if (sideAddressPicker.mode === "leaflet" && sideAddressPicker.leaflet.map) {
@@ -1263,7 +1408,10 @@ function applySideAddressPickerDraftSelection() {
     }
     map.setView([lat, lng], 17);
     setSideAddressSelected(lat, lng, { provider: "draft", query: label || null });
+    return true;
   }
+
+  return false;
 }
 
 function loadGoogleMaps(apiKey) {
@@ -1571,7 +1719,9 @@ async function openSideAddressPicker() {
         const msg = hasSvc ? "Search (Google Places) or click to drop a pin." : "Click to drop a pin (Places library missing).";
         sideAddressPickerMeta.textContent = msg;
       }
-      applySideAddressPickerDraftSelection();
+      if (!applySideAddressPickerDraftSelection()) {
+        await applySideAddressPickerTextSelection();
+      }
       return;
     } catch (err) {
       if (sideAddressPickerMeta) {
@@ -1591,7 +1741,9 @@ async function openSideAddressPicker() {
         ? "Search (OpenStreetMap) or click the map to drop a pin (Google failed to load)."
         : "Search (OpenStreetMap) or click the map to drop a pin.";
   }
-  applySideAddressPickerDraftSelection();
+  if (!applySideAddressPickerDraftSelection()) {
+    await applySideAddressPickerTextSelection();
+  }
 }
 
 function saveSideAddressFromPicker() {
@@ -4897,6 +5049,7 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     coverageHours: draft.coverageHours || {},
     emergencyContacts: collectContacts(emergencyContactsList),
     siteContacts: collectContacts(siteContactsList),
+    notificationCircumstances: collectNotificationCircumstances(),
     status: normalizeOrderStatus(draft.status || "quote"),
     actorName,
     actorEmail,
@@ -5906,6 +6059,34 @@ function init() {
     const existing = localStorage.getItem("roUserName");
     if (existing && noteUserInput) noteUserInput.value = existing;
   } catch (_) { }
+}
+
+// Event handlers for notification circumstances
+if (notificationOtherCheckbox && notificationOtherInput) {
+  notificationOtherCheckbox.addEventListener("change", () => {
+    if (notificationOtherCheckbox.checked) {
+      notificationOtherInput.style.display = "";
+      notificationOtherInput.focus();
+    } else {
+      notificationOtherInput.style.display = "none";
+    }
+    scheduleDraftSave();
+  });
+
+  notificationOtherInput.addEventListener("input", () => {
+    scheduleDraftSave();
+  });
+}
+
+if (notificationCircumstancesContainer) {
+  const checkboxes = notificationCircumstancesContainer.querySelectorAll('input[type="checkbox"]');
+  checkboxes.forEach((cb) => {
+    if (cb !== notificationOtherCheckbox) {
+      cb.addEventListener("change", () => {
+        scheduleDraftSave();
+      });
+    }
+  });
 }
 
 init();

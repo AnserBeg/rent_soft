@@ -166,6 +166,7 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
   siteContacts: { enabled: true, required: true },
+  notificationCircumstances: { enabled: true, required: false },
   coverageHours: { enabled: true, required: true },
 };
 
@@ -828,6 +829,7 @@ function renderOrderDetail(row, detail) {
 
   const emergencyContacts = parseContacts(order.emergency_contacts || order.emergencyContacts || []);
   const siteContacts = parseContacts(order.site_contacts || order.siteContacts || []);
+  const notificationCircumstances = order.notification_circumstances || order.notificationCircumstances || [];
   const coverageHours = order.coverage_hours || order.coverageHours || {};
   const siteAddress = order.site_address || order.siteAddress || "--";
   const criticalAreas = order.critical_areas || order.criticalAreas || "--";
@@ -859,6 +861,12 @@ function renderOrderDetail(row, detail) {
   }
   if (isRentalInfoEnabled("generalNotes")) {
     lineDetailItems.push(detailItem("General notes", generalNotesValue));
+  }
+  if (isRentalInfoEnabled("notificationCircumstances")) {
+    const notifValue = Array.isArray(notificationCircumstances) && notificationCircumstances.length
+      ? notificationCircumstances.map(v => escapeHtml(v)).join(", ")
+      : "--";
+    lineDetailItems.push(detailItem("Notification circumstance", notifValue));
   }
   lineItemDetails.innerHTML = lineDetailItems.join("");
 }

@@ -8,6 +8,8 @@
   const generalNotesImagesInputId = "rs-general-notes-images";
   const generalNotesImagesPreviewsId = "rs-general-notes-previews";
   const generalNotesImagesStatusId = "rs-general-notes-status";
+  const notificationCircumstancesId = "rs-notification-circumstances";
+  const notificationOtherInputId = "rs-notification-other-input";
   const deliveryInstructionsId = "rs-delivery-instructions";
 
   const DEFAULT_RENTAL_INFO_FIELDS = {
@@ -16,6 +18,7 @@
     generalNotes: { enabled: true, required: true },
     emergencyContacts: { enabled: true, required: true },
     siteContacts: { enabled: true, required: true },
+    notificationCircumstances: { enabled: true, required: false },
     coverageHours: { enabled: true, required: true },
   };
 
@@ -234,6 +237,30 @@
           </div>
           <div class="space-y-3" id="${siteListId}"></div>
         </div>
+        <div class="space-y-3" data-rental-info-field="notificationCircumstances">
+          <label class="block text-xs font-bold text-slate-500">Notification circumstance</label>
+          <div id="${notificationCircumstancesId}" class="flex flex-wrap items-center gap-4">
+             <label class="flex items-center gap-2 cursor-pointer">
+               <input type="checkbox" value="Damage" class="rounded border-gray-300 text-brand-accent focus:ring-brand-accent w-4 h-4" />
+               <span class="text-sm text-slate-700">Damage</span>
+             </label>
+             <label class="flex items-center gap-2 cursor-pointer">
+               <input type="checkbox" value="Trespassing" class="rounded border-gray-300 text-brand-accent focus:ring-brand-accent w-4 h-4" />
+               <span class="text-sm text-slate-700">Trespassing</span>
+             </label>
+             <label class="flex items-center gap-2 cursor-pointer">
+               <input type="checkbox" value="Suspicious activity" class="rounded border-gray-300 text-brand-accent focus:ring-brand-accent w-4 h-4" />
+               <span class="text-sm text-slate-700">Suspicious activity</span>
+             </label>
+             <div class="flex items-center gap-2">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" value="Other" data-action="toggle-notification-other" class="rounded border-gray-300 text-brand-accent focus:ring-brand-accent w-4 h-4" />
+                  <span class="text-sm text-slate-700">Other</span>
+                </label>
+                <input id="${notificationOtherInputId}" type="text" class="hidden px-2 py-1 rounded-lg border border-gray-200 text-sm focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all w-48" placeholder="Please specify..." />
+             </div>
+          </div>
+        </div>
         <div class="space-y-3" data-rental-info-field="coverageHours">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <span class="text-sm font-bold text-slate-700">Hours of coverage required</span>
@@ -253,8 +280,8 @@
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             ${coverageDays
-              .map(
-                (day) => `
+        .map(
+          (day) => `
               <div class="border border-gray-200 rounded-xl p-3 bg-white">
                 <div class="text-xs font-bold text-slate-500 mb-2">${day.label}</div>
                 <div class="flex items-center gap-2">
@@ -264,8 +291,8 @@
                 </div>
               </div>
             `
-              )
-              .join("")}
+        )
+        .join("")}
           </div>
         </div>
       </div>
@@ -305,6 +332,13 @@
           if (el.dataset.coverageField === "start") el.value = startValue;
           if (el.dataset.coverageField === "end") el.value = endValue;
         });
+      }
+      if (target.dataset.action === "toggle-notification-other") {
+        const otherInput = section.querySelector(`#${notificationOtherInputId}`);
+        if (otherInput) {
+          otherInput.classList.toggle("hidden", !target.checked);
+          if (target.checked) otherInput.focus();
+        }
       }
     });
     return section;
@@ -498,6 +532,22 @@
       .filter((entry) => entry.name || entry.email || entry.phone);
   }
 
+  function collectNotificationCircumstances(section) {
+    if (!section) return [];
+    const container = section.querySelector(`#${notificationCircumstancesId}`);
+    if (!container) return [];
+    const checked = Array.from(container.querySelectorAll('input[type="checkbox"]:checked'));
+    const values = checked.map((cb) => {
+      if (cb.value === "Other") {
+        const otherInput = section.querySelector(`#${notificationOtherInputId}`);
+        const otherVal = normalizeValue(otherInput?.value);
+        return otherVal ? `Other: ${otherVal}` : "Other";
+      }
+      return cb.value;
+    });
+    return values;
+  }
+
   function collectCoverageHours(section) {
     const coverage = {};
     if (!section) return coverage;
@@ -528,6 +578,7 @@
       ? collectContacts(section.querySelector(`#${emergencyListId}`))
       : [];
     const siteContacts = useField("siteContacts") ? collectContacts(section.querySelector(`#${siteListId}`)) : [];
+    const notificationCircumstances = useField("notificationCircumstances") ? collectNotificationCircumstances(section) : [];
     const coverageHours = useField("coverageHours") ? collectCoverageHours(section) : {};
     return {
       ...(useField("siteAddress") ? { siteAddress } : {}),
@@ -535,6 +586,7 @@
       ...(useField("generalNotes") ? { generalNotes } : {}),
       ...(useField("emergencyContacts") ? { emergencyContacts } : {}),
       ...(useField("siteContacts") ? { siteContacts } : {}),
+      ...(useField("notificationCircumstances") ? { notificationCircumstances } : {}),
       ...(useField("coverageHours") ? { coverageHours } : {}),
     };
   }
@@ -587,7 +639,7 @@
           .clone()
           .json()
           .then((payload) => cacheRentalInfoFromListings(payload?.listings))
-          .catch(() => {});
+          .catch(() => { });
       }
       return response;
     } catch (err) {

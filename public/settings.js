@@ -98,6 +98,7 @@ const rentalInfoFieldOptions = [
   { key: "generalNotes", label: "General notes" },
   { key: "emergencyContacts", label: "Emergency contacts" },
   { key: "siteContacts", label: "Site contacts" },
+  { key: "notificationCircumstances", label: "Notification circumstance" },
   { key: "coverageHours", label: "Hours of coverage" },
 ];
 
@@ -107,6 +108,7 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
   siteContacts: { enabled: true, required: true },
+  notificationCircumstances: { enabled: true, required: false },
   coverageHours: { enabled: true, required: true },
 };
 
@@ -890,7 +892,7 @@ logoFileInput?.addEventListener("change", async (e) => {
     renderLogoPreview(url);
     setLogoHint("Logo saved.");
     if (previous) {
-      deleteLogo(previous).catch(() => {});
+      deleteLogo(previous).catch(() => { });
     }
   } catch (err) {
     setLogoHint(err.message || "Unable to upload logo.");
@@ -911,7 +913,7 @@ removeLogoBtn?.addEventListener("click", async (e) => {
     await saveLogoUrl(null);
     renderLogoPreview(null);
     setLogoHint("Logo removed.");
-    await deleteLogo(previous).catch(() => {});
+    await deleteLogo(previous).catch(() => { });
   } catch (err) {
     setLogoHint(err.message || "Unable to remove logo.");
     renderLogoPreview(previous);
