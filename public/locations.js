@@ -54,6 +54,7 @@ let googleMap = null;
 let mapMarkers = [];
 let mapInfoWindow = null;
 let mapStyle = "street";
+let droppedPinMarker = null;
 
 let addGoogleMap = null;
 let addGoogleMarker = null;
@@ -394,6 +395,17 @@ function ensureMap() {
     mapTypeControl: false,
     streetViewControl: false,
     fullscreenControl: false,
+  });
+  googleMap.addListener("click", (e) => {
+    const lat = e?.latLng?.lat?.();
+    const lng = e?.latLng?.lng?.();
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    if (!droppedPinMarker) {
+      droppedPinMarker = new window.google.maps.Marker({ position: { lat, lng }, map: googleMap });
+    } else {
+      droppedPinMarker.setPosition({ lat, lng });
+    }
+    if (mapMeta) mapMeta.textContent = `Pinned: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
   });
   mapInfoWindow = new window.google.maps.InfoWindow();
   applyMainMapStyle(mapStyle);
@@ -971,6 +983,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (pageMeta) pageMeta.textContent = err.message || String(err);
   });
 });
+
 
 
 
