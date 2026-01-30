@@ -1,11 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Aiven Rental - Work Bench</title>
   <link rel="stylesheet" href="style.css" />
+  <style>
+    /* Allow workbench timeline to expand fully so the page handles scrolling */
+    .timeline-left {
+      max-height: none !important;
+      overflow: visible !important;
+    }
+
+    #timeline-scroll-body {
+      max-height: none !important;
+      overflow-y: visible !important;
+    }
+  </style>
 </head>
+
 <body class="no-top-headers">
   <div class="app-shell">
     <div class="layout">
@@ -103,12 +117,14 @@
                         <option value="location">Pickup location</option>
                       </select>
                     </label>
-                    <label class="filter-pill"><input type="checkbox" id="bench-sort-nearest" checked /> Closest dates first</label>
+                    <label class="filter-pill"><input type="checkbox" id="bench-sort-nearest" checked /> Closest dates
+                      first</label>
                     <button class="ghost small" id="today" type="button">Today</button>
                   </div>
                   <div class="inline-actions bench-controls-row bench-status-row">
                     <label class="filter-pill"><input type="checkbox" id="status-requested" checked /> Requested</label>
-                    <label class="filter-pill"><input type="checkbox" id="status-reservation" checked /> Reservation</label>
+                    <label class="filter-pill"><input type="checkbox" id="status-reservation" checked />
+                      Reservation</label>
                     <label class="filter-pill"><input type="checkbox" id="status-ordered" checked /> Ordered</label>
                     <label class="filter-pill"><input type="checkbox" id="status-received" /> Received</label>
                     <label class="filter-pill"><input type="checkbox" id="status-closed" /> Closed</label>
@@ -161,10 +177,13 @@
                   <input id="bench-search" type="search" placeholder="Customer, equipment, location, RO/Quote…" />
                 </label>
                 <div class="view-toggle" id="bench-view-toggle" role="group" aria-label="Workbench view">
-                  <button class="view-toggle-btn active" id="bench-view-timeline-btn" type="button" data-view="timeline">Timeline</button>
-                  <button class="view-toggle-btn" id="bench-view-stages-btn" type="button" data-view="stages">Stages</button>
+                  <button class="view-toggle-btn active" id="bench-view-timeline-btn" type="button"
+                    data-view="timeline">Timeline</button>
+                  <button class="view-toggle-btn" id="bench-view-stages-btn" type="button"
+                    data-view="stages">Stages</button>
                 </div>
-                <button class="ghost small bench-hot-filter" id="bench-ending-72h" type="button" title="Show items ending in the next 72 hours">Ending &lt;72h</button>
+                <button class="ghost small bench-hot-filter" id="bench-ending-72h" type="button"
+                  title="Show items ending in the next 72 hours">Ending &lt;72h</button>
                 <button class="primary" id="bench-new-ro" type="button">New RO</button>
               </div>
             </div>
@@ -208,7 +227,8 @@
 
                 <div class="table-shell bench-stage-shell">
                   <div class="table-head">
-                    <div><strong>Reservation</strong> <span class="hint" id="bench-stage-reservation-count"></span></div>
+                    <div><strong>Reservation</strong> <span class="hint" id="bench-stage-reservation-count"></span>
+                    </div>
                   </div>
                   <div class="table bench-stage-table" id="bench-stage-reservation-table"></div>
                 </div>
@@ -256,9 +276,5 @@
   <script src="session.js"></script>
   <script src="dashboard.js"></script>
 </body>
+
 </html>
-
-
-
-
-
