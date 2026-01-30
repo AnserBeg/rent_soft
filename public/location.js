@@ -36,6 +36,7 @@ let googlePlacesService = null;
 let googleGeocoder = null;
 let googleMapsApiKey = "";
 let googleMapsLoadError = null;
+let selectedCoords = null; // { lat, lng, provider, query }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -133,6 +134,20 @@ function ensureMap() {
     mapTypeControl: false,
     streetViewControl: false,
     fullscreenControl: false,
+  });
+  googleMap.addListener("click", (e) => {
+    const lat = e?.latLng?.lat?.();
+    const lng = e?.latLng?.lng?.();
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    setMapPoint(lat, lng, 17);
+    const query = String(addressSearchInput?.value || "").trim();
+    selectedCoords = {
+      lat,
+      lng,
+      provider: "manual_pin",
+      query: query || `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+    };
+    if (formMeta) formMeta.textContent = `Pinned: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
   });
   googleAutocompleteService = new window.google.maps.places.AutocompleteService();
   googlePlacesService = new window.google.maps.places.PlacesService(googleMap);
@@ -406,12 +421,22 @@ async function init() {
   if (regionInput) regionInput.value = loc?.region || "";
   if (countryInput) countryInput.value = loc?.country || "";
   if (isBaseCheckbox) isBaseCheckbox.checked = loc?.is_base_location !== false;
+  if (addressSearchInput) {
+    const label = String(loc?.geocode_query || "").trim();
+    addressSearchInput.value = label || buildAddressQuery();
+  }
 
   ensureMap();
   const initialLat = toCoord(loc?.latitude);
   const initialLng = toCoord(loc?.longitude);
   if (initialLat !== null && initialLng !== null) {
     setMapPoint(initialLat, initialLng, 15);
+    selectedCoords = {
+      lat: initialLat,
+      lng: initialLng,
+      provider: "saved",
+      query: String(loc?.geocode_query || "").trim() || null,
+    };
   }
 
   const addressState = {
@@ -446,12 +471,19 @@ async function init() {
           try {
             const details = await fetchPlaceDetails(placeId, picked?.description || "");
             const parts = parseAddressComponents(details.components);
+            if (addressSearchInput) addressSearchInput.value = details.label || String(picked?.description || "");
             if (streetInput) streetInput.value = parts.street || "";
             if (cityInput) cityInput.value = parts.city || "";
             if (regionInput) regionInput.value = parts.region || "";
             if (countryInput) countryInput.value = parts.country || "";
             ensureMap();
             setMapPoint(details.lat, details.lng, 17);
+            selectedCoords = {
+              lat: details.lat,
+              lng: details.lng,
+              provider: "google_places",
+              query: details.label || String(picked?.description || ""),
+            };
             if (formMeta) formMeta.textContent = "Address selected (not saved yet).";
           } catch (err) {
             if (formMeta) formMeta.textContent = err?.message || String(err);
@@ -478,6 +510,13 @@ async function init() {
           if (!Number.isFinite(details?.lat) || !Number.isFinite(details?.lng)) return;
           ensureMap();
           setMapPoint(details.lat, details.lng, 15);
+          selectedCoords = {
+            lat: details.lat,
+            lng: details.lng,
+            provider: "google_geocode",
+            query: details.label || query,
+          };
+          if (addressSearchInput && details.label) addressSearchInput.value = details.label;
         } catch {
           // ignore preview failures; user can still save and/or use search box.
         }
@@ -632,6 +671,7 @@ async function init() {
     }
     saveBtn.disabled = true;
     try {
+      const hasSelected = selectedCoords && Number.isFinite(selectedCoords.lat) && Number.isFinite(selectedCoords.lng);
       const res = await fetch(`/api/locations/${encodeURIComponent(locationId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -643,6 +683,10 @@ async function init() {
           region: String(regionInput?.value || "").trim() || null,
           country: String(countryInput?.value || "").trim() || null,
           isBaseLocation: Boolean(isBaseCheckbox?.checked),
+          latitude: hasSelected ? selectedCoords.lat : null,
+          longitude: hasSelected ? selectedCoords.lng : null,
+          geocodeProvider: hasSelected ? (selectedCoords.provider || "manual") : null,
+          geocodeQuery: hasSelected ? (selectedCoords.query || null) : null,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -653,6 +697,16 @@ async function init() {
       if (savedLat !== null && savedLng !== null) {
         ensureMap();
         setMapPoint(savedLat, savedLng, 15);
+        selectedCoords = {
+          lat: savedLat,
+          lng: savedLng,
+          provider: data.location?.geocode_provider || selectedCoords?.provider || "saved",
+          query: data.location?.geocode_query || selectedCoords?.query || null,
+        };
+      }
+      if (addressSearchInput) {
+        const savedQuery = String(data.location?.geocode_query || "").trim();
+        addressSearchInput.value = savedQuery || buildAddressQuery();
       }
       if (formMeta) formMeta.textContent = "Saved.";
     } catch (err) {

@@ -2770,7 +2770,19 @@ app.put(
   "/api/locations/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { companyId, name, streetAddress, city, region, country, isBaseLocation } = req.body;
+    const {
+      companyId,
+      name,
+      streetAddress,
+      city,
+      region,
+      country,
+      isBaseLocation,
+      latitude,
+      longitude,
+      geocodeProvider,
+      geocodeQuery,
+    } = req.body;
     if (!companyId || !name) return res.status(400).json({ error: "companyId and name are required." });
     const baseFlag = isBaseLocation === undefined ? undefined : parseBoolean(isBaseLocation);
     if (isBaseLocation !== undefined && baseFlag === null) return res.status(400).json({ error: "isBaseLocation must be boolean." });
@@ -2796,6 +2808,19 @@ app.put(
       const query = buildLocationGeocodeQuery(location);
 
       let saved = location;
+      const hasManualCoords = Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude));
+      if (hasManualCoords) {
+        const updated = await setLocationGeocode({
+          companyId,
+          id: Number(location.id),
+          latitude: Number(latitude),
+          longitude: Number(longitude),
+          provider: geocodeProvider || "manual",
+          query: geocodeQuery || null,
+        });
+        if (updated) saved = updated;
+        return res.json({ location: saved });
+      }
       if (query && (addressChanged || coordsMissing)) {
         const geo = await geocodeWithNominatim(query);
         if (geo) {
