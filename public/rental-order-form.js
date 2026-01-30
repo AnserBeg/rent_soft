@@ -915,6 +915,8 @@ let sideAddressPicker = {
     autocompleteService: null,
     placesService: null,
     debounceTimer: null,
+    searchSeq: 0,
+    pickSeq: 0,
   },
   leaflet: {
     map: null,
@@ -1049,6 +1051,19 @@ function closeSideAddressPickerModal() {
   if (sideAddressPickerInput) sideAddressPickerInput.value = "";
   if (sideAddressPickerSuggestions) sideAddressPickerSuggestions.hidden = true;
   if (sideAddressPickerSuggestions) sideAddressPickerSuggestions.replaceChildren();
+  if (sideAddressPicker.google.debounceTimer) {
+    clearTimeout(sideAddressPicker.google.debounceTimer);
+    sideAddressPicker.google.debounceTimer = null;
+  }
+  sideAddressPicker.google.searchSeq = (sideAddressPicker.google.searchSeq || 0) + 1;
+  sideAddressPicker.google.pickSeq = (sideAddressPicker.google.pickSeq || 0) + 1;
+  if (sideAddressPicker.leaflet.debounceTimer) {
+    clearTimeout(sideAddressPicker.leaflet.debounceTimer);
+    sideAddressPicker.leaflet.debounceTimer = null;
+  }
+  try {
+    sideAddressPicker.leaflet.searchAbort?.abort?.();
+  } catch { }
   sideAddressPicker.selected = null;
 }
 
@@ -1451,16 +1466,23 @@ function initGoogleSideAddressPicker(center) {
           return;
         }
         if (sideAddressPicker.google.debounceTimer) clearTimeout(sideAddressPicker.google.debounceTimer);
+        const seq = (sideAddressPicker.google.searchSeq || 0) + 1;
+        sideAddressPicker.google.searchSeq = seq;
         sideAddressPicker.google.debounceTimer = setTimeout(async () => {
           try {
             const preds = await requestPredictions(q);
+            if (seq !== sideAddressPicker.google.searchSeq) return;
+            if (String(sideAddressPickerSearch.value || "").trim() !== q) return;
             renderSideAddressSuggestions(preds, async (p) => {
               hideSideAddressSuggestions();
               const placeId = p?.place_id;
               if (!placeId) return;
               const label = p?.description || "";
               try {
+                const pickSeq = (sideAddressPicker.google.pickSeq || 0) + 1;
+                sideAddressPicker.google.pickSeq = pickSeq;
                 const details = await fetchPlaceDetails(placeId, label);
+                if (pickSeq !== sideAddressPicker.google.pickSeq) return;
                 if (sideAddressPickerInput) sideAddressPickerInput.value = details.label;
                 if (sideAddressPickerSearch) sideAddressPickerSearch.value = details.label;
                 if (!sideAddressPicker.google.marker) {

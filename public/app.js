@@ -122,6 +122,8 @@ let currentLocationPicker = {
     autocompleteService: null,
     placesService: null,
     debounceTimer: null,
+    searchSeq: 0,
+    pickSeq: 0,
   },
   leaflet: {
     map: null,
@@ -996,6 +998,19 @@ function closeCurrentLocationPickerModal() {
   if (currentLocationPickerName) currentLocationPickerName.value = "";
   if (currentLocationPickerSuggestions) currentLocationPickerSuggestions.hidden = true;
   if (currentLocationPickerSuggestions) currentLocationPickerSuggestions.replaceChildren();
+  if (currentLocationPicker.google.debounceTimer) {
+    clearTimeout(currentLocationPicker.google.debounceTimer);
+    currentLocationPicker.google.debounceTimer = null;
+  }
+  currentLocationPicker.google.searchSeq = (currentLocationPicker.google.searchSeq || 0) + 1;
+  currentLocationPicker.google.pickSeq = (currentLocationPicker.google.pickSeq || 0) + 1;
+  if (currentLocationPicker.leaflet.debounceTimer) {
+    clearTimeout(currentLocationPicker.leaflet.debounceTimer);
+    currentLocationPicker.leaflet.debounceTimer = null;
+  }
+  try {
+    currentLocationPicker.leaflet.searchAbort?.abort?.();
+  } catch { }
   currentLocationPicker.selected = null;
 }
 
@@ -1346,16 +1361,23 @@ function initGooglePicker(center) {
           return;
         }
         if (currentLocationPicker.google.debounceTimer) clearTimeout(currentLocationPicker.google.debounceTimer);
+        const seq = (currentLocationPicker.google.searchSeq || 0) + 1;
+        currentLocationPicker.google.searchSeq = seq;
         currentLocationPicker.google.debounceTimer = setTimeout(async () => {
           try {
             const preds = await requestPredictions(q);
+            if (seq !== currentLocationPicker.google.searchSeq) return;
+            if (String(currentLocationPickerSearch.value || "").trim() !== q) return;
             renderPickerSuggestions(preds, async (p) => {
               hidePickerSuggestions();
               const placeId = p?.place_id;
               if (!placeId) return;
               const label = p?.description || "";
               try {
+                const pickSeq = (currentLocationPicker.google.pickSeq || 0) + 1;
+                currentLocationPicker.google.pickSeq = pickSeq;
                 const details = await fetchPlaceDetails(placeId, label);
+                if (pickSeq !== currentLocationPicker.google.pickSeq) return;
                 if (currentLocationPickerName && !String(currentLocationPickerName.value || "").trim()) {
                   currentLocationPickerName.value = ensureUniqueLocationName(details.label);
                 }

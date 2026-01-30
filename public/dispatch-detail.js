@@ -59,6 +59,8 @@ let siteAddressPicker = {
     autocompleteService: null,
     placesService: null,
     debounceTimer: null,
+    searchSeq: 0,
+    pickSeq: 0,
   },
   leaflet: {
     map: null,
@@ -274,6 +276,19 @@ function closeSiteAddressPickerModal() {
   if (siteAddressPickerInput) siteAddressPickerInput.value = "";
   if (siteAddressPickerSuggestions) siteAddressPickerSuggestions.hidden = true;
   if (siteAddressPickerSuggestions) siteAddressPickerSuggestions.replaceChildren();
+  if (siteAddressPicker.google.debounceTimer) {
+    clearTimeout(siteAddressPicker.google.debounceTimer);
+    siteAddressPicker.google.debounceTimer = null;
+  }
+  siteAddressPicker.google.searchSeq = (siteAddressPicker.google.searchSeq || 0) + 1;
+  siteAddressPicker.google.pickSeq = (siteAddressPicker.google.pickSeq || 0) + 1;
+  if (siteAddressPicker.leaflet.debounceTimer) {
+    clearTimeout(siteAddressPicker.leaflet.debounceTimer);
+    siteAddressPicker.leaflet.debounceTimer = null;
+  }
+  try {
+    siteAddressPicker.leaflet.searchAbort?.abort?.();
+  } catch { }
   siteAddressPicker.selected = null;
 }
 
@@ -631,16 +646,23 @@ function initGoogleSiteAddressPicker(center) {
           return;
         }
         if (siteAddressPicker.google.debounceTimer) clearTimeout(siteAddressPicker.google.debounceTimer);
+        const seq = (siteAddressPicker.google.searchSeq || 0) + 1;
+        siteAddressPicker.google.searchSeq = seq;
         siteAddressPicker.google.debounceTimer = setTimeout(async () => {
           try {
             const preds = await requestPredictions(q);
+            if (seq !== siteAddressPicker.google.searchSeq) return;
+            if (String(siteAddressPickerSearch.value || "").trim() !== q) return;
             renderSiteAddressSuggestions(preds, async (p) => {
               hideSiteAddressSuggestions();
               const placeId = p?.place_id;
               if (!placeId) return;
               const label = p?.description || "";
               try {
+                const pickSeq = (siteAddressPicker.google.pickSeq || 0) + 1;
+                siteAddressPicker.google.pickSeq = pickSeq;
                 const details = await fetchPlaceDetails(placeId, label);
+                if (pickSeq !== siteAddressPicker.google.pickSeq) return;
                 if (siteAddressPickerInput) siteAddressPickerInput.value = details.label;
                 if (siteAddressPickerSearch) siteAddressPickerSearch.value = details.label;
                 if (!siteAddressPicker.google.marker) {
