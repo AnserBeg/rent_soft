@@ -2442,16 +2442,21 @@ async function syncLineItemTypesForEquipment({ companyId, equipmentId, typeId })
   if (typeId === null || typeId === undefined) return 0;
   const res = await pool.query(
     `
+    WITH target AS (
+      SELECT li.id
+        FROM rental_order_line_items li
+        JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
+        JOIN rental_orders ro ON ro.id = li.rental_order_id
+       WHERE liv.equipment_id = $2
+         AND ro.company_id = $3
+         AND ro.status <> 'closed'
+         AND (SELECT COUNT(*) FROM rental_order_line_inventory liv2 WHERE liv2.line_item_id = li.id) = 1
+         AND li.type_id IS DISTINCT FROM $1
+    )
     UPDATE rental_order_line_items li
        SET type_id = $1
-      FROM rental_order_line_inventory liv
-      JOIN rental_orders ro ON ro.id = li.rental_order_id
-     WHERE liv.line_item_id = li.id
-       AND liv.equipment_id = $2
-       AND ro.company_id = $3
-       AND ro.status <> 'closed'
-       AND (SELECT COUNT(*) FROM rental_order_line_inventory liv2 WHERE liv2.line_item_id = li.id) = 1
-       AND li.type_id IS DISTINCT FROM $1
+      FROM target
+     WHERE li.id = target.id
     `,
     [typeId, equipmentId, companyId]
   );

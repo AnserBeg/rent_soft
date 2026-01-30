@@ -61,15 +61,20 @@ async function run() {
 
   const updateRes = await pool.query(
     `
+    WITH target AS (
+      SELECT li.id, e.type_id
+        FROM rental_order_line_items li
+        JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
+        JOIN rental_orders ro ON ro.id = li.rental_order_id
+        JOIN equipment e ON e.id = liv.equipment_id
+       WHERE ro.status <> 'closed'
+         AND (SELECT COUNT(*) FROM rental_order_line_inventory liv2 WHERE liv2.line_item_id = li.id) = 1
+         AND li.type_id IS DISTINCT FROM e.type_id
+    )
     UPDATE rental_order_line_items li
-       SET type_id = e.type_id
-      FROM rental_order_line_inventory liv
-      JOIN rental_orders ro ON ro.id = li.rental_order_id
-      JOIN equipment e ON e.id = liv.equipment_id
-     WHERE liv.line_item_id = li.id
-       AND ro.status <> 'closed'
-       AND (SELECT COUNT(*) FROM rental_order_line_inventory liv2 WHERE liv2.line_item_id = li.id) = 1
-       AND li.type_id IS DISTINCT FROM e.type_id
+       SET type_id = target.type_id
+      FROM target
+     WHERE li.id = target.id
     `
   );
 
