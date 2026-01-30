@@ -1033,6 +1033,12 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+function toFiniteCoordinate(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
 async function getPublicConfig() {
   const res = await fetch("/api/public-config");
   const data = await res.json().catch(() => ({}));
@@ -1216,8 +1222,8 @@ function setSideAddressPickerMapStyle(style) {
 }
 
 function applySideAddressPickerDraftSelection() {
-  const lat = Number(draft.siteAddressLat);
-  const lng = Number(draft.siteAddressLng);
+  const lat = toFiniteCoordinate(draft.siteAddressLat);
+  const lng = toFiniteCoordinate(draft.siteAddressLng);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
   const label = String(draft.siteAddressQuery || draft.siteAddress || "").trim();
 
@@ -4138,8 +4144,8 @@ function loadDraftFromStorage() {
         emergencyContacts: Array.isArray(stored.emergencyContacts) ? stored.emergencyContacts : [],
         siteContacts: Array.isArray(stored.siteContacts) ? stored.siteContacts : [],
         siteAddress: typeof stored.siteAddress === "string" ? stored.siteAddress : "",
-        siteAddressLat: Number.isFinite(Number(stored.siteAddressLat)) ? Number(stored.siteAddressLat) : null,
-        siteAddressLng: Number.isFinite(Number(stored.siteAddressLng)) ? Number(stored.siteAddressLng) : null,
+        siteAddressLat: toFiniteCoordinate(stored.siteAddressLat),
+        siteAddressLng: toFiniteCoordinate(stored.siteAddressLng),
         siteAddressQuery: typeof stored.siteAddressQuery === "string" ? stored.siteAddressQuery : "",
         criticalAreas: typeof stored.criticalAreas === "string" ? stored.criticalAreas : "",
         generalNotes: typeof stored.generalNotes === "string" ? stored.generalNotes : "",
