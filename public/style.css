@@ -3432,18 +3432,20 @@ a.ghost {
 }
 
 .table-row .table-link {
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   background: #ffffff;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  justify-content: flex-start;
+  text-align: left;
   transition: background 0.12s ease, box-shadow 0.12s ease, transform 0.08s ease;
 }
 
 .table-row .table-link:hover {
   background: #f8fafc;
-  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
 }
 
 .table-row .table-link:focus-visible {
