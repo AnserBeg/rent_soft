@@ -860,7 +860,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }, 800);
   });
 
-  form?.addEventListener("submit", async (e) => {
+    form?.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (meta) meta.textContent = "";
     if (submit) submit.disabled = true;
@@ -883,16 +883,6 @@ document.addEventListener("DOMContentLoaded", async () => {
           geocodeQuery: hasSelected ? (addSelected.label || null) : null,
         }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Unable to add location");
-      hideModal();
-      await loadLocations();
-    } catch (err) {
-      if (meta) meta.textContent = err.message || String(err);
-    } finally {
-      if (submit) submit.disabled = false;
-    }
-  });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Unable to add location");
       hideModal();
@@ -973,6 +963,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (pageMeta) pageMeta.textContent = err.message || String(err);
   });
 });
+
+
 
 
 
