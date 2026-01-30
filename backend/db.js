@@ -860,6 +860,9 @@ async function ensureTables() {
         pickup_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
         dropoff_address TEXT,
         site_address TEXT,
+        site_address_lat DOUBLE PRECISION,
+        site_address_lng DOUBLE PRECISION,
+        site_address_query TEXT,
         logistics_instructions TEXT,
         special_instructions TEXT,
         critical_areas TEXT,
@@ -886,6 +889,9 @@ async function ensureTables() {
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS pickup_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS dropoff_address TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_address TEXT;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_address_lat DOUBLE PRECISION;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_address_lng DOUBLE PRECISION;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_address_query TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS logistics_instructions TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS special_instructions TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS critical_areas TEXT;`);
@@ -7838,6 +7844,9 @@ async function createRentalOrder({
   pickupLocationId,
   dropoffAddress,
   siteAddress,
+  siteAddressLat,
+  siteAddressLng,
+  siteAddressQuery,
   logisticsInstructions,
   specialInstructions,
   criticalAreas,
@@ -7898,9 +7907,10 @@ async function createRentalOrder({
       `
       INSERT INTO rental_orders
         (company_id, quote_number, ro_number, external_contract_number, legacy_data, customer_id, customer_po, salesperson_id, fulfillment_method, status,
-         terms, general_notes, pickup_location_id, dropoff_address, site_address, logistics_instructions, special_instructions, critical_areas,
+         terms, general_notes, pickup_location_id, dropoff_address, site_address, site_address_lat, site_address_lng, site_address_query,
+         logistics_instructions, special_instructions, critical_areas,
          notification_circumstances, coverage_hours, emergency_contacts, site_contacts, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20::jsonb,$21::jsonb,$22::jsonb,COALESCE($23::timestamptz, NOW()),COALESCE($23::timestamptz, NOW()))
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23::jsonb,$24::jsonb,$25::jsonb,COALESCE($26::timestamptz, NOW()),COALESCE($26::timestamptz, NOW()))
       RETURNING id, quote_number, ro_number
       `,
       [
@@ -7919,6 +7929,9 @@ async function createRentalOrder({
         pickupLocationId || null,
         fulfillmentMethod === "dropoff" ? (dropoffAddress || null) : null,
         siteAddress || null,
+        Number.isFinite(Number(siteAddressLat)) ? Number(siteAddressLat) : null,
+        Number.isFinite(Number(siteAddressLng)) ? Number(siteAddressLng) : null,
+        siteAddressQuery || null,
         logisticsInstructions || null,
         specialInstructions || null,
         criticalAreas || null,
@@ -9475,6 +9488,9 @@ async function updateRentalOrder({
   pickupLocationId,
   dropoffAddress,
   siteAddress,
+  siteAddressLat,
+  siteAddressLng,
+  siteAddressQuery,
   logisticsInstructions,
   specialInstructions,
   criticalAreas,
@@ -9563,15 +9579,18 @@ async function updateRentalOrder({
              pickup_location_id = $10,
              dropoff_address = $11,
              site_address = $12,
-             logistics_instructions = $13,
-             special_instructions = $14,
-             critical_areas = $15,
-             notification_circumstances = $16::jsonb,
-             coverage_hours = $17::jsonb,
-             emergency_contacts = $18::jsonb,
-             site_contacts = $19::jsonb,
+             site_address_lat = $13,
+             site_address_lng = $14,
+             site_address_query = $15,
+             logistics_instructions = $16,
+             special_instructions = $17,
+             critical_areas = $18,
+             notification_circumstances = $19::jsonb,
+             coverage_hours = $20::jsonb,
+             emergency_contacts = $21::jsonb,
+             site_contacts = $22::jsonb,
              updated_at = NOW()
-       WHERE id = $20 AND company_id = $21
+       WHERE id = $23 AND company_id = $24
        RETURNING id, quote_number, ro_number
       `,
       [
@@ -9587,6 +9606,9 @@ async function updateRentalOrder({
         pickupLocationId || null,
         fulfillmentMethod === "dropoff" ? (dropoffAddress || null) : null,
         siteAddress || null,
+        Number.isFinite(Number(siteAddressLat)) ? Number(siteAddressLat) : null,
+        Number.isFinite(Number(siteAddressLng)) ? Number(siteAddressLng) : null,
+        siteAddressQuery || null,
         logisticsInstructions || null,
         specialInstructions || null,
         criticalAreas || null,
@@ -9903,16 +9925,26 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
   };
 }
 
-async function updateRentalOrderSiteAddress({ companyId, orderId, siteAddress }) {
+async function updateRentalOrderSiteAddress({ companyId, orderId, siteAddress, siteAddressLat, siteAddressLng, siteAddressQuery }) {
   const res = await pool.query(
     `
     UPDATE rental_orders
        SET site_address = $1,
+           site_address_lat = $2,
+           site_address_lng = $3,
+           site_address_query = $4,
            updated_at = NOW()
-     WHERE id = $2 AND company_id = $3
-     RETURNING id, site_address, updated_at
+     WHERE id = $5 AND company_id = $6
+     RETURNING id, site_address, site_address_lat, site_address_lng, site_address_query, updated_at
     `,
-    [siteAddress || null, orderId, companyId]
+    [
+      siteAddress || null,
+      Number.isFinite(Number(siteAddressLat)) ? Number(siteAddressLat) : null,
+      Number.isFinite(Number(siteAddressLng)) ? Number(siteAddressLng) : null,
+      siteAddressQuery || null,
+      orderId,
+      companyId,
+    ]
   );
   return res.rows[0] || null;
 }

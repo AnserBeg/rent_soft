@@ -789,15 +789,35 @@ async function saveSiteAddressFromPicker() {
     const res = await fetch(`/api/rental-orders/${orderIdValue}/site-address`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId: activeCompanyId, siteAddress }),
+      body: JSON.stringify({
+        companyId: activeCompanyId,
+        siteAddress,
+        siteAddressLat: siteAddressPicker.selected?.lat ?? null,
+        siteAddressLng: siteAddressPicker.selected?.lng ?? null,
+        siteAddressQuery: siteAddressPicker.selected?.query ?? null,
+      }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to update site address.");
     const updatedAddress = data?.order?.site_address ?? siteAddress;
-    if (currentOrderDetail?.order) currentOrderDetail.order.site_address = updatedAddress;
+    if (currentOrderDetail?.order) {
+      currentOrderDetail.order.site_address = updatedAddress;
+      if (data?.order) {
+        currentOrderDetail.order.site_address_lat = data.order.site_address_lat ?? currentOrderDetail.order.site_address_lat;
+        currentOrderDetail.order.site_address_lng = data.order.site_address_lng ?? currentOrderDetail.order.site_address_lng;
+        currentOrderDetail.order.site_address_query = data.order.site_address_query ?? currentOrderDetail.order.site_address_query;
+      }
+    }
     if (orderCache.has(String(orderIdValue))) {
       const cached = orderCache.get(String(orderIdValue));
-      if (cached?.order) cached.order.site_address = updatedAddress;
+      if (cached?.order) {
+        cached.order.site_address = updatedAddress;
+        if (data?.order) {
+          cached.order.site_address_lat = data.order.site_address_lat ?? cached.order.site_address_lat;
+          cached.order.site_address_lng = data.order.site_address_lng ?? cached.order.site_address_lng;
+          cached.order.site_address_query = data.order.site_address_query ?? cached.order.site_address_query;
+        }
+      }
     }
     renderOrderDetail(selectedUnit, currentOrderDetail);
     if (siteAddressStatus) siteAddressStatus.textContent = `Site address updated at ${new Date().toLocaleTimeString()}`;

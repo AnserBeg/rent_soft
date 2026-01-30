@@ -4416,6 +4416,11 @@ async function loadOrder() {
   draft.terms = o.terms || "";
   draft.specialInstructions = o.special_instructions || "";
   draft.siteAddress = o.site_address || o.siteAddress || "";
+  draft.siteAddressLat = toFiniteCoordinate(o.site_address_lat ?? o.siteAddressLat);
+  draft.siteAddressLng = toFiniteCoordinate(o.site_address_lng ?? o.siteAddressLng);
+  draft.siteAddressQuery = typeof (o.site_address_query ?? o.siteAddressQuery) === "string"
+    ? String(o.site_address_query ?? o.siteAddressQuery)
+    : "";
   draft.criticalAreas = o.critical_areas || o.criticalAreas || "";
   draft.generalNotes = o.general_notes || o.generalNotes || "";
   const rawNotificationCircumstances = o.notification_circumstances || o.notificationCircumstances || [];
@@ -5087,6 +5092,9 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     terms: draft.terms || null,
     specialInstructions: draft.specialInstructions || null,
     siteAddress: draft.siteAddress || null,
+    siteAddressLat: toFiniteCoordinate(draft.siteAddressLat),
+    siteAddressLng: toFiniteCoordinate(draft.siteAddressLng),
+    siteAddressQuery: draft.siteAddressQuery || null,
     criticalAreas: draft.criticalAreas || null,
     generalNotes: draft.generalNotes || null,
     coverageHours: draft.coverageHours || {},

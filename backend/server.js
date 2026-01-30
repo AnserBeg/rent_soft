@@ -5070,6 +5070,9 @@ app.post(
       pickupLocationId,
       dropoffAddress,
       siteAddress,
+      siteAddressLat,
+      siteAddressLng,
+      siteAddressQuery,
       logisticsInstructions,
       specialInstructions,
       criticalAreas,
@@ -5102,6 +5105,9 @@ app.post(
         pickupLocationId,
         dropoffAddress,
         siteAddress,
+        siteAddressLat,
+        siteAddressLng,
+        siteAddressQuery,
         logisticsInstructions,
         specialInstructions,
         criticalAreas,
@@ -5172,6 +5178,9 @@ app.put(
       pickupLocationId,
       dropoffAddress,
       siteAddress,
+      siteAddressLat,
+      siteAddressLng,
+      siteAddressQuery,
       logisticsInstructions,
       specialInstructions,
       criticalAreas,
@@ -5205,6 +5214,9 @@ app.put(
         pickupLocationId,
         dropoffAddress,
         siteAddress,
+        siteAddressLat,
+        siteAddressLng,
+        siteAddressQuery,
         logisticsInstructions,
         specialInstructions,
         criticalAreas,
@@ -5288,12 +5300,15 @@ app.put(
   "/api/rental-orders/:id/site-address",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { companyId, siteAddress } = req.body || {};
+    const { companyId, siteAddress, siteAddressLat, siteAddressLng, siteAddressQuery } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     const updated = await updateRentalOrderSiteAddress({
       companyId: Number(companyId),
       orderId: Number(id),
       siteAddress,
+      siteAddressLat,
+      siteAddressLng,
+      siteAddressQuery,
     });
     if (!updated) return res.status(404).json({ error: "Rental order not found" });
     res.json({ order: updated });
