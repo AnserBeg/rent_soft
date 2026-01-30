@@ -12233,9 +12233,18 @@ async function listQboDocuments({ companyId, assigned = null, search = null, lim
   const res = await pool.query(
     `
     SELECT d.*,
-           ro.ro_number
+           ro.ro_number,
+           COALESCE(ro.customer_id, qbo_customer.id) AS customer_id
       FROM qbo_documents d
  LEFT JOIN rental_orders ro ON ro.id = d.rental_order_id
+ LEFT JOIN LATERAL (
+           SELECT c.id
+             FROM customers c
+            WHERE c.company_id = d.company_id
+              AND c.qbo_customer_id = d.customer_ref
+            ORDER BY c.id
+            LIMIT 1
+       ) qbo_customer ON true
      WHERE ${filters.join(" AND ")}
      ORDER BY d.txn_date DESC NULLS LAST, d.created_at DESC
      LIMIT $${params.length - 1} OFFSET $${params.length}
@@ -12253,9 +12262,18 @@ async function getQboDocument({ companyId, id } = {}) {
   const res = await pool.query(
     `
     SELECT d.*,
-           ro.ro_number
+           ro.ro_number,
+           COALESCE(ro.customer_id, qbo_customer.id) AS customer_id
       FROM qbo_documents d
  LEFT JOIN rental_orders ro ON ro.id = d.rental_order_id
+ LEFT JOIN LATERAL (
+           SELECT c.id
+             FROM customers c
+            WHERE c.company_id = d.company_id
+              AND c.qbo_customer_id = d.customer_ref
+            ORDER BY c.id
+            LIMIT 1
+       ) qbo_customer ON true
      WHERE d.company_id = $1 AND d.id = $2
      LIMIT 1
     `,

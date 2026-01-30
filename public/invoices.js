@@ -93,17 +93,26 @@ function renderTable(rows) {
   rows.forEach((doc) => {
     const row = document.createElement("div");
     row.className = "table-row";
+    const customerName = customerLabel(doc);
+    const customerIdValue = doc.customer_id ?? doc.customerId ?? doc.customerID;
+    const customerId = Number(customerIdValue);
+    const hasCustomerId = Number.isFinite(customerId) && customerId > 0;
+    const customerCell = hasCustomerId
+      ? `<a class="ghost small table-link" href="customers-form.html?id=${encodeURIComponent(String(customerId))}" title="Open customer">${customerName}</a>`
+      : customerName === "--"
+        ? `<span class="hint">${customerName}</span>`
+        : customerName;
     const roLabel = doc.ro_number || (doc.rental_order_id ? `RO #${doc.rental_order_id}` : "Unassigned");
     const roLink =
       doc.rental_order_id
-        ? `<a class="ghost small" href="rental-order-form.html?id=${encodeURIComponent(String(doc.rental_order_id))}">${roLabel}</a>`
+        ? `<a class="ghost small table-link" href="rental-order-form.html?id=${encodeURIComponent(String(doc.rental_order_id))}" title="Open rental order">${roLabel}</a>`
         : `<span class="hint">${roLabel}</span>`;
     const detailLink =
       doc.id
         ? `<a class="ghost small" href="invoice-detail.html?id=${encodeURIComponent(String(doc.id))}&companyId=${encodeURIComponent(String(activeCompanyId || ""))}">View</a>`
         : `<span class="hint">--</span>`;
     row.innerHTML = `
-      <span>${customerLabel(doc)}</span>
+      <span>${customerCell}</span>
       <span>${doc.doc_number || doc.qbo_entity_id || "--"}</span>
       <span>${roLink}</span>
       <span>${docStatus(doc)}</span>
