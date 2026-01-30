@@ -532,8 +532,12 @@ function renderUnitsMap(rows) {
     mapMarkers.push(marker);
   });
 
-  if (hasBounds) {
-    googleMap.fitBounds(bounds, { padding: 60, maxZoom: 16 });
+      if (hasBounds) {
+    googleMap.fitBounds(bounds, { padding: 120, maxZoom: 16 });
+    setTimeout(() => {
+      const z = googleMap.getZoom();
+      if (Number.isFinite(z)) googleMap.setZoom(Math.max(z - 2, 2));
+    }, 0);
   } else {
     googleMap.setCenter({ lat: 20, lng: 0 });
     googleMap.setZoom(2);
@@ -594,8 +598,12 @@ function renderLocationsMap(rows) {
     mapMarkers.push(marker);
   });
 
-  if (hasBounds) {
-    googleMap.fitBounds(bounds, { padding: 60, maxZoom: 14 });
+      if (hasBounds) {
+    googleMap.fitBounds(bounds, { padding: 120, maxZoom: 14 });
+    setTimeout(() => {
+      const z = googleMap.getZoom();
+      if (Number.isFinite(z)) googleMap.setZoom(Math.max(z - 2, 2));
+    }, 0);
   } else {
     googleMap.setCenter({ lat: 20, lng: 0 });
     googleMap.setZoom(2);
@@ -963,6 +971,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (pageMeta) pageMeta.textContent = err.message || String(err);
   });
 });
+
+
+
+
 
 
 
