@@ -15,6 +15,7 @@ const { mimeFromExtension, readImageAsInlinePart, generateDamageReportMarkdown }
 const { editImageBufferWithGemini, writeCompanyUpload } = require("./aiImageEdit");
 
 const {
+  pool,
   ensureTables,
   createCompanyWithUser,
   createUser,
@@ -1161,6 +1162,675 @@ async function ensureDropoffLocation({ companyId, dropoffAddress }) {
     return updated || created;
   }
   return created;
+}
+
+function parseDelimitedRows(text, delimiter) {
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+
+  const pushField = () => {
+    row.push(field);
+    field = "";
+  };
+
+  const pushRow = () => {
+    rows.push(row);
+    row = [];
+  };
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+
+    if (ch === '"') {
+      const next = text[i + 1];
+      if (inQuotes && next === '"') {
+        field += '"';
+        i += 1;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (!inQuotes && ch === delimiter) {
+      pushField();
+      continue;
+    }
+
+    if (!inQuotes && (ch === "\n" || ch === "\r")) {
+      if (ch === "\r" && text[i + 1] === "\n") i += 1;
+      pushField();
+      pushRow();
+      continue;
+    }
+
+    field += ch;
+  }
+
+  if (field.length > 0 || row.length > 0) {
+    pushField();
+    pushRow();
+  }
+
+  return rows;
+}
+
+function normalizeHeaderKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function normalizeModelKey(value) {
+  return normalizeWhitespace(value).toLowerCase();
+}
+
+function normalizeTimeValue(raw, warnings) {
+  const match = String(raw || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute < 0 || minute > 59) return null;
+  if (hour === 24 && minute === 0) {
+    if (warnings) warnings.push('Converted "24:00" to "23:59" for time inputs.');
+    return "23:59";
+  }
+  if (hour < 0 || hour > 23) return null;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function parseCoverageHours(raw, warnings) {
+  const value = String(raw || "").trim();
+  if (!value) return {};
+  const cleaned = value.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) return {};
+  const dayMap = {
+    mon: "mon",
+    monday: "mon",
+    tue: "tue",
+    tues: "tue",
+    tuesday: "tue",
+    wed: "wed",
+    weds: "wed",
+    wednesday: "wed",
+    thu: "thu",
+    thur: "thu",
+    thurs: "thu",
+    thursday: "thu",
+    fri: "fri",
+    friday: "fri",
+    sat: "sat",
+    saturday: "sat",
+    sun: "sun",
+    sunday: "sun",
+  };
+  const dayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+  const coverage = {};
+  const segments = cleaned.split(";").map((seg) => seg.trim()).filter(Boolean);
+
+  for (const segment of segments) {
+    const match = segment.match(
+      /(mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)(?:\s*-\s*(mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:rs(?:day)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?))?\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/i
+    );
+    if (!match) continue;
+    const startDay = dayMap[match[1].toLowerCase()];
+    const endDay = match[2] ? dayMap[match[2].toLowerCase()] : startDay;
+    const startTime = normalizeTimeValue(match[3], warnings);
+    const endTime = normalizeTimeValue(match[4], warnings);
+    if (!startDay || !endDay || !startTime || !endTime) continue;
+
+    const startIdx = dayOrder.indexOf(startDay);
+    const endIdx = dayOrder.indexOf(endDay);
+    if (startIdx === -1 || endIdx === -1) continue;
+
+    const days = [];
+    if (startIdx <= endIdx) {
+      for (let i = startIdx; i <= endIdx; i += 1) days.push(dayOrder[i]);
+    } else {
+      for (let i = startIdx; i < dayOrder.length; i += 1) days.push(dayOrder[i]);
+      for (let i = 0; i <= endIdx; i += 1) days.push(dayOrder[i]);
+    }
+    days.forEach((day) => {
+      coverage[day] = { start: startTime, end: endTime };
+    });
+  }
+
+  return coverage;
+}
+
+function extractContactBlocks(raw) {
+  const text = String(raw || "");
+  if (!text.includes("[") || !text.includes("]")) return { contacts: [], remainder: text.trim() };
+  const contacts = [];
+  let remainder = text;
+  const matches = [...text.matchAll(/\[([^\]]+)\]/g)];
+  matches.forEach((match) => {
+    const content = match[1] || "";
+    if (!content.includes(";")) return;
+    const parts = content.split(";").map((v) => normalizeWhitespace(v));
+    const name = parts[0] || "";
+    const email = parts[1] || "";
+    const phone = parts[2] || "";
+    if (!name && !email && !phone) return;
+    contacts.push({ name, email, phone });
+    remainder = remainder.replace(match[0], " ");
+  });
+  remainder = remainder.replace(/[\s,;]+/g, " ").trim();
+  return { contacts, remainder };
+}
+
+function contactKey(entry) {
+  return [entry?.name, entry?.email, entry?.phone].map((v) => normalizeWhitespace(v).toLowerCase()).join("|");
+}
+
+function parseContactList(raw) {
+  const extracted = extractContactBlocks(raw);
+  if (extracted.contacts.length) return extracted;
+  const text = String(raw || "").trim();
+  if (!text.includes(";")) return { contacts: [], remainder: text };
+  const parts = text.split(";").map((v) => normalizeWhitespace(v));
+  const contact = {
+    name: parts[0] || "",
+    email: parts[1] || "",
+    phone: parts[2] || "",
+  };
+  if (!contact.name && !contact.email && !contact.phone) return { contacts: [], remainder: text };
+  return { contacts: [contact], remainder: "" };
+}
+
+function parseLatLngCandidate(value) {
+  const match = String(value || "")
+    .trim()
+    .match(/(-?\d{1,3}(?:\.\d+)?)[,\s]+(-?\d{1,3}(?:\.\d+)?)/);
+  if (!match) return null;
+  const lat = Number(match[1]);
+  const lng = Number(match[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return { lat, lng };
+}
+
+function extractLatLngFromMapsUrl(rawUrl) {
+  if (!rawUrl) return null;
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const href = url.href;
+  const atMatch = href.match(/@(-?\d{1,3}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)/);
+  if (atMatch) {
+    return parseLatLngCandidate(`${atMatch[1]},${atMatch[2]}`);
+  }
+  const dMatch = href.match(/!3d(-?\d{1,3}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/);
+  if (dMatch) {
+    return parseLatLngCandidate(`${dMatch[1]},${dMatch[2]}`);
+  }
+  const paramCandidates = ["q", "query", "ll", "center"];
+  for (const key of paramCandidates) {
+    const val = url.searchParams.get(key);
+    if (!val) continue;
+    const coords = parseLatLngCandidate(val);
+    if (coords) return coords;
+  }
+  return null;
+}
+
+function extractMapsLabelFromUrl(rawUrl) {
+  if (!rawUrl) return "";
+  try {
+    const url = new URL(rawUrl);
+    const parts = url.pathname.split("/").filter(Boolean);
+    const placeIdx = parts.findIndex((p) => p.toLowerCase() === "place");
+    if (placeIdx !== -1 && parts[placeIdx + 1]) {
+      return decodeURIComponent(parts[placeIdx + 1]).replace(/\+/g, " ");
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+async function resolveMapsUrl(rawUrl) {
+  const url = String(rawUrl || "").trim();
+  if (!/^https?:\/\//i.test(url)) return { resolved: url };
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { resolved: url };
+  }
+  const host = parsed.hostname.toLowerCase();
+  const isShort =
+    host.endsWith("maps.app.goo.gl") ||
+    host.endsWith("goo.gl") ||
+    (host.endsWith("google.com") && parsed.pathname.startsWith("/maps") && parsed.pathname.includes("/short"));
+  if (!isShort) return { resolved: url };
+  try {
+    const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(8000) });
+    res.body?.cancel?.();
+    return { resolved: res.url || url };
+  } catch {
+    return { resolved: url, error: "Unable to resolve short maps URL." };
+  }
+}
+
+async function resolveMapPin(rawValue, warnings) {
+  const raw = String(rawValue || "").trim();
+  if (!raw) return null;
+  const direct = parseLatLngCandidate(raw);
+  if (direct) return { ...direct, provider: "manual", query: raw, label: raw };
+
+  const isUrl = /^https?:\/\//i.test(raw);
+  const target = isUrl ? (await resolveMapsUrl(raw)).resolved : raw;
+  const coords = extractLatLngFromMapsUrl(target);
+  if (coords) {
+    return { ...coords, provider: "maps_url", query: target, label: extractMapsLabelFromUrl(target) || raw };
+  }
+  if (isUrl) {
+    if (warnings) warnings.push("Maps URL did not include coordinates; using geocode fallback if possible.");
+  }
+  let fallbackQuery = target;
+  if (isUrl) {
+    try {
+      const parsed = new URL(target);
+      const q = parsed.searchParams.get("q") || parsed.searchParams.get("query");
+      fallbackQuery = q || "";
+    } catch {
+      fallbackQuery = "";
+    }
+  }
+  if (!fallbackQuery) return null;
+  const geo = await geocodeWithNominatim(fallbackQuery);
+  if (geo?.latitude && geo?.longitude) {
+    return { lat: geo.latitude, lng: geo.longitude, provider: geo.provider, query: geo.query, label: fallbackQuery };
+  }
+  return null;
+}
+
+function findLocationByCoords(locations, lat, lng) {
+  const tol = 1e-6;
+  return (locations || []).find((loc) => {
+    const lLat = Number(loc?.latitude);
+    const lLng = Number(loc?.longitude);
+    if (!Number.isFinite(lLat) || !Number.isFinite(lLng)) return false;
+    return Math.abs(lLat - lat) <= tol && Math.abs(lLng - lng) <= tol;
+  });
+}
+
+async function ensureCurrentLocationFromMap({ companyId, modelName, mapPin, locationsCache, existingNames }) {
+  if (!mapPin || !Number.isFinite(mapPin.lat) || !Number.isFinite(mapPin.lng)) return { location: null, created: false };
+  const existing = findLocationByCoords(locationsCache, mapPin.lat, mapPin.lng);
+  if (existing?.id) return { location: existing, created: false };
+
+  const baseLabel = normalizeWhitespace(mapPin.label || modelName || "Pinned location");
+  const trimmed = baseLabel.length > 64 ? `${baseLabel.slice(0, 61)}...` : baseLabel;
+  const name = buildUniqueLocationName(existingNames, `Current - ${trimmed}`);
+  const created = await createLocation({
+    companyId,
+    name,
+    streetAddress: null,
+    city: null,
+    region: null,
+    country: null,
+    isBaseLocation: false,
+  });
+  if (!created?.id) return { location: null, created: false };
+  const updated = await setLocationGeocode({
+    companyId,
+    id: Number(created.id),
+    latitude: mapPin.lat,
+    longitude: mapPin.lng,
+    provider: mapPin.provider || "maps_url",
+    query: mapPin.query || null,
+  });
+  const finalLoc = updated || created;
+  locationsCache.push(finalLoc);
+  existingNames.add(String(finalLoc.name || ""));
+  return { location: finalLoc, created: true };
+}
+
+async function importRentalOrderRentalInfoFromText({ companyId, text }) {
+  const result = {
+    rowsTotal: 0,
+    rowsParsed: 0,
+    rowsSkippedMissingModel: 0,
+    assetsMatched: 0,
+    assetsMissing: 0,
+    assetsNotOut: 0,
+    ordersUpdated: 0,
+    ordersSkipped: 0,
+    equipmentLocationsUpdated: 0,
+    locationsCreated: 0,
+    warnings: [],
+    errors: [],
+  };
+  if (!companyId) throw new Error("companyId is required.");
+  if (!text) return result;
+
+  const firstLine = text.split(/\r?\n/, 1)[0] || "";
+  const delimiter = firstLine.includes("\t") ? "\t" : ",";
+  const rows = parseDelimitedRows(text, delimiter).filter((r) => r.some((c) => String(c ?? "").trim() !== ""));
+  result.rowsTotal = Math.max(0, rows.length - 1);
+  if (rows.length < 2) return result;
+
+  const header = rows[0].map((h) => normalizeHeaderKey(h));
+  const indexByKey = new Map();
+  header.forEach((name, idx) => {
+    if (name) indexByKey.set(name, idx);
+  });
+
+  const getIndex = (aliases) => {
+    for (const alias of aliases) {
+      const idx = indexByKey.get(alias);
+      if (idx !== undefined) return idx;
+    }
+    return undefined;
+  };
+
+  const idxModelName = getIndex(["model_name", "model", "modelname", "unit", "asset", "equipment"]);
+  if (idxModelName === undefined) {
+    result.errors.push("Missing required column: model_name.");
+    return result;
+  }
+
+  const idxSiteAddress = getIndex(["client_address", "site_address", "siteaddress", "site_location", "address"]);
+  const idxCurrentAddress = getIndex([
+    "current_address",
+    "current_location",
+    "currentlocation",
+    "map_url",
+    "maps_url",
+    "map",
+  ]);
+  const idxGeneralNotes = getIndex(["general_notes", "generalnotes", "notes", "note"]);
+  const idxMonitoring = getIndex(["monitoring_times", "monitoring", "coverage", "coverage_hours", "coveragehours"]);
+  const idxEmergency = getIndex(["emergency_contacts", "emergency_contact", "emergency", "emergencycontacts"]);
+  const idxSiteContacts = getIndex(["site_contacts", "site_contact", "sitecontacts"]);
+
+  const hasSiteAddress = idxSiteAddress !== undefined;
+  const hasGeneralNotes = idxGeneralNotes !== undefined;
+  const hasMonitoring = idxMonitoring !== undefined;
+  let hasEmergencyContacts = idxEmergency !== undefined;
+  const hasSiteContacts = idxSiteContacts !== undefined;
+
+  const getCell = (row, idx) => {
+    if (idx === undefined) return "";
+    return String(row[idx] ?? "").trim();
+  };
+
+  const rowsData = [];
+  rows.slice(1).forEach((row, i) => {
+    const modelName = getCell(row, idxModelName);
+    if (!modelName) {
+      result.rowsSkippedMissingModel += 1;
+      return;
+    }
+
+    const siteAddress = hasSiteAddress ? getCell(row, idxSiteAddress) : "";
+    const currentAddress = idxCurrentAddress !== undefined ? getCell(row, idxCurrentAddress) : "";
+    const monitoringTimes = hasMonitoring ? getCell(row, idxMonitoring) : "";
+
+    const notesRaw = hasGeneralNotes ? String(row[idxGeneralNotes] ?? "").trim() : "";
+    const emergencyRaw = idxEmergency !== undefined ? String(row[idxEmergency] ?? "").trim() : "";
+    const siteContactsRaw = idxSiteContacts !== undefined ? String(row[idxSiteContacts] ?? "").trim() : "";
+
+    let emergencyContacts = [];
+    let generalNotes = notesRaw;
+    if (emergencyRaw) {
+      const parsed = parseContactList(emergencyRaw);
+      emergencyContacts = parsed.contacts;
+    } else if (notesRaw) {
+      const parsed = parseContactList(notesRaw);
+      if (parsed.contacts.length) {
+        emergencyContacts = parsed.contacts;
+        generalNotes = parsed.remainder || "";
+        hasEmergencyContacts = true;
+      }
+    }
+
+    let siteContacts = [];
+    if (siteContactsRaw) {
+      const parsed = parseContactList(siteContactsRaw);
+      siteContacts = parsed.contacts;
+    }
+
+    const coverageWarnings = [];
+    const coverageHours = monitoringTimes ? parseCoverageHours(monitoringTimes, coverageWarnings) : {};
+    coverageWarnings.forEach((w) => {
+      if (result.warnings.length < 50) result.warnings.push(`${modelName}: ${w}`);
+    });
+
+    rowsData.push({
+      rowNumber: i + 2,
+      modelName,
+      modelKey: normalizeModelKey(modelName),
+      siteAddress,
+      currentAddress,
+      generalNotes,
+      monitoringTimes,
+      coverageHours,
+      emergencyContacts,
+      siteContacts,
+    });
+    result.rowsParsed += 1;
+  });
+
+  if (!rowsData.length) return result;
+
+  const equipmentRes = await pool.query(`SELECT id, model_name FROM equipment WHERE company_id = $1`, [companyId]);
+  const equipmentByModel = new Map();
+  equipmentRes.rows.forEach((row) => {
+    const key = normalizeModelKey(row.model_name);
+    if (!equipmentByModel.has(key)) equipmentByModel.set(key, []);
+    equipmentByModel.get(key).push(Number(row.id));
+  });
+
+  const allEquipmentIds = new Set();
+  rowsData.forEach((row) => {
+    const ids = equipmentByModel.get(row.modelKey) || [];
+    if (!ids.length) {
+      result.assetsMissing += 1;
+      if (result.warnings.length < 50) {
+        result.warnings.push(`Row ${row.rowNumber}: no equipment found for model "${row.modelName}".`);
+      }
+      return;
+    }
+    if (ids.length > 1 && result.warnings.length < 50) {
+      result.warnings.push(`Row ${row.rowNumber}: multiple equipment records found for model "${row.modelName}".`);
+    }
+    result.assetsMatched += ids.length;
+    ids.forEach((id) => allEquipmentIds.add(id));
+  });
+
+  const equipmentIds = Array.from(allEquipmentIds);
+  const outOrdersByEquipment = new Map();
+  if (equipmentIds.length) {
+    const outRes = await pool.query(
+      `
+      SELECT liv.equipment_id, ro.id AS order_id
+        FROM rental_order_line_inventory liv
+        JOIN rental_order_line_items li ON li.id = liv.line_item_id
+        JOIN rental_orders ro ON ro.id = li.rental_order_id
+       WHERE ro.company_id = $1
+         AND liv.equipment_id = ANY($2::int[])
+         AND li.fulfilled_at IS NOT NULL
+         AND li.returned_at IS NULL
+      `,
+      [companyId, equipmentIds]
+    );
+    outRes.rows.forEach((row) => {
+      const eqId = Number(row.equipment_id);
+      const orderId = Number(row.order_id);
+      if (!outOrdersByEquipment.has(eqId)) outOrdersByEquipment.set(eqId, new Set());
+      outOrdersByEquipment.get(eqId).add(orderId);
+    });
+  }
+
+  const orderBuckets = new Map();
+  const equipmentLocationInputs = new Map();
+
+  rowsData.forEach((row) => {
+    const ids = equipmentByModel.get(row.modelKey) || [];
+    ids.forEach((equipmentId) => {
+      const orderIds = outOrdersByEquipment.get(equipmentId);
+      if (!orderIds || !orderIds.size) {
+        result.assetsNotOut += 1;
+        return;
+      }
+
+      if (row.currentAddress && !equipmentLocationInputs.has(equipmentId)) {
+        equipmentLocationInputs.set(equipmentId, {
+          modelName: row.modelName,
+          currentAddress: row.currentAddress,
+        });
+      }
+
+      orderIds.forEach((orderId) => {
+        if (!orderBuckets.has(orderId)) {
+          orderBuckets.set(orderId, {
+            siteAddress: "",
+            generalNotes: "",
+            coverageHours: {},
+            emergencyContacts: [],
+            emergencyKeys: new Set(),
+            siteContacts: [],
+            siteContactKeys: new Set(),
+            hasCoverage: false,
+          });
+        }
+        const bucket = orderBuckets.get(orderId);
+        if (hasSiteAddress && !bucket.siteAddress && row.siteAddress) {
+          bucket.siteAddress = row.siteAddress;
+        }
+        if (hasGeneralNotes && !bucket.generalNotes && row.generalNotes) {
+          bucket.generalNotes = row.generalNotes;
+        }
+        if (hasMonitoring && !bucket.hasCoverage && row.coverageHours && Object.keys(row.coverageHours).length) {
+          bucket.coverageHours = row.coverageHours;
+          bucket.hasCoverage = true;
+        }
+        row.emergencyContacts.forEach((contact) => {
+          const key = contactKey(contact);
+          if (!key || bucket.emergencyKeys.has(key)) return;
+          bucket.emergencyKeys.add(key);
+          bucket.emergencyContacts.push(contact);
+        });
+        row.siteContacts.forEach((contact) => {
+          const key = contactKey(contact);
+          if (!key || bucket.siteContactKeys.has(key)) return;
+          bucket.siteContactKeys.add(key);
+          bucket.siteContacts.push(contact);
+        });
+      });
+    });
+  });
+
+  const locationsCache = await listLocations(companyId, { scope: "all" }).catch(() => []);
+  const locationNames = new Set((locationsCache || []).map((l) => String(l?.name || "").trim()).filter(Boolean));
+
+  for (const [orderId, bucket] of orderBuckets.entries()) {
+    const updates = [];
+    const values = [companyId, orderId];
+    let idx = 3;
+
+    if (hasSiteAddress) {
+      updates.push(`site_address = $${idx++}`);
+      values.push(bucket.siteAddress || null);
+      updates.push(`site_address_query = $${idx++}`);
+      values.push(bucket.siteAddress || null);
+      updates.push(`site_address_lat = $${idx++}`);
+      values.push(null);
+      updates.push(`site_address_lng = $${idx++}`);
+      values.push(null);
+    }
+    if (hasGeneralNotes) {
+      updates.push(`general_notes = $${idx++}`);
+      values.push(bucket.generalNotes || null);
+    }
+    if (hasMonitoring) {
+      updates.push(`coverage_hours = $${idx++}::jsonb`);
+      values.push(JSON.stringify(bucket.hasCoverage ? bucket.coverageHours : {}));
+    }
+    if (hasEmergencyContacts) {
+      updates.push(`emergency_contacts = $${idx++}::jsonb`);
+      values.push(JSON.stringify(bucket.emergencyContacts));
+    }
+    if (hasSiteContacts) {
+      updates.push(`site_contacts = $${idx++}::jsonb`);
+      values.push(JSON.stringify(bucket.siteContacts));
+    }
+
+    if (!updates.length) {
+      result.ordersSkipped += 1;
+      continue;
+    }
+
+    updates.push("updated_at = NOW()");
+    await pool.query(
+      `UPDATE rental_orders SET ${updates.join(", ")} WHERE company_id = $1 AND id = $2`,
+      values
+    );
+    result.ordersUpdated += 1;
+  }
+
+  const equipmentIdsToUpdate = Array.from(equipmentLocationInputs.keys());
+  if (equipmentIdsToUpdate.length) {
+    const beforeRows = await listEquipmentCurrentLocationIdsForIds({ companyId, equipmentIds: equipmentIdsToUpdate });
+    const beforeMap = new Map(beforeRows.map((row) => [Number(row.id), row.current_location_id]));
+
+    for (const equipmentId of equipmentIdsToUpdate) {
+      const info = equipmentLocationInputs.get(equipmentId);
+      const warnings = [];
+      const mapPin = await resolveMapPin(info.currentAddress, warnings);
+      warnings.forEach((w) => {
+        if (result.warnings.length < 50) result.warnings.push(`Model ${info.modelName}: ${w}`);
+      });
+      if (!mapPin) {
+        if (result.warnings.length < 50) {
+          result.warnings.push(`Model ${info.modelName}: unable to resolve map pin for current location.`);
+        }
+        continue;
+      }
+      const locResult = await ensureCurrentLocationFromMap({
+        companyId,
+        modelName: info.modelName,
+        mapPin,
+        locationsCache,
+        existingNames: locationNames,
+      });
+      const loc = locResult.location;
+      if (!loc?.id) continue;
+      const updatedCount = await setEquipmentCurrentLocationForIds({
+        companyId,
+        equipmentIds: [equipmentId],
+        currentLocationId: Number(loc.id),
+      });
+      if (updatedCount) {
+        result.equipmentLocationsUpdated += updatedCount;
+      }
+      const before = beforeMap.get(equipmentId) ?? null;
+      if (String(before || "") !== String(loc.id || "")) {
+        await recordEquipmentCurrentLocationChange({
+          companyId,
+          equipmentId,
+          fromLocationId: before,
+          toLocationId: Number(loc.id),
+        }).catch(() => null);
+        if (before) {
+          await cleanupNonBaseLocationIfUnused({ companyId, locationId: Number(before) }).catch(() => null);
+        }
+      }
+      if (locResult.created) result.locationsCreated += 1;
+    }
+  }
+
+  return result;
 }
 
 async function updateEquipmentCurrentLocationFromDropoff({ companyId, status, fulfillmentMethod, dropoffAddress, lineItems }) {
@@ -3395,6 +4065,25 @@ app.post(
       futureReportText,
     });
     res.status(201).json({ ...result, importSource: futureReportText ? "legacy_plus_future" : "legacy_exports" });
+  })
+);
+
+app.post(
+  "/api/rental-orders/import-rental-info",
+  (req, res, next) => {
+    importUpload.single("file")(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || "Upload failed." });
+      next();
+    });
+  },
+  asyncHandler(async (req, res) => {
+    const companyId = Number(req.body.companyId);
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    if (!req.file?.buffer) return res.status(400).json({ error: "file is required." });
+
+    const text = req.file.buffer.toString("utf8");
+    const result = await importRentalOrderRentalInfoFromText({ companyId, text });
+    res.status(201).json(result);
   })
 );
 

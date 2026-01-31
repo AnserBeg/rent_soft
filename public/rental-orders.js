@@ -12,6 +12,12 @@ const filterOrdered = document.getElementById("filter-ordered");
 const filterReceived = document.getElementById("filter-received");
 const filterClosed = document.getElementById("filter-closed");
 const searchInput = document.getElementById("search");
+const openRentalInfoImportBtn = document.getElementById("open-rental-info-import");
+const rentalInfoImportModal = document.getElementById("rental-info-import-modal");
+const closeRentalInfoImportBtn = document.getElementById("close-rental-info-import");
+const importRentalInfoInput = document.getElementById("import-rental-info-file");
+const runRentalInfoImportBtn = document.getElementById("run-rental-info-import");
+const rentalInfoImportResult = document.getElementById("rental-info-import-result");
 const openLegacyImportBtn = document.getElementById("open-legacy-import");
 const legacyImportModal = document.getElementById("legacy-import-modal");
 const closeLegacyImportBtn = document.getElementById("close-legacy-import");
@@ -376,6 +382,63 @@ function closeLegacyImport() {
   legacyImportModal.classList.remove("show");
 }
 
+function openRentalInfoImport() {
+  if (!rentalInfoImportModal) return;
+  rentalInfoImportModal.classList.add("show");
+  if (rentalInfoImportResult) rentalInfoImportResult.textContent = "";
+}
+
+function closeRentalInfoImport() {
+  if (!rentalInfoImportModal) return;
+  rentalInfoImportModal.classList.remove("show");
+}
+
+openRentalInfoImportBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  openRentalInfoImport();
+});
+
+closeRentalInfoImportBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  closeRentalInfoImport();
+});
+
+runRentalInfoImportBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) {
+    if (rentalInfoImportResult) rentalInfoImportResult.textContent = "Select a company first.";
+    return;
+  }
+  const file = importRentalInfoInput?.files?.[0] || null;
+  if (!file) {
+    if (rentalInfoImportResult) rentalInfoImportResult.textContent = "Choose a CSV/TSV file to import.";
+    return;
+  }
+  if (rentalInfoImportResult) rentalInfoImportResult.textContent = "Importing rental info...";
+  runRentalInfoImportBtn.disabled = true;
+  try {
+    const body = new FormData();
+    body.append("companyId", String(activeCompanyId));
+    body.append("file", file);
+    const res = await fetch("/api/rental-orders/import-rental-info", { method: "POST", body });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Import failed");
+
+    const summary = `Import complete: orders updated ${data.ordersUpdated ?? 0}, assets matched ${data.assetsMatched ?? 0}, assets not out ${data.assetsNotOut ?? 0}, equipment locations updated ${data.equipmentLocationsUpdated ?? 0}.`;
+    const warnCount = Array.isArray(data.warnings) ? data.warnings.length : 0;
+    const errorCount = Array.isArray(data.errors) ? data.errors.length : 0;
+    const warnTail = warnCount ? `\nWarnings:\n${data.warnings.slice(0, 5).map((w) => `- ${w}`).join("\n")}` : "";
+    const errorTail = errorCount ? `\nErrors:\n${data.errors.slice(0, 5).map((w) => `- ${w}`).join("\n")}` : "";
+    if (rentalInfoImportResult) rentalInfoImportResult.textContent = `${summary}${warnTail}${errorTail}`;
+    await loadOrders();
+  } catch (err) {
+    if (rentalInfoImportResult) rentalInfoImportResult.textContent = err.message || "Import failed";
+  } finally {
+    runRentalInfoImportBtn.disabled = false;
+    if (importRentalInfoInput) importRentalInfoInput.value = "";
+  }
+});
+
 openLegacyImportBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   openLegacyImport();
@@ -390,8 +453,15 @@ legacyImportModal?.addEventListener("click", (e) => {
   if (e.target === legacyImportModal) closeLegacyImport();
 });
 
+rentalInfoImportModal?.addEventListener("click", (e) => {
+  if (e.target === rentalInfoImportModal) closeRentalInfoImport();
+});
+
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeLegacyImport();
+  if (e.key === "Escape") {
+    closeLegacyImport();
+    closeRentalInfoImport();
+  }
 });
 
 runImportBtn?.addEventListener("click", async (e) => {

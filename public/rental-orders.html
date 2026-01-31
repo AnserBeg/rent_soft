@@ -96,7 +96,8 @@
               <div class="inline-actions">
                 <button class="ghost" id="refresh">Refresh</button>
                 <button class="ghost" id="download-pdf">Download PDF</button>
-                <button class="ghost" id="open-legacy-import">Import</button>
+                <button class="ghost" id="open-rental-info-import">Import info</button>
+                <button class="ghost" id="open-legacy-import">Legacy import</button>
                 <button class="primary" id="new-ro">New RO</button>
               </div>
             </div>
@@ -142,6 +143,29 @@
           <button class="ghost" id="backfill-legacy-rates" type="button">Backfill rates</button>
         </div>
         <p class="hint" id="import-result" style="margin: 0;"></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="rental-info-import-modal">
+    <div class="modal-content wide">
+      <div class="modal-header">
+        <div>
+          <h3 style="margin:0;">Import rental info</h3>
+          <p class="hint" style="margin: 6px 0 0;">
+            Matches by model_name. Updates rental orders with assets currently out (actual start set, actual end blank).
+            Uses current_address map URLs to set the asset current location pin. Existing rental info fields are overwritten.
+          </p>
+        </div>
+        <button class="ghost small" id="close-rental-info-import" type="button">Close</button>
+      </div>
+
+      <div class="stack">
+        <div class="inline-actions" style="flex-wrap:wrap;">
+          <label>Rental info sheet <input type="file" id="import-rental-info-file" accept=".csv,.tsv,.txt" /></label>
+          <button class="primary" id="run-rental-info-import" type="button">Import</button>
+        </div>
+        <p class="hint" id="rental-info-import-result" style="margin: 0;"></p>
       </div>
     </div>
   </div>
