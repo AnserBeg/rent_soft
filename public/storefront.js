@@ -377,6 +377,15 @@ document.addEventListener("DOMContentLoaded", () => {
     return { ok: true, contacts };
   }
 
+  function timeToMinutes(value) {
+    const match = String(value || "").trim().match(/^(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return hour * 60 + minute;
+  }
+
   function collectCoverageHoursFromInputs() {
     const coverage = {};
     coverageDayKeys.forEach((day) => {
@@ -384,7 +393,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const start = normalizeContactValue(entry.start?.value);
       const end = normalizeContactValue(entry.end?.value);
       if (!start && !end) return;
-      coverage[day] = { start, end };
+      let endDayOffset = 0;
+      if (start && end) {
+        const startMinutes = timeToMinutes(start);
+        const endMinutes = timeToMinutes(end);
+        if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) endDayOffset = 1;
+      }
+      coverage[day] = { start, end, endDayOffset };
     });
     return coverage;
   }

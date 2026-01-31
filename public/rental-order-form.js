@@ -131,6 +131,15 @@ const coverageInputs = {
     end: document.getElementById("coverage-sun-end"),
   },
 };
+const coverageNextDayIndicators = {
+  mon: document.querySelector('[data-coverage-next-day="mon"]'),
+  tue: document.querySelector('[data-coverage-next-day="tue"]'),
+  wed: document.querySelector('[data-coverage-next-day="wed"]'),
+  thu: document.querySelector('[data-coverage-next-day="thu"]'),
+  fri: document.querySelector('[data-coverage-next-day="fri"]'),
+  sat: document.querySelector('[data-coverage-next-day="sat"]'),
+  sun: document.querySelector('[data-coverage-next-day="sun"]'),
+};
 const termsPanel = document.getElementById("terms-panel");
 const toggleTermsBtn = document.getElementById("toggle-terms");
 const extrasNotesBadge = document.getElementById("extras-notes-badge");
@@ -1017,9 +1026,47 @@ function normalizeCoverageHours(value) {
     const start = typeof entry.start === "string" ? entry.start.trim() : "";
     const end = typeof entry.end === "string" ? entry.end.trim() : "";
     if (!start && !end) return;
-    normalized[day] = { start, end };
+    const explicit = entry.endDayOffset ?? entry.end_day_offset;
+    let endDayOffset =
+      explicit === 1 || explicit === "1" || explicit === true || entry.spansMidnight === true ? 1 : 0;
+    if (!endDayOffset && start && end) {
+      const startMinutes = timeToMinutes(start);
+      const endMinutes = timeToMinutes(end);
+      if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) endDayOffset = 1;
+    }
+    normalized[day] = { start, end, endDayOffset };
   });
   return normalized;
+}
+
+function timeToMinutes(value) {
+  const match = String(value || "").trim().match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function updateCoverageNextDayIndicators() {
+  coverageDayKeys.forEach((day) => {
+    const indicator = coverageNextDayIndicators[day];
+    if (!indicator) return;
+    const entry = coverageInputs[day] || {};
+    const start = String(entry.start?.value || "").trim();
+    const end = String(entry.end?.value || "").trim();
+    if (!start || !end) {
+      indicator.textContent = "";
+      return;
+    }
+    const startMinutes = timeToMinutes(start);
+    const endMinutes = timeToMinutes(end);
+    if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) {
+      indicator.textContent = "(next day)";
+    } else {
+      indicator.textContent = "";
+    }
+  });
 }
 
 function escapeHtml(s) {
@@ -1829,10 +1876,15 @@ function collectCoverageHoursFromInputs() {
   const raw = {};
   coverageDayKeys.forEach((day) => {
     const entry = coverageInputs[day] || {};
-    raw[day] = {
-      start: entry.start ? String(entry.start.value || "").trim() : "",
-      end: entry.end ? String(entry.end.value || "").trim() : "",
-    };
+    const start = entry.start ? String(entry.start.value || "").trim() : "";
+    const end = entry.end ? String(entry.end.value || "").trim() : "";
+    let endDayOffset = 0;
+    if (start && end) {
+      const startMinutes = timeToMinutes(start);
+      const endMinutes = timeToMinutes(end);
+      if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) endDayOffset = 1;
+    }
+    raw[day] = { start, end, endDayOffset };
   });
   return normalizeCoverageHours(raw);
 }
@@ -1852,6 +1904,7 @@ function setCoverageInputs(value) {
       refreshTimePickerForInput(coverageInputs[day].end);
     }
   });
+  updateCoverageNextDayIndicators();
 }
 
 function normalizeOrderStatus(status) {
@@ -4761,12 +4814,14 @@ coverageInputsList.forEach((el) => {
     snapInputToMinuteStep(el);
     syncTimeOverlayState(el);
     refreshTimePickerForInput(el);
+    updateCoverageNextDayIndicators();
     syncRentalInfoDraft();
   });
   el.addEventListener("blur", () => {
     snapInputToMinuteStep(el);
     syncTimeOverlayState(el);
     refreshTimePickerForInput(el);
+    updateCoverageNextDayIndicators();
   });
 });
 
@@ -4787,6 +4842,7 @@ copyMondayCoverageBtn?.addEventListener("click", (e) => {
     syncTimeOverlayState(el);
     refreshTimePickerForInput(el);
   });
+  updateCoverageNextDayIndicators();
   syncRentalInfoDraft();
 });
 

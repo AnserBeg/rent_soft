@@ -101,8 +101,11 @@ function formatCoverageHours(value) {
     const entry = raw[key] || {};
     const start = safeText(entry.start);
     const end = safeText(entry.end);
+    const endDayOffset =
+      entry.endDayOffset === 1 || entry.end_day_offset === 1 || entry.spansMidnight === true ? 1 : 0;
     if (!start && !end) return;
-    parts.push(`${label} ${start || "--"}-${end || "--"}`);
+    const suffix = endDayOffset ? " (+1 day)" : "";
+    parts.push(`${label} ${start || "--"}-${end || "--"}${suffix}`);
   });
   return parts.join(", ");
 }

@@ -685,6 +685,11 @@ textarea:focus {
   color: var(--muted);
 }
 
+.coverage-next-day {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .coverage-inputs input[type="time"] {
   width: 100%;
   min-width: 0;

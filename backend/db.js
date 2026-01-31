@@ -3277,13 +3277,32 @@ function normalizeCoverageHours(value) {
     }
   }
   const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+  const timeToMinutes = (val) => {
+    const match = String(val || "").trim().match(/^(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return hour * 60 + minute;
+  };
   const normalized = {};
   days.forEach((day) => {
     const entry = raw[day] || {};
     const start = typeof entry.start === "string" ? entry.start.trim() : "";
     const end = typeof entry.end === "string" ? entry.end.trim() : "";
     if (!start && !end) return;
-    normalized[day] = { start, end };
+    let endDayOffset = 0;
+    const explicitOffset = entry.endDayOffset ?? entry.end_day_offset;
+    if (explicitOffset === 1 || explicitOffset === "1" || explicitOffset === true) {
+      endDayOffset = 1;
+    } else if (entry.spansMidnight === true) {
+      endDayOffset = 1;
+    } else {
+      const startMinutes = timeToMinutes(start);
+      const endMinutes = timeToMinutes(end);
+      if (startMinutes !== null && endMinutes !== null && endMinutes <= startMinutes) endDayOffset = 1;
+    }
+    normalized[day] = { start, end, endDayOffset };
   });
   return normalized;
 }

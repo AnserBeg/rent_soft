@@ -548,6 +548,15 @@
     return values;
   }
 
+  function timeToMinutes(value) {
+    const match = String(value || "").trim().match(/^(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+    return hour * 60 + minute;
+  }
+
   function collectCoverageHours(section) {
     const coverage = {};
     if (!section) return coverage;
@@ -563,6 +572,12 @@
     Object.keys(coverage).forEach((day) => {
       const entry = coverage[day] || {};
       if (!entry.start && !entry.end) delete coverage[day];
+      if (entry.start && entry.end) {
+        const startMinutes = timeToMinutes(entry.start);
+        const endMinutes = timeToMinutes(entry.end);
+        entry.endDayOffset =
+          startMinutes !== null && endMinutes !== null && endMinutes < startMinutes ? 1 : 0;
+      }
     });
     return coverage;
   }

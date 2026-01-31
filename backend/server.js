@@ -1243,6 +1243,15 @@ function normalizeTimeValue(raw, warnings) {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
+function timeToMinutes(value) {
+  const match = String(value || "").trim().match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
 function parseCoverageHours(raw, warnings) {
   const value = String(raw || "").trim();
   if (!value) return {};
@@ -1282,10 +1291,13 @@ function parseCoverageHours(raw, warnings) {
     const startTime = normalizeTimeValue(match[3], warnings);
     const endTime = normalizeTimeValue(match[4], warnings);
     if (!startDay || !endDay || !startTime || !endTime) continue;
-
     const startIdx = dayOrder.indexOf(startDay);
     const endIdx = dayOrder.indexOf(endDay);
     if (startIdx === -1 || endIdx === -1) continue;
+    const startMinutes = timeToMinutes(startTime);
+    const endMinutes = timeToMinutes(endTime);
+    const endDayOffset =
+      startMinutes !== null && endMinutes !== null && endMinutes <= startMinutes ? 1 : 0;
 
     const days = [];
     if (startIdx <= endIdx) {
@@ -1295,7 +1307,7 @@ function parseCoverageHours(raw, warnings) {
       for (let i = 0; i <= endIdx; i += 1) days.push(dayOrder[i]);
     }
     days.forEach((day) => {
-      coverage[day] = { start: startTime, end: endTime };
+      coverage[day] = { start: startTime, end: endTime, endDayOffset };
     });
   }
 
@@ -1327,19 +1339,37 @@ function contactKey(entry) {
   return [entry?.name, entry?.email, entry?.phone].map((v) => normalizeWhitespace(v).toLowerCase()).join("|");
 }
 
+function parseContactTriples(text) {
+  const matches = [...String(text || "").matchAll(/([^;\[\]]+?)\s*;\s*([^;\[\]]*?)\s*;\s*([^\],]+?)(?=,|\]|$)/g)];
+  return matches
+    .map((m) => ({
+      name: normalizeWhitespace(m[1]),
+      email: normalizeWhitespace(m[2]),
+      phone: normalizeWhitespace(m[3]),
+    }))
+    .filter((c) => c.name || c.email || c.phone);
+}
+
 function parseContactList(raw) {
-  const extracted = extractContactBlocks(raw);
-  if (extracted.contacts.length) return extracted;
   const text = String(raw || "").trim();
-  if (!text.includes(";")) return { contacts: [], remainder: text };
-  const parts = text.split(";").map((v) => normalizeWhitespace(v));
-  const contact = {
-    name: parts[0] || "",
-    email: parts[1] || "",
-    phone: parts[2] || "",
-  };
-  if (!contact.name && !contact.email && !contact.phone) return { contacts: [], remainder: text };
-  return { contacts: [contact], remainder: "" };
+  if (!text) return { contacts: [], remainder: "" };
+  const contacts = [];
+  let remainder = text;
+  const matches = [...text.matchAll(/\[([^\]]+)\]/g)];
+  if (matches.length) {
+    matches.forEach((match) => {
+      const block = match[1] || "";
+      const blockContacts = parseContactTriples(block);
+      blockContacts.forEach((c) => contacts.push(c));
+      remainder = remainder.replace(match[0], " ");
+    });
+    remainder = remainder.replace(/[\s,;]+/g, " ").trim();
+    if (contacts.length) return { contacts, remainder };
+  }
+
+  const fallbackContacts = parseContactTriples(text);
+  if (fallbackContacts.length) return { contacts: fallbackContacts, remainder: "" };
+  return { contacts: [], remainder: text };
 }
 
 function parseLatLngCandidate(value) {
@@ -1581,17 +1611,10 @@ async function importRentalOrderRentalInfoFromText({ companyId, text }) {
     const siteContactsRaw = idxSiteContacts !== undefined ? String(row[idxSiteContacts] ?? "").trim() : "";
 
     let emergencyContacts = [];
-    let generalNotes = notesRaw;
+    const generalNotes = notesRaw;
     if (emergencyRaw) {
       const parsed = parseContactList(emergencyRaw);
       emergencyContacts = parsed.contacts;
-    } else if (notesRaw) {
-      const parsed = parseContactList(notesRaw);
-      if (parsed.contacts.length) {
-        emergencyContacts = parsed.contacts;
-        generalNotes = parsed.remainder || "";
-        hasEmergencyContacts = true;
-      }
     }
 
     let siteContacts = [];

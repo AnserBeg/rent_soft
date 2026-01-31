@@ -154,7 +154,10 @@ function formatCoverageHours(coverage) {
     .map((key) => {
       const entry = normalized[key] || {};
       if (!entry.start && !entry.end) return null;
-      return `${dayLabels[key]}: ${entry.start || "--"} - ${entry.end || "--"}`;
+      const endDayOffset =
+        entry.endDayOffset === 1 || entry.end_day_offset === 1 || entry.spansMidnight === true ? 1 : 0;
+      const suffix = endDayOffset ? " (+1 day)" : "";
+      return `${dayLabels[key]}: ${entry.start || "--"} - ${entry.end || "--"}${suffix}`;
     })
     .filter(Boolean);
   return lines.length ? lines.join("<br />") : "--";
