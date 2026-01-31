@@ -692,7 +692,7 @@ textarea:focus {
 
 .rs-time-popover {
   position: fixed;
-  z-index: 1200;
+  z-index: 6100;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 14px;
