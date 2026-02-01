@@ -3,7 +3,6 @@ const documentId = params.get("id");
 const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
 
 const companyMeta = document.getElementById("company-meta");
-const refreshBtn = document.getElementById("refresh-detail");
 const invoiceEmpty = document.getElementById("invoice-empty");
 const invoiceDetail = document.getElementById("invoice-detail");
 const invoiceType = document.getElementById("invoice-type");
@@ -465,10 +464,6 @@ async function loadDocument() {
   renderDocument(data.document);
 }
 
-refreshBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  loadDocument().catch(() => null);
-});
 
 if (activeCompanyId) {
   const session = window.RentSoft?.getSession?.();

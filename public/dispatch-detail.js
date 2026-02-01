@@ -16,7 +16,6 @@ const initialOrderId = params.get("orderId") || (lastSelection?.orderId ? String
 
 const companyMeta = document.getElementById("company-meta");
 const detailSummary = document.getElementById("dispatch-detail-summary");
-const refreshBtn = document.getElementById("refresh-detail");
 
 const detailEmpty = document.getElementById("dispatch-detail-empty");
 const detailWrap = document.getElementById("dispatch-detail");
@@ -1546,7 +1545,6 @@ async function loadDetail() {
   }
 }
 
-refreshBtn?.addEventListener("click", () => loadDetail());
 
 guardNotesInput?.addEventListener("keydown", (e) => {
   if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;

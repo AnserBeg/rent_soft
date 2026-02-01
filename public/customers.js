@@ -1,5 +1,4 @@
 const companyMeta = document.getElementById("company-meta");
-const refreshBtn = document.getElementById("refresh");
 const customersTable = document.getElementById("customers-table");
 const newCustomerBtn = document.getElementById("new-customer");
 const importCustomersBtn = document.getElementById("import-customers");
@@ -550,11 +549,6 @@ async function loadSales() {
   }
 }
 
-refreshBtn.addEventListener("click", (e) => {
-  e.preventDefault();
-  loadSales();
-  loadCustomers();
-});
 
 newCustomerBtn?.addEventListener("click", (e) => {
   e.preventDefault();
@@ -788,4 +782,3 @@ if (activeCompanyId) {
   companyMeta.textContent = "Log in to view customers.";
   if (hasQboPanel) setQboStatus("Log in to view QBO sync.");
 }
-

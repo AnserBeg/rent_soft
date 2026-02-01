@@ -7,7 +7,6 @@ const openCurrentLocationPickerBtn = document.getElementById("open-current-locat
 const clearCurrentLocationBtn = document.getElementById("clear-current-location");
 const locationCount = document.getElementById("location-count");
 const equipmentTable = document.getElementById("equipment-table");
-const refreshBtn = document.getElementById("refresh");
 const locationModal = document.getElementById("location-modal");
 const locationModalForm = document.getElementById("location-modal-form");
 const closeModalBtn = document.getElementById("close-modal");
@@ -458,7 +457,7 @@ function renderEquipmentTable(rows) {
       </span>
       <span>${roCell}</span>
       <span>${customerCell}</span>
-      <span>${statusTag}</span>
+      <span class="status-cell">${statusTag}</span>
       <span>${baseLocation}</span>
     `;
     equipmentTable.appendChild(div);
@@ -1865,11 +1864,6 @@ equipmentForm.addEventListener("submit", async (e) => {
   }
 });
 
-refreshBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  loadLocations();
-  loadEquipment();
-});
 
 locationSelect.addEventListener("change", (e) => {
   if (e.target.value === "__new__") {

@@ -2,8 +2,6 @@ const params = new URLSearchParams(window.location.search);
 const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
 
 const companyMeta = document.getElementById("company-meta");
-const refreshBtn = document.getElementById("refresh");
-const downloadPdfBtn = document.getElementById("download-pdf");
 const newQuoteBtn = document.getElementById("new-quote");
 const quotesTable = document.getElementById("rental-quotes-table");
 const searchInput = document.getElementById("search");
@@ -281,19 +279,6 @@ async function loadQuotes() {
   }
 }
 
-refreshBtn.addEventListener("click", (e) => {
-  e.preventDefault();
-  loadQuotes();
-});
-
-downloadPdfBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  if (!activeCompanyId) {
-    companyMeta.textContent = "Select a company first.";
-    return;
-  }
-  window.open(`/api/rental-orders/pdf?companyId=${activeCompanyId}&statuses=quote,quote_rejected&includeQuotes=1`, "_blank");
-});
 
 newQuoteBtn.addEventListener("click", (e) => {
   e.preventDefault();

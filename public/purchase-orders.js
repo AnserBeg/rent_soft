@@ -1,5 +1,4 @@
 const companyMeta = document.getElementById("company-meta");
-const refreshBtn = document.getElementById("refresh");
 const newPoBtn = document.getElementById("new-po");
 const searchInput = document.getElementById("search");
 const purchaseOrdersTable = document.getElementById("purchase-orders-table");
@@ -164,10 +163,6 @@ async function loadPurchaseOrders() {
   }
 }
 
-refreshBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  loadPurchaseOrders();
-});
 
 newPoBtn?.addEventListener("click", (e) => {
   e.preventDefault();

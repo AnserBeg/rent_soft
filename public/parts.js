@@ -1,6 +1,5 @@
 const companyMeta = document.getElementById("company-meta");
 const partsTable = document.getElementById("parts-table");
-const refreshBtn = document.getElementById("refresh");
 const newPartBtn = document.getElementById("new-part");
 const searchInput = document.getElementById("search");
 const partModal = document.getElementById("part-modal");
@@ -154,10 +153,6 @@ function closePartModal() {
   partModal.classList.remove("show");
 }
 
-refreshBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  loadParts();
-});
 
 newPartBtn?.addEventListener("click", (e) => {
   e.preventDefault();

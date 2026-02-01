@@ -631,79 +631,7 @@ async function buildOrderPdfBuffer({
   };
 }
 
-function streamOrdersReportPdf(res, { title, rows, companyLogoPath = null, companyProfile = null, rentalInfoFields = null }) {
-  const docNo = "rental-orders-report";
-  const doc = createContractDoc({
-    title: title || "Rental Orders Report",
-    docNo,
-    docLabel: "Report",
-    status: "",
-    logoPath: companyLogoPath,
-    companyProfile,
-  });
-
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="rental-orders-report.pdf"`);
-  doc.pipe(res);
-
-  ensureSpace(doc, 20);
-  doc.moveDown(0.4);
-  const left = doc.page.margins.left;
-  const right = doc.page.margins.right;
-  const pageWidth = doc.page.width;
-  const tableW = pageWidth - left - right;
-  const headerY = doc.y;
-  drawBox(doc, { x: left, y: headerY, w: tableW, h: 20, border: "#0ea5e9", fill: "#38bdf8" });
-  doc.fillColor("#fff").font("Helvetica-Bold").fontSize(9).text("Doc #", left + 8, headerY + 6, { width: 90 });
-  doc.text("Status", left + 100, headerY + 6, { width: 60 });
-  doc.text("Customer", left + 165, headerY + 6, { width: 140 });
-  doc.text("Sales", left + 310, headerY + 6, { width: 90 });
-  doc.text("Start", left + 405, headerY + 6, { width: 80 });
-  doc.text("End", left + 490, headerY + 6, { width: 80 });
-  doc.text("Qty", left + 575, headerY + 6, { width: 40, align: "right" });
-  doc.text("Fees", left + 620, headerY + 6, { width: tableW - 628, align: "right" });
-  doc.y = headerY + 20;
-
-  const rentalInfoConfig = normalizeRentalInfoFields(rentalInfoFields);
-  const showRentalInfo = (key) => rentalInfoConfig?.[key]?.enabled !== false;
-
-  (rows || []).forEach((r) => {
-    const siteAddress = safeText(r?.site_address || r?.siteAddress);
-    const criticalAreas = safeText(r?.critical_areas || r?.criticalAreas);
-    const coverageText = formatCoverageHours(r?.coverage_hours || r?.coverageHours);
-    const detailLine = [
-      showRentalInfo("siteAddress") && siteAddress ? `Site address: ${siteAddress}` : null,
-      showRentalInfo("criticalAreas") && criticalAreas ? `Critical areas: ${criticalAreas}` : null,
-      showRentalInfo("coverageHours") && coverageText ? `Coverage: ${coverageText}` : null,
-    ]
-      .filter(Boolean)
-      .join(" | ");
-    const detailHeight = detailLine ? Math.max(12, doc.heightOfString(detailLine, { width: tableW - 16 })) : 0;
-    const rowH = 16 + (detailLine ? detailHeight + 4 : 0);
-    ensureSpace(doc, rowH);
-    const y = doc.y;
-    drawBox(doc, { x: left, y, w: tableW, h: rowH, border: "#e2e8f0", fill: "#ffffff" });
-    doc.fillColor("#111").font("Helvetica").fontSize(8);
-    doc.text(docNumberLabel(r), left + 8, y + 4, { width: 90 });
-    doc.text(statusLabel(r.status), left + 100, y + 4, { width: 60 });
-    doc.text(r.customer_name || "--", left + 165, y + 4, { width: 140 });
-    doc.text(r.salesperson_name || "--", left + 310, y + 4, { width: 90 });
-    doc.text(fmtDateTime(r.start_at), left + 405, y + 4, { width: 80 });
-    doc.text(fmtDateTime(r.end_at), left + 490, y + 4, { width: 80 });
-    doc.text(String(r.equipment_count || 0), left + 575, y + 4, { width: 40, align: "right" });
-    doc.text(fmtMoney(r.fee_total), left + 620, y + 4, { width: tableW - 628, align: "right" });
-    if (detailLine) {
-      doc.fillColor("#475569").font("Helvetica").fontSize(7);
-      doc.text(detailLine, left + 8, y + 18, { width: tableW - 16 });
-    }
-    doc.y = y + rowH;
-  });
-
-  doc.end();
-}
-
 module.exports = {
   streamOrderPdf,
   buildOrderPdfBuffer,
-  streamOrdersReportPdf,
 };

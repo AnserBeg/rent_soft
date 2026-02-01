@@ -2,7 +2,6 @@ const params = new URLSearchParams(window.location.search);
 const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
 
 const companyMeta = document.getElementById("company-meta");
-const refreshBtn = document.getElementById("refresh");
 const newTypeBtn = document.getElementById("new-type");
 const typesTable = document.getElementById("types-table");
 const importInventoryBtn = document.getElementById("import-inventory");
@@ -224,10 +223,6 @@ async function loadTypeStats() {
   }
 }
 
-refreshBtn.addEventListener("click", (e) => {
-  e.preventDefault();
-  loadTypeStats();
-});
 
 importInventoryBtn?.addEventListener("click", (e) => {
   e.preventDefault();

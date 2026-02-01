@@ -160,7 +160,7 @@ const {
   countOutItemsForOrder,
 } = require("./db");
 
-const { streamOrderPdf, buildOrderPdfBuffer, streamOrdersReportPdf } = require("./pdf");
+const { streamOrderPdf, buildOrderPdfBuffer } = require("./pdf");
 const { sendCompanyEmail, requestSubmittedEmail, statusUpdatedEmail } = require("./mailer");
 const {
   getQboConfig,
@@ -5816,32 +5816,6 @@ app.get(
       const companyProfile = await getCompanyProfile(Number(companyId));
       streamOrderPdf(res, {
         ...detail,
-        companyLogoPath: logoPath,
-        companyProfile,
-        rentalInfoFields: settings?.rental_info_fields || null,
-      });
-  })
-);
-
-app.get(
-  "/api/rental-orders/pdf",
-  asyncHandler(async (req, res) => {
-    const { companyId, statuses, includeQuotes } = req.query;
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const requested = String(statuses || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const allRequested = includeQuotes ? [...new Set([...requested, "quote", "quote_rejected"])] : requested;
-    const finalStatuses = allRequested.length ? allRequested : null;
-    const orders = await listRentalOrders(companyId, { statuses: finalStatuses });
-    const settings = await getCompanySettings(companyId);
-    const rawLogoPath = settings?.logo_url ? resolveCompanyUploadPath({ companyId, url: settings.logo_url }) : null;
-    const logoPath = rawLogoPath ? await resolvePdfCompatibleImagePath(rawLogoPath) : null;
-    const companyProfile = await getCompanyProfile(Number(companyId));
-      streamOrdersReportPdf(res, {
-        title: "Rental Orders & Quotes",
-        rows: orders,
         companyLogoPath: logoPath,
         companyProfile,
         rentalInfoFields: settings?.rental_info_fields || null,

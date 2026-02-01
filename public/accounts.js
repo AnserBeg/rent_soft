@@ -60,7 +60,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const companyMeta = $("company-meta");
   const form = $("user-form");
   const meta = $("user-meta");
-  const refresh = $("refresh-users");
   const tbody = $("users-body");
 
   const activeCompanyId = window.RentSoft?.getCompanyId?.() ? Number(window.RentSoft.getCompanyId()) : null;
@@ -103,7 +102,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  refresh?.addEventListener("click", () => loadUsers().catch((err) => setMeta(meta, err.message)));
 
   if (activeCompanyId) loadUsers().catch((err) => setMeta(meta, err.message));
 });

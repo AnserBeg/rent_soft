@@ -7,7 +7,6 @@ const qboHint = document.getElementById("qbo-hint");
 const qboConnectBtn = document.getElementById("qbo-connect");
 const qboDisconnectBtn = document.getElementById("qbo-disconnect");
 const qboSyncBtn = document.getElementById("qbo-sync");
-const refreshBtn = document.getElementById("refresh");
 const assignedFilter = document.getElementById("assigned-filter");
 const searchInput = document.getElementById("search");
 const syncSinceInput = document.getElementById("sync-since");
@@ -217,12 +216,6 @@ qboSyncBtn?.addEventListener("click", (e) => {
   syncQbo().catch(() => null);
 });
 
-refreshBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  loadInvoices().catch((err) => {
-    if (invoicesHint) invoicesHint.textContent = err?.message ? String(err.message) : "Unable to refresh invoices.";
-  });
-});
 
 assignedFilter?.addEventListener("change", () => {
   loadInvoices().catch(() => null);

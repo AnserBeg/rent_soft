@@ -1,5 +1,4 @@
 const companyMeta = document.getElementById("company-meta");
-const refreshBtn = document.getElementById("refresh");
 const vendorsTable = document.getElementById("vendors-table");
 const newVendorBtn = document.getElementById("new-vendor");
 const searchInput = document.getElementById("search");
@@ -121,10 +120,6 @@ async function loadVendors() {
   }
 }
 
-refreshBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  loadVendors();
-});
 
 newVendorBtn?.addEventListener("click", (e) => {
   e.preventDefault();

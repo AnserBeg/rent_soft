@@ -4,7 +4,6 @@ const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyI
 const companyMeta = document.getElementById("company-meta");
 const summaryMeta = document.getElementById("dispatch-summary");
 const dispatchTable = document.getElementById("dispatch-table");
-const refreshBtn = document.getElementById("refresh");
 const searchInput = document.getElementById("search");
 const filterOverdue = document.getElementById("filter-overdue");
 
@@ -251,7 +250,6 @@ dispatchTable?.addEventListener("click", (e) => {
   window.location.href = query ? `dispatch-detail.html?${query}` : "dispatch-detail.html";
 });
 
-refreshBtn?.addEventListener("click", () => loadActiveUnits());
 
 searchInput?.addEventListener("input", (e) => {
   searchTerm = String(e.target.value || "").trim();

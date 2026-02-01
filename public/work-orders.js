@@ -1,6 +1,5 @@
 const companyMeta = document.getElementById("company-meta");
 const workOrdersTable = document.getElementById("work-orders-table");
-const refreshBtn = document.getElementById("refresh");
 const newWorkOrderBtn = document.getElementById("new-work-order");
 const searchInput = document.getElementById("search");
 const showClosedInput = document.getElementById("show-closed");
@@ -175,10 +174,6 @@ function closeWorkOrder(id) {
   });
 }
 
-refreshBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  loadWorkOrders();
-});
 
 newWorkOrderBtn?.addEventListener("click", (e) => {
   e.preventDefault();

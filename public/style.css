@@ -3483,6 +3483,22 @@ a.ghost {
   white-space: nowrap;
 }
 
+#equipment-table .status-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+}
+
+#equipment-table .status-tag {
+  display: inline-flex;
+  white-space: nowrap;
+}
+
+#equipment-table .status-tag .status-dot {
+  display: inline-block;
+}
+
 .table-row .table-link {
   width: 100%;
   min-width: 0;
