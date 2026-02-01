@@ -8,8 +8,25 @@ const searchInput = document.getElementById("reports-search");
 const fromInput = document.getElementById("reports-from");
 const toInput = document.getElementById("reports-to");
 const rangeRow = document.getElementById("reports-range-row");
+const dateFieldRow = document.getElementById("reports-date-field-row");
+const dateFieldSelect = document.getElementById("reports-date-field");
 const statusesWrap = document.getElementById("reports-statuses");
 const statusCheckboxes = Array.from(statusesWrap?.querySelectorAll?.("input[type=\"checkbox\"]") || []);
+const analyticsWrap = document.getElementById("reports-analytics");
+const revenueGroupSelect = document.getElementById("reports-revenue-group");
+const salespersonMetricSelect = document.getElementById("reports-salesperson-metric");
+const utilizationBasisSelect = document.getElementById("reports-utilization-basis");
+const utilizationForwardInput = document.getElementById("reports-utilization-forward-months");
+const analyticsLocationSelect = document.getElementById("reports-analytics-location");
+const analyticsTypeSelect = document.getElementById("reports-analytics-type");
+const analyticsCategorySelect = document.getElementById("reports-analytics-category");
+const lineItemGroupRow = document.getElementById("reports-lineitem-group-row");
+const lineItemGroupSelect = document.getElementById("reports-lineitem-group");
+const analyticsRevenueRow = document.getElementById("reports-analytics-row-revenue");
+const analyticsSalespersonRow = document.getElementById("reports-analytics-row-salesperson");
+const analyticsFiltersRow = document.getElementById("reports-analytics-row-filters");
+const analyticsUtilizationRow = document.getElementById("reports-analytics-row-utilization");
+const analyticsCategoryRow = document.getElementById("reports-analytics-row-category");
 
 const fieldsEl = document.getElementById("reports-fields");
 const runBtn = document.getElementById("reports-run");
@@ -32,6 +49,7 @@ let rawRows = [];
 let filteredRows = [];
 let selectedFields = [];
 let chart = null;
+let analyticsOptionsLoaded = false;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -79,11 +97,155 @@ function selectedStatusesParam() {
 }
 
 function hasDateRange(datasetKey) {
-  return datasetKey === "revenueTimeseries";
+  if (Boolean(dateFieldOptionsFor(datasetKey)?.length)) return true;
+  return ["revenueTimeseries", "revenueSummary", "salespersonSummary", "utilizationSummary", "utilizationDaily", "utilizationForward"].includes(
+    datasetKey
+  );
+}
+
+function dateFieldOptionsFor(datasetKey) {
+  switch (datasetKey) {
+    case "rentalOrders":
+    case "quotes":
+      return [
+        { value: "rental_period", label: "Rental period" },
+        { value: "created_at", label: "Created" },
+        { value: "updated_at", label: "Updated" },
+      ];
+    case "rentalOrderLineItems":
+    case "lineItemRevenueSummary":
+      return [
+        { value: "start_at", label: "Start" },
+        { value: "end_at", label: "End" },
+        { value: "fulfilled_at", label: "Fulfilled" },
+        { value: "returned_at", label: "Returned" },
+        { value: "order_created_at", label: "Order created" },
+        { value: "order_updated_at", label: "Order updated" },
+      ];
+    case "purchaseOrders":
+      return [
+        { value: "created_at", label: "Created" },
+        { value: "updated_at", label: "Updated" },
+        { value: "expected_possession_date", label: "Expected" },
+      ];
+    case "equipmentBundles":
+    case "types":
+    case "categories":
+    case "locations":
+    case "vendors":
+    case "customers":
+    case "users":
+    case "equipment":
+    case "salesPeople":
+      return [{ value: "created_at", label: "Created" }];
+    case "revenueTimeseries":
+    default:
+      return [];
+  }
+}
+
+function getRangeOrDefault() {
+  const range = readDateRangeParams();
+  if (range) return range;
+  const now = new Date();
+  const fromDt = startOfLocalDay(new Date(now.getTime() - 365 * DAY_MS));
+  const toDt = startOfLocalDay(now);
+  return {
+    from: fromDt.toISOString(),
+    to: new Date(toDt.getTime() + DAY_MS).toISOString(),
+  };
+}
+
+function readDateRangeParams() {
+  const fromDt = parseLocalDateInputValue(fromInput?.value);
+  const toDt = parseLocalDateInputValue(toInput?.value);
+  if (!fromDt || !toDt) return null;
+  return {
+    from: fromDt.toISOString(),
+    to: new Date(toDt.getTime() + DAY_MS).toISOString(),
+  };
+}
+
+function applyDateRangeParams(qs) {
+  const range = readDateRangeParams();
+  if (!range) return;
+  qs.set("from", range.from);
+  qs.set("to", range.to);
+  const dateField = String(dateFieldSelect?.value || "").trim();
+  if (dateField) qs.set("dateField", dateField);
 }
 
 function supportsStatuses(datasetKey) {
-  return datasetKey === "rentalOrders" || datasetKey === "quotes";
+  return (
+    datasetKey === "rentalOrders" ||
+    datasetKey === "quotes" ||
+    datasetKey === "rentalOrderLineItems" ||
+    datasetKey === "lineItemRevenueSummary"
+  );
+}
+
+function supportsAnalyticsOptions(datasetKey) {
+  return (
+    datasetKey === "revenueSummary" ||
+    datasetKey === "salespersonSummary" ||
+    datasetKey.startsWith("utilization") ||
+    datasetKey === "lineItemRevenueSummary"
+  );
+}
+
+function supportsAnalyticsFilters(datasetKey) {
+  return (
+    datasetKey === "revenueSummary" ||
+    datasetKey === "salespersonSummary" ||
+    datasetKey.startsWith("utilization")
+  );
+}
+
+function supportsUtilizationFilters(datasetKey) {
+  return datasetKey.startsWith("utilization");
+}
+
+function setSelectOptions(select, items, { includeAll = true, allLabel = "All" } = {}) {
+  if (!select) return;
+  select.innerHTML = "";
+  if (includeAll) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = allLabel;
+    select.appendChild(opt);
+  }
+  (items || []).forEach((item) => {
+    const opt = document.createElement("option");
+    opt.value = String(item.value);
+    opt.textContent = item.label;
+    select.appendChild(opt);
+  });
+}
+
+async function loadAnalyticsOptions() {
+  if (!activeCompanyId || analyticsOptionsLoaded) return;
+  try {
+    const [locationsData, typesData, categoriesData] = await Promise.all([
+      fetchJson(`/api/locations?companyId=${activeCompanyId}&scope=all`),
+      fetchJson(`/api/equipment-types?companyId=${activeCompanyId}`),
+      fetchJson(`/api/equipment-categories?companyId=${activeCompanyId}`),
+    ]);
+    const locations = Array.isArray(locationsData.locations)
+      ? locationsData.locations.map((l) => ({ value: l.id, label: l.name }))
+      : [];
+    const types = Array.isArray(typesData.types) ? typesData.types.map((t) => ({ value: t.id, label: t.name })) : [];
+    const categories = Array.isArray(categoriesData.categories)
+      ? categoriesData.categories.map((c) => ({ value: c.id, label: c.name }))
+      : [];
+    setSelectOptions(analyticsLocationSelect, locations);
+    setSelectOptions(analyticsTypeSelect, types);
+    setSelectOptions(analyticsCategorySelect, categories);
+    analyticsOptionsLoaded = true;
+  } catch {
+    setSelectOptions(analyticsLocationSelect, []);
+    setSelectOptions(analyticsTypeSelect, []);
+    setSelectOptions(analyticsCategorySelect, []);
+  }
 }
 
 async function loadDataset(datasetKey) {
@@ -93,6 +255,7 @@ async function loadDataset(datasetKey) {
   if (datasetKey === "rentalOrders") {
     const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
     if (statuses) qs.set("statuses", statuses);
+    applyDateRangeParams(qs);
     const data = await fetchJson(`/api/rental-orders?${qs.toString()}`);
     return Array.isArray(data.orders) ? data.orders : [];
   }
@@ -100,32 +263,108 @@ async function loadDataset(datasetKey) {
   if (datasetKey === "quotes") {
     const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
     if (statuses) qs.set("statuses", statuses);
+    applyDateRangeParams(qs);
     const data = await fetchJson(`/api/rental-quotes?${qs.toString()}`);
     return Array.isArray(data.orders) ? data.orders : [];
   }
 
+  if (datasetKey === "rentalOrderLineItems") {
+    const range = getRangeOrDefault();
+    const qs = new URLSearchParams({
+      companyId: String(activeCompanyId),
+      from: range.from,
+      to: range.to,
+    });
+    if (statuses) qs.set("statuses", statuses);
+    const dateField = String(dateFieldSelect?.value || "start_at");
+    if (dateField) qs.set("dateField", dateField);
+    const data = await fetchJson(`/api/rental-order-line-items?${qs.toString()}`);
+    return Array.isArray(data.items) ? data.items : [];
+  }
+
+  if (datasetKey === "lineItemRevenueSummary") {
+    const range = getRangeOrDefault();
+    const qs = new URLSearchParams({
+      companyId: String(activeCompanyId),
+      from: range.from,
+      to: range.to,
+    });
+    if (statuses) qs.set("statuses", statuses);
+    const dateField = String(dateFieldSelect?.value || "start_at");
+    if (dateField) qs.set("dateField", dateField);
+    const groupBy = String(lineItemGroupSelect?.value || "type");
+    if (groupBy) qs.set("groupBy", groupBy);
+    const data = await fetchJson(`/api/rental-order-line-items/revenue-summary?${qs.toString()}`);
+    return Array.isArray(data.rows) ? data.rows : [];
+  }
+
   if (datasetKey === "customers") {
-    const data = await fetchJson(`/api/customers?companyId=${activeCompanyId}`);
+    const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
+    applyDateRangeParams(qs);
+    const data = await fetchJson(`/api/customers?${qs.toString()}`);
     return Array.isArray(data.customers) ? data.customers : [];
   }
 
+  if (datasetKey === "users") {
+    const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
+    applyDateRangeParams(qs);
+    const data = await fetchJson(`/api/users?${qs.toString()}`);
+    return Array.isArray(data.users) ? data.users : [];
+  }
+
   if (datasetKey === "equipment") {
-    const data = await fetchJson(`/api/equipment?companyId=${activeCompanyId}`);
+    const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
+    applyDateRangeParams(qs);
+    const data = await fetchJson(`/api/equipment?${qs.toString()}`);
     return Array.isArray(data.equipment) ? data.equipment : [];
   }
 
+  if (datasetKey === "equipmentBundles") {
+    const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
+    applyDateRangeParams(qs);
+    const data = await fetchJson(`/api/equipment-bundles?${qs.toString()}`);
+    return Array.isArray(data.bundles) ? data.bundles : [];
+  }
+
   if (datasetKey === "types") {
-    const data = await fetchJson(`/api/equipment-types?companyId=${activeCompanyId}`);
+    const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
+    applyDateRangeParams(qs);
+    const data = await fetchJson(`/api/equipment-types?${qs.toString()}`);
     return Array.isArray(data.types) ? data.types : [];
   }
 
+  if (datasetKey === "categories") {
+    const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
+    applyDateRangeParams(qs);
+    const data = await fetchJson(`/api/equipment-categories?${qs.toString()}`);
+    return Array.isArray(data.categories) ? data.categories : [];
+  }
+
   if (datasetKey === "locations") {
-    const data = await fetchJson(`/api/locations?companyId=${activeCompanyId}`);
+    const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
+    applyDateRangeParams(qs);
+    const data = await fetchJson(`/api/locations?${qs.toString()}`);
     return Array.isArray(data.locations) ? data.locations : [];
   }
 
+  if (datasetKey === "vendors") {
+    const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
+    applyDateRangeParams(qs);
+    const data = await fetchJson(`/api/vendors?${qs.toString()}`);
+    return Array.isArray(data.vendors) ? data.vendors : [];
+  }
+
+  if (datasetKey === "purchaseOrders") {
+    const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
+    applyDateRangeParams(qs);
+    const data = await fetchJson(`/api/purchase-orders?${qs.toString()}`);
+    return Array.isArray(data.purchaseOrders) ? data.purchaseOrders : [];
+  }
+
   if (datasetKey === "salesPeople") {
-    const data = await fetchJson(`/api/sales-people?companyId=${activeCompanyId}`);
+    const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
+    applyDateRangeParams(qs);
+    const data = await fetchJson(`/api/sales-people?${qs.toString()}`);
     return Array.isArray(data.salesPeople) ? data.salesPeople : [];
   }
 
@@ -143,6 +382,103 @@ async function loadDataset(datasetKey) {
     return Array.isArray(data.rows) ? data.rows : [];
   }
 
+  if (datasetKey === "revenueSummary") {
+    const range = getRangeOrDefault();
+    const groupBy = String(revenueGroupSelect?.value || "location");
+    const locationId = String(analyticsLocationSelect?.value || "").trim();
+    const typeId = String(analyticsTypeSelect?.value || "").trim();
+    const qs = new URLSearchParams({
+      companyId: String(activeCompanyId),
+      from: range.from,
+      to: range.to,
+      groupBy,
+    });
+    if (locationId) qs.set("pickupLocationId", locationId);
+    if (typeId) qs.set("typeId", typeId);
+    const data = await fetchJson(`/api/revenue-summary?${qs.toString()}`);
+    return Array.isArray(data.rows) ? data.rows : [];
+  }
+
+  if (datasetKey === "salespersonSummary") {
+    const range = getRangeOrDefault();
+    const metric = String(salespersonMetricSelect?.value || "revenue");
+    const locationId = String(analyticsLocationSelect?.value || "").trim();
+    const typeId = String(analyticsTypeSelect?.value || "").trim();
+    const qs = new URLSearchParams({
+      companyId: String(activeCompanyId),
+      from: range.from,
+      to: range.to,
+      metric,
+    });
+    if (locationId) qs.set("pickupLocationId", locationId);
+    if (typeId) qs.set("typeId", typeId);
+    const data = await fetchJson(`/api/salesperson-summary?${qs.toString()}`);
+    return Array.isArray(data.rows) ? data.rows : [];
+  }
+
+  if (datasetKey === "utilizationSummary") {
+    const range = getRangeOrDefault();
+    const maxBasis = String(utilizationBasisSelect?.value || "rack");
+    const forwardMonths = String(Math.max(1, Math.min(18, Number(utilizationForwardInput?.value) || 12)));
+    const locationId = String(analyticsLocationSelect?.value || "").trim();
+    const typeId = String(analyticsTypeSelect?.value || "").trim();
+    const categoryId = String(analyticsCategorySelect?.value || "").trim();
+    const qs = new URLSearchParams({
+      companyId: String(activeCompanyId),
+      from: range.from,
+      to: range.to,
+      maxBasis,
+      forwardMonths,
+    });
+    if (locationId) qs.set("locationId", locationId);
+    if (typeId) qs.set("typeId", typeId);
+    if (categoryId) qs.set("categoryId", categoryId);
+    const data = await fetchJson(`/api/utilization-dashboard?${qs.toString()}`);
+    return data?.summary ? [data.summary] : [];
+  }
+
+  if (datasetKey === "utilizationDaily") {
+    const range = getRangeOrDefault();
+    const maxBasis = String(utilizationBasisSelect?.value || "rack");
+    const forwardMonths = String(Math.max(1, Math.min(18, Number(utilizationForwardInput?.value) || 12)));
+    const locationId = String(analyticsLocationSelect?.value || "").trim();
+    const typeId = String(analyticsTypeSelect?.value || "").trim();
+    const categoryId = String(analyticsCategorySelect?.value || "").trim();
+    const qs = new URLSearchParams({
+      companyId: String(activeCompanyId),
+      from: range.from,
+      to: range.to,
+      maxBasis,
+      forwardMonths,
+    });
+    if (locationId) qs.set("locationId", locationId);
+    if (typeId) qs.set("typeId", typeId);
+    if (categoryId) qs.set("categoryId", categoryId);
+    const data = await fetchJson(`/api/utilization-dashboard?${qs.toString()}`);
+    return Array.isArray(data?.daily) ? data.daily : [];
+  }
+
+  if (datasetKey === "utilizationForward") {
+    const range = getRangeOrDefault();
+    const maxBasis = String(utilizationBasisSelect?.value || "rack");
+    const forwardMonths = String(Math.max(1, Math.min(18, Number(utilizationForwardInput?.value) || 12)));
+    const locationId = String(analyticsLocationSelect?.value || "").trim();
+    const typeId = String(analyticsTypeSelect?.value || "").trim();
+    const categoryId = String(analyticsCategorySelect?.value || "").trim();
+    const qs = new URLSearchParams({
+      companyId: String(activeCompanyId),
+      from: range.from,
+      to: range.to,
+      maxBasis,
+      forwardMonths,
+    });
+    if (locationId) qs.set("locationId", locationId);
+    if (typeId) qs.set("typeId", typeId);
+    if (categoryId) qs.set("categoryId", categoryId);
+    const data = await fetchJson(`/api/utilization-dashboard?${qs.toString()}`);
+    return Array.isArray(data?.forward) ? data.forward : [];
+  }
+
   return [];
 }
 
@@ -152,18 +488,42 @@ function datasetLabel(key) {
       return "Rental Orders";
     case "quotes":
       return "Quotes";
+    case "rentalOrderLineItems":
+      return "Rental Order Line Items";
+    case "lineItemRevenueSummary":
+      return "Line Item Revenue Summary";
     case "customers":
       return "Customers";
+    case "users":
+      return "Users";
     case "equipment":
       return "Stock";
+    case "equipmentBundles":
+      return "Equipment Bundles";
     case "types":
       return "Equipments";
+    case "categories":
+      return "Equipment Categories";
     case "locations":
       return "Locations";
+    case "vendors":
+      return "Vendors";
+    case "purchaseOrders":
+      return "Purchase Orders";
     case "salesPeople":
       return "Sales People";
     case "revenueTimeseries":
       return "Revenue (time series)";
+    case "revenueSummary":
+      return "Revenue Summary";
+    case "salespersonSummary":
+      return "Salesperson Summary";
+    case "utilizationSummary":
+      return "Utilization Summary";
+    case "utilizationDaily":
+      return "Utilization Daily";
+    case "utilizationForward":
+      return "Utilization Forward";
     default:
       return key;
   }
@@ -171,11 +531,41 @@ function datasetLabel(key) {
 
 function defaultFieldsFor(key, rows) {
   if (key === "revenueTimeseries") return ["bucket", "label", "revenue"];
-  if (key === "customers") return ["company_name", "contact_name", "contact_email", "phone"];
-  if (key === "equipment") return ["type_name", "serial_number", "model_name", "condition", "location_name"];
-  if (key === "types") return ["name", "category_name", "stock_count", "active_count"];
-  if (key === "locations") return ["name", "city", "region", "country"];
-  if (key === "salesPeople") return ["name", "email", "phone"];
+  if (key === "rentalOrderLineItems")
+    return [
+      "order_status",
+      "ro_number",
+      "quote_number",
+      "customer_name",
+      "type_name",
+      "bundle_name",
+      "start_at",
+      "end_at",
+      "rate_basis",
+      "rate_amount",
+      "billable_units",
+      "line_amount",
+      "equipment_count",
+      "equipment_serials",
+      "equipment_models",
+      "equipment_conditions",
+    ];
+  if (key === "lineItemRevenueSummary") return ["label", "revenue"];
+  if (key === "revenueSummary") return ["label", "revenue"];
+  if (key === "salespersonSummary") return ["label", "value"];
+  if (key === "utilizationSummary") return ["maxPotential", "activeRevenue", "reservedRevenue", "deadRevenue", "utilization", "discountImpact"];
+  if (key === "utilizationDaily") return ["date", "rackTotal", "activeEffective", "reservedEffective", "discountImpact"];
+  if (key === "utilizationForward") return ["bucket", "rackTotal", "activeEffective", "reservedEffective", "discountImpact"];
+  if (key === "customers") return ["company_name", "contact_name", "email", "phone", "created_at"];
+  if (key === "users") return ["name", "email", "role", "can_act_as_customer", "created_at"];
+  if (key === "equipment") return ["type_name", "serial_number", "model_name", "condition", "location_name", "created_at"];
+  if (key === "equipmentBundles") return ["name", "primaryTypeName", "itemCount", "dailyRate", "weeklyRate", "createdAt"];
+  if (key === "types") return ["name", "category_name", "stock_count", "active_count", "created_at"];
+  if (key === "categories") return ["name", "id", "created_at"];
+  if (key === "locations") return ["name", "city", "region", "country", "created_at"];
+  if (key === "vendors") return ["company_name", "contact_name", "email", "phone", "created_at"];
+  if (key === "purchaseOrders") return ["status", "po_number", "vendor_name", "expected_possession_date", "created_at"];
+  if (key === "salesPeople") return ["name", "email", "phone", "created_at"];
   if (key === "quotes" || key === "rentalOrders") return ["status", "ro_number", "quote_number", "customer_name", "start_at", "end_at"];
 
   const first = rows && rows[0] ? Object.keys(rows[0]) : [];
@@ -257,7 +647,7 @@ function renderPreview() {
   const cols = selectedFields.length ? selectedFields : allFields(filteredRows).slice(0, 8);
   const head = document.createElement("div");
   head.className = "table-row table-header";
-  head.style.gridTemplateColumns = `repeat(${Math.max(1, cols.length)}, minmax(150px, 1fr))`;
+    head.style.gridTemplateColumns = `repeat(${Math.max(1, cols.length)}, 180px)`;
   cols.forEach((c) => {
     const span = document.createElement("span");
     span.textContent = c;
@@ -270,7 +660,7 @@ function renderPreview() {
   filteredRows.slice(0, 200).forEach((r) => {
     const row = document.createElement("div");
     row.className = "table-row";
-    row.style.gridTemplateColumns = head.style.gridTemplateColumns;
+      row.style.gridTemplateColumns = head.style.gridTemplateColumns;
     cols.forEach((c) => {
       const span = document.createElement("span");
       span.textContent = safeCellValue(r[c]);
@@ -454,10 +844,52 @@ function renderStatusVisibility() {
   if (statusesWrap) statusesWrap.style.display = supportsStatuses(key) ? "block" : "none";
 }
 
+function renderAnalyticsVisibility() {
+  const key = String(datasetSelect?.value || "");
+  if (!analyticsWrap) return;
+  const show = supportsAnalyticsOptions(key);
+  analyticsWrap.style.display = show ? "block" : "none";
+  if (show) {
+    loadAnalyticsOptions().catch(() => null);
+  }
+  if (analyticsRevenueRow) analyticsRevenueRow.style.display = key === "revenueSummary" ? "grid" : "none";
+  if (analyticsSalespersonRow) analyticsSalespersonRow.style.display = key === "salespersonSummary" ? "grid" : "none";
+  if (lineItemGroupRow) {
+    lineItemGroupRow.style.display = key === "lineItemRevenueSummary" ? "grid" : "none";
+  }
+  if (analyticsFiltersRow) analyticsFiltersRow.style.display = supportsAnalyticsFilters(key) ? "grid" : "none";
+  if (analyticsUtilizationRow) analyticsUtilizationRow.style.display = supportsUtilizationFilters(key) ? "grid" : "none";
+  if (analyticsCategoryRow) analyticsCategoryRow.style.display = supportsUtilizationFilters(key) ? "grid" : "none";
+  if (analyticsLocationSelect) analyticsLocationSelect.disabled = !supportsAnalyticsFilters(key);
+  if (analyticsTypeSelect) analyticsTypeSelect.disabled = !supportsAnalyticsFilters(key);
+  if (analyticsCategorySelect) analyticsCategorySelect.disabled = !supportsUtilizationFilters(key);
+}
+
 function renderRangeVisibility() {
   const key = String(datasetSelect?.value || "");
   if (!rangeRow) return;
   rangeRow.style.display = hasDateRange(key) ? "grid" : "none";
+}
+
+function renderDateFieldVisibility() {
+  const key = String(datasetSelect?.value || "");
+  if (!dateFieldRow || !dateFieldSelect) return;
+  const options = dateFieldOptionsFor(key);
+  if (!options.length) {
+    dateFieldRow.style.display = "none";
+    dateFieldSelect.innerHTML = "";
+    return;
+  }
+
+  dateFieldSelect.innerHTML = "";
+  options.forEach((opt) => {
+    const option = document.createElement("option");
+    option.value = opt.value;
+    option.textContent = opt.label;
+    dateFieldSelect.appendChild(option);
+  });
+  dateFieldSelect.value = options[0]?.value || "";
+  dateFieldRow.style.display = options.length > 1 ? "grid" : "none";
 }
 
 function applyDefaultStatusesFor(datasetKey) {
@@ -475,7 +907,20 @@ function applyDefaultStatusesFor(datasetKey) {
 async function runReport() {
   setMeta("");
   exportBtn.disabled = true;
-  const key = String(datasetSelect?.value || "rentalOrders");
+  const key = String(datasetSelect?.value || "").trim();
+  if (!key) {
+    previewTitle.textContent = "Preview";
+    companyMeta.textContent = "Select a dataset to run a report.";
+    rawRows = [];
+    filteredRows = [];
+    selectedFields = [];
+    renderFieldPicker([]);
+    if (countPill) countPill.textContent = "0 rows";
+    if (tableEl) tableEl.innerHTML = "";
+    if (chart) chart.destroy();
+    chart = null;
+    return;
+  }
   previewTitle.textContent = `Preview: ${datasetLabel(key)}`;
   companyMeta.textContent = "Loading…";
   try {
@@ -527,19 +972,31 @@ function init() {
   if (toInput) toInput.value = toLocalDateInputValue(startOfLocalDay(now));
 
   renderStatusVisibility();
+  renderAnalyticsVisibility();
   renderRangeVisibility();
+  renderDateFieldVisibility();
   renderFieldPicker([]);
   setMeta("Choose a dataset and click Run.");
 
   datasetSelect?.addEventListener("change", () => {
     renderStatusVisibility();
+    renderAnalyticsVisibility();
     renderRangeVisibility();
+    renderDateFieldVisibility();
     applyDefaultStatusesFor(String(datasetSelect?.value || ""));
-    runReport().catch(() => null);
+    setMeta("Choose a dataset and click Run.");
   });
   statusCheckboxes.forEach((c) => c.addEventListener("change", () => runReport().catch(() => null)));
   runBtn?.addEventListener("click", () => runReport().catch(() => null));
   searchInput?.addEventListener("input", () => onSearchChange());
+  dateFieldSelect?.addEventListener("change", () => runReport().catch(() => null));
+  [revenueGroupSelect, salespersonMetricSelect, utilizationBasisSelect, utilizationForwardInput]
+    .filter(Boolean)
+    .forEach((el) => el.addEventListener("change", () => runReport().catch(() => null)));
+  lineItemGroupSelect?.addEventListener("change", () => runReport().catch(() => null));
+  [analyticsLocationSelect, analyticsTypeSelect, analyticsCategorySelect]
+    .filter(Boolean)
+    .forEach((el) => el.addEventListener("change", () => runReport().catch(() => null)));
   exportBtn?.addEventListener("click", (e) => {
     e.preventDefault();
     exportCsv();

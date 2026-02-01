@@ -98,14 +98,27 @@
                 <div class="two-col">
                   <label>Dataset
                     <select id="reports-dataset">
+                      <option value="" selected>Select dataset</option>
                       <option value="rentalOrders">Rental Orders</option>
                       <option value="quotes">Quotes</option>
+                      <option value="rentalOrderLineItems">Rental Order Line Items</option>
+                      <option value="lineItemRevenueSummary">Line Item Revenue Summary</option>
                       <option value="customers">Customers</option>
+                      <option value="users">Users</option>
                       <option value="equipment">Stock</option>
+                      <option value="equipmentBundles">Equipment Bundles</option>
                       <option value="types">Equipments</option>
+                      <option value="categories">Equipment Categories</option>
                       <option value="locations">Locations</option>
+                      <option value="vendors">Vendors</option>
+                      <option value="purchaseOrders">Purchase Orders</option>
                       <option value="salesPeople">Sales People</option>
                       <option value="revenueTimeseries">Revenue (time series)</option>
+                      <option value="revenueSummary">Revenue Summary</option>
+                      <option value="salespersonSummary">Salesperson Summary</option>
+                      <option value="utilizationSummary">Utilization Summary</option>
+                      <option value="utilizationDaily">Utilization Daily</option>
+                      <option value="utilizationForward">Utilization Forward</option>
                     </select>
                   </label>
                   <label>Search
@@ -121,6 +134,11 @@
                     <input type="date" id="reports-to" />
                   </label>
                 </div>
+                <div class="two-col" id="reports-date-field-row" style="display:none;">
+                  <label>Date field
+                    <select id="reports-date-field"></select>
+                  </label>
+                </div>
 
                 <div class="stack" id="reports-statuses" style="display:none;">
                   <div class="hint">Statuses</div>
@@ -133,20 +151,64 @@
                   </div>
                 </div>
 
+                <div class="stack" id="reports-analytics" style="display:none;">
+                  <div class="hint">Analytics options</div>
+                  <div class="two-col" id="reports-analytics-row-revenue">
+                    <label>Revenue group by
+                      <select id="reports-revenue-group">
+                        <option value="location">Location</option>
+                        <option value="type">Type</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="two-col" id="reports-analytics-row-salesperson">
+                    <label>Salesperson metric
+                      <select id="reports-salesperson-metric">
+                        <option value="revenue">Revenue</option>
+                        <option value="transactions">Transactions</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="two-col" id="reports-lineitem-group-row">
+                    <label>Line item revenue group
+                      <select id="reports-lineitem-group">
+                        <option value="type">Type</option>
+                        <option value="bundle">Bundle</option>
+                        <option value="customer">Customer</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="two-col" id="reports-analytics-row-filters">
+                    <label>Location filter
+                      <select id="reports-analytics-location"></select>
+                    </label>
+                    <label>Type filter
+                      <select id="reports-analytics-type"></select>
+                    </label>
+                  </div>
+                  <div class="two-col" id="reports-analytics-row-utilization">
+                    <label>Utilization basis
+                      <select id="reports-utilization-basis">
+                        <option value="rack">Rack</option>
+                        <option value="expected">Expected</option>
+                      </select>
+                    </label>
+                    <label>Forward months
+                      <input id="reports-utilization-forward-months" type="number" min="1" max="18" value="12" />
+                    </label>
+                  </div>
+                  <div class="two-col" id="reports-analytics-row-category">
+                    <label>Category filter
+                      <select id="reports-analytics-category"></select>
+                    </label>
+                  </div>
+                </div>
+
                 <div class="stack">
                   <div class="hint">Columns</div>
                   <div class="report-fields" id="reports-fields"></div>
                 </div>
 
-                <div class="table-shell">
-                  <div class="table-head">
-                    <p id="reports-preview-title">Preview</p>
-                    <div class="inline">
-                      <span class="pill" id="reports-count">0 rows</span>
-                    </div>
-                  </div>
-                  <div class="table" id="reports-table"></div>
-                </div>
               </div>
 
               <div class="stack">
@@ -190,6 +252,18 @@
                   <div class="chart-canvas">
                     <canvas id="reports-chart"></canvas>
                   </div>
+                </div>
+              </div>
+
+              <div class="report-preview">
+                <div class="table-shell">
+                  <div class="table-head">
+                    <p id="reports-preview-title">Preview</p>
+                    <div class="inline">
+                      <span class="pill" id="reports-count">0 rows</span>
+                    </div>
+                  </div>
+                  <div class="table reports-table" id="reports-table"></div>
                 </div>
               </div>
             </div>

@@ -230,6 +230,26 @@
           <section class="card wide">
             <div class="card-header">
               <div>
+                <h2>Work order automation</h2>
+                <p class="hint" style="margin:6px 0 0;">Automatically create return inspection work orders when assets are returned.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="save-work-order-settings" type="button" disabled>Save</button>
+              </div>
+            </div>
+
+            <div class="stack">
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="auto-work-order-on-return" type="checkbox" />
+                <span>Auto-create return inspection work orders on return</span>
+              </label>
+              <p class="hint" id="work-order-settings-hint" style="margin:0;"></p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
                 <h2>Email (SMTP)</h2>
                 <p class="hint" style="margin:6px 0 0;">Send request confirmations and status updates to customers.</p>
               </div>

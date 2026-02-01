@@ -44,6 +44,10 @@ const qboTaxCodesHint = document.getElementById("qbo-tax-codes-hint");
 const qboHint = document.getElementById("qbo-hint");
 const saveQboSettingsBtn = document.getElementById("save-qbo-settings");
 
+const autoWorkOrderOnReturnToggle = document.getElementById("auto-work-order-on-return");
+const saveWorkOrderSettingsBtn = document.getElementById("save-work-order-settings");
+const workOrderSettingsHint = document.getElementById("work-order-settings-hint");
+
 const saveEmailSettingsBtn = document.getElementById("save-email-settings");
 const testEmailSettingsBtn = document.getElementById("test-email-settings");
 const emailEnabledToggle = document.getElementById("email-enabled");
@@ -76,6 +80,7 @@ let qboIncomeAccountIds = [];
 let qboTaxCodesCache = [];
 let qboTaxCodesLoading = false;
 let qboDefaultTaxCode = "";
+let workOrderSettingsLoaded = false;
 
 const storefrontRequirementOptions = [
   { key: "businessName", label: "Business name" },
@@ -278,6 +283,11 @@ function setCompanyInfoHint(message) {
 function setQboHint(message) {
   if (!qboHint) return;
   qboHint.textContent = String(message || "");
+}
+
+function setWorkOrderSettingsHint(message) {
+  if (!workOrderSettingsHint) return;
+  workOrderSettingsHint.textContent = String(message || "");
 }
 
 function setQboIncomeAccountsHint(message) {
@@ -668,6 +678,11 @@ async function loadSettings() {
   setQboSettingsFields(data.settings || null);
   qboSettingsLoaded = true;
   if (saveQboSettingsBtn) saveQboSettingsBtn.disabled = false;
+  if (autoWorkOrderOnReturnToggle) {
+    autoWorkOrderOnReturnToggle.checked = data.settings?.auto_work_order_on_return === true;
+  }
+  workOrderSettingsLoaded = true;
+  if (saveWorkOrderSettingsBtn) saveWorkOrderSettingsBtn.disabled = false;
 }
 
 async function loadQboIncomeAccounts({ force = false } = {}) {
@@ -787,6 +802,24 @@ async function saveQboSettings() {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to save QBO settings");
   setQboSettingsFields(data.settings);
+  return data.settings;
+}
+
+async function saveWorkOrderSettings() {
+  if (!activeCompanyId) return;
+  const res = await fetch("/api/company-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyId: activeCompanyId,
+      autoWorkOrderOnReturn: autoWorkOrderOnReturnToggle?.checked === true,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to save work order settings");
+  if (autoWorkOrderOnReturnToggle) {
+    autoWorkOrderOnReturnToggle.checked = data.settings?.auto_work_order_on_return === true;
+  }
   return data.settings;
 }
 
@@ -963,6 +996,21 @@ saveQboSettingsBtn?.addEventListener("click", async (e) => {
     setQboHint(err?.message ? String(err.message) : "Unable to save QBO settings.");
   } finally {
     saveQboSettingsBtn.disabled = !qboSettingsLoaded;
+  }
+});
+
+saveWorkOrderSettingsBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  setWorkOrderSettingsHint("Saving...");
+  saveWorkOrderSettingsBtn.disabled = true;
+  try {
+    await saveWorkOrderSettings();
+    setWorkOrderSettingsHint("Work order settings saved.");
+  } catch (err) {
+    setWorkOrderSettingsHint(err?.message ? String(err.message) : "Unable to save work order settings.");
+  } finally {
+    saveWorkOrderSettingsBtn.disabled = !workOrderSettingsLoaded;
   }
 });
 

@@ -89,6 +89,8 @@ const {
   deleteSalesPerson,
   listRentalOrders,
   listRentalOrdersForRange,
+  listRentalOrderLineItemsForRange,
+  getLineItemRevenueSummary,
   listRentalOrderContacts,
   listTimelineData,
   getRentalOrder,
@@ -3339,9 +3341,9 @@ app.post(
 app.get(
   "/api/users",
   asyncHandler(async (req, res) => {
-    const { companyId } = req.query;
+    const { companyId, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const users = await listUsers(companyId);
+    const users = await listUsers(companyId, { from, to, dateField });
     res.json({ users });
   })
 );
@@ -3395,9 +3397,9 @@ app.put(
 app.get(
   "/api/locations",
   asyncHandler(async (req, res) => {
-    const { companyId, scope } = req.query;
+    const { companyId, scope, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const locations = await listLocations(companyId, { scope });
+    const locations = await listLocations(companyId, { scope, from, to, dateField });
     res.json({ locations });
   })
 );
@@ -3626,9 +3628,9 @@ app.get(
 app.get(
   "/api/equipment-categories",
   asyncHandler(async (req, res) => {
-    const { companyId } = req.query;
+    const { companyId, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const categories = await listCategories(companyId);
+    const categories = await listCategories(companyId, { from, to, dateField });
     res.json({ categories });
   })
 );
@@ -3647,9 +3649,9 @@ app.post(
 app.get(
   "/api/equipment-types",
   asyncHandler(async (req, res) => {
-    const { companyId } = req.query;
+    const { companyId, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const types = await listTypes(companyId);
+    const types = await listTypes(companyId, { from, to, dateField });
     res.json({ types });
   })
 );
@@ -3750,9 +3752,9 @@ app.delete(
 app.get(
   "/api/customers",
   asyncHandler(async (req, res) => {
-    const { companyId } = req.query;
+    const { companyId, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const customers = await listCustomers(companyId);
+    const customers = await listCustomers(companyId, { from, to, dateField });
     res.json({ customers });
   })
 );
@@ -3760,9 +3762,9 @@ app.get(
 app.get(
   "/api/vendors",
   asyncHandler(async (req, res) => {
-    const { companyId } = req.query;
+    const { companyId, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const vendors = await listVendors(companyId);
+    const vendors = await listVendors(companyId, { from, to, dateField });
     res.json({ vendors });
   })
 );
@@ -4168,9 +4170,9 @@ app.delete(
 app.get(
   "/api/sales-people",
   asyncHandler(async (req, res) => {
-    const { companyId } = req.query;
+    const { companyId, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const sales = await listSalesPeople(companyId);
+    const sales = await listSalesPeople(companyId, { from, to, dateField });
     res.json({ sales });
   })
 );
@@ -5191,8 +5193,18 @@ app.post(
 app.get(
   "/api/rental-orders",
   asyncHandler(async (req, res) => {
-    const { companyId, statuses } = req.query;
+    const { companyId, statuses, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    if (from && to) {
+      const orders = await listRentalOrdersForRange(companyId, {
+        from,
+        to,
+        statuses: statuses || null,
+        quoteOnly: false,
+        dateField: dateField || "rental_period",
+      });
+      return res.json({ orders });
+    }
     const orders = await listRentalOrders(companyId, { statuses: statuses || null });
     res.json({ orders });
   })
@@ -5201,8 +5213,18 @@ app.get(
 app.get(
   "/api/rental-quotes",
   asyncHandler(async (req, res) => {
-    const { companyId, statuses } = req.query;
+    const { companyId, statuses, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    if (from && to) {
+      const orders = await listRentalOrdersForRange(companyId, {
+        from,
+        to,
+        statuses: statuses || null,
+        quoteOnly: true,
+        dateField: dateField || "rental_period",
+      });
+      return res.json({ orders });
+    }
     const orders = await listRentalOrders(companyId, { quoteOnly: true, statuses: statuses || null });
     res.json({ orders });
   })
@@ -5229,6 +5251,41 @@ app.get(
     }
     const data = await listTimelineData(companyId, { from, to, statuses: statuses || null });
     res.json(data);
+  })
+);
+
+app.get(
+  "/api/rental-order-line-items",
+  asyncHandler(async (req, res) => {
+    const { companyId, from, to, statuses, dateField } = req.query;
+    if (!companyId || !from || !to) {
+      return res.status(400).json({ error: "companyId, from, and to are required." });
+    }
+    const items = await listRentalOrderLineItemsForRange(companyId, {
+      from,
+      to,
+      statuses: statuses || null,
+      dateField,
+    });
+    res.json({ items });
+  })
+);
+
+app.get(
+  "/api/rental-order-line-items/revenue-summary",
+  asyncHandler(async (req, res) => {
+    const { companyId, from, to, statuses, dateField, groupBy } = req.query;
+    if (!companyId || !from || !to) {
+      return res.status(400).json({ error: "companyId, from, and to are required." });
+    }
+    const rows = await getLineItemRevenueSummary(companyId, {
+      from,
+      to,
+      statuses: statuses || null,
+      dateField,
+      groupBy,
+    });
+    res.json({ rows });
   })
 );
 
@@ -6219,9 +6276,9 @@ app.delete(
 app.get(
   "/api/purchase-orders",
   asyncHandler(async (req, res) => {
-    const { companyId } = req.query || {};
+    const { companyId, from, to, dateField } = req.query || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const purchaseOrders = await listPurchaseOrders(Number(companyId));
+    const purchaseOrders = await listPurchaseOrders(Number(companyId), { from, to, dateField });
     res.json({ purchaseOrders });
   })
 );
@@ -6479,9 +6536,9 @@ app.delete(
 app.get(
   "/api/equipment-bundles",
   asyncHandler(async (req, res) => {
-    const { companyId } = req.query;
+    const { companyId, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const bundles = await listEquipmentBundles(Number(companyId));
+    const bundles = await listEquipmentBundles(Number(companyId), { from, to, dateField });
     res.json({ bundles });
   })
 );
@@ -6613,9 +6670,9 @@ app.post(
 app.get(
   "/api/equipment",
   asyncHandler(async (req, res) => {
-    const { companyId } = req.query;
+    const { companyId, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const equipment = await listEquipment(companyId);
+    const equipment = await listEquipment(companyId, { from, to, dateField });
     res.json({ equipment });
   })
 );

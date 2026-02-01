@@ -3481,6 +3481,38 @@ function ensureReturnInspectionWorkOrders(li) {
   return created;
 }
 
+function removeReturnInspectionWorkOrders(li) {
+  if (!activeCompanyId) return false;
+  const ids = Array.isArray(li?.inventoryIds)
+    ? li.inventoryIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+    : [];
+  if (!ids.length) return false;
+  const idSet = new Set(ids.map((id) => String(id)));
+  const lineItemId = li?.lineItemId ? String(li.lineItemId) : null;
+  const orderNumber = draft?.roNumber || draft?.quoteNumber || null;
+  const orders = loadWorkOrdersForCompany(activeCompanyId);
+  let removed = false;
+
+  const filtered = orders.filter((order) => {
+    if (order?.returnInspection !== true) return true;
+    if (order?.source !== "return_inspection") return true;
+    if (order?.orderStatus === "closed") return true;
+    if (!idSet.has(String(order?.unitId))) return true;
+    if (lineItemId) {
+      if (String(order?.sourceLineItemId || "") !== lineItemId) return true;
+    } else if (orderNumber) {
+      if (String(order?.sourceOrderNumber || "") !== String(orderNumber)) return true;
+    } else {
+      if (order?.sourceLineItemId || order?.sourceOrderId) return true;
+    }
+    removed = true;
+    return false;
+  });
+
+  if (removed) saveWorkOrdersForCompany(activeCompanyId, filtered);
+  return removed;
+}
+
 function ensureSingleUnitSelection(li) {
   const ids = Array.isArray(li.inventoryIds)
     ? li.inventoryIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
@@ -3920,6 +3952,8 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn, ski
     }
     if (targetReturn) {
       ensureReturnInspectionWorkOrders(li);
+    } else {
+      removeReturnInspectionWorkOrders(li);
     }
   }
 

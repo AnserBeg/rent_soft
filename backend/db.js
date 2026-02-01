@@ -1569,12 +1569,28 @@ async function createUser({ companyId, name, email, role = "member", password })
   return result.rows[0];
 }
 
-async function listUsers(companyId) {
+async function listUsers(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
   const cid = Number(companyId);
   if (!Number.isFinite(cid) || cid <= 0) return [];
+  const fromIso = from ? normalizeTimestamptz(from) : null;
+  const toIso = to ? normalizeTimestamptz(to) : null;
+  const field = dateField === "created_at" ? "created_at" : "created_at";
+  const params = [cid];
+  const where = ["company_id = $1"];
+  if (fromIso) {
+    params.push(fromIso);
+    where.push(`${field} >= $${params.length}::timestamptz`);
+  }
+  if (toIso) {
+    params.push(toIso);
+    where.push(`${field} < $${params.length}::timestamptz`);
+  }
   const res = await pool.query(
-    `SELECT id, name, email, role, can_act_as_customer, created_at FROM users WHERE company_id = $1 ORDER BY created_at ASC`,
-    [cid]
+    `SELECT id, name, email, role, can_act_as_customer, created_at
+       FROM users
+      WHERE ${where.join(" AND ")}
+      ORDER BY created_at ASC`,
+    params
   );
   return res.rows || [];
 }
@@ -1856,16 +1872,28 @@ async function updateCompanyProfile({
   };
 }
 
-async function listLocations(companyId, { scope } = {}) {
+async function listLocations(companyId, { scope, from = null, to = null, dateField = "created_at" } = {}) {
   const normalizedScope = String(scope || "").trim().toLowerCase();
   const includeAll = normalizedScope === "all";
+  const fromIso = from ? normalizeTimestamptz(from) : null;
+  const toIso = to ? normalizeTimestamptz(to) : null;
+  const field = dateField === "created_at" ? "created_at" : "created_at";
+  const params = [companyId, includeAll];
+  const where = ["company_id = $1", "($2::boolean OR is_base_location = TRUE)"];
+  if (fromIso) {
+    params.push(fromIso);
+    where.push(`${field} >= $${params.length}::timestamptz`);
+  }
+  if (toIso) {
+    params.push(toIso);
+    where.push(`${field} < $${params.length}::timestamptz`);
+  }
   const result = await pool.query(
-    `SELECT id, name, street_address, city, region, country, latitude, longitude, is_base_location
+    `SELECT id, name, street_address, city, region, country, latitude, longitude, is_base_location, created_at
      FROM locations
-     WHERE company_id = $1
-       AND ($2::boolean OR is_base_location = TRUE)
+     WHERE ${where.join(" AND ")}
      ORDER BY name`,
-    [companyId, includeAll]
+    params
   );
   return result.rows;
 }
@@ -2092,10 +2120,26 @@ async function listEquipmentCurrentLocationHistory({ companyId, equipmentId, lim
   return res.rows;
 }
 
-async function listCategories(companyId) {
+async function listCategories(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
+  const fromIso = from ? normalizeTimestamptz(from) : null;
+  const toIso = to ? normalizeTimestamptz(to) : null;
+  const field = dateField === "created_at" ? "created_at" : "created_at";
+  const params = [companyId];
+  const where = ["company_id = $1"];
+  if (fromIso) {
+    params.push(fromIso);
+    where.push(`${field} >= $${params.length}::timestamptz`);
+  }
+  if (toIso) {
+    params.push(toIso);
+    where.push(`${field} < $${params.length}::timestamptz`);
+  }
   const result = await pool.query(
-    `SELECT id, name FROM equipment_categories WHERE company_id = $1 ORDER BY name`,
-    [companyId]
+    `SELECT id, name, created_at
+       FROM equipment_categories
+      WHERE ${where.join(" AND ")}
+      ORDER BY name`,
+    params
   );
   return result.rows;
 }
@@ -2111,19 +2155,33 @@ async function createCategory({ companyId, name }) {
   return result.rows[0];
 }
 
-async function listTypes(companyId) {
+async function listTypes(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
+  const fromIso = from ? normalizeTimestamptz(from) : null;
+  const toIso = to ? normalizeTimestamptz(to) : null;
+  const field = dateField === "created_at" ? "created_at" : "created_at";
+  const params = [companyId];
+  const where = ["et.company_id = $1"];
+  if (fromIso) {
+    params.push(fromIso);
+    where.push(`et.${field} >= $${params.length}::timestamptz`);
+  }
+  if (toIso) {
+    params.push(toIso);
+    where.push(`et.${field} < $${params.length}::timestamptz`);
+  }
   const result = await pool.query(
     `SELECT et.id, et.name, et.description, et.terms, et.category_id,
             COALESCE(NULLIF(et.image_urls, '[]'::jsonb)->>0, et.image_url) AS image_url,
             et.image_urls,
             et.qbo_item_id,
             et.daily_rate, et.weekly_rate, et.monthly_rate,
-            ec.name AS category
+            ec.name AS category,
+            et.created_at
      FROM equipment_types et
      LEFT JOIN equipment_categories ec ON et.category_id = ec.id
-     WHERE et.company_id = $1
+     WHERE ${where.join(" AND ")}
      ORDER BY et.name`,
-    [companyId]
+    params
   );
   return result.rows;
 }
@@ -2223,7 +2281,20 @@ async function deleteType({ id, companyId }) {
   await pool.query(`DELETE FROM equipment_types WHERE id = $1 AND company_id = $2`, [id, companyId]);
 }
 
-async function listEquipment(companyId) {
+async function listEquipment(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
+  const fromIso = from ? normalizeTimestamptz(from) : null;
+  const toIso = to ? normalizeTimestamptz(to) : null;
+  const field = dateField === "created_at" ? "created_at" : "created_at";
+  const params = [companyId];
+  const where = ["e.company_id = $1", "(e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')"];
+  if (fromIso) {
+    params.push(fromIso);
+    where.push(`e.${field} >= $${params.length}::timestamptz`);
+  }
+  if (toIso) {
+    params.push(toIso);
+    where.push(`e.${field} < $${params.length}::timestamptz`);
+  }
   const result = await pool.query(
     `
     SELECT e.id,
@@ -2266,7 +2337,8 @@ async function listEquipment(companyId) {
            COALESCE(active_ro.order_id, reserved_ro.order_id) AS rental_order_id,
            COALESCE(active_ro.ro_number, reserved_ro.ro_number) AS rental_order_number,
            COALESCE(active_ro.customer_name, reserved_ro.customer_name) AS rental_customer_name,
-           COALESCE(active_ro.customer_id, reserved_ro.customer_id) AS rental_customer_id
+           COALESCE(active_ro.customer_id, reserved_ro.customer_id) AS rental_customer_id,
+           e.created_at
     FROM equipment e
     LEFT JOIN locations l ON e.location_id = l.id
     LEFT JOIN locations cl ON e.current_location_id = cl.id
@@ -2335,11 +2407,10 @@ async function listEquipment(companyId) {
        ORDER BY li.start_at DESC, ro.id DESC
        LIMIT 1
     ) reserved_ro ON TRUE
-    WHERE e.company_id = $1
-      AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
+    WHERE ${where.join(" AND ")}
     ORDER BY e.created_at DESC;
   `,
-    [companyId]
+    params
   );
   return result.rows;
 }
@@ -2536,7 +2607,20 @@ function normalizeEquipmentIds(input) {
   return Array.from(new Set(ids));
 }
 
-async function listEquipmentBundles(companyId) {
+async function listEquipmentBundles(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
+  const fromIso = from ? normalizeTimestamptz(from) : null;
+  const toIso = to ? normalizeTimestamptz(to) : null;
+  const field = dateField === "updated_at" ? "updated_at" : "created_at";
+  const params = [companyId];
+  const where = ["b.company_id = $1"];
+  if (fromIso) {
+    params.push(fromIso);
+    where.push(`b.${field} >= $${params.length}::timestamptz`);
+  }
+  if (toIso) {
+    params.push(toIso);
+    where.push(`b.${field} < $${params.length}::timestamptz`);
+  }
   const result = await pool.query(
     `
     SELECT b.id,
@@ -2545,6 +2629,7 @@ async function listEquipmentBundles(companyId) {
            b.daily_rate,
            b.weekly_rate,
            b.monthly_rate,
+           b.created_at,
            pe.type_id AS primary_type_id,
            et.name AS primary_type_name,
            et.daily_rate AS type_daily_rate,
@@ -2555,11 +2640,11 @@ async function listEquipmentBundles(companyId) {
  LEFT JOIN equipment pe ON pe.id = b.primary_equipment_id
  LEFT JOIN equipment_types et ON et.id = pe.type_id
  LEFT JOIN equipment_bundle_items bi ON bi.bundle_id = b.id
-     WHERE b.company_id = $1
+     WHERE ${where.join(" AND ")}
      GROUP BY b.id, pe.type_id, et.name, et.daily_rate, et.weekly_rate, et.monthly_rate
      ORDER BY b.name ASC
     `,
-    [companyId]
+    params
   );
   return result.rows.map((row) => ({
     id: row.id,
@@ -2571,6 +2656,7 @@ async function listEquipmentBundles(companyId) {
     weeklyRate: row.weekly_rate === null || row.weekly_rate === undefined ? (row.type_weekly_rate ?? null) : Number(row.weekly_rate),
     monthlyRate: row.monthly_rate === null || row.monthly_rate === undefined ? (row.type_monthly_rate ?? null) : Number(row.monthly_rate),
     itemCount: Number(row.item_count || 0),
+    createdAt: row.created_at || null,
   }));
 }
 
@@ -2762,7 +2848,20 @@ async function deleteEquipmentBundle({ id, companyId }) {
   await pool.query(`DELETE FROM equipment_bundles WHERE id = $1 AND company_id = $2`, [id, companyId]);
 }
 
-async function listVendors(companyId) {
+async function listVendors(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
+  const fromIso = from ? normalizeTimestamptz(from) : null;
+  const toIso = to ? normalizeTimestamptz(to) : null;
+  const field = dateField === "created_at" ? "created_at" : "created_at";
+  const params = [companyId];
+  const where = ["company_id = $1"];
+  if (fromIso) {
+    params.push(fromIso);
+    where.push(`${field} >= $${params.length}::timestamptz`);
+  }
+  if (toIso) {
+    params.push(toIso);
+    where.push(`${field} < $${params.length}::timestamptz`);
+  }
   const result = await pool.query(
     `SELECT id,
             company_name,
@@ -2774,11 +2873,12 @@ async function listVendors(companyId) {
             postal_code,
             email,
             phone,
-            notes
+            notes,
+            created_at
        FROM vendors
-      WHERE company_id = $1
+      WHERE ${where.join(" AND ")}
       ORDER BY company_name`,
-    [companyId]
+    params
   );
   return result.rows;
 }
@@ -2867,7 +2967,22 @@ async function deleteVendor({ id, companyId }) {
   await pool.query(`DELETE FROM vendors WHERE id = $1 AND company_id = $2`, [id, companyId]);
 }
 
-async function listPurchaseOrders(companyId) {
+async function listPurchaseOrders(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
+  const fromIso = from ? normalizeTimestamptz(from) : null;
+  const toIso = to ? normalizeTimestamptz(to) : null;
+  const allowed = new Set(["created_at", "updated_at", "expected_possession_date"]);
+  const field = allowed.has(dateField) ? dateField : "created_at";
+  const isDateField = field === "expected_possession_date";
+  const params = [companyId];
+  const where = ["po.company_id = $1"];
+  if (fromIso) {
+    params.push(fromIso);
+    where.push(`po.${field} >= $${params.length}::${isDateField ? "date" : "timestamptz"}`);
+  }
+  if (toIso) {
+    params.push(toIso);
+    where.push(`po.${field} < $${params.length}::${isDateField ? "date" : "timestamptz"}`);
+  }
   const result = await pool.query(
     `SELECT po.id,
             po.company_id,
@@ -2899,9 +3014,9 @@ async function listPurchaseOrders(companyId) {
   LEFT JOIN equipment_types et ON et.id = po.type_id
   LEFT JOIN locations l ON l.id = po.location_id
   LEFT JOIN locations cl ON cl.id = po.current_location_id
-      WHERE po.company_id = $1
+      WHERE ${where.join(" AND ")}
       ORDER BY po.created_at DESC, po.id DESC`,
-    [companyId]
+    params
   );
   return result.rows;
 }
@@ -3075,7 +3190,20 @@ async function deletePurchaseOrder({ id, companyId }) {
   await pool.query(`DELETE FROM purchase_orders WHERE id = $1 AND company_id = $2`, [id, companyId]);
 }
 
-async function listCustomers(companyId) {
+async function listCustomers(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
+  const fromIso = from ? normalizeTimestamptz(from) : null;
+  const toIso = to ? normalizeTimestamptz(to) : null;
+  const field = dateField === "created_at" ? "created_at" : "created_at";
+  const params = [companyId];
+  const where = ["c.company_id = $1"];
+  if (fromIso) {
+    params.push(fromIso);
+    where.push(`c.${field} >= $${params.length}::timestamptz`);
+  }
+  if (toIso) {
+    params.push(toIso);
+    where.push(`c.${field} < $${params.length}::timestamptz`);
+  }
   const result = await pool.query(
     `SELECT c.id,
             c.company_name,
@@ -3095,6 +3223,7 @@ async function listCustomers(companyId) {
             c.follow_up_date,
             c.notes,
             c.parent_customer_id,
+            c.created_at,
             p.company_name AS parent_company_name,
             CASE
               WHEN c.parent_customer_id IS NOT NULL THEN p.can_charge_deposit
@@ -3102,9 +3231,9 @@ async function listCustomers(companyId) {
             END AS effective_can_charge_deposit
      FROM customers c
      LEFT JOIN customers p ON p.id = c.parent_customer_id
-     WHERE c.company_id = $1
+     WHERE ${where.join(" AND ")}
      ORDER BY c.company_name`,
-    [companyId]
+    params
   );
   return result.rows;
 }
@@ -4107,10 +4236,26 @@ async function deleteCustomerPricing({ companyId, customerId, typeId }) {
   );
 }
 
-async function listSalesPeople(companyId) {
+async function listSalesPeople(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
+  const fromIso = from ? normalizeTimestamptz(from) : null;
+  const toIso = to ? normalizeTimestamptz(to) : null;
+  const field = dateField === "created_at" ? "created_at" : "created_at";
+  const params = [companyId];
+  const where = ["company_id = $1"];
+  if (fromIso) {
+    params.push(fromIso);
+    where.push(`${field} >= $${params.length}::timestamptz`);
+  }
+  if (toIso) {
+    params.push(toIso);
+    where.push(`${field} < $${params.length}::timestamptz`);
+  }
   const result = await pool.query(
-    `SELECT id, name, email, phone, image_url FROM sales_people WHERE company_id = $1 ORDER BY name`,
-    [companyId]
+    `SELECT id, name, email, phone, image_url, created_at
+       FROM sales_people
+      WHERE ${where.join(" AND ")}
+      ORDER BY name`,
+    params
   );
   return result.rows;
 }
@@ -5008,7 +5153,7 @@ async function listRentalOrders(companyId, { statuses = null, quoteOnly = false 
   return result.rows;
 }
 
-async function listRentalOrdersForRange(companyId, { from, to, statuses = null } = {}) {
+async function listRentalOrdersForRange(companyId, { from, to, statuses = null, quoteOnly = false, dateField = "rental_period" } = {}) {
   const fromIso = normalizeTimestamptz(from);
   const toIso = normalizeTimestamptz(to);
   if (!fromIso || !toIso) return [];
@@ -5025,8 +5170,14 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null }
 
   const params = [companyId, fromIso, toIso];
   const where = ["ro.company_id = $1"];
-  where.push(`(SELECT MIN(li.start_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) < $3::timestamptz`);
-  where.push(`(SELECT MAX(li.end_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) > $2::timestamptz`);
+  if (quoteOnly) where.push("ro.quote_number IS NOT NULL");
+  if (dateField === "created_at" || dateField === "updated_at") {
+    where.push(`ro.${dateField} >= $2::timestamptz`);
+    where.push(`ro.${dateField} < $3::timestamptz`);
+  } else {
+    where.push(`(SELECT MIN(li.start_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) < $3::timestamptz`);
+    where.push(`(SELECT MAX(li.end_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) > $2::timestamptz`);
+  }
   if (useStatuses) {
     params.push(useStatuses);
     where.push(`ro.status = ANY($${params.length}::text[])`);
@@ -5100,6 +5251,199 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null }
     params
   );
   return result.rows;
+}
+
+async function listRentalOrderLineItemsForRange(
+  companyId,
+  { from, to, statuses = null, dateField = "start_at" } = {}
+) {
+  const fromIso = normalizeTimestamptz(from);
+  const toIso = normalizeTimestamptz(to);
+  if (!fromIso || !toIso) return [];
+
+  const normalizedStatuses = Array.isArray(statuses)
+    ? statuses.map((s) => normalizeRentalOrderStatus(s)).filter(Boolean)
+    : typeof statuses === "string"
+      ? statuses
+          .split(",")
+          .map((s) => normalizeRentalOrderStatus(s))
+          .filter(Boolean)
+      : null;
+  const useStatuses = normalizedStatuses && normalizedStatuses.length ? normalizedStatuses : null;
+
+  const fieldMap = {
+    start_at: "li.start_at",
+    end_at: "li.end_at",
+    fulfilled_at: "li.fulfilled_at",
+    returned_at: "li.returned_at",
+    order_created_at: "ro.created_at",
+    order_updated_at: "ro.updated_at",
+  };
+  const field = fieldMap[dateField] || "li.start_at";
+
+  const params = [companyId, fromIso, toIso];
+  const where = ["ro.company_id = $1", `${field} >= $2::timestamptz`, `${field} < $3::timestamptz`];
+  if (useStatuses) {
+    params.push(useStatuses);
+    where.push(`ro.status = ANY($${params.length}::text[])`);
+  }
+
+  const result = await pool.query(
+    `
+    SELECT li.id AS line_item_id,
+           li.rental_order_id,
+           ro.status AS order_status,
+           ro.quote_number,
+           ro.ro_number,
+           ro.customer_po,
+           ro.created_at AS order_created_at,
+           ro.updated_at AS order_updated_at,
+           ro.customer_id,
+           c.company_name AS customer_name,
+           ro.salesperson_id,
+           sp.name AS salesperson_name,
+           ro.pickup_location_id,
+           l.name AS pickup_location_name,
+           li.type_id,
+           et.name AS type_name,
+           ec.id AS category_id,
+           ec.name AS category_name,
+           li.bundle_id,
+           b.name AS bundle_name,
+           li.start_at,
+           li.end_at,
+           li.fulfilled_at,
+           li.returned_at,
+           li.rate_basis,
+           li.rate_amount,
+           li.billable_units,
+           li.line_amount,
+           (SELECT COUNT(*) FROM rental_order_line_inventory liv WHERE liv.line_item_id = li.id) AS equipment_count,
+           (SELECT COALESCE(jsonb_agg(e.id ORDER BY e.id), '[]'::jsonb)
+              FROM rental_order_line_inventory liv
+              JOIN equipment e ON e.id = liv.equipment_id
+             WHERE liv.line_item_id = li.id) AS equipment_ids,
+           (SELECT COALESCE(jsonb_agg(e.serial_number ORDER BY e.serial_number), '[]'::jsonb)
+              FROM rental_order_line_inventory liv
+              JOIN equipment e ON e.id = liv.equipment_id
+             WHERE liv.line_item_id = li.id) AS equipment_serials
+          ,
+           (SELECT COALESCE(jsonb_agg(e.model_name ORDER BY e.serial_number), '[]'::jsonb)
+              FROM rental_order_line_inventory liv
+              JOIN equipment e ON e.id = liv.equipment_id
+             WHERE liv.line_item_id = li.id) AS equipment_models,
+           (SELECT COALESCE(jsonb_agg(e.condition ORDER BY e.serial_number), '[]'::jsonb)
+              FROM rental_order_line_inventory liv
+              JOIN equipment e ON e.id = liv.equipment_id
+             WHERE liv.line_item_id = li.id) AS equipment_conditions,
+           (SELECT COALESCE(jsonb_agg(e.manufacturer ORDER BY e.serial_number), '[]'::jsonb)
+              FROM rental_order_line_inventory liv
+              JOIN equipment e ON e.id = liv.equipment_id
+             WHERE liv.line_item_id = li.id) AS equipment_manufacturers
+      FROM rental_order_line_items li
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+      JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN sales_people sp ON sp.id = ro.salesperson_id
+ LEFT JOIN locations l ON l.id = ro.pickup_location_id
+ LEFT JOIN equipment_types et ON et.id = li.type_id
+ LEFT JOIN equipment_categories ec ON ec.id = et.category_id
+ LEFT JOIN equipment_bundles b ON b.id = li.bundle_id
+     WHERE ${where.join(" AND ")}
+     ORDER BY ${field} ASC NULLS LAST, li.id ASC
+    `,
+    params
+  );
+  return result.rows;
+}
+
+async function getLineItemRevenueSummary(
+  companyId,
+  { from, to, statuses = null, dateField = "start_at", groupBy = "type" } = {}
+) {
+  const fromIso = normalizeTimestamptz(from);
+  const toIso = normalizeTimestamptz(to);
+  if (!fromIso || !toIso) return [];
+
+  const normalizedStatuses = Array.isArray(statuses)
+    ? statuses.map((s) => normalizeRentalOrderStatus(s)).filter(Boolean)
+    : typeof statuses === "string"
+      ? statuses
+          .split(",")
+          .map((s) => normalizeRentalOrderStatus(s))
+          .filter(Boolean)
+      : null;
+  const useStatuses = normalizedStatuses && normalizedStatuses.length ? normalizedStatuses : null;
+
+  const fieldMap = {
+    start_at: "li.start_at",
+    end_at: "li.end_at",
+    fulfilled_at: "li.fulfilled_at",
+    returned_at: "li.returned_at",
+    order_created_at: "ro.created_at",
+    order_updated_at: "ro.updated_at",
+  };
+  const field = fieldMap[dateField] || "li.start_at";
+
+  const group = String(groupBy || "type").toLowerCase();
+
+  const params = [companyId, fromIso, toIso];
+  const filters = ["ro.company_id = $1", `${field} >= $2::timestamptz`, `${field} < $3::timestamptz`];
+  if (useStatuses) {
+    params.push(useStatuses);
+    filters.push(`ro.status = ANY($${params.length}::text[])`);
+  }
+
+  if (group === "bundle") {
+    const res = await pool.query(
+      `
+      SELECT li.bundle_id AS key,
+             COALESCE(b.name, 'No bundle') AS label,
+             COALESCE(SUM(li.line_amount), 0) AS revenue
+        FROM rental_order_line_items li
+        JOIN rental_orders ro ON ro.id = li.rental_order_id
+   LEFT JOIN equipment_bundles b ON b.id = li.bundle_id
+       WHERE ${filters.join(" AND ")}
+       GROUP BY li.bundle_id, b.name
+       ORDER BY revenue DESC, label ASC
+      `,
+      params
+    );
+    return res.rows.map((r) => ({ key: r.key, label: r.label, revenue: Number(r.revenue || 0) }));
+  }
+
+  if (group === "customer") {
+    const res = await pool.query(
+      `
+      SELECT ro.customer_id AS key,
+             COALESCE(c.company_name, 'Unknown') AS label,
+             COALESCE(SUM(li.line_amount), 0) AS revenue
+        FROM rental_order_line_items li
+        JOIN rental_orders ro ON ro.id = li.rental_order_id
+        JOIN customers c ON c.id = ro.customer_id
+       WHERE ${filters.join(" AND ")}
+       GROUP BY ro.customer_id, c.company_name
+       ORDER BY revenue DESC, label ASC
+      `,
+      params
+    );
+    return res.rows.map((r) => ({ key: r.key, label: r.label, revenue: Number(r.revenue || 0) }));
+  }
+
+  const res = await pool.query(
+    `
+    SELECT li.type_id AS key,
+           COALESCE(et.name, 'Unknown type') AS label,
+           COALESCE(SUM(li.line_amount), 0) AS revenue
+      FROM rental_order_line_items li
+      JOIN rental_orders ro ON ro.id = li.rental_order_id
+ LEFT JOIN equipment_types et ON et.id = li.type_id
+     WHERE ${filters.join(" AND ")}
+     GROUP BY li.type_id, et.name
+     ORDER BY revenue DESC, label ASC
+    `,
+    params
+  );
+  return res.rows.map((r) => ({ key: r.key, label: r.label, revenue: Number(r.revenue || 0) }));
 }
 
 async function listRentalOrderContacts({ companyId, customerId }) {
@@ -12672,6 +13016,8 @@ module.exports = {
   upsertCompanyEmailSettings,
   listRentalOrders,
   listRentalOrdersForRange,
+  listRentalOrderLineItemsForRange,
+  getLineItemRevenueSummary,
   listRentalOrderContacts,
   listTimelineData,
   getRentalOrder,

@@ -1916,9 +1916,24 @@ a.ghost {
 
 .report-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 480px;
+  grid-template-columns: minmax(320px, 1fr) minmax(480px, 1.2fr);
   gap: 16px;
   align-items: start;
+}
+
+.report-grid > * {
+  min-width: 0;
+}
+
+.report-grid > .stack:first-child {
+  overflow-x: hidden;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.report-grid > .stack:first-child > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .report-fields {
@@ -1928,6 +1943,8 @@ a.ghost {
   padding: 12px;
   max-height: 220px;
   overflow: auto;
+  max-width: 100%;
+  width: 100%;
 }
 
 .report-fields-grid {
@@ -1937,6 +1954,13 @@ a.ghost {
   justify-content: flex-start;
 }
 
+.report-fields-grid .filter-pill {
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  word-break: break-word;
+}
+
 .report-grid .chart-card {
   margin: 0;
 }
@@ -1944,6 +1968,16 @@ a.ghost {
 .report-grid .chart-canvas {
   height: 320px;
   max-height: 380px;
+}
+
+.report-preview {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.report-preview .table-header {
+  position: static;
+  top: auto;
 }
 
 @media (max-width: 1100px) {
@@ -3165,6 +3199,17 @@ a.ghost {
   isolation: isolate;
 }
 
+.reports-table {
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-gutter: stable;
+}
+
+.reports-table .table-row {
+  width: max-content;
+  min-width: 100%;
+}
+
 .types-cards-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -3431,6 +3476,8 @@ a.ghost {
 }
 
 .table-row span {
+  display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
