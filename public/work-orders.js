@@ -60,8 +60,41 @@ function saveWorkOrdersToStorage(orders) {
   localStorage.setItem(keyForWorkOrders(activeCompanyId), JSON.stringify(orders || []));
 }
 
+function normalizeUnitIds(order) {
+  if (!order) return [];
+  if (Array.isArray(order.unitIds)) {
+    return order.unitIds.map((id) => String(id)).filter(Boolean);
+  }
+  if (order.unitId) return [String(order.unitId)];
+  return [];
+}
+
+function normalizeUnitLabels(order) {
+  if (!order) return [];
+  if (Array.isArray(order.unitLabels)) {
+    return order.unitLabels.map((label) => String(label)).filter(Boolean);
+  }
+  if (order.unitLabel) return [String(order.unitLabel)];
+  return [];
+}
+
+function dedupeStringList(values) {
+  return Array.from(new Set((values || []).map((value) => String(value)).filter(Boolean)));
+}
+
+function formatUnitSummary(order) {
+  const labels = dedupeStringList(normalizeUnitLabels(order));
+  if (!labels.length) return order?.unitLabel || "--";
+  if (labels.length === 1) return labels[0];
+  const preview = labels.slice(0, 2).join(", ");
+  const remaining = labels.length - 2;
+  return remaining > 0 ? `${preview} +${remaining} more` : preview;
+}
+
 async function syncWorkOrderPause(order) {
-  if (!activeCompanyId || !order?.unitId) return;
+  if (!activeCompanyId) return;
+  const unitIds = dedupeStringList(normalizeUnitIds(order));
+  if (!unitIds.length) return;
   const now = new Date().toISOString();
   const payload = {
     companyId: activeCompanyId,
@@ -77,13 +110,19 @@ async function syncWorkOrderPause(order) {
   } else {
     payload.endAt = order.closedAt || order.updatedAt || now;
   }
-  const res = await fetch(`/api/equipment/${encodeURIComponent(order.unitId)}/work-order-pause`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Unable to update rental pause period.");
+  const errors = [];
+  await Promise.all(
+    unitIds.map(async (unitId) => {
+      const res = await fetch(`/api/equipment/${encodeURIComponent(unitId)}/work-order-pause`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) errors.push(data.error || "Unable to update rental pause period.");
+    })
+  );
+  if (errors.length) throw new Error(errors[0]);
 }
 
 function renderWorkOrders(rows) {
@@ -92,7 +131,7 @@ function renderWorkOrders(rows) {
     <div class="table-row table-header">
       <span>Work order</span>
       <span>Date</span>
-      <span>Unit</span>
+      <span>Units</span>
       <span>Service</span>
       <span>Updated</span>
     </div>`;
@@ -111,7 +150,7 @@ function renderWorkOrders(rows) {
     div.innerHTML = `
       <span>${order.number || "--"}</span>
       <span>${order.date || "--"}</span>
-      <span>${order.unitLabel || "--"}</span>
+      <span>${formatUnitSummary(order)}</span>
       <span>${serviceLabel}${inspectionBadge}</span>
       <span>${updatedLabel}</span>
     `;
@@ -129,10 +168,11 @@ function applyFilters() {
   if (searchTerm) {
     const term = searchTerm.toLowerCase();
     rows = rows.filter((order) => {
+      const unitLabels = normalizeUnitLabels(order).join(" ");
       return [
         order.number,
         order.date,
-        order.unitLabel,
+        unitLabels,
         order.orderStatus,
         order.serviceStatus,
         order.workSummary,

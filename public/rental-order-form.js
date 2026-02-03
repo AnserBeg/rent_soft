@@ -3812,12 +3812,22 @@ function loadWorkOrdersForCompany(companyId) {
   return Array.isArray(data) ? data : [];
 }
 
+function workOrderUnitIds(order) {
+  if (!order) return [];
+  if (Array.isArray(order.unitIds)) {
+    return order.unitIds.map((id) => String(id)).filter(Boolean);
+  }
+  if (order.unitId) return [String(order.unitId)];
+  return [];
+}
+
 function findOpenWorkOrderForUnit(companyId, unitId) {
   if (!companyId || !unitId) return null;
   const orders = loadWorkOrdersForCompany(companyId);
   return (
     orders.find((order) => {
-      if (String(order?.unitId) !== String(unitId)) return false;
+      const unitIds = workOrderUnitIds(order);
+      if (!unitIds.includes(String(unitId))) return false;
       if (order?.orderStatus === "closed") return false;
       return order?.serviceStatus === "out_of_service";
     }) || null
@@ -3895,7 +3905,8 @@ function ensureReturnInspectionWorkOrders(li) {
     const existing = orders.find((order) => {
       if (order?.returnInspection !== true) return false;
       if (order?.orderStatus === "closed") return false;
-      if (String(order?.unitId) !== String(unitId)) return false;
+      const orderUnitIds = workOrderUnitIds(order);
+      if (!orderUnitIds.includes(String(unitId))) return false;
       if (li?.lineItemId && String(order?.sourceLineItemId) !== String(li.lineItemId)) return false;
       return true;
     });
@@ -3911,6 +3922,8 @@ function ensureReturnInspectionWorkOrders(li) {
       date,
       unitId: String(unitId),
       unitLabel: label,
+      unitIds: [String(unitId)],
+      unitLabels: [label],
       workSummary: summary,
       orderStatus: "open",
       serviceStatus: "out_of_service",
@@ -3946,7 +3959,10 @@ function removeReturnInspectionWorkOrders(li) {
     if (order?.returnInspection !== true) return true;
     if (order?.source !== "return_inspection") return true;
     if (order?.orderStatus === "closed") return true;
-    if (!idSet.has(String(order?.unitId))) return true;
+    const orderUnitIds = workOrderUnitIds(order);
+    if (!orderUnitIds.length) return true;
+    if (orderUnitIds.length > 1) return true;
+    if (!idSet.has(String(orderUnitIds[0]))) return true;
     if (lineItemId) {
       if (String(order?.sourceLineItemId || "") !== lineItemId) return true;
     } else if (orderNumber) {

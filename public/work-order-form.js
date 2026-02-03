@@ -20,6 +20,7 @@ const grandTotalEl = document.getElementById("grand-total");
 const saveStatus = document.getElementById("save-status");
 const saveBtn = document.getElementById("save-work-order");
 const deleteBtn = document.getElementById("delete-work-order");
+const markCompleteBtn = document.getElementById("mark-complete");
 const markClosedBtn = document.getElementById("mark-closed");
 const markOpenBtn = document.getElementById("mark-open");
 
@@ -95,14 +96,78 @@ function saveWorkOrders(orders) {
   localStorage.setItem(keyForWorkOrders(activeCompanyId), JSON.stringify(orders || []));
 }
 
+function normalizeUnitIds(order) {
+  if (!order) return [];
+  if (Array.isArray(order.unitIds)) {
+    return order.unitIds.map((id) => String(id)).filter(Boolean);
+  }
+  if (order.unitId) return [String(order.unitId)];
+  return [];
+}
+
+function normalizeUnitLabels(order) {
+  if (!order) return [];
+  if (Array.isArray(order.unitLabels)) {
+    return order.unitLabels.map((label) => String(label)).filter(Boolean);
+  }
+  if (order.unitLabel) return [String(order.unitLabel)];
+  return [];
+}
+
+function dedupeStringList(values) {
+  return Array.from(new Set((values || []).map((value) => String(value)).filter(Boolean)));
+}
+
+function getSelectedUnitIds() {
+  if (!unitSelect) return [];
+  return dedupeStringList(Array.from(unitSelect.selectedOptions || []).map((opt) => opt.value));
+}
+
+function getSelectedUnitLabels() {
+  if (!unitSelect) return [];
+  return dedupeStringList(Array.from(unitSelect.selectedOptions || []).map((opt) => opt.textContent || ""));
+}
+
+function ensureUnitOption(unitId, label) {
+  if (!unitSelect || !unitId) return null;
+  const idValue = String(unitId);
+  let option = Array.from(unitSelect.options).find((opt) => String(opt.value) === idValue);
+  if (!option) {
+    option = document.createElement("option");
+    option.value = idValue;
+    option.textContent = label || `Unit ${idValue}`;
+    unitSelect.appendChild(option);
+  } else if (label && !option.textContent) {
+    option.textContent = label;
+  }
+  option.selected = true;
+  return option;
+}
+
+function applyUnitSelectionToSelect(unitIds, unitLabels) {
+  if (!unitSelect) return;
+  const ids = dedupeStringList(unitIds);
+  if (!ids.length) return;
+  const labels = Array.isArray(unitLabels) ? unitLabels.map((label) => String(label || "")) : [];
+  ids.forEach((id, index) => {
+    ensureUnitOption(id, labels[index]);
+  });
+  Array.from(unitSelect.options).forEach((opt) => {
+    if (ids.includes(String(opt.value))) opt.selected = true;
+  });
+}
+
 function getOutOfServiceMap(excludeId = null) {
   const orders = loadWorkOrders();
   const map = new Map();
   orders.forEach((order) => {
-    if (!order?.unitId) return;
+    const unitIds = normalizeUnitIds(order);
+    if (!unitIds.length) return;
     if (excludeId && String(order.id) === String(excludeId)) return;
     if (order.serviceStatus === "out_of_service" && order.orderStatus !== "closed") {
-      map.set(String(order.unitId), order);
+      unitIds.forEach((unitId) => {
+        map.set(String(unitId), order);
+      });
     }
   });
   return map;
@@ -134,16 +199,23 @@ function updateServiceHint() {
   const orderStatus = orderStatusInput?.value || "open";
   const serviceStatus = serviceStatusSelect?.value || "in_service";
   const outOfServiceMap = getOutOfServiceMap(editingWorkOrder?.id || null);
-  const selectedUnitId = unitSelect?.value || "";
-  const existing = selectedUnitId ? outOfServiceMap.get(String(selectedUnitId)) : null;
+  const selectedUnitIds = getSelectedUnitIds();
+  const conflicts = selectedUnitIds
+    .map((unitId) => outOfServiceMap.get(String(unitId)))
+    .filter(Boolean);
 
   if (serviceStatus === "out_of_service" && orderStatus !== "closed") {
-    serviceHint.textContent = "Out of service makes this unit unavailable until the work order is closed.";
+    const unitLabel = selectedUnitIds.length === 1 ? "this unit" : "these units";
+    serviceHint.textContent = `Out of service makes ${unitLabel} unavailable until the work order is closed.`;
     return;
   }
 
-  if (existing) {
-    serviceHint.textContent = `This unit is already out of service on ${existing.number || "another work order"}.`;
+  if (conflicts.length) {
+    const numbers = dedupeStringList(
+      conflicts.map((order) => order?.number || "another work order")
+    );
+    const prefix = selectedUnitIds.length === 1 ? "This unit is" : "Some selected units are";
+    serviceHint.textContent = `${prefix} already out of service on ${numbers.join(", ")}.`;
     return;
   }
 
@@ -151,10 +223,13 @@ function updateServiceHint() {
 }
 
 function syncStatusActions() {
-  if (!orderStatusInput || !markClosedBtn || !markOpenBtn) return;
-  const isClosed = orderStatusInput.value === "closed";
-  markClosedBtn.style.display = isClosed ? "none" : "inline-flex";
-  markOpenBtn.style.display = isClosed ? "inline-flex" : "none";
+  if (!orderStatusInput || !markClosedBtn || !markOpenBtn || !markCompleteBtn) return;
+  const status = orderStatusInput.value || "open";
+  const isClosed = status === "closed";
+  const isCompleted = status === "completed";
+  markCompleteBtn.style.display = status === "open" ? "inline-flex" : "none";
+  markClosedBtn.style.display = isCompleted ? "inline-flex" : "none";
+  markOpenBtn.style.display = status !== "open" ? "inline-flex" : "none";
 }
 
 function renderPartsCatalogOptions() {
@@ -343,7 +418,9 @@ function setSaveStatus(message) {
 }
 
 async function syncWorkOrderPause(record) {
-  if (!activeCompanyId || !record?.unitId) return;
+  if (!activeCompanyId) return;
+  const unitIds = dedupeStringList(normalizeUnitIds(record));
+  if (!unitIds.length) return;
   const now = new Date().toISOString();
   const payload = {
     companyId: activeCompanyId,
@@ -361,14 +438,22 @@ async function syncWorkOrderPause(record) {
     payload.endAt = record.closedAt || record.updatedAt || now;
   }
 
-  const res = await fetch(`/api/equipment/${encodeURIComponent(record.unitId)}/work-order-pause`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data.error || "Unable to update rental pause period.");
+  const errors = [];
+  await Promise.all(
+    unitIds.map(async (unitId) => {
+      const res = await fetch(`/api/equipment/${encodeURIComponent(unitId)}/work-order-pause`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        errors.push(data.error || "Unable to update rental pause period.");
+      }
+    })
+  );
+  if (errors.length) {
+    throw new Error(errors[0]);
   }
 }
 
@@ -383,7 +468,12 @@ function applyWorkOrderToForm(order) {
     autoResizeTextarea(workSummaryInput);
   }
   if (workDateInput) workDateInput.value = order?.date || "";
-  if (unitSelect && order?.unitId) unitSelect.value = String(order.unitId);
+  if (unitSelect) {
+    Array.from(unitSelect.options).forEach((opt) => {
+      opt.selected = false;
+    });
+    applyUnitSelectionToSelect(normalizeUnitIds(order), normalizeUnitLabels(order));
+  }
   if (orderStatusInput) orderStatusInput.value = order?.orderStatus || "open";
   if (serviceStatusSelect) serviceStatusSelect.value = order?.serviceStatus || "in_service";
   if (returnInspectionToggle) returnInspectionToggle.checked = order?.returnInspection === true;
@@ -424,18 +514,15 @@ async function loadEquipment() {
       option.textContent = label;
       unitSelect.appendChild(option);
     });
-    if (pendingUnitId && !editingWorkOrder) {
-      const match = Array.from(unitSelect.options).some((opt) => String(opt.value) === pendingUnitId);
-      if (!match) {
-        const option = document.createElement("option");
-        option.value = pendingUnitId;
-        option.textContent = `Unit ${pendingUnitId} (from dispatch)`;
-        unitSelect.appendChild(option);
-      }
-      unitSelect.value = pendingUnitId;
+    Array.from(unitSelect.options).forEach((opt) => {
+      opt.selected = false;
+    });
+    if (editingWorkOrder) {
+      applyUnitSelectionToSelect(normalizeUnitIds(editingWorkOrder), normalizeUnitLabels(editingWorkOrder));
+    } else if (pendingUnitId) {
+      applyUnitSelectionToSelect([pendingUnitId], [`Unit ${pendingUnitId} (from dispatch)`]);
       pendingUnitId = null;
     }
-    if (editingWorkOrder?.unitId) unitSelect.value = String(editingWorkOrder.unitId);
     unitSelect.disabled = false;
     if (unitMeta) unitMeta.textContent = equipmentCache.length ? `${equipmentCache.length} units available` : "No units found.";
     updateServiceHint();
@@ -478,8 +565,8 @@ async function saveWorkOrder() {
   }
 
   const date = workDateInput?.value || "";
-  const unitId = unitSelect?.value || "";
-  const unitLabel = unitSelect?.selectedOptions?.[0]?.textContent || "";
+  const unitIds = getSelectedUnitIds();
+  const unitLabels = getSelectedUnitLabels();
   const workSummary = workSummaryInput?.value?.trim() || "";
   const orderStatus = orderStatusInput?.value || "open";
   const returnInspection = returnInspectionToggle?.checked === true;
@@ -489,8 +576,8 @@ async function saveWorkOrder() {
     setSaveStatus("Please select a date.");
     return false;
   }
-  if (!unitId) {
-    setSaveStatus("Please select a unit.");
+  if (!unitIds.length) {
+    setSaveStatus("Please select at least one unit.");
     return false;
   }
 
@@ -518,8 +605,10 @@ async function saveWorkOrder() {
   }
 
   record.date = date;
-  record.unitId = unitId;
-  record.unitLabel = unitLabel;
+  record.unitIds = unitIds;
+  record.unitLabels = unitLabels;
+  record.unitId = unitIds[0] || null;
+  record.unitLabel = unitLabels[0] || "";
   record.workSummary = workSummary;
   record.orderStatus = orderStatus;
   record.serviceStatus = serviceStatus;
@@ -529,8 +618,11 @@ async function saveWorkOrder() {
   record.updatedAt = now;
   if (orderStatus === "closed") {
     if (!record.closedAt) record.closedAt = now;
+  } else if (orderStatus === "completed") {
+    if (!record.completedAt) record.completedAt = now;
   } else {
     record.closedAt = null;
+    record.completedAt = null;
   }
 
   saveWorkOrders(orders);
@@ -581,6 +673,12 @@ returnInspectionToggle?.addEventListener("change", () => {
     serviceStatusSelect.value = "out_of_service";
   }
   updateServiceHint();
+});
+markCompleteBtn?.addEventListener("click", () => {
+  if (orderStatusInput) orderStatusInput.value = "completed";
+  updateServiceHint();
+  syncStatusActions();
+  saveWorkOrder();
 });
 markClosedBtn?.addEventListener("click", () => {
   if (orderStatusInput) orderStatusInput.value = "closed";
