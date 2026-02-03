@@ -177,6 +177,27 @@
             </div>
           </section>
 
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Customer update link</h2>
+                <p class="hint" style="margin:6px 0 0;">Share this link so customers can submit updates.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="create-customer-link" type="button">Generate link</button>
+              </div>
+            </div>
+            <div class="stack">
+              <label>Share link
+                <input id="customer-link-output" readonly />
+              </label>
+              <div class="inline-actions" style="justify-content:flex-start;">
+                <button class="ghost small" id="copy-customer-link" type="button">Copy</button>
+              </div>
+              <p class="hint" id="customer-link-hint"></p>
+            </div>
+          </section>
+
           <div class="extras-strip wide" id="extras-strip">
             <div class="extras-strip-left">
               <span class="extras-label">Customer</span>

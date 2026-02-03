@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Customer Update</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="landing-shell">
+    <header class="hero" style="margin-bottom: 18px;">
+      <div>
+        <p class="eyebrow">Customer update</p>
+        <h1 id="page-title">Complete your details</h1>
+        <p class="lede" id="page-subtitle">Review and submit your information below.</p>
+      </div>
+    </header>
+
+    <main style="max-width: 1100px; margin: 0 auto;">
+      <form id="customer-link-form" class="grid" enctype="multipart/form-data">
+        <section class="card wide">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">Customer &amp; sales</p>
+              <h2>Customer details</h2>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="info" id="link-banner">Loading your link...</div>
+            <div class="stack" id="customer-section">
+              <label>Company name
+                <input id="company-name" autocomplete="organization" />
+              </label>
+              <div class="two-col">
+                <label>Contact name
+                  <input id="contact-name" autocomplete="name" />
+                </label>
+                <label>Email
+                  <input id="email" type="email" autocomplete="email" />
+                </label>
+              </div>
+              <div class="two-col">
+                <label>Phone
+                  <input id="phone" type="tel" autocomplete="tel" />
+                </label>
+                <label>Street address
+                  <input id="street-address" autocomplete="street-address" />
+                </label>
+              </div>
+              <div class="three-col">
+                <label>City
+                  <input id="city" autocomplete="address-level2" />
+                </label>
+                <label>State / Region
+                  <input id="region" autocomplete="address-level1" />
+                </label>
+                <label>Postal code
+                  <input id="postal-code" autocomplete="postal-code" />
+                </label>
+              </div>
+              <label>Country
+                <input id="country" autocomplete="country-name" />
+              </label>
+              <div class="two-col" id="customer-po-field" style="display:none;">
+                <label>Customer PO #
+                  <input id="customer-po" />
+                </label>
+                <span></span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card wide" id="order-section" style="display:none;">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">Logistics</p>
+              <h2>Pickup &amp; drop-off</h2>
+            </div>
+          </div>
+          <div class="stack">
+            <div class="two-col">
+              <label>Fulfillment method
+                <select id="fulfillment-method">
+                  <option value="pickup">Pickup</option>
+                  <option value="dropoff">Dropoff</option>
+                </select>
+              </label>
+              <label>Pickup / Drop-off address
+                <input id="dropoff-address" />
+              </label>
+            </div>
+            <label>Pickup / Drop-off instructions
+              <textarea id="logistics-instructions" class="compact-textarea" rows="1"></textarea>
+            </label>
+          </div>
+        </section>
+
+        <section class="card wide" id="line-items-section" style="display:none;">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">Core</p>
+              <h2>Rental line items</h2>
+            </div>
+            <div class="inline-actions">
+              <button type="button" class="ghost" id="add-line-item">Add line item</button>
+            </div>
+          </div>
+          <div class="stack" id="line-items"></div>
+        </section>
+
+        <section class="card wide" id="rental-info-section" style="display:none;">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">Details</p>
+              <h2>Rental information</h2>
+            </div>
+          </div>
+          <div class="stack">
+            <div data-rental-info-field="siteAddress">
+              <label>Site address
+                <input id="site-address" />
+              </label>
+            </div>
+            <div data-rental-info-field="criticalAreas">
+              <label>Critical Areas on Site
+                <textarea id="critical-areas"></textarea>
+              </label>
+            </div>
+            <div data-rental-info-field="generalNotes">
+              <label>General notes
+                <textarea id="general-notes" class="notes-area"></textarea>
+              </label>
+              <div class="guard-notes-actions" style="margin-top: 8px;">
+                <label class="ghost small" for="general-notes-images">Add photos</label>
+                <input id="general-notes-images" class="guard-notes-images" type="file" accept="image/*" multiple hidden />
+                <span class="hint" id="general-notes-images-status"></span>
+              </div>
+              <div class="guard-notes-previews" id="general-notes-previews" hidden></div>
+            </div>
+            <div class="contact-block" data-rental-info-field="emergencyContacts">
+              <div class="contact-header">
+                <strong>Emergency contacts</strong>
+                <button type="button" class="ghost small" id="add-emergency-contact-row">+ Add contact</button>
+              </div>
+              <div class="contacts-list stack" id="emergency-contacts-list"></div>
+            </div>
+            <div class="contact-block" data-rental-info-field="siteContacts">
+              <div class="contact-header">
+                <strong>Site contacts</strong>
+                <button type="button" class="ghost small" id="add-site-contact-row">+ Add contact</button>
+              </div>
+              <div class="contacts-list stack" id="site-contacts-list"></div>
+            </div>
+            <div data-rental-info-field="notificationCircumstances">
+              <label>Notification circumstance</label>
+              <div id="notification-circumstances-container" style="display:flex; flex-wrap:wrap; gap:16px; align-items:center;">
+                <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                  <input type="checkbox" value="Damage"> Damage
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                  <input type="checkbox" value="Trespassing"> Trespassing
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                  <input type="checkbox" value="Suspicious activity"> Suspicious activity
+                </label>
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                    <input type="checkbox" value="Other" id="notification-circumstance-other-cb"> Other
+                  </label>
+                  <input id="notification-circumstance-other-input" type="text" placeholder="Please specify..." style="display:none; margin-left:8px; padding:4px 8px; border:1px solid #ccc; border-radius:4px;" />
+                </div>
+              </div>
+            </div>
+            <div class="coverage-block" data-rental-info-field="coverageHours">
+              <div class="coverage-header">
+                <strong>Hours of coverage required</strong>
+                <div class="inline-actions" style="gap:12px;">
+                  <span class="hint">Use 24-hour time - 5-minute steps</span>
+                  <button type="button" class="ghost small" id="add-coverage-slot">+ Add time slot</button>
+                </div>
+              </div>
+              <div class="coverage-slots" id="coverage-slots"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card wide" id="documents-section" style="display:none;">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">Documents</p>
+              <h2>Requested documents</h2>
+            </div>
+          </div>
+          <div class="stack" id="document-uploads"></div>
+        </section>
+
+        <section class="card wide" id="terms-section" style="display:none;">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">Terms</p>
+              <h2>Terms</h2>
+            </div>
+          </div>
+          <div class="info" id="terms-text"></div>
+        </section>
+
+        <section class="card wide" id="signature-section" style="display:none;">
+          <div class="card-header">
+            <div>
+              <p class="eyebrow">Signature</p>
+              <h2>E-signature</h2>
+            </div>
+          </div>
+          <div class="stack">
+            <label>Typed name
+              <input id="signature-name" />
+            </label>
+            <div class="stack">
+              <canvas id="signature-canvas" width="600" height="200" style="border:1px solid var(--border); border-radius:12px; background:#fff;"></canvas>
+              <div class="inline-actions" style="justify-content:flex-start;">
+                <button type="button" class="ghost small" id="clear-signature">Clear signature</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card wide">
+          <div class="inline-actions" style="justify-content:flex-end;">
+            <button type="submit" class="primary" id="submit-link">Submit update</button>
+          </div>
+          <div class="inline-actions" style="justify-content:flex-start; display:none;" id="proof-actions">
+            <a class="ghost" id="download-proof" href="#" target="_blank" rel="noreferrer">Download proof PDF</a>
+          </div>
+          <p class="hint" id="link-hint"></p>
+        </section>
+      </form>
+    </main>
+  </div>
+
+  <script src="customer-link.js"></script>
+</body>
+</html>

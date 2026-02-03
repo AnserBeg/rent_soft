@@ -10,6 +10,9 @@ const startBlank =
 
 const companyMeta = document.getElementById("company-meta");
 const backToList = document.getElementById("back-to-list");
+const createOrderLinkBtn = document.getElementById("create-order-link");
+const orderLinkOutput = document.getElementById("order-link-output");
+const orderLinkHint = document.getElementById("order-link-hint");
 
 const modeLabel = document.getElementById("mode-label");
 const formTitle = document.getElementById("form-title");
@@ -31,6 +34,7 @@ const confirmRequestRejectBtn = document.getElementById("confirm-request-reject"
 const requestRejectNoteInput = document.getElementById("request-reject-note");
 const requestRejectHint = document.getElementById("request-reject-hint");
 const closeOpenBtn = document.getElementById("close-open");
+const deleteOrderBtn = document.getElementById("delete-order");
 const statusPill = document.getElementById("status-pill");
 const orderNumberPill = document.getElementById("order-number-pill");
 const downloadOrderPdfBtn = document.getElementById("download-order-pdf");
@@ -75,6 +79,9 @@ const specialInstructions = document.getElementById("special-instructions");
 const siteAddressInput = document.getElementById("site-address");
 const criticalAreasInput = document.getElementById("critical-areas");
 const generalNotesInput = document.getElementById("general-notes");
+const generalNotesEditor = document.getElementById("general-notes-editor");
+const generalNotesToolbar = document.getElementById("general-notes-toolbar");
+const generalNotesInsertImageBtn = document.getElementById("general-notes-insert-image");
 const generalNotesImagesInput = document.getElementById("general-notes-images");
 const generalNotesImagesStatus = document.getElementById("general-notes-images-status");
 const generalNotesPreviews = document.getElementById("general-notes-previews");
@@ -101,45 +108,17 @@ const sideAddressPickerMeta = document.getElementById("side-address-picker-meta"
 const sideAddressPickerSuggestions = document.getElementById("side-address-picker-suggestions");
 const sideAddressPickerMapStyle = document.getElementById("side-address-picker-map-style");
 const coverageDayKeys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-const coverageInputs = {
-  mon: {
-    start: document.getElementById("coverage-mon-start"),
-    end: document.getElementById("coverage-mon-end"),
-  },
-  tue: {
-    start: document.getElementById("coverage-tue-start"),
-    end: document.getElementById("coverage-tue-end"),
-  },
-  wed: {
-    start: document.getElementById("coverage-wed-start"),
-    end: document.getElementById("coverage-wed-end"),
-  },
-  thu: {
-    start: document.getElementById("coverage-thu-start"),
-    end: document.getElementById("coverage-thu-end"),
-  },
-  fri: {
-    start: document.getElementById("coverage-fri-start"),
-    end: document.getElementById("coverage-fri-end"),
-  },
-  sat: {
-    start: document.getElementById("coverage-sat-start"),
-    end: document.getElementById("coverage-sat-end"),
-  },
-  sun: {
-    start: document.getElementById("coverage-sun-start"),
-    end: document.getElementById("coverage-sun-end"),
-  },
+const coverageDayLabels = {
+  mon: "Mon",
+  tue: "Tue",
+  wed: "Wed",
+  thu: "Thu",
+  fri: "Fri",
+  sat: "Sat",
+  sun: "Sun",
 };
-const coverageNextDayIndicators = {
-  mon: document.querySelector('[data-coverage-next-day="mon"]'),
-  tue: document.querySelector('[data-coverage-next-day="tue"]'),
-  wed: document.querySelector('[data-coverage-next-day="wed"]'),
-  thu: document.querySelector('[data-coverage-next-day="thu"]'),
-  fri: document.querySelector('[data-coverage-next-day="fri"]'),
-  sat: document.querySelector('[data-coverage-next-day="sat"]'),
-  sun: document.querySelector('[data-coverage-next-day="sun"]'),
-};
+const coverageSlotsContainer = document.getElementById("coverage-slots");
+const addCoverageSlotBtn = document.getElementById("add-coverage-slot");
 const termsPanel = document.getElementById("terms-panel");
 const toggleTermsBtn = document.getElementById("toggle-terms");
 const extrasNotesBadge = document.getElementById("extras-notes-badge");
@@ -264,6 +243,25 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
 
 const TIME_STEP_MINUTES = 15;
 
+function resolveMinuteStep(input, stepMinutes = null) {
+  if (Number.isFinite(stepMinutes)) return stepMinutes;
+  const rawStep = Number(input?.getAttribute?.("step") || input?.step);
+  if (Number.isFinite(rawStep) && rawStep > 0) return rawStep / 60;
+  const dataStep = Number(input?.dataset?.minuteStep);
+  if (Number.isFinite(dataStep) && dataStep > 0) return dataStep;
+  return TIME_STEP_MINUTES;
+}
+
+function buildMinuteOptions(stepMinutes) {
+  const step = Math.max(1, Math.round(stepMinutes));
+  const options = [];
+  for (let m = 0; m < 60; m += step) {
+    options.push(m);
+  }
+  if (!options.includes(0)) options.unshift(0);
+  return options;
+}
+
 function pad2(value) {
   return String(value).padStart(2, "0");
 }
@@ -313,29 +311,30 @@ function snapDatetimeLocalValue(value, stepMinutes = TIME_STEP_MINUTES) {
   return `${nextDate}T${snappedTime.value}`;
 }
 
-function snapInputToMinuteStep(input, stepMinutes = TIME_STEP_MINUTES) {
+function snapInputToMinuteStep(input, stepMinutes = null) {
   if (!input || !input.value) return;
   const rawType = (input.getAttribute?.("type") || input.type || "").toLowerCase();
+  const step = resolveMinuteStep(input, stepMinutes);
   let nextValue = input.value;
   if (rawType === "time") {
-    nextValue = snapTimeValue(input.value, stepMinutes);
+    nextValue = snapTimeValue(input.value, step);
   } else if (rawType === "datetime-local") {
-    nextValue = snapDatetimeLocalValue(input.value, stepMinutes);
+    nextValue = snapDatetimeLocalValue(input.value, step);
   }
   if (nextValue && nextValue !== input.value) {
     input.value = nextValue;
   }
 }
 
-function applyMinuteStep(input, stepMinutes = TIME_STEP_MINUTES) {
+function applyMinuteStep(input, stepMinutes = null) {
   if (!input) return;
   const rawType = (input.getAttribute?.("type") || input.type || "").toLowerCase();
   if (rawType === "time" || rawType === "datetime-local") {
-    input.step = String(Math.max(1, Math.round(stepMinutes * 60)));
+    const step = resolveMinuteStep(input, stepMinutes);
+    input.step = String(Math.max(1, Math.round(step * 60)));
   }
 }
 
-const TIME_PICKER_MINUTES = [0, 15, 30, 45];
 const timePickerInstances = new WeakMap();
 const timePickerOverlays = new WeakMap();
 let activeTimePicker = null;
@@ -380,22 +379,25 @@ function to24HourValue(hour12, meridiem) {
   return hour;
 }
 
-function getRoundedTimeParts() {
+function getRoundedTimeParts(stepMinutes = TIME_STEP_MINUTES) {
+  const step = Math.max(1, Math.round(stepMinutes));
   const now = new Date();
   const minutes = now.getMinutes();
-  const rounded = Math.round(minutes / 15) * 15;
-  const hourCarry = rounded === 60 ? 1 : 0;
+  const rounded = Math.round(minutes / step) * step;
+  const hourCarry = rounded >= 60 ? 1 : 0;
   const hour = (now.getHours() + hourCarry) % 24;
-  const minute = rounded === 60 ? 0 : rounded;
+  const minute = rounded >= 60 ? 0 : rounded;
   return { hours: hour, minutes: minute };
 }
 
 function ensurePickerState(instance) {
+  syncTimePickerStep(instance);
+  const stepMinutes = instance.stepMinutes || TIME_STEP_MINUTES;
   const raw = String(instance.input.value || "");
   if (instance.type === "time") {
     const parsed = parseTimeParts(raw);
     if (parsed) {
-      const snapped = snapTimeValueWithDayDelta(`${pad2(parsed.hours)}:${pad2(parsed.minutes)}`);
+      const snapped = snapTimeValueWithDayDelta(`${pad2(parsed.hours)}:${pad2(parsed.minutes)}`, stepMinutes);
       if (snapped) {
         const snappedParts = parseTimeParts(snapped.value);
         instance.selectedHour = snappedParts ? snappedParts.hours : parsed.hours;
@@ -405,7 +407,7 @@ function ensurePickerState(instance) {
         instance.selectedMinute = parsed.minutes;
       }
     } else {
-      const fallback = getRoundedTimeParts();
+      const fallback = getRoundedTimeParts(stepMinutes);
       instance.selectedHour = fallback.hours;
       instance.selectedMinute = fallback.minutes;
     }
@@ -415,11 +417,11 @@ function ensurePickerState(instance) {
   const [datePart, timePart] = raw.split("T");
   const parsedDate = parseDateParts(datePart);
   const parsedTime = parseTimeParts(timePart);
-  const fallbackTime = getRoundedTimeParts();
+  const fallbackTime = getRoundedTimeParts(stepMinutes);
   let baseDate = parsedDate ? new Date(parsedDate.year, parsedDate.month - 1, parsedDate.day) : new Date();
 
   if (parsedTime) {
-    const snapped = snapTimeValueWithDayDelta(`${pad2(parsedTime.hours)}:${pad2(parsedTime.minutes)}`);
+    const snapped = snapTimeValueWithDayDelta(`${pad2(parsedTime.hours)}:${pad2(parsedTime.minutes)}`, stepMinutes);
     if (snapped) {
       const snappedParts = parseTimeParts(snapped.value);
       if (snappedParts) {
@@ -478,6 +480,14 @@ function buildColumnOption(label, isSelected, onClick) {
   return btn;
 }
 
+function syncTimePickerStep(instance) {
+  const step = resolveMinuteStep(instance.input, instance.stepMinutes);
+  if (instance.stepMinutes !== step || !Array.isArray(instance.minuteOptions)) {
+    instance.stepMinutes = step;
+    instance.minuteOptions = buildMinuteOptions(step);
+  }
+}
+
 function renderTimeColumns(instance) {
   const { hourCol, minuteCol, meridiemCol, hourFormat, selectedHour, selectedMinute } = instance;
   if (!hourCol || !minuteCol) return;
@@ -485,7 +495,8 @@ function renderTimeColumns(instance) {
   minuteCol.innerHTML = "";
   if (meridiemCol) meridiemCol.innerHTML = "";
 
-  const minuteLabels = TIME_PICKER_MINUTES.map((m) => pad2(m));
+  syncTimePickerStep(instance);
+  const minuteLabels = (instance.minuteOptions || []).map((m) => pad2(m));
   let hourLabels = [];
   let selectedHourLabel = "";
 
@@ -712,10 +723,13 @@ function createTimePickerInstance(input) {
   }
   panel.appendChild(timePanel);
 
+  const stepMinutes = resolveMinuteStep(input);
   const instance = {
     input,
     type,
     hourFormat,
+    stepMinutes,
+    minuteOptions: buildMinuteOptions(stepMinutes),
     popover,
     panel,
     dateGrid,
@@ -962,7 +976,7 @@ let draft = {
   siteAddressQuery: "",
   criticalAreas: "",
   generalNotes: "",
-  coverageHours: {},
+  coverageHours: [],
   emergencyContacts: [],
   siteContacts: [],
   notificationCircumstances: [],
@@ -996,7 +1010,7 @@ function resetDraftForNew() {
     siteAddressQuery: "",
     criticalAreas: "",
     generalNotes: "",
-    coverageHours: {},
+    coverageHours: [],
     emergencyContacts: [],
     siteContacts: [],
     notificationCircumstances: [],
@@ -1008,35 +1022,15 @@ function resetDraftForNew() {
   };
 }
 
-function normalizeCoverageHours(value) {
-  let raw = {};
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    raw = value;
-  } else if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed;
-    } catch {
-      raw = {};
-    }
+function normalizeTimeValue(value) {
+  const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return "";
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return "";
   }
-  const normalized = {};
-  coverageDayKeys.forEach((day) => {
-    const entry = raw[day] || {};
-    const start = typeof entry.start === "string" ? entry.start.trim() : "";
-    const end = typeof entry.end === "string" ? entry.end.trim() : "";
-    if (!start && !end) return;
-    const explicit = entry.endDayOffset ?? entry.end_day_offset;
-    let endDayOffset =
-      explicit === 1 || explicit === "1" || explicit === true || entry.spansMidnight === true ? 1 : 0;
-    if (!endDayOffset && start && end) {
-      const startMinutes = timeToMinutes(start);
-      const endMinutes = timeToMinutes(end);
-      if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) endDayOffset = 1;
-    }
-    normalized[day] = { start, end, endDayOffset };
-  });
-  return normalized;
+  return `${pad2(hour)}:${pad2(minute)}`;
 }
 
 function timeToMinutes(value) {
@@ -1048,25 +1042,272 @@ function timeToMinutes(value) {
   return hour * 60 + minute;
 }
 
-function updateCoverageNextDayIndicators() {
-  coverageDayKeys.forEach((day) => {
-    const indicator = coverageNextDayIndicators[day];
-    if (!indicator) return;
-    const entry = coverageInputs[day] || {};
-    const start = String(entry.start?.value || "").trim();
-    const end = String(entry.end?.value || "").trim();
-    if (!start || !end) {
-      indicator.textContent = "";
-      return;
-    }
-    const startMinutes = timeToMinutes(start);
-    const endMinutes = timeToMinutes(end);
-    if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) {
-      indicator.textContent = "(next day)";
+function coerceCoverageDay(value) {
+  const key = String(value || "").trim().toLowerCase();
+  if (!key) return "";
+  const dayMap = {
+    mon: "mon",
+    monday: "mon",
+    tue: "tue",
+    tues: "tue",
+    tuesday: "tue",
+    wed: "wed",
+    weds: "wed",
+    wednesday: "wed",
+    thu: "thu",
+    thur: "thu",
+    thurs: "thu",
+    thursday: "thu",
+    fri: "fri",
+    friday: "fri",
+    sat: "sat",
+    saturday: "sat",
+    sun: "sun",
+    sunday: "sun",
+  };
+  return dayMap[key] || "";
+}
+
+function coverageDayIndex(day) {
+  return coverageDayKeys.indexOf(day);
+}
+
+function addCoverageDayOffset(day, offset) {
+  const idx = coverageDayIndex(day);
+  if (idx === -1) return day;
+  const nextIdx = (idx + offset + coverageDayKeys.length) % coverageDayKeys.length;
+  return coverageDayKeys[nextIdx];
+}
+
+function coverageSlotKey(slot) {
+  return `${slot.startDay || ""}-${slot.startTime || ""}-${slot.endDay || ""}-${slot.endTime || ""}`;
+}
+
+function normalizeCoverageSlot(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const startDay = coerceCoverageDay(entry.startDay ?? entry.start_day ?? entry.day ?? entry.startDayKey);
+  const endDayRaw = coerceCoverageDay(entry.endDay ?? entry.end_day ?? entry.endDayKey ?? entry.day_end);
+  const startTime = normalizeTimeValue(entry.startTime ?? entry.start_time ?? entry.start);
+  const endTime = normalizeTimeValue(entry.endTime ?? entry.end_time ?? entry.end);
+  if (!startDay && !endDayRaw && !startTime && !endTime) return null;
+  if (!startDay || !startTime || !endTime) return null;
+  let endDay = endDayRaw || startDay;
+  const explicitOffset = entry.endDayOffset ?? entry.end_day_offset;
+  if (!endDayRaw) {
+    if (explicitOffset === 1 || explicitOffset === "1" || explicitOffset === true || entry.spansMidnight === true) {
+      endDay = addCoverageDayOffset(startDay, 1);
     } else {
-      indicator.textContent = "";
+      const startMinutes = timeToMinutes(startTime);
+      const endMinutes = timeToMinutes(endTime);
+      if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) {
+        endDay = addCoverageDayOffset(startDay, 1);
+      }
     }
+  }
+  if (!endDay) endDay = startDay;
+  return { startDay, startTime, endDay, endTime };
+}
+
+function sortCoverageSlots(slots) {
+  return (slots || [])
+    .slice()
+    .sort((a, b) => {
+      const dayDiff = coverageDayIndex(a.startDay) - coverageDayIndex(b.startDay);
+      if (dayDiff) return dayDiff;
+      const aStart = timeToMinutes(a.startTime) ?? 0;
+      const bStart = timeToMinutes(b.startTime) ?? 0;
+      if (aStart !== bStart) return aStart - bStart;
+      const aEnd = timeToMinutes(a.endTime) ?? 0;
+      const bEnd = timeToMinutes(b.endTime) ?? 0;
+      return aEnd - bEnd;
+    });
+}
+
+function normalizeCoverageHours(value) {
+  let raw = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = null;
+    }
+  }
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && Array.isArray(raw.slots)) {
+    raw = raw.slots;
+  }
+
+  const slots = [];
+  if (Array.isArray(raw)) {
+    raw.forEach((entry) => {
+      const normalized = normalizeCoverageSlot(entry);
+      if (normalized) slots.push(normalized);
+    });
+    return sortCoverageSlots(slots);
+  }
+
+  if (raw && typeof raw === "object") {
+    coverageDayKeys.forEach((day) => {
+      const entry = raw[day] || {};
+      const startTime = normalizeTimeValue(entry.start);
+      const endTime = normalizeTimeValue(entry.end);
+      if (!startTime && !endTime) return;
+      if (!startTime || !endTime) return;
+      let endDay = day;
+      const explicit = entry.endDayOffset ?? entry.end_day_offset;
+      if (explicit === 1 || explicit === "1" || explicit === true || entry.spansMidnight === true) {
+        endDay = addCoverageDayOffset(day, 1);
+      } else {
+        const startMinutes = timeToMinutes(startTime);
+        const endMinutes = timeToMinutes(endTime);
+        if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) {
+          endDay = addCoverageDayOffset(day, 1);
+        }
+      }
+      slots.push({ startDay: day, startTime, endDay, endTime });
+    });
+  }
+
+  return sortCoverageSlots(slots);
+}
+
+const coverageDayOptionsHtml = coverageDayKeys
+  .map((day) => `<option value="${day}">${coverageDayLabels[day] || day}</option>`)
+  .join("");
+const coverageCopyDaysHtml = coverageDayKeys
+  .map(
+    (day) =>
+      `<label><input type="checkbox" value="${day}" data-coverage-copy-day="${day}" />${coverageDayLabels[day] || day}</label>`
+  )
+  .join("");
+
+function bindCoverageTimeInput(input) {
+  if (!input) return;
+  applyMinuteStep(input);
+  bindTimePickerInput(input);
+  input.addEventListener("change", () => {
+    snapInputToMinuteStep(input);
+    syncTimeOverlayState(input);
+    refreshTimePickerForInput(input);
+    syncRentalInfoDraft();
   });
+  input.addEventListener("blur", () => {
+    snapInputToMinuteStep(input);
+    syncTimeOverlayState(input);
+    refreshTimePickerForInput(input);
+  });
+}
+
+function buildCoverageSlotRow(slot = {}) {
+  const row = document.createElement("div");
+  row.className = "coverage-slot";
+  row.dataset.coverageSlot = "true";
+  row.innerHTML = `
+    <div class="coverage-slot-main">
+      <label class="coverage-field">
+        <span class="hint">Start</span>
+        <div class="coverage-stack">
+          <select data-coverage-field="start-day">${coverageDayOptionsHtml}</select>
+          <input type="time" step="300" data-coverage-field="start-time" aria-label="Coverage start time" />
+        </div>
+      </label>
+      <label class="coverage-field">
+        <span class="hint">End</span>
+        <div class="coverage-stack">
+          <select data-coverage-field="end-day">${coverageDayOptionsHtml}</select>
+          <input type="time" step="300" data-coverage-field="end-time" aria-label="Coverage end time" />
+        </div>
+      </label>
+    </div>
+    <div class="coverage-slot-actions">
+      <button type="button" class="ghost small" data-coverage-action="duplicate">Duplicate</button>
+      <button type="button" class="ghost small" data-coverage-action="copy">Copy to days</button>
+      <button type="button" class="ghost small danger" data-coverage-action="remove">Remove</button>
+    </div>
+    <div class="coverage-slot-copy" data-coverage-copy hidden>
+      <span class="hint">Copy this slot to start on:</span>
+      <div class="coverage-day-options">${coverageCopyDaysHtml}</div>
+      <div class="inline-actions">
+        <button type="button" class="ghost small" data-coverage-action="apply-copy">Apply</button>
+        <button type="button" class="ghost small" data-coverage-action="cancel-copy">Cancel</button>
+      </div>
+    </div>
+  `;
+
+  const normalized = normalizeCoverageSlot(slot) || {};
+  const startDaySelect = row.querySelector('[data-coverage-field="start-day"]');
+  const endDaySelect = row.querySelector('[data-coverage-field="end-day"]');
+  const startTimeInput = row.querySelector('[data-coverage-field="start-time"]');
+  const endTimeInput = row.querySelector('[data-coverage-field="end-time"]');
+
+  const fallbackDay = coverageDayKeys[0];
+  const startDay = normalized.startDay || coerceCoverageDay(slot.startDay ?? slot.start_day) || fallbackDay;
+  const endDay =
+    normalized.endDay || coerceCoverageDay(slot.endDay ?? slot.end_day) || (startDay ? startDay : fallbackDay);
+
+  if (startDaySelect) startDaySelect.value = startDay;
+  if (endDaySelect) endDaySelect.value = endDay;
+  if (startTimeInput && normalized.startTime) startTimeInput.value = normalized.startTime;
+  if (endTimeInput && normalized.endTime) endTimeInput.value = normalized.endTime;
+
+  [startTimeInput, endTimeInput].forEach((input) => {
+    if (input) bindCoverageTimeInput(input);
+  });
+
+  [startDaySelect, endDaySelect].forEach((select) => {
+    if (!select) return;
+    select.addEventListener("change", () => {
+      syncRentalInfoDraft();
+    });
+  });
+
+  return row;
+}
+
+function addCoverageSlotRow(slot = {}, { afterRow = null } = {}) {
+  if (!coverageSlotsContainer) return null;
+  const row = buildCoverageSlotRow(slot);
+  if (afterRow && afterRow.parentNode === coverageSlotsContainer) {
+    afterRow.insertAdjacentElement("afterend", row);
+  } else {
+    coverageSlotsContainer.appendChild(row);
+  }
+  return row;
+}
+
+function renderCoverageSlots(slots) {
+  if (!coverageSlotsContainer) return;
+  coverageSlotsContainer.innerHTML = "";
+  const normalized = normalizeCoverageHours(slots);
+  if (!normalized.length) {
+    addCoverageSlotRow({});
+    return;
+  }
+  normalized.forEach((slot) => addCoverageSlotRow(slot));
+}
+
+function readCoverageSlotFromRow(row) {
+  if (!row) return null;
+  const startDay = row.querySelector('[data-coverage-field="start-day"]')?.value || "";
+  const endDay = row.querySelector('[data-coverage-field="end-day"]')?.value || "";
+  const startTime = row.querySelector('[data-coverage-field="start-time"]')?.value || "";
+  const endTime = row.querySelector('[data-coverage-field="end-time"]')?.value || "";
+  return { startDay, startTime, endDay, endTime };
+}
+
+function collectCoverageHoursFromInputs() {
+  if (!coverageSlotsContainer) return [];
+  const slots = [];
+  coverageSlotsContainer.querySelectorAll("[data-coverage-slot]").forEach((row) => {
+    const slot = readCoverageSlotFromRow(row);
+    if (!slot) return;
+    if (!slot.startDay && !slot.startTime && !slot.endDay && !slot.endTime) return;
+    slots.push(slot);
+  });
+  return normalizeCoverageHours(slots);
+}
+
+function setCoverageInputs(value) {
+  renderCoverageSlots(value || []);
 }
 
 function escapeHtml(s) {
@@ -1870,41 +2111,6 @@ function saveSideAddressFromPicker() {
   if (siteAddressInput) siteAddressInput.value = nextValue;
   syncRentalInfoDraft();
   closeSideAddressPickerModal();
-}
-
-function collectCoverageHoursFromInputs() {
-  const raw = {};
-  coverageDayKeys.forEach((day) => {
-    const entry = coverageInputs[day] || {};
-    const start = entry.start ? String(entry.start.value || "").trim() : "";
-    const end = entry.end ? String(entry.end.value || "").trim() : "";
-    let endDayOffset = 0;
-    if (start && end) {
-      const startMinutes = timeToMinutes(start);
-      const endMinutes = timeToMinutes(end);
-      if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) endDayOffset = 1;
-    }
-    raw[day] = { start, end, endDayOffset };
-  });
-  return normalizeCoverageHours(raw);
-}
-
-function setCoverageInputs(value) {
-  const raw = value && typeof value === "object" ? value : {};
-  coverageDayKeys.forEach((day) => {
-    const entry = raw[day] || {};
-    if (coverageInputs[day]?.start) {
-      coverageInputs[day].start.value = typeof entry.start === "string" ? entry.start : "";
-      syncTimeOverlayState(coverageInputs[day].start);
-      refreshTimePickerForInput(coverageInputs[day].start);
-    }
-    if (coverageInputs[day]?.end) {
-      coverageInputs[day].end.value = typeof entry.end === "string" ? entry.end : "";
-      syncTimeOverlayState(coverageInputs[day].end);
-      refreshTimePickerForInput(coverageInputs[day].end);
-    }
-  });
-  updateCoverageNextDayIndicators();
 }
 
 function normalizeOrderStatus(status) {
@@ -2768,13 +2974,20 @@ function renderStatusControls() {
   }
 
   if (closeOpenBtn) {
-    if (quoteMode || requestMode) {
+    const canToggleClosed =
+      !quoteMode && !requestMode && (normalized === "received" || normalized === "closed");
+    if (!canToggleClosed) {
       closeOpenBtn.style.display = "none";
-      return;
+    } else {
+      closeOpenBtn.style.display = "inline-flex";
+      closeOpenBtn.textContent = normalized === "closed" ? "Open" : "Close";
+      closeOpenBtn.classList.toggle("danger", normalized !== "closed");
     }
-    closeOpenBtn.style.display = "inline-flex";
-    closeOpenBtn.textContent = normalized === "closed" ? "Open" : "Close";
-    closeOpenBtn.classList.toggle("danger", normalized !== "closed");
+  }
+
+  if (deleteOrderBtn) {
+    const canDelete = !!editingOrderId && normalized !== "closed";
+    deleteOrderBtn.style.display = canDelete ? "inline-flex" : "none";
   }
 }
 
@@ -2981,7 +3194,14 @@ function contractDurationText(lineItems) {
   return `${days} days${monthsText}`;
 }
 
-function updatePricingSummary({ periodSummaries, lineItems, contractSubtotal, contractGst, contractTotal }) {
+function updatePricingSummary({
+  periodSummaries,
+  lineItems,
+  contractSubtotal,
+  contractGst,
+  contractTotal,
+  monthlyRecurringSubtotal = 0,
+}) {
   if (
     !pricingRecurringLabelEl ||
     !pricingRecurringHeadlineEl ||
@@ -2995,33 +3215,13 @@ function updatePricingSummary({ periodSummaries, lineItems, contractSubtotal, co
   }
   const basisOrder = ["daily", "weekly", "monthly"];
   const activeBases = basisOrder.filter((basis) => (periodSummaries.get(basis)?.totalAmount || 0) > 0);
-  if (activeBases.length === 1) {
-    const basis = activeBases[0];
-    const summary = periodSummaries.get(basis) || {};
-    const subtotal = Number.isFinite(summary.periodSubtotal) ? summary.periodSubtotal : 0;
-    const gst = subtotal * 0.05;
-    const total = subtotal + gst;
-    pricingRecurringLabelEl.textContent = rateBasisRecurringLabel(basis);
-    pricingRecurringHeadlineEl.textContent = `${fmtMoney(total)} / ${rateBasisUnitSuffix(basis)}`;
-    pricingRecurringSubtotalEl.textContent = fmtMoney(subtotal);
-    pricingRecurringGstEl.textContent = fmtMoney(gst);
-  } else if (activeBases.length > 1) {
-    const mixedSubtotal = activeBases.reduce((sum, basis) => {
-      const summary = periodSummaries.get(basis) || {};
-      return sum + (Number.isFinite(summary.periodSubtotal) ? summary.periodSubtotal : 0);
-    }, 0);
-    const mixedGst = mixedSubtotal * 0.05;
-    const mixedTotal = mixedSubtotal + mixedGst;
-    pricingRecurringLabelEl.textContent = "Recurring (mixed periods)";
-    pricingRecurringHeadlineEl.textContent = `${fmtMoney(mixedTotal)} / period`;
-    pricingRecurringSubtotalEl.textContent = fmtMoney(mixedSubtotal);
-    pricingRecurringGstEl.textContent = fmtMoney(mixedGst);
-  } else {
-    pricingRecurringLabelEl.textContent = "Recurring (per period)";
-    pricingRecurringHeadlineEl.textContent = `${fmtMoney(0)} / period`;
-    pricingRecurringSubtotalEl.textContent = fmtMoney(0);
-    pricingRecurringGstEl.textContent = fmtMoney(0);
-  }
+  const recurringSubtotal = Number.isFinite(monthlyRecurringSubtotal) ? monthlyRecurringSubtotal : 0;
+  const recurringGst = recurringSubtotal * 0.05;
+  const recurringTotal = recurringSubtotal + recurringGst;
+  pricingRecurringLabelEl.textContent = "Per month (recurring)";
+  pricingRecurringHeadlineEl.textContent = `${fmtMoney(recurringTotal)} / month`;
+  pricingRecurringSubtotalEl.textContent = fmtMoney(recurringSubtotal);
+  pricingRecurringGstEl.textContent = fmtMoney(recurringGst);
 
   // Logic to hide/show the recurring pricing card
   const pricingRecurringCard = pricingRecurringLabelEl.closest(".pricing-mini-card");
@@ -3063,6 +3263,7 @@ function updatePricingSummary({ periodSummaries, lineItems, contractSubtotal, co
 function updateOrderTotals() {
   const feesTotal = (draft.fees || []).reduce((sum, f) => sum + moneyNumber(f.amount), 0);
   const periodSummaries = new Map();
+  let monthlyRecurringSubtotal = 0;
   const lineSubtotal = (draft.lineItems || []).reduce((sum, li) => {
     const { startLocal, endLocal } = effectiveLineItemLocalPeriod(li);
     const calc = computeLineAmount({
@@ -3090,6 +3291,21 @@ function updateOrderTotals() {
       summary.periodSubtotal += Number.isFinite(perPeriod) ? perPeriod : 0;
       periodSummaries.set(basis, summary);
     }
+    const startAt = fromLocalInputValue(startLocal);
+    const endAt = fromLocalInputValue(endLocal);
+    if (startAt && endAt) {
+      const monthlyUnits = computeMonthlyUnits({
+        startAt,
+        endAt,
+        prorationMethod: monthlyProrationMethod,
+        roundingMode: billingRoundingMode,
+        roundingGranularity: billingRoundingGranularity,
+        timeZone: billingTimeZone,
+      });
+      if (Number.isFinite(monthlyUnits) && monthlyUnits > 0) {
+        monthlyRecurringSubtotal += calc.lineAmount / monthlyUnits;
+      }
+    }
     return sum + calc.lineAmount;
   }, 0);
 
@@ -3102,6 +3318,7 @@ function updateOrderTotals() {
     contractSubtotal: subtotal,
     contractGst: gst,
     contractTotal: total,
+    monthlyRecurringSubtotal,
   });
 }
 
@@ -3151,6 +3368,238 @@ function renderNotes(notes) {
     extrasNotesBadge.textContent = String(count);
     extrasNotesBadge.style.display = count > 0 ? "inline-flex" : "none";
   }
+}
+
+let generalNotesLastRange = null;
+let generalNotesInsertMode = null;
+
+const GENERAL_NOTES_ALLOWED_TAGS = new Set([
+  "b",
+  "strong",
+  "i",
+  "em",
+  "u",
+  "s",
+  "strike",
+  "p",
+  "br",
+  "div",
+  "span",
+  "h1",
+  "h2",
+  "h3",
+  "ul",
+  "ol",
+  "li",
+  "a",
+  "img",
+  "font",
+]);
+
+const GENERAL_NOTES_ALLOWED_ATTRS = {
+  a: new Set(["href", "target", "rel"]),
+  img: new Set(["src", "alt", "title"]),
+  span: new Set(["style"]),
+  div: new Set(["style"]),
+  p: new Set(["style"]),
+  h1: new Set(["style"]),
+  h2: new Set(["style"]),
+  h3: new Set(["style"]),
+  li: new Set(["style"]),
+  font: new Set(["size", "face", "color"]),
+};
+
+const GENERAL_NOTES_ALLOWED_STYLES = new Set([
+  "font-size",
+  "font-family",
+  "font-weight",
+  "font-style",
+  "text-decoration",
+  "text-align",
+  "color",
+]);
+
+const GENERAL_NOTES_ALLOWED_FONTS = new Set([
+  "Inter",
+  "Georgia",
+  "Times New Roman",
+  "Arial",
+  "Verdana",
+  "Courier New",
+]);
+
+function isSafeUrl(url, { allowDataImage = false } = {}) {
+  if (!url) return false;
+  const value = String(url || "").trim();
+  if (!value) return false;
+  const lower = value.toLowerCase();
+  if (lower.startsWith("javascript:") || lower.startsWith("vbscript:")) return false;
+  if (lower.startsWith("data:")) {
+    return allowDataImage && lower.startsWith("data:image/");
+  }
+  if (lower.startsWith("/uploads/")) return true;
+  if (lower.startsWith("http://") || lower.startsWith("https://")) return true;
+  return false;
+}
+
+function sanitizeStyle(style) {
+  if (!style) return "";
+  const parts = String(style)
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const cleaned = [];
+  parts.forEach((entry) => {
+    const idx = entry.indexOf(":");
+    if (idx === -1) return;
+    const prop = entry.slice(0, idx).trim().toLowerCase();
+    let value = entry.slice(idx + 1).trim();
+    if (!GENERAL_NOTES_ALLOWED_STYLES.has(prop)) return;
+    if (!value || /url\s*\(/i.test(value) || /expression\s*\(/i.test(value)) return;
+    if (prop === "font-family") {
+      const family = value.replace(/['"]/g, "").split(",")[0].trim();
+      if (!GENERAL_NOTES_ALLOWED_FONTS.has(family)) return;
+      value = family;
+    }
+    if (prop === "font-size" && !/^\d+(px|pt|em|rem|%)?$/.test(value)) return;
+    if (prop === "font-weight" && !/^(bold|normal|[1-9]00)$/.test(value)) return;
+    if (prop === "text-align" && !/^(left|right|center|justify)$/.test(value)) return;
+    if (prop === "text-decoration" && !/^(underline|line-through|none)$/.test(value)) return;
+    if (prop === "color" && !/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value) && !/^rgb(a)?\(/i.test(value)) return;
+    cleaned.push(`${prop}: ${value}`);
+  });
+  return cleaned.join("; ");
+}
+
+function sanitizeRichText(html) {
+  const raw = String(html || "");
+  if (!raw.trim()) return "";
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<div>${raw}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  if (!root) return "";
+
+  const sanitizeNode = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) return;
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      node.remove();
+      return;
+    }
+    const tag = node.tagName.toLowerCase();
+    if (!GENERAL_NOTES_ALLOWED_TAGS.has(tag)) {
+      const fragment = doc.createDocumentFragment();
+      while (node.firstChild) fragment.appendChild(node.firstChild);
+      node.replaceWith(fragment);
+      return;
+    }
+
+    const allowed = GENERAL_NOTES_ALLOWED_ATTRS[tag] || new Set();
+    Array.from(node.attributes || []).forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const value = attr.value;
+      if (name.startsWith("on")) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+      if (!allowed.has(name)) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+      if (name === "href") {
+        if (!isSafeUrl(value)) {
+          node.removeAttribute(attr.name);
+          return;
+        }
+        node.setAttribute("rel", "noopener noreferrer");
+        node.setAttribute("target", "_blank");
+      }
+      if (name === "src") {
+        if (!isSafeUrl(value, { allowDataImage: true })) {
+          node.remove();
+          return;
+        }
+      }
+      if (name === "style") {
+        const nextStyle = sanitizeStyle(value);
+        if (nextStyle) node.setAttribute("style", nextStyle);
+        else node.removeAttribute("style");
+      }
+      if (tag === "font" && name === "size") {
+        const size = String(value || "").trim();
+        if (!/^[1-7]$/.test(size)) node.removeAttribute("size");
+      }
+      if (tag === "font" && name === "face") {
+        const face = String(value || "").replace(/['"]/g, "").trim();
+        if (!GENERAL_NOTES_ALLOWED_FONTS.has(face)) node.removeAttribute("face");
+      }
+    });
+
+    Array.from(node.childNodes).forEach((child) => sanitizeNode(child));
+  };
+
+  Array.from(root.childNodes).forEach((child) => sanitizeNode(child));
+  return root.innerHTML.trim();
+}
+
+function setGeneralNotesHtml(value) {
+  const raw = String(value || "");
+  const looksLikeHtml = /<\s*[a-z][\s\S]*>/i.test(raw);
+  const html = looksLikeHtml ? raw : escapeHtml(raw).replaceAll("\n", "<br />");
+  const cleaned = sanitizeRichText(html);
+  if (generalNotesEditor) generalNotesEditor.innerHTML = cleaned;
+  if (generalNotesInput) generalNotesInput.value = cleaned;
+}
+
+function getGeneralNotesHtml() {
+  const raw = generalNotesEditor ? generalNotesEditor.innerHTML : String(generalNotesInput?.value || "");
+  const looksLikeHtml = /<\s*[a-z][\s\S]*>/i.test(raw);
+  const html = looksLikeHtml ? raw : escapeHtml(raw).replaceAll("\n", "<br />");
+  const cleaned = sanitizeRichText(html);
+  if (generalNotesInput) generalNotesInput.value = cleaned;
+  return cleaned;
+}
+
+function storeGeneralNotesSelection() {
+  if (!generalNotesEditor) return;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
+  const range = sel.getRangeAt(0);
+  if (!generalNotesEditor.contains(range.commonAncestorContainer)) return;
+  // Clone so toolbar clicks don't mutate the stored range.
+  generalNotesLastRange = range.cloneRange();
+}
+
+function restoreGeneralNotesSelection() {
+  if (!generalNotesLastRange || !generalNotesEditor) return;
+  const sel = window.getSelection();
+  if (!sel) return;
+  if (!generalNotesEditor.contains(generalNotesLastRange.commonAncestorContainer)) return;
+  sel.removeAllRanges();
+  sel.addRange(generalNotesLastRange);
+}
+
+function execGeneralNotesCommand(command, value) {
+  if (!generalNotesEditor) return;
+  generalNotesEditor.focus();
+  restoreGeneralNotesSelection();
+  document.execCommand(command, false, value);
+  storeGeneralNotesSelection();
+  syncRentalInfoDraft();
+}
+
+function insertGeneralNotesImage(url, name) {
+  if (!generalNotesEditor || !url) return;
+  generalNotesEditor.focus();
+  restoreGeneralNotesSelection();
+  document.execCommand("insertImage", false, url);
+  if (name) {
+    const imgs = Array.from(generalNotesEditor.querySelectorAll("img"));
+    const matching = imgs.filter((img) => String(img.getAttribute("src") || "") === String(url));
+    const last = (matching.length ? matching : imgs)[(matching.length ? matching : imgs).length - 1];
+    if (last) last.alt = String(name || "General notes image");
+  }
+  storeGeneralNotesSelection();
+  syncRentalInfoDraft();
 }
 
 function setGeneralNotesStatus(message) {
@@ -4460,8 +4909,8 @@ function initFormFieldsFromDraft() {
   specialInstructions.value = draft.specialInstructions || "";
   if (siteAddressInput) siteAddressInput.value = draft.siteAddress || "";
   if (criticalAreasInput) criticalAreasInput.value = draft.criticalAreas || "";
-  if (generalNotesInput) generalNotesInput.value = draft.generalNotes || "";
-  setCoverageInputs(draft.coverageHours || {});
+  setGeneralNotesHtml(draft.generalNotes || "");
+  setCoverageInputs(draft.coverageHours || []);
   applyNotificationCircumstances(draft.notificationCircumstances || []);
   setContactRows(emergencyContactsList, draft.emergencyContacts || [], emergencyContactOptions);
   setContactRows(siteContactsList, draft.siteContacts || [], siteContactOptions);
@@ -4491,7 +4940,7 @@ function syncRentalInfoDraft() {
     draft.siteAddressQuery = "";
   }
   draft.criticalAreas = criticalAreasInput?.value || "";
-  draft.generalNotes = generalNotesInput?.value || "";
+  draft.generalNotes = getGeneralNotesHtml();
   draft.coverageHours = collectCoverageHoursFromInputs();
   draft.notificationCircumstances = collectNotificationCircumstances();
   scheduleDraftSave();
@@ -4530,7 +4979,7 @@ async function loadOrder() {
   draft.notificationCircumstances = Array.isArray(rawNotificationCircumstances)
     ? rawNotificationCircumstances
     : safeJsonParse(rawNotificationCircumstances, []);
-  draft.coverageHours = normalizeCoverageHours(o.coverage_hours || o.coverageHours || {});
+  draft.coverageHours = normalizeCoverageHours(o.coverage_hours || o.coverageHours || []);
   draft.emergencyContacts = parseContacts(o.emergency_contacts || o.emergencyContacts || []);
   draft.siteContacts = parseContacts(o.site_contacts || o.siteContacts || []);
   draft.pickupInvoiceMode = null;
@@ -4815,6 +5264,35 @@ closeOpenBtn?.addEventListener("click", async (e) => {
   }
 });
 
+deleteOrderBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId || !editingOrderId) return;
+  if (normalizeOrderStatus(draft.status) === "closed") {
+    setCompanyMeta("Closed rental orders cannot be deleted.");
+    return;
+  }
+  if (!window.confirm("Delete this rental order? This cannot be undone.")) return;
+  deleteOrderBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/rental-orders/${editingOrderId}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyId: activeCompanyId }),
+    });
+    if (res.status === 204) {
+      window.location.href = "rental-orders.html";
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to delete rental order.");
+    window.location.href = "rental-orders.html";
+  } catch (err) {
+    setCompanyMeta(err?.message ? String(err.message) : String(err));
+  } finally {
+    deleteOrderBtn.disabled = false;
+  }
+});
+
 const rentalInfoInputs = [
   customerPoInput,
   logisticsInstructions,
@@ -4822,13 +5300,7 @@ const rentalInfoInputs = [
   specialInstructions,
   siteAddressInput,
   criticalAreasInput,
-  generalNotesInput,
 ].filter(Boolean);
-const coverageInputsList = coverageDayKeys.flatMap((day) => {
-  const entry = coverageInputs[day];
-  if (!entry) return [];
-  return [entry.start, entry.end].filter(Boolean);
-});
 const minuteStepInputs = [
   lineItemStartInput,
   lineItemEndInput,
@@ -4836,47 +5308,159 @@ const minuteStepInputs = [
   lineItemActualReturnInput,
   lineItemPauseStartInput,
   lineItemPauseEndInput,
-  ...coverageInputsList,
 ].filter(Boolean);
 minuteStepInputs.forEach((el) => applyMinuteStep(el));
 initTimePickers(minuteStepInputs);
 [...rentalInfoInputs].forEach((el) => {
   el.addEventListener("input", syncRentalInfoDraft);
 });
-coverageInputsList.forEach((el) => {
-  el.addEventListener("change", () => {
-    snapInputToMinuteStep(el);
-    syncTimeOverlayState(el);
-    refreshTimePickerForInput(el);
-    updateCoverageNextDayIndicators();
+
+if (generalNotesEditor) {
+  generalNotesEditor.addEventListener("input", () => {
+    storeGeneralNotesSelection();
     syncRentalInfoDraft();
   });
-  el.addEventListener("blur", () => {
-    snapInputToMinuteStep(el);
-    syncTimeOverlayState(el);
-    refreshTimePickerForInput(el);
-    updateCoverageNextDayIndicators();
+  generalNotesEditor.addEventListener("keyup", storeGeneralNotesSelection);
+  generalNotesEditor.addEventListener("mouseup", storeGeneralNotesSelection);
+  generalNotesEditor.addEventListener("blur", () => {
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (generalNotesToolbar && active && generalNotesToolbar.contains(active)) return;
+      setGeneralNotesHtml(generalNotesEditor.innerHTML);
+    });
   });
-});
+}
 
-const copyMondayCoverageBtn = document.getElementById("copy-monday-coverage");
-copyMondayCoverageBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  const start = coverageInputs.mon.start.value;
-  const end = coverageInputs.mon.end.value;
-  ["tue", "wed", "thu", "fri", "sat", "sun"].forEach((day) => {
-    const entry = coverageInputs[day];
-    if (entry) {
-      if (entry.start) entry.start.value = start;
-      if (entry.end) entry.end.value = end;
+if (generalNotesToolbar) {
+  generalNotesToolbar.addEventListener("mousedown", (e) => {
+    storeGeneralNotesSelection();
+    const btn = e.target.closest?.("[data-rich-cmd],[data-rich-action]");
+    if (btn) e.preventDefault();
+  });
+  generalNotesToolbar.addEventListener("click", (e) => {
+    const btn = e.target.closest?.("[data-rich-cmd],[data-rich-action]");
+    if (!btn) return;
+    e.preventDefault();
+    const command = btn.getAttribute("data-rich-cmd");
+    if (command) {
+      execGeneralNotesCommand(command);
+      return;
+    }
+    const action = btn.getAttribute("data-rich-action");
+    if (action === "link") {
+      const url = window.prompt("Enter link URL");
+      if (url) execGeneralNotesCommand("createLink", url);
+      return;
+    }
+    if (action === "clear") {
+      execGeneralNotesCommand("removeFormat");
+      return;
+    }
+    if (action === "image") {
+      if (!editingOrderId) {
+        setGeneralNotesStatus("Save the RO first to enable uploads.");
+        return;
+      }
+      generalNotesInsertMode = "inline";
+      storeGeneralNotesSelection();
+      generalNotesImagesInput?.click();
     }
   });
-  coverageInputsList.forEach((el) => {
-    snapInputToMinuteStep(el);
-    syncTimeOverlayState(el);
-    refreshTimePickerForInput(el);
+
+  generalNotesToolbar.addEventListener("change", (e) => {
+    const target = e.target;
+    if (!target || !target.matches) return;
+    if (target.matches('[data-rich="font"]')) {
+      const value = target.value;
+      if (value) execGeneralNotesCommand("fontName", value);
+      target.value = "";
+      return;
+    }
+    if (target.matches('[data-rich="size"]')) {
+      const value = target.value;
+      if (value) execGeneralNotesCommand("fontSize", value);
+      target.value = "";
+      return;
+    }
+    if (target.matches('[data-rich="block"]')) {
+      const value = target.value;
+      if (value) {
+        const block = value.startsWith("<") ? value : `<${value}>`;
+        execGeneralNotesCommand("formatBlock", block);
+      }
+      target.value = "";
+    }
   });
-  updateCoverageNextDayIndicators();
+}
+if (coverageSlotsContainer) {
+  coverageSlotsContainer.addEventListener("click", (e) => {
+    const btn = e.target.closest?.("[data-coverage-action]");
+    if (!btn) return;
+    const row = btn.closest?.("[data-coverage-slot]");
+    if (!row) return;
+    const action = btn.dataset.coverageAction;
+    if (action === "remove") {
+      row.remove();
+      if (!coverageSlotsContainer.querySelector("[data-coverage-slot]")) {
+        addCoverageSlotRow({});
+      }
+      syncRentalInfoDraft();
+      return;
+    }
+    if (action === "duplicate") {
+      const slot = readCoverageSlotFromRow(row);
+      if (!slot) return;
+      addCoverageSlotRow(slot, { afterRow: row });
+      syncRentalInfoDraft();
+      return;
+    }
+    if (action === "copy") {
+      const panel = row.querySelector("[data-coverage-copy]");
+      if (panel) panel.hidden = !panel.hidden;
+      return;
+    }
+    if (action === "cancel-copy") {
+      const panel = row.querySelector("[data-coverage-copy]");
+      if (panel) {
+        panel.hidden = true;
+        panel.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+          cb.checked = false;
+        });
+      }
+      return;
+    }
+    if (action === "apply-copy") {
+      const slot = normalizeCoverageSlot(readCoverageSlotFromRow(row));
+      if (!slot) return;
+      const panel = row.querySelector("[data-coverage-copy]");
+      const selected = Array.from(panel?.querySelectorAll('input[type="checkbox"]:checked') || []).map((cb) => cb.value);
+      if (!selected.length) return;
+      const offset = (coverageDayIndex(slot.endDay) - coverageDayIndex(slot.startDay) + coverageDayKeys.length) % coverageDayKeys.length;
+      const existingKeys = new Set(collectCoverageHoursFromInputs().map((s) => coverageSlotKey(s)));
+      selected.forEach((day) => {
+        const startDay = coerceCoverageDay(day);
+        if (!startDay) return;
+        const endDay = addCoverageDayOffset(startDay, offset);
+        const nextSlot = { startDay, startTime: slot.startTime, endDay, endTime: slot.endTime };
+        const key = coverageSlotKey(nextSlot);
+        if (existingKeys.has(key)) return;
+        existingKeys.add(key);
+        addCoverageSlotRow(nextSlot);
+      });
+      if (panel) {
+        panel.hidden = true;
+        panel.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+          cb.checked = false;
+        });
+      }
+      syncRentalInfoDraft();
+    }
+  });
+}
+
+addCoverageSlotBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  addCoverageSlotRow({});
   syncRentalInfoDraft();
 });
 
@@ -5151,6 +5735,7 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
   }
   const lockUnits = isUnitSelectionLocked(draft.status);
   const requireUnits = isUnitSelectionRequired(draft.status);
+  const allowTbdUnits = normalizeOrderStatus(draft.status) === "ordered";
   for (const li of validLines) {
     const s = new Date(li.startLocal);
     const en = new Date(li.endLocal);
@@ -5175,7 +5760,8 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
         reportError("One or more line items have no available units for the selected dates.");
         return { ok: false, error: "One or more line items have no available units for the selected dates." };
       }
-      if ((li.inventoryIds || []).length !== 1) {
+      const inventoryCount = (li.inventoryIds || []).length;
+      if (inventoryCount !== 1 && !(allowTbdUnits && inventoryCount === 0)) {
         reportError("Select a unit for each line item.");
         return { ok: false, error: "Select a unit for each line item." };
       }
@@ -5203,7 +5789,7 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     siteAddressQuery: draft.siteAddressQuery || null,
     criticalAreas: draft.criticalAreas || null,
     generalNotes: draft.generalNotes || null,
-    coverageHours: draft.coverageHours || {},
+    coverageHours: draft.coverageHours || [],
     emergencyContacts: collectContacts(emergencyContactsList),
     siteContacts: collectContacts(siteContactsList),
     notificationCircumstances: collectNotificationCircumstances(),
@@ -5430,6 +6016,8 @@ saveNoteBtn?.addEventListener("click", async (e) => {
 
 generalNotesImagesInput?.addEventListener("change", async (e) => {
   const files = Array.from(e.target?.files || []);
+  const insertInline = generalNotesInsertMode === "inline";
+  generalNotesInsertMode = null;
   if (!files.length) return;
   if (!editingOrderId) {
     setGeneralNotesStatus("Save the RO first to enable uploads.");
@@ -5476,6 +6064,12 @@ generalNotesImagesInput?.addEventListener("change", async (e) => {
   if (uploaded.length) {
     generalNotesImages = generalNotesImages.concat(normalizeGeneralNotesAttachments(uploaded));
     renderGeneralNotesImages();
+    if (insertInline) {
+      const normalized = normalizeGeneralNotesAttachments(uploaded);
+      normalized.forEach((img) => {
+        insertGeneralNotesImage(img.url, img.name || img.fileName || "General notes image");
+      });
+    }
   }
 
   if (failures.length) {
@@ -6248,6 +6842,37 @@ if (notificationCircumstancesContainer) {
     }
   });
 }
+
+createOrderLinkBtn?.addEventListener("click", async () => {
+  if (!activeCompanyId) {
+    if (orderLinkHint) orderLinkHint.textContent = "Log in to continue.";
+    return;
+  }
+  if (orderLinkHint) orderLinkHint.textContent = "Generating link...";
+  createOrderLinkBtn.disabled = true;
+  try {
+    const scope = editingOrderId ? "order_update" : "new_quote";
+    const res = await fetch("/api/customer-share-links", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId: activeCompanyId,
+        rentalOrderId: editingOrderId,
+        customerId: draft.customerId || null,
+        scope,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to create link.");
+    const url = `${window.location.origin}${data.url || ""}`;
+    if (orderLinkOutput) orderLinkOutput.value = url;
+    if (orderLinkHint) orderLinkHint.textContent = "Link generated.";
+  } catch (err) {
+    if (orderLinkHint) orderLinkHint.textContent = err?.message ? String(err.message) : "Unable to create link.";
+  } finally {
+    createOrderLinkBtn.disabled = false;
+  }
+});
 
 init();
 

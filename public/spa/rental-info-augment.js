@@ -38,6 +38,277 @@
     { key: "sun", label: "Sun" },
   ];
 
+  const coverageDayOptionsHtml = coverageDays
+    .map((day) => `<option value="${day.key}">${day.label}</option>`)
+    .join("");
+  const coverageCopyDaysHtml = coverageDays
+    .map(
+      (day) =>
+        `<label class="flex items-center gap-2 text-xs text-slate-500">
+          <input type="checkbox" value="${day.key}" data-coverage-copy-day="${day.key}" class="rounded border-gray-300 text-brand-accent focus:ring-brand-accent w-4 h-4" />
+          <span>${day.label}</span>
+        </label>`
+    )
+    .join("");
+
+  function normalizeTimeValue(value) {
+    const match = String(value || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return "";
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      return "";
+    }
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  }
+
+  function timeToMinutes(value) {
+    const match = String(value || "").trim().match(/^(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      return null;
+    }
+    return hour * 60 + minute;
+  }
+
+  function coerceCoverageDay(value) {
+    const key = String(value || "").trim().toLowerCase();
+    if (!key) return "";
+    const dayMap = {
+      mon: "mon",
+      monday: "mon",
+      tue: "tue",
+      tues: "tue",
+      tuesday: "tue",
+      wed: "wed",
+      weds: "wed",
+      wednesday: "wed",
+      thu: "thu",
+      thur: "thu",
+      thurs: "thu",
+      thursday: "thu",
+      fri: "fri",
+      friday: "fri",
+      sat: "sat",
+      saturday: "sat",
+      sun: "sun",
+      sunday: "sun",
+    };
+    return dayMap[key] || "";
+  }
+
+  function coverageDayIndex(day) {
+    return coverageDays.findIndex((d) => d.key === day);
+  }
+
+  function addCoverageDayOffset(day, offset) {
+    const idx = coverageDayIndex(day);
+    if (idx === -1) return day;
+    const nextIdx = (idx + offset + coverageDays.length) % coverageDays.length;
+    return coverageDays[nextIdx].key;
+  }
+
+  function coverageSlotKey(slot) {
+    return `${slot.startDay || ""}-${slot.startTime || ""}-${slot.endDay || ""}-${slot.endTime || ""}`;
+  }
+
+  function normalizeCoverageSlot(entry) {
+    if (!entry || typeof entry !== "object") return null;
+    const startDay = coerceCoverageDay(entry.startDay ?? entry.start_day ?? entry.day ?? entry.startDayKey);
+    const endDayRaw = coerceCoverageDay(entry.endDay ?? entry.end_day ?? entry.endDayKey ?? entry.day_end);
+    const startTime = normalizeTimeValue(entry.startTime ?? entry.start_time ?? entry.start);
+    const endTime = normalizeTimeValue(entry.endTime ?? entry.end_time ?? entry.end);
+    if (!startDay && !endDayRaw && !startTime && !endTime) return null;
+    if (!startDay || !startTime || !endTime) return null;
+    let endDay = endDayRaw || startDay;
+    const explicitOffset = entry.endDayOffset ?? entry.end_day_offset;
+    if (!endDayRaw) {
+      if (explicitOffset === 1 || explicitOffset === "1" || explicitOffset === true || entry.spansMidnight === true) {
+        endDay = addCoverageDayOffset(startDay, 1);
+      } else {
+        const startMinutes = timeToMinutes(startTime);
+        const endMinutes = timeToMinutes(endTime);
+        if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) {
+          endDay = addCoverageDayOffset(startDay, 1);
+        }
+      }
+    }
+    if (!endDay) endDay = startDay;
+    return { startDay, startTime, endDay, endTime };
+  }
+
+  function sortCoverageSlots(slots) {
+    return (slots || [])
+      .slice()
+      .sort((a, b) => {
+        const dayDiff = coverageDayIndex(a.startDay) - coverageDayIndex(b.startDay);
+        if (dayDiff) return dayDiff;
+        const aStart = timeToMinutes(a.startTime) ?? 0;
+        const bStart = timeToMinutes(b.startTime) ?? 0;
+        if (aStart !== bStart) return aStart - bStart;
+        const aEnd = timeToMinutes(a.endTime) ?? 0;
+        const bEnd = timeToMinutes(b.endTime) ?? 0;
+        return aEnd - bEnd;
+      });
+  }
+
+  function normalizeCoverageHours(value) {
+    let raw = value;
+    if (typeof raw === "string") {
+      try {
+        raw = JSON.parse(raw);
+      } catch {
+        raw = null;
+      }
+    }
+    if (raw && typeof raw === "object" && !Array.isArray(raw) && Array.isArray(raw.slots)) {
+      raw = raw.slots;
+    }
+
+    const slots = [];
+    if (Array.isArray(raw)) {
+      raw.forEach((entry) => {
+        const normalized = normalizeCoverageSlot(entry);
+        if (normalized) slots.push(normalized);
+      });
+      return sortCoverageSlots(slots);
+    }
+
+    if (raw && typeof raw === "object") {
+      coverageDays.forEach((day) => {
+        const entry = raw[day.key] || {};
+        const startTime = normalizeTimeValue(entry.start);
+        const endTime = normalizeTimeValue(entry.end);
+        if (!startTime && !endTime) return;
+        if (!startTime || !endTime) return;
+        let endDay = day.key;
+        const explicit = entry.endDayOffset ?? entry.end_day_offset;
+        if (explicit === 1 || explicit === "1" || explicit === true || entry.spansMidnight === true) {
+          endDay = addCoverageDayOffset(day.key, 1);
+        } else {
+          const startMinutes = timeToMinutes(startTime);
+          const endMinutes = timeToMinutes(endTime);
+          if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) {
+            endDay = addCoverageDayOffset(day.key, 1);
+          }
+        }
+        slots.push({ startDay: day.key, startTime, endDay, endTime });
+      });
+    }
+
+    return sortCoverageSlots(slots);
+  }
+
+  function buildCoverageSlotRow(slot = {}) {
+    const row = document.createElement("div");
+    row.className = "border border-gray-200 rounded-xl p-3 bg-white space-y-3 w-full xl:w-[calc(50%-0.75rem)]";
+    row.dataset.coverageSlot = "true";
+    row.innerHTML = `
+      <div class="grid gap-3 md:grid-cols-2 items-start">
+        <label class="block text-xs font-bold text-slate-500">
+          Start
+          <div class="mt-1 grid gap-2">
+            <select data-coverage-field="start-day" class="w-full max-w-[150px] p-2 rounded-lg border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all">
+              ${coverageDayOptionsHtml}
+            </select>
+            <input data-coverage-field="start-time" type="time" step="300" class="w-full max-w-[150px] p-2 rounded-lg border border-gray-200 focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all" />
+          </div>
+        </label>
+        <label class="block text-xs font-bold text-slate-500">
+          End
+          <div class="mt-1 grid gap-2">
+            <select data-coverage-field="end-day" class="w-full max-w-[150px] p-2 rounded-lg border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all">
+              ${coverageDayOptionsHtml}
+            </select>
+            <input data-coverage-field="end-time" type="time" step="300" class="w-full max-w-[150px] p-2 rounded-lg border border-gray-200 focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all" />
+          </div>
+        </label>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button type="button" class="text-xs font-bold text-brand-accent hover:text-yellow-600" data-coverage-action="duplicate">Duplicate</button>
+        <button type="button" class="text-xs font-bold text-brand-accent hover:text-yellow-600" data-coverage-action="copy">Copy to days</button>
+        <button type="button" class="text-xs font-bold text-red-600 hover:text-red-700" data-coverage-action="remove">Remove</button>
+      </div>
+      <div class="hidden border border-dashed border-gray-200 rounded-lg p-3 bg-slate-50 space-y-2" data-coverage-copy>
+        <div class="text-xs text-slate-500 font-bold">Copy this slot to start on:</div>
+        <div class="flex flex-wrap gap-3">
+          ${coverageCopyDaysHtml}
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="text-xs font-bold text-brand-accent hover:text-yellow-600" data-coverage-action="apply-copy">Apply</button>
+          <button type="button" class="text-xs font-bold text-slate-400 hover:text-slate-500" data-coverage-action="cancel-copy">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    const normalized = normalizeCoverageSlot(slot) || {};
+    const startDaySelect = row.querySelector('[data-coverage-field="start-day"]');
+    const endDaySelect = row.querySelector('[data-coverage-field="end-day"]');
+    const startTimeInput = row.querySelector('[data-coverage-field="start-time"]');
+    const endTimeInput = row.querySelector('[data-coverage-field="end-time"]');
+    const fallbackDay = coverageDays[0]?.key || "mon";
+    const startDay = normalized.startDay || coerceCoverageDay(slot.startDay ?? slot.start_day) || fallbackDay;
+    const endDay =
+      normalized.endDay || coerceCoverageDay(slot.endDay ?? slot.end_day) || (startDay ? startDay : fallbackDay);
+
+    if (startDaySelect) startDaySelect.value = startDay;
+    if (endDaySelect) endDaySelect.value = endDay;
+    if (startTimeInput && normalized.startTime) startTimeInput.value = normalized.startTime;
+    if (endTimeInput && normalized.endTime) endTimeInput.value = normalized.endTime;
+
+    return row;
+  }
+
+  function getCoverageSlotsContainer(section) {
+    return section?.querySelector?.("[data-coverage-slots]") || null;
+  }
+
+  function addCoverageSlotRow(section, slot = {}, { afterRow = null } = {}) {
+    const container = getCoverageSlotsContainer(section);
+    if (!container) return null;
+    const row = buildCoverageSlotRow(slot);
+    if (afterRow && afterRow.parentNode === container) {
+      afterRow.insertAdjacentElement("afterend", row);
+    } else {
+      container.appendChild(row);
+    }
+    return row;
+  }
+
+  function renderCoverageSlots(section, slots) {
+    const container = getCoverageSlotsContainer(section);
+    if (!container) return;
+    container.innerHTML = "";
+    const normalized = normalizeCoverageHours(slots);
+    if (!normalized.length) {
+      addCoverageSlotRow(section, {});
+      return;
+    }
+    normalized.forEach((slot) => addCoverageSlotRow(section, slot));
+  }
+
+  function readCoverageSlotFromRow(row) {
+    if (!row) return null;
+    const startDay = row.querySelector('[data-coverage-field="start-day"]')?.value || "";
+    const endDay = row.querySelector('[data-coverage-field="end-day"]')?.value || "";
+    const startTime = row.querySelector('[data-coverage-field="start-time"]')?.value || "";
+    const endTime = row.querySelector('[data-coverage-field="end-time"]')?.value || "";
+    return { startDay, startTime, endDay, endTime };
+  }
+
+  function collectCoverageSlotRows(section) {
+    const container = getCoverageSlotsContainer(section);
+    if (!container) return [];
+    return Array.from(container.querySelectorAll("[data-coverage-slot]")).map((row) => {
+      const slot = readCoverageSlotFromRow(row) || {};
+      const hasAny = Boolean(slot.startDay || slot.startTime || slot.endDay || slot.endTime);
+      const isComplete = Boolean(slot.startDay && slot.startTime && slot.endDay && slot.endTime);
+      return { ...slot, hasAny, isComplete };
+    });
+  }
+
   function normalizeRentalInfoFields(value) {
     let raw = value;
     if (typeof raw === "string") {
@@ -265,38 +536,17 @@
           <div class="flex flex-wrap items-center justify-between gap-2">
             <span class="text-sm font-bold text-slate-700">Hours of coverage required</span>
             <div class="flex flex-wrap items-center gap-2">
-              <span class="text-xs text-slate-400">Use 24-hour time</span>
-              <label class="text-xs text-slate-500 flex items-center gap-2">
-                Apply
-                <select class="border border-gray-200 rounded-lg px-2 py-1 text-xs" data-coverage-source>
-                  ${coverageDays.map((day) => `<option value="${day.key}">${day.label}</option>`).join("")}
-                </select>
-                to all
-              </label>
-              <button type="button" class="text-xs font-bold text-brand-accent hover:text-yellow-600" data-action="apply-coverage-all">
-                Apply
+              <span class="text-xs text-slate-400">Use 24-hour time - 5-minute steps</span>
+              <button type="button" class="text-xs font-bold text-brand-accent hover:text-yellow-600" data-action="add-coverage-slot">
+                + Add time slot
               </button>
             </div>
           </div>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-            ${coverageDays
-        .map(
-          (day) => `
-              <div class="border border-gray-200 rounded-xl p-3 bg-white">
-                <div class="text-xs font-bold text-slate-500 mb-2">${day.label}</div>
-                <div class="flex items-center gap-2">
-                  <input data-coverage-day="${day.key}" data-coverage-field="start" type="time" class="w-full p-2 rounded-lg border border-gray-200 focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all" />
-                  <span class="text-xs text-slate-400">to</span>
-                  <input data-coverage-day="${day.key}" data-coverage-field="end" type="time" class="w-full p-2 rounded-lg border border-gray-200 focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all" />
-                </div>
-              </div>
-            `
-        )
-        .join("")}
-          </div>
+          <div class="flex flex-wrap gap-3" data-coverage-slots></div>
         </div>
       </div>
     `;
+    renderCoverageSlots(section, []);
     section.addEventListener("click", (event) => {
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
@@ -312,26 +562,67 @@
         const row = target.closest("[data-contact-row]");
         if (row) row.remove();
       }
-      if (target.dataset.action === "apply-coverage-all") {
-        const sourceSelect = section.querySelector("[data-coverage-source]");
-        if (!(sourceSelect instanceof HTMLSelectElement)) return;
-        const sourceDay = sourceSelect.value;
-        const sourceStart = section.querySelector(
-          `[data-coverage-day="${sourceDay}"][data-coverage-field="start"]`
-        );
-        const sourceEnd = section.querySelector(
-          `[data-coverage-day="${sourceDay}"][data-coverage-field="end"]`
-        );
-        if (!(sourceStart instanceof HTMLInputElement) || !(sourceEnd instanceof HTMLInputElement)) return;
-        const startValue = sourceStart.value;
-        const endValue = sourceEnd.value;
-        if (!startValue && !endValue) return;
-        section.querySelectorAll("[data-coverage-day]").forEach((input) => {
-          const el = input;
-          if (el.dataset.coverageDay === sourceDay) return;
-          if (el.dataset.coverageField === "start") el.value = startValue;
-          if (el.dataset.coverageField === "end") el.value = endValue;
-        });
+      const coverageAction = target.closest?.("[data-coverage-action]");
+      if (target.dataset.action === "add-coverage-slot") {
+        addCoverageSlotRow(section, {});
+      }
+      if (coverageAction) {
+        const row = coverageAction.closest?.("[data-coverage-slot]");
+        if (!row) return;
+        const action = coverageAction.dataset.coverageAction;
+        if (action === "remove") {
+          row.remove();
+          if (!getCoverageSlotsContainer(section)?.querySelector("[data-coverage-slot]")) {
+            addCoverageSlotRow(section, {});
+          }
+          return;
+        }
+        if (action === "duplicate") {
+          const slot = readCoverageSlotFromRow(row);
+          if (!slot) return;
+          addCoverageSlotRow(section, slot, { afterRow: row });
+          return;
+        }
+        if (action === "copy") {
+          const panel = row.querySelector("[data-coverage-copy]");
+          if (panel) panel.classList.toggle("hidden");
+          return;
+        }
+        if (action === "cancel-copy") {
+          const panel = row.querySelector("[data-coverage-copy]");
+          if (panel) {
+            panel.classList.add("hidden");
+            panel.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+              cb.checked = false;
+            });
+          }
+          return;
+        }
+        if (action === "apply-copy") {
+          const slot = normalizeCoverageSlot(readCoverageSlotFromRow(row));
+          if (!slot) return;
+          const panel = row.querySelector("[data-coverage-copy]");
+          const selected = Array.from(panel?.querySelectorAll('input[type="checkbox"]:checked') || []).map((cb) => cb.value);
+          if (!selected.length) return;
+          const offset = (coverageDayIndex(slot.endDay) - coverageDayIndex(slot.startDay) + coverageDays.length) % coverageDays.length;
+          const existingKeys = new Set(collectCoverageHours(section).map((s) => coverageSlotKey(s)));
+          selected.forEach((day) => {
+            const startDay = coerceCoverageDay(day);
+            if (!startDay) return;
+            const endDay = addCoverageDayOffset(startDay, offset);
+            const nextSlot = { startDay, startTime: slot.startTime, endDay, endTime: slot.endTime };
+            const key = coverageSlotKey(nextSlot);
+            if (existingKeys.has(key)) return;
+            existingKeys.add(key);
+            addCoverageSlotRow(section, nextSlot);
+          });
+          if (panel) {
+            panel.classList.add("hidden");
+            panel.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+              cb.checked = false;
+            });
+          }
+        }
       }
       if (target.dataset.action === "toggle-notification-other") {
         const otherInput = section.querySelector(`#${notificationOtherInputId}`);
@@ -548,38 +839,18 @@
     return values;
   }
 
-  function timeToMinutes(value) {
-    const match = String(value || "").trim().match(/^(\d{2}):(\d{2})$/);
-    if (!match) return null;
-    const hour = Number(match[1]);
-    const minute = Number(match[2]);
-    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-    return hour * 60 + minute;
-  }
-
   function collectCoverageHours(section) {
-    const coverage = {};
-    if (!section) return coverage;
-    const inputs = section.querySelectorAll("[data-coverage-day]");
-    inputs.forEach((input) => {
-      const el = input;
-      const day = el.dataset.coverageDay;
-      const field = el.dataset.coverageField;
-      if (!day || !field) return;
-      if (!coverage[day]) coverage[day] = {};
-      coverage[day][field] = normalizeValue(el.value);
-    });
-    Object.keys(coverage).forEach((day) => {
-      const entry = coverage[day] || {};
-      if (!entry.start && !entry.end) delete coverage[day];
-      if (entry.start && entry.end) {
-        const startMinutes = timeToMinutes(entry.start);
-        const endMinutes = timeToMinutes(entry.end);
-        entry.endDayOffset =
-          startMinutes !== null && endMinutes !== null && endMinutes < startMinutes ? 1 : 0;
-      }
-    });
-    return coverage;
+    if (!section) return [];
+    const rows = collectCoverageSlotRows(section);
+    const slots = rows
+      .filter((row) => row.isComplete)
+      .map((row) => ({
+        startDay: row.startDay,
+        startTime: normalizeValue(row.startTime),
+        endDay: row.endDay,
+        endTime: normalizeValue(row.endTime),
+      }));
+    return normalizeCoverageHours(slots);
   }
 
   function readRentalInfo() {
@@ -594,7 +865,7 @@
       : [];
     const siteContacts = useField("siteContacts") ? collectContacts(section.querySelector(`#${siteListId}`)) : [];
     const notificationCircumstances = useField("notificationCircumstances") ? collectNotificationCircumstances(section) : [];
-    const coverageHours = useField("coverageHours") ? collectCoverageHours(section) : {};
+    const coverageHours = useField("coverageHours") ? collectCoverageHours(section) : [];
     return {
       ...(useField("siteAddress") ? { siteAddress } : {}),
       ...(useField("criticalAreas") ? { criticalAreas } : {}),

@@ -6,6 +6,7 @@ const rateLimit = require("express-rate-limit");
 const cors = require("cors");
 const multer = require("multer");
 const dotenv = require("dotenv");
+const PDFDocument = require("pdfkit");
 
 // Load env from repo root even if server is started from `backend/`.
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
@@ -98,6 +99,7 @@ const {
   updateRentalOrder,
   updateRentalOrderSiteAddress,
   updateRentalOrderStatus,
+  deleteRentalOrder,
   listRentalOrderAudits,
   addRentalOrderNote,
   addRentalOrderAttachment,
@@ -105,6 +107,15 @@ const {
   listCustomerDocuments,
   addCustomerDocument,
   deleteCustomerDocument,
+  createCustomerShareLink,
+  getCustomerShareLinkByHash,
+  markCustomerShareLinkUsed,
+  revokeCustomerShareLink,
+  createCustomerChangeRequest,
+  updateCustomerChangeRequestStatus,
+  listCustomerChangeRequests,
+  getCustomerChangeRequest,
+  getLatestCustomerChangeRequestForLink,
   getCustomerStorefrontExtras,
   listAvailableInventory,
   getBundleAvailability,
@@ -221,6 +232,7 @@ const HSTS_MAX_AGE = parseHstsMaxAge(process.env.HSTS_MAX_AGE, 60 * 60 * 24 * 18
 const HSTS_INCLUDE_SUBDOMAINS = parseBoolean(process.env.HSTS_INCLUDE_SUBDOMAINS) !== false;
 const HSTS_PRELOAD = parseBoolean(process.env.HSTS_PRELOAD) === true;
 const CONTENT_SECURITY_POLICY = buildCspHeaderValue(process.env.CONTENT_SECURITY_POLICY);
+const JSON_BODY_LIMIT = parseBodySize(process.env.JSON_BODY_LIMIT, "5mb");
 if (TRUST_PROXY) {
   app.set("trust proxy", 1);
 }
@@ -315,6 +327,7 @@ app.use((req, res, next) => {
 });
 app.use(
   express.json({
+    limit: JSON_BODY_LIMIT,
     verify: (req, res, buf) => {
       if (buf && buf.length) req.rawBody = buf.toString("utf8");
     },
@@ -458,12 +471,61 @@ function parseRateLimitMax(value, fallback) {
   return Math.floor(parsed);
 }
 
+function parseBodySize(value, fallback) {
+  if (value === null || value === undefined || value === "") return fallback;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value <= 0) return fallback;
+    return Math.floor(value);
+  }
+  const raw = String(value).trim().toLowerCase();
+  if (!raw) return fallback;
+  if (/^\d+$/.test(raw)) return Math.max(1, Number(raw));
+  if (/^\d+(\.\d+)?\s*(b|kb|mb|gb)$/i.test(raw)) {
+    return raw.replace(/\s+/g, "");
+  }
+  return fallback;
+}
+
 const RATE_LIMIT_LOGIN_WINDOW_MS = parseRateLimitMs(process.env.RATE_LIMIT_LOGIN_WINDOW_MS, 15 * 60 * 1000);
 const RATE_LIMIT_LOGIN_MAX = parseRateLimitMax(process.env.RATE_LIMIT_LOGIN_MAX, 5);
 const QBO_OAUTH_STATE_TTL_MS = parseRateLimitMs(process.env.QBO_OAUTH_STATE_TTL_MS, 10 * 60 * 1000);
 const QBO_OAUTH_STATE_MAX = parseRateLimitMax(process.env.QBO_OAUTH_STATE_MAX, 2000);
 const QBO_OAUTH_ERROR_REDIRECT = "/settings.html?qbo=error";
 const qboOauthStateStore = new Map();
+
+function buildRateLimitHandler(message) {
+  return (req, res, next, options) => {
+    const resetTime = req.rateLimit?.resetTime ? new Date(req.rateLimit.resetTime).getTime() : null;
+    const retryAfterSeconds = resetTime ? Math.max(0, Math.ceil((resetTime - Date.now()) / 1000)) : null;
+    const payload = { error: message };
+    if (retryAfterSeconds !== null) payload.retryAfterSeconds = retryAfterSeconds;
+    res.status(options.statusCode).json(payload);
+  };
+}
+
+const loginLimiter = rateLimit({
+  windowMs: RATE_LIMIT_LOGIN_WINDOW_MS,
+  max: RATE_LIMIT_LOGIN_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: buildRateLimitHandler("Too many login attempts, please try again later."),
+});
+
+const customerLinkLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: buildRateLimitHandler("Too many link requests, please try again later."),
+});
+
+const customerLinkSubmitLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: buildRateLimitHandler("Too many submissions, please try again later."),
+});
 
 function pruneQboOauthStates(now = Date.now()) {
   for (const [key, entry] of qboOauthStateStore.entries()) {
@@ -848,6 +910,344 @@ app.get(
   })
 );
 
+app.get(
+  "/api/public/customer-links/:token",
+  customerLinkLimiter,
+  asyncHandler(async (req, res) => {
+    const resolved = await resolveCustomerShareLink(req.params?.token);
+    if (resolved.error) return res.status(404).json({ error: resolved.error });
+    const link = resolved.link;
+
+    const [settings, companyProfile, latestProof] = await Promise.all([
+      getCompanySettings(link.company_id),
+      getCompanyProfile(link.company_id),
+      getLatestCustomerChangeRequestForLink({ companyId: link.company_id, linkId: link.id }),
+    ]);
+
+    const customer = link.customer_id ? await getCustomerById({ companyId: link.company_id, id: link.customer_id }) : null;
+    const orderDetail = link.rental_order_id ? await getRentalOrder({ companyId: link.company_id, id: link.rental_order_id }) : null;
+    const types = await listTypes(link.company_id);
+    const sanitizedTypes = (types || []).map((t) => ({
+      id: Number(t.id),
+      name: t.name || "",
+      category: t.category || null,
+      description: t.description || null,
+      terms: t.terms || null,
+      imageUrl: t.image_url || null,
+    }));
+
+    const order = orderDetail?.order || null;
+    const lineItems = Array.isArray(orderDetail?.lineItems) ? orderDetail.lineItems : [];
+    const preparedLineItems = lineItems.map((li) => {
+      const lineItemId = li.lineItemId ?? li.id ?? null;
+      const typeId = li.typeId ?? li.type_id ?? null;
+      const bundleId = li.bundleId ?? li.bundle_id ?? null;
+      const startAt = li.startAt ?? li.start_at ?? null;
+      const endAt = li.endAt ?? li.end_at ?? null;
+      const rateBasis = li.rateBasis ?? li.rate_basis ?? null;
+      const rateAmount = li.rateAmount ?? li.rate_amount ?? null;
+      const billableUnits = li.billableUnits ?? li.billable_units ?? null;
+      const lineAmount = li.lineAmount ?? li.line_amount ?? null;
+      const hasPricing = rateAmount !== null && rateAmount !== undefined || lineAmount !== null && lineAmount !== undefined;
+      return {
+        lineItemId: lineItemId === null ? null : Number(lineItemId),
+        typeId: typeId === null ? null : Number(typeId),
+        bundleId: bundleId === null ? null : Number(bundleId),
+        startAt,
+        endAt,
+        rateBasis: hasPricing ? rateBasis || null : null,
+        rateAmount: hasPricing && rateAmount !== null ? Number(rateAmount) : null,
+        billableUnits: hasPricing && billableUnits !== null ? Number(billableUnits) : null,
+        lineAmount: hasPricing && lineAmount !== null ? Number(lineAmount) : null,
+      };
+    });
+
+    res.json({
+      link: {
+        id: link.id,
+        scope: link.scope,
+        singleUse: link.single_use === true,
+        usedAt: link.used_at || null,
+        expiresAt: link.expires_at || null,
+        requireEsignature: link.require_esignature === true,
+        termsText: link.terms_text || settings?.customer_terms_template || null,
+        documentCategories:
+          Array.isArray(link.allowed_document_categories) && link.allowed_document_categories.length
+            ? link.allowed_document_categories
+            : settings?.customer_document_categories || [],
+      },
+      company: {
+        id: companyProfile?.id || link.company_id,
+        name: companyProfile?.name || null,
+        email: companyProfile?.contact_email || null,
+        phone: companyProfile?.phone || null,
+        logoUrl: settings?.logo_url || null,
+      },
+      customer: customer
+        ? {
+            id: customer.id,
+            companyName: customer.company_name || null,
+            contactName: customer.contact_name || null,
+            streetAddress: customer.street_address || null,
+            city: customer.city || null,
+            region: customer.region || null,
+            country: customer.country || null,
+            postalCode: customer.postal_code || null,
+            email: customer.email || null,
+            phone: customer.phone || null,
+          }
+        : null,
+      order: order
+        ? {
+            id: order.id,
+            status: order.status || null,
+            customerPo: order.customer_po || null,
+            fulfillmentMethod: order.fulfillment_method || "pickup",
+            pickupLocationId: order.pickup_location_id || null,
+            pickupLocationName: order.pickup_location_name || null,
+            pickupStreetAddress: order.pickup_street_address || null,
+            pickupCity: order.pickup_city || null,
+            pickupRegion: order.pickup_region || null,
+            pickupCountry: order.pickup_country || null,
+            dropoffAddress: order.dropoff_address || null,
+            siteAddress: order.site_address || null,
+            siteAddressLat: order.site_address_lat || null,
+            siteAddressLng: order.site_address_lng || null,
+            siteAddressQuery: order.site_address_query || null,
+            logisticsInstructions: order.logistics_instructions || null,
+            specialInstructions: order.special_instructions || null,
+            criticalAreas: order.critical_areas || null,
+            notificationCircumstances: order.notification_circumstances || [],
+            coverageHours: order.coverage_hours || [],
+            emergencyContacts: order.emergency_contacts || [],
+            siteContacts: order.site_contacts || [],
+            generalNotes: order.general_notes || null,
+          }
+        : null,
+      lineItems: preparedLineItems,
+      types: sanitizedTypes,
+      rentalInfoFields: settings?.rental_info_fields || null,
+      proofAvailable: !!(latestProof?.proof_pdf_path),
+    });
+  })
+);
+
+app.post(
+  "/api/public/customer-links/:token/submit",
+  customerLinkSubmitLimiter,
+  asyncHandler(async (req, res, next) => {
+    const resolved = await resolveCustomerShareLink(req.params?.token);
+    if (resolved.error) return res.status(404).json({ error: resolved.error });
+    req.customerShareLink = resolved.link;
+    req.customerShareToken = resolved.token;
+    next();
+  }),
+  (req, res, next) => {
+    customerLinkUpload.any()(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || "Upload failed." });
+      next();
+    });
+  },
+  asyncHandler(async (req, res) => {
+    const link = req.customerShareLink;
+    if (!link) return res.status(404).json({ error: "Share link not found." });
+    if (link.single_use && link.used_at) {
+      return res.status(409).json({ error: "This share link has already been used." });
+    }
+
+    const allowedCustomerFields = filterAllowedFields(link.allowed_fields, ALLOWED_CUSTOMER_FIELDS, Array.from(ALLOWED_CUSTOMER_FIELDS));
+    const allowedOrderFields = filterAllowedFields(link.allowed_fields, ALLOWED_ORDER_FIELDS, Array.from(ALLOWED_ORDER_FIELDS));
+    const allowedLineItemFields = filterAllowedFields(
+      link.allowed_line_item_fields,
+      ALLOWED_LINE_ITEM_FIELDS,
+      Array.from(ALLOWED_LINE_ITEM_FIELDS)
+    );
+
+    const payload = parseJsonObject(req.body?.payload);
+    const customerPayload = sanitizeCustomerPayload(payload.customer || {}, allowedCustomerFields);
+    const allowOrderData = link.scope === "new_quote" || link.scope === "order_update" || !!link.rental_order_id;
+    const orderPayload = allowOrderData ? sanitizeOrderPayload(payload.order || {}, allowedOrderFields) : {};
+    const lineItemsPayload = allowOrderData ? sanitizeLineItems(payload.lineItems || [], allowedLineItemFields) : [];
+    if (allowOrderData && orderPayload?.generalNotesImages) {
+      orderPayload.generalNotesImages = normalizeGeneralNotesImages({
+        companyId: link.company_id,
+        images: orderPayload.generalNotesImages,
+      });
+      if (!orderPayload.generalNotesImages.length) delete orderPayload.generalNotesImages;
+    }
+
+    if (["new_customer", "new_quote"].includes(link.scope) && !customerPayload.companyName && !customerPayload.contactName) {
+      return res.status(400).json({ error: "Customer name is required." });
+    }
+    if (allowOrderData && lineItemsPayload.length === 0) {
+      return res.status(400).json({ error: "At least one line item is required." });
+    }
+
+    const signatureName = String(req.body?.signatureName || "").trim();
+    const signatureDataUrl = String(req.body?.signatureData || "").trim();
+    if (link.require_esignature && (!signatureName || !signatureDataUrl)) {
+      return res.status(400).json({ error: "Typed name and signature are required." });
+    }
+
+    const docCategoryMap = parseJsonObject(req.body?.docCategoryMap);
+    const allowedDocCategories =
+      Array.isArray(link.allowed_document_categories) && link.allowed_document_categories.length
+        ? link.allowed_document_categories
+        : (await getCompanySettings(link.company_id)).customer_document_categories || [];
+
+    const submissionId = req.body?.submissionId || crypto.randomUUID();
+    const uploadBase = `/uploads/customer-links/link-${link.id}/submission-${submissionId}/`;
+    const docs = [];
+    const files = Array.isArray(req.files) ? req.files : [];
+    for (const file of files) {
+      const field = String(file.fieldname || "");
+      if (!field.startsWith("doc_")) {
+        try {
+          fs.unlinkSync(file.path);
+        } catch {
+          // ignore
+        }
+        continue;
+      }
+      const slug = field.slice(4);
+      const category = docCategoryMap[slug] ? String(docCategoryMap[slug]) : null;
+      if (!category || !allowedDocCategories.includes(category)) {
+        try {
+          fs.unlinkSync(file.path);
+        } catch {
+          // ignore
+        }
+        continue;
+      }
+      docs.push({
+        category,
+        fileName: file.originalname,
+        mime: file.mimetype,
+        sizeBytes: file.size,
+        url: `${uploadBase}${file.filename}`,
+      });
+    }
+
+    let signature = null;
+    let signatureForPdf = null;
+    if (signatureName && signatureDataUrl) {
+      const decoded = decodeDataUrlImage(signatureDataUrl);
+      if (!decoded) return res.status(400).json({ error: "Invalid signature image data." });
+      const sigDir = safeUploadPath("customer-links", `link-${link.id}`, `submission-${submissionId}`);
+      if (!sigDir) return res.status(400).json({ error: "Invalid upload path." });
+      fs.mkdirSync(sigDir, { recursive: true });
+      const sigFilename = `signature-${crypto.randomUUID()}.png`;
+      const sigPath = path.join(sigDir, sigFilename);
+      fs.writeFileSync(sigPath, decoded.buffer);
+      signature = {
+        typedName: signatureName,
+        imageUrl: `${uploadBase}${sigFilename}`,
+        imageMime: decoded.mime,
+        signedAt: new Date().toISOString(),
+        ip: req.ip,
+        userAgent: String(req.headers["user-agent"] || ""),
+      };
+      signatureForPdf = { ...signature, imageDataUrl: signatureDataUrl };
+    }
+
+    let lineItemsForStore = [...lineItemsPayload];
+    if (link.rental_order_id) {
+      const existingOrder = await getRentalOrder({ companyId: link.company_id, id: link.rental_order_id });
+      const existingMap = new Map();
+      (existingOrder?.lineItems || []).forEach((li) => {
+        existingMap.set(String(li.id), li);
+      });
+      lineItemsForStore = lineItemsPayload.map((li) => {
+        const existing = li.lineItemId ? existingMap.get(String(li.lineItemId)) : null;
+        if (
+          existing &&
+          (existing.rate_amount !== null || existing.line_amount !== null) &&
+          Number(existing.type_id) === Number(li.typeId) &&
+          Number(existing.bundle_id || 0) === Number(li.bundleId || 0)
+        ) {
+          return {
+            ...li,
+            rateBasis: existing.rate_basis || null,
+            rateAmount: existing.rate_amount !== null ? Number(existing.rate_amount) : null,
+            lineAmount: existing.line_amount !== null ? Number(existing.line_amount) : null,
+          };
+        }
+        return li;
+      });
+    }
+
+    const typesForPdf = await listTypes(link.company_id);
+    const typeNameById = new Map((typesForPdf || []).map((t) => [String(t.id), t.name || ""]));
+    const lineItemsWithNames = lineItemsForStore.map((li) => ({
+      ...li,
+      typeName: li.typeId ? typeNameById.get(String(li.typeId)) || null : null,
+    }));
+
+    const changeRequest = await createCustomerChangeRequest({
+      companyId: link.company_id,
+      customerId: link.customer_id,
+      rentalOrderId: link.rental_order_id,
+      linkId: link.id,
+      scope: link.scope,
+      payload: {
+        customer: customerPayload,
+        order: orderPayload,
+        lineItems: lineItemsWithNames,
+      },
+      documents: docs,
+      signature: signature || {},
+      sourceIp: req.ip,
+      userAgent: String(req.headers["user-agent"] || ""),
+    });
+
+    const proofDir = safeUploadPath("customer-links", `link-${link.id}`, "proofs");
+    if (!proofDir) return res.status(400).json({ error: "Invalid proof path." });
+    fs.mkdirSync(proofDir, { recursive: true });
+    const proofPath = path.join(proofDir, `change-request-${changeRequest.id}.pdf`);
+    await writeCustomerChangeRequestPdf({
+      filePath: proofPath,
+      company: await getCompanyProfile(link.company_id),
+      link,
+      payload: {
+        customer: customerPayload,
+        order: orderPayload,
+        lineItems: lineItemsWithNames,
+      },
+      documents: docs,
+      signature: signatureForPdf || signature || {},
+    });
+    await updateCustomerChangeRequestStatus({
+      companyId: link.company_id,
+      id: changeRequest.id,
+      proofPdfPath: proofPath,
+    });
+    await markCustomerShareLinkUsed({ linkId: link.id, ip: req.ip, userAgent: String(req.headers["user-agent"] || ""), changeRequestId: changeRequest.id });
+
+    res.status(201).json({
+      ok: true,
+      changeRequestId: changeRequest.id,
+      proofUrl: `/api/public/customer-links/${encodeURIComponent(req.customerShareToken)}/proof`,
+    });
+  })
+);
+
+app.get(
+  "/api/public/customer-links/:token/proof",
+  customerLinkLimiter,
+  asyncHandler(async (req, res) => {
+    const resolved = await resolveCustomerShareLink(req.params?.token, { allowExpired: true });
+    if (resolved.error) return res.status(404).json({ error: resolved.error });
+    const link = resolved.link;
+    const latest = await getLatestCustomerChangeRequestForLink({ companyId: link.company_id, linkId: link.id });
+    if (!latest?.proof_pdf_path) return res.status(404).json({ error: "Proof not available." });
+    const pdfPath = String(latest.proof_pdf_path);
+    if (!fs.existsSync(pdfPath)) return res.status(404).json({ error: "Proof not available." });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=\"customer-update-proof.pdf\"");
+    fs.createReadStream(pdfPath).pipe(res);
+  })
+);
+
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
 function normalizeSubmissionId(value) {
@@ -1040,23 +1440,415 @@ function getApiPath(req) {
   return `${req.baseUrl || ""}${req.path || ""}`;
 }
 
-function buildRateLimitHandler(message) {
-  return (req, res, next, options) => {
-    const resetTime = req.rateLimit?.resetTime ? new Date(req.rateLimit.resetTime).getTime() : null;
-    const retryAfterSeconds = resetTime ? Math.max(0, Math.ceil((resetTime - Date.now()) / 1000)) : null;
-    const payload = { error: message };
-    if (retryAfterSeconds !== null) payload.retryAfterSeconds = retryAfterSeconds;
-    res.status(options.statusCode).json(payload);
-  };
+const CUSTOMER_SHARE_SCOPES = new Set(["new_customer", "customer_update", "new_quote", "order_update"]);
+const ALLOWED_CUSTOMER_FIELDS = new Set([
+  "companyName",
+  "contactName",
+  "email",
+  "phone",
+  "streetAddress",
+  "city",
+  "region",
+  "postalCode",
+  "country",
+]);
+const ALLOWED_ORDER_FIELDS = new Set([
+  "customerPo",
+  "fulfillmentMethod",
+  "dropoffAddress",
+  "siteAddress",
+  "siteAddressLat",
+  "siteAddressLng",
+  "siteAddressQuery",
+  "logisticsInstructions",
+  "specialInstructions",
+  "criticalAreas",
+  "notificationCircumstances",
+  "coverageHours",
+  "emergencyContacts",
+  "siteContacts",
+  "generalNotes",
+  "generalNotesImages",
+]);
+const ALLOWED_LINE_ITEM_FIELDS = new Set(["lineItemId", "typeId", "bundleId", "startAt", "endAt"]);
+
+function normalizeCustomerShareScope(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (CUSTOMER_SHARE_SCOPES.has(raw)) return raw;
+  return "customer_update";
 }
 
-const loginLimiter = rateLimit({
-  windowMs: RATE_LIMIT_LOGIN_WINDOW_MS,
-  max: RATE_LIMIT_LOGIN_MAX,
-  standardHeaders: true,
-  legacyHeaders: false,
-  handler: buildRateLimitHandler("Too many login attempts, please try again later."),
-});
+function normalizeStringArray(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? (() => {
+          try {
+            const parsed = JSON.parse(value);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })()
+      : value && typeof value === "object"
+        ? value
+        : [];
+  return Array.from(new Set(raw.map((v) => String(v || "").trim()).filter(Boolean)));
+}
+
+function filterAllowedFields(values, allowedSet, fallback) {
+  const arr = normalizeStringArray(values);
+  const filtered = arr.filter((v) => allowedSet.has(v));
+  if (filtered.length) return filtered;
+  return fallback;
+}
+
+function parseJsonObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseJsonCoverage(value) {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object") return value;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed;
+    return parsed && typeof parsed === "object" ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function hashShareToken(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+function decodeDataUrlImage(dataUrl) {
+  const raw = String(dataUrl || "");
+  const match = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/);
+  if (!match) return null;
+  try {
+    const buffer = Buffer.from(match[2], "base64");
+    if (!buffer.length) return null;
+    return { mime: match[1], buffer };
+  } catch {
+    return null;
+  }
+}
+
+function stripHtml(value) {
+  const raw = String(value ?? "");
+  if (!raw.trim()) return "";
+  const withBreaks = raw
+    .replace(/<\s*br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/h[1-6]>/gi, "\n")
+    .replace(/<\/li>/gi, "\n");
+  return withBreaks
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+async function writeCustomerChangeRequestPdf({ filePath, company, link, payload, documents, signature }) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({ size: "LETTER", margin: 50 });
+      const stream = fs.createWriteStream(filePath);
+      doc.on("error", reject);
+      stream.on("error", reject);
+      stream.on("finish", resolve);
+
+      doc.pipe(stream);
+      doc.fontSize(18).text("Customer Update Submission", { align: "center" });
+      doc.moveDown(0.5);
+      doc.fontSize(10).text(`Company: ${company?.name || "Unknown"}`);
+      doc.text(`Link scope: ${link?.scope || "--"}`);
+      doc.text(`Submitted: ${new Date().toLocaleString()}`);
+      doc.moveDown();
+
+      const customer = payload?.customer || {};
+      if (Object.keys(customer).length) {
+        doc.fontSize(14).text("Customer");
+        doc.fontSize(10);
+        doc.text(`Company: ${customer.companyName || "--"}`);
+        doc.text(`Contact: ${customer.contactName || "--"}`);
+        doc.text(`Email: ${customer.email || "--"}`);
+        doc.text(`Phone: ${customer.phone || "--"}`);
+        const address = [customer.streetAddress, customer.city, customer.region, customer.postalCode, customer.country]
+          .map((v) => String(v || "").trim())
+          .filter(Boolean)
+          .join(", ");
+        doc.text(`Address: ${address || "--"}`);
+        doc.moveDown();
+      }
+
+      const order = payload?.order || {};
+      if (Object.keys(order).length) {
+        doc.fontSize(14).text("Rental / Quote");
+        doc.fontSize(10);
+        doc.text(`Customer PO: ${order.customerPo || "--"}`);
+        doc.text(`Fulfillment: ${order.fulfillmentMethod || "--"}`);
+        doc.text(`Site address: ${order.siteAddress || "--"}`);
+        doc.text(`Dropoff address: ${order.dropoffAddress || "--"}`);
+        doc.text(`General notes: ${stripHtml(order.generalNotes || "--")}`);
+        const generalNotesImages = Array.isArray(order.generalNotesImages) ? order.generalNotesImages : [];
+        if (generalNotesImages.length) {
+          doc.text(`General notes images: ${generalNotesImages.length}`);
+          generalNotesImages.slice(0, 10).forEach((img) => {
+            const label = img?.fileName || img?.file_name || img?.name || img?.url || "Image";
+            doc.text(`- ${label}`);
+          });
+          if (generalNotesImages.length > 10) {
+            doc.text(`- +${generalNotesImages.length - 10} more`);
+          }
+        }
+        doc.moveDown();
+      }
+
+      const lineItems = Array.isArray(payload?.lineItems) ? payload.lineItems : [];
+      if (lineItems.length) {
+        doc.fontSize(14).text("Line Items");
+        doc.fontSize(10);
+        lineItems.forEach((li, idx) => {
+          doc.text(
+            `${idx + 1}. Type: ${li.typeName || li.typeId || "--"} | Start: ${li.startAt || "--"} | End: ${li.endAt || "--"}`
+          );
+          if (li.rateAmount !== null && li.rateAmount !== undefined) {
+            doc.text(`   Rate: ${li.rateBasis || "--"} @ ${li.rateAmount}`);
+          }
+          if (li.lineAmount !== null && li.lineAmount !== undefined) {
+            doc.text(`   Line amount: ${li.lineAmount}`);
+          }
+        });
+        doc.moveDown();
+      }
+
+      if (Array.isArray(documents) && documents.length) {
+        doc.fontSize(14).text("Documents");
+        doc.fontSize(10);
+        documents.forEach((d) => {
+          doc.text(`- ${d.category || "Document"}: ${d.fileName || d.file_name || "--"}`);
+        });
+        doc.moveDown();
+      }
+
+      if (signature && signature.typedName) {
+        doc.fontSize(14).text("Signature");
+        doc.fontSize(10).text(`Signed by: ${signature.typedName}`);
+        if (signature.signedAt) doc.text(`Signed at: ${new Date(signature.signedAt).toLocaleString()}`);
+        const decoded = decodeDataUrlImage(signature.imageDataUrl || signature.imageData || "");
+        if (decoded) {
+          try {
+            doc.moveDown(0.5);
+            doc.image(decoded.buffer, { width: 220 });
+          } catch {
+            // Ignore signature image failures.
+          }
+        }
+      }
+
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+async function resolveCustomerShareLink(token, { allowExpired = false } = {}) {
+  const clean = String(token || "").trim();
+  if (!clean) return { error: "Share link token is required." };
+  const hashed = hashShareToken(clean);
+  const link = await getCustomerShareLinkByHash(hashed);
+  if (!link) return { error: "Share link not found." };
+  if (link.revoked_at) return { error: "This share link has been revoked." };
+  if (!allowExpired && link.expires_at && Date.parse(link.expires_at) <= Date.now()) {
+    return { error: "This share link has expired." };
+  }
+  return { link, token: clean };
+}
+
+function sanitizeCustomerPayload(input, allowedFields) {
+  const src = input && typeof input === "object" ? input : {};
+  const read = (k) => (allowedFields.includes(k) ? String(src[k] || "").trim() : "");
+  const out = {};
+  if (allowedFields.includes("companyName")) out.companyName = read("companyName") || null;
+  if (allowedFields.includes("contactName")) out.contactName = read("contactName") || null;
+  if (allowedFields.includes("email")) out.email = read("email") || null;
+  if (allowedFields.includes("phone")) out.phone = read("phone") || null;
+  if (allowedFields.includes("streetAddress")) out.streetAddress = read("streetAddress") || null;
+  if (allowedFields.includes("city")) out.city = read("city") || null;
+  if (allowedFields.includes("region")) out.region = read("region") || null;
+  if (allowedFields.includes("postalCode")) out.postalCode = read("postalCode") || null;
+  if (allowedFields.includes("country")) out.country = read("country") || null;
+  return out;
+}
+
+function sanitizeOrderPayload(input, allowedFields) {
+  const src = input && typeof input === "object" ? input : {};
+  const read = (k) => (allowedFields.includes(k) ? String(src[k] || "").trim() : "");
+  const out = {};
+  if (allowedFields.includes("customerPo")) out.customerPo = read("customerPo") || null;
+  if (allowedFields.includes("fulfillmentMethod")) {
+    const method = read("fulfillmentMethod").toLowerCase();
+    out.fulfillmentMethod = method === "dropoff" ? "dropoff" : "pickup";
+  }
+  if (allowedFields.includes("dropoffAddress")) out.dropoffAddress = read("dropoffAddress") || null;
+  if (allowedFields.includes("siteAddress")) out.siteAddress = read("siteAddress") || null;
+  if (allowedFields.includes("siteAddressLat")) {
+    const lat = Number(src.siteAddressLat);
+    if (Number.isFinite(lat)) out.siteAddressLat = lat;
+  }
+  if (allowedFields.includes("siteAddressLng")) {
+    const lng = Number(src.siteAddressLng);
+    if (Number.isFinite(lng)) out.siteAddressLng = lng;
+  }
+  if (allowedFields.includes("siteAddressQuery")) out.siteAddressQuery = read("siteAddressQuery") || null;
+  if (allowedFields.includes("logisticsInstructions")) out.logisticsInstructions = read("logisticsInstructions") || null;
+  if (allowedFields.includes("specialInstructions")) out.specialInstructions = read("specialInstructions") || null;
+  if (allowedFields.includes("criticalAreas")) out.criticalAreas = read("criticalAreas") || null;
+  if (allowedFields.includes("generalNotes")) out.generalNotes = read("generalNotes") || null;
+  if (allowedFields.includes("generalNotesImages") || allowedFields.includes("generalNotes")) {
+    const images = parseJsonArray(src.generalNotesImages);
+    if (images.length) out.generalNotesImages = images;
+  }
+  if (allowedFields.includes("notificationCircumstances")) out.notificationCircumstances = parseJsonArray(src.notificationCircumstances);
+  if (allowedFields.includes("coverageHours")) out.coverageHours = parseJsonCoverage(src.coverageHours);
+  if (allowedFields.includes("emergencyContacts")) out.emergencyContacts = parseJsonArray(src.emergencyContacts);
+  if (allowedFields.includes("siteContacts")) out.siteContacts = parseJsonArray(src.siteContacts);
+  return out;
+}
+
+function normalizeGeneralNotesImages({ companyId, images } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) return [];
+  const list = Array.isArray(images) ? images : [];
+  const prefix = `/uploads/company-${cid}/`;
+  return list
+    .map((entry) => {
+      if (!entry) return null;
+      const url = String(entry.url || entry.src || "").trim();
+      if (!url || !url.startsWith(prefix)) return null;
+      const fileName = String(entry.fileName || entry.name || "General notes image").trim() || "General notes image";
+      const mime = entry.mime ? String(entry.mime) : entry.type ? String(entry.type) : null;
+      const sizeBytes =
+        entry.sizeBytes === null || entry.sizeBytes === undefined
+          ? entry.size === null || entry.size === undefined
+            ? null
+            : Number(entry.size)
+          : Number(entry.sizeBytes);
+      return {
+        fileName,
+        mime: mime || null,
+        sizeBytes: Number.isFinite(sizeBytes) ? sizeBytes : null,
+        url,
+        category: "general_notes",
+      };
+    })
+    .filter(Boolean);
+}
+
+function sanitizeLineItems(input, allowedFields) {
+  const items = Array.isArray(input) ? input : [];
+  const out = [];
+  items.forEach((raw) => {
+    if (!raw || typeof raw !== "object") return;
+    const next = {};
+    if (allowedFields.includes("lineItemId") && raw.lineItemId) {
+      const liId = Number(raw.lineItemId);
+      if (Number.isFinite(liId)) next.lineItemId = liId;
+    }
+    if (allowedFields.includes("typeId") && raw.typeId) {
+      const typeId = Number(raw.typeId);
+      if (Number.isFinite(typeId)) next.typeId = typeId;
+    }
+    if (allowedFields.includes("bundleId") && raw.bundleId) {
+      const bundleId = Number(raw.bundleId);
+      if (Number.isFinite(bundleId)) next.bundleId = bundleId;
+    }
+    if (allowedFields.includes("startAt")) next.startAt = String(raw.startAt || "").trim();
+    if (allowedFields.includes("endAt")) next.endAt = String(raw.endAt || "").trim();
+    if (!next.typeId && !next.bundleId) return;
+    if (!next.startAt || !next.endAt) return;
+    out.push(next);
+  });
+  return out;
+}
+
+function isDemandOnlyStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  return ["quote", "quote_rejected", "reservation", "requested"].includes(normalized);
+}
+
+function mergeCustomerPayload(existing, updates) {
+  const next = { ...(existing || {}) };
+  Object.entries(updates || {}).forEach(([key, value]) => {
+    if (value === undefined) return;
+    if (value === null || value === "") return;
+    next[key] = value;
+  });
+  return next;
+}
+
+function mergeOrderPayload(existing, updates) {
+  const next = { ...(existing || {}) };
+  Object.entries(updates || {}).forEach(([key, value]) => {
+    if (value === undefined) return;
+    if (value === null || value === "" || (typeof value === "number" && !Number.isFinite(value))) return;
+    next[key] = value;
+  });
+  return next;
+}
+
+function mergeLineItemsWithExisting(existingItems, requestedItems) {
+  const map = new Map();
+  (existingItems || []).forEach((li) => {
+    map.set(String(li.id), li);
+  });
+  return (requestedItems || []).map((li) => {
+    const existing = li.lineItemId ? map.get(String(li.lineItemId)) : null;
+    const typeId = li.typeId ? Number(li.typeId) : null;
+    const bundleId = li.bundleId ? Number(li.bundleId) : null;
+    const next = {
+      typeId,
+      bundleId,
+      startAt: li.startAt,
+      endAt: li.endAt,
+    };
+    if (
+      existing &&
+      Number(existing.type_id) === Number(typeId) &&
+      Number(existing.bundle_id || 0) === Number(bundleId || 0)
+    ) {
+      next.rateBasis = existing.rate_basis || null;
+      next.rateAmount = existing.rate_amount !== null ? Number(existing.rate_amount) : null;
+      next.billableUnits = existing.billable_units !== null ? Number(existing.billable_units) : null;
+      next.lineAmount = existing.line_amount !== null ? Number(existing.line_amount) : null;
+    }
+    return next;
+  });
+}
 
 function buildLocationGeocodeQuery(location) {
   if (!location) return "";
@@ -1280,7 +2072,7 @@ function parseCoverageHours(raw, warnings) {
     sunday: "sun",
   };
   const dayOrder = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-  const coverage = {};
+  const slots = [];
   const segments = cleaned.split(";").map((seg) => seg.trim()).filter(Boolean);
 
   for (const segment of segments) {
@@ -1309,11 +2101,13 @@ function parseCoverageHours(raw, warnings) {
       for (let i = 0; i <= endIdx; i += 1) days.push(dayOrder[i]);
     }
     days.forEach((day) => {
-      coverage[day] = { start: startTime, end: endTime, endDayOffset };
+      const idx = dayOrder.indexOf(day);
+      const endDay = endDayOffset ? dayOrder[(idx + 1) % dayOrder.length] : day;
+      slots.push({ startDay: day, startTime, endDay, endTime });
     });
   }
 
-  return coverage;
+  return slots;
 }
 
 function extractContactBlocks(raw) {
@@ -1626,7 +2420,7 @@ async function importRentalOrderRentalInfoFromText({ companyId, text }) {
     }
 
     const coverageWarnings = [];
-    const coverageHours = monitoringTimes ? parseCoverageHours(monitoringTimes, coverageWarnings) : {};
+    const coverageHours = monitoringTimes ? parseCoverageHours(monitoringTimes, coverageWarnings) : [];
     coverageWarnings.forEach((w) => {
       if (result.warnings.length < 50) result.warnings.push(`${modelName}: ${w}`);
     });
@@ -1721,7 +2515,7 @@ async function importRentalOrderRentalInfoFromText({ companyId, text }) {
           orderBuckets.set(orderId, {
             siteAddress: "",
             generalNotes: "",
-            coverageHours: {},
+            coverageHours: [],
             emergencyContacts: [],
             emergencyKeys: new Set(),
             siteContacts: [],
@@ -1736,7 +2530,7 @@ async function importRentalOrderRentalInfoFromText({ companyId, text }) {
         if (hasGeneralNotes && !bucket.generalNotes && row.generalNotes) {
           bucket.generalNotes = row.generalNotes;
         }
-        if (hasMonitoring && !bucket.hasCoverage && row.coverageHours && Object.keys(row.coverageHours).length) {
+        if (hasMonitoring && !bucket.hasCoverage && Array.isArray(row.coverageHours) && row.coverageHours.length) {
           bucket.coverageHours = row.coverageHours;
           bucket.hasCoverage = true;
         }
@@ -1780,7 +2574,7 @@ async function importRentalOrderRentalInfoFromText({ companyId, text }) {
     }
     if (hasMonitoring) {
       updates.push(`coverage_hours = $${idx++}::jsonb`);
-      values.push(JSON.stringify(bucket.hasCoverage ? bucket.coverageHours : {}));
+      values.push(JSON.stringify(bucket.hasCoverage ? bucket.coverageHours : []));
     }
     if (hasEmergencyContacts) {
       updates.push(`emergency_contacts = $${idx++}::jsonb`);
@@ -2069,6 +2863,7 @@ app.use("/api", (req, res, next) => {
     (apiPath === "/api/companies" && method === "POST") ||
     apiPath.startsWith("/api/customers") ||
     apiPath.startsWith("/api/storefront") ||
+    apiPath.startsWith("/api/public") ||
     apiPath === "/api/qbo/callback" ||
     apiPath === "/api/qbo/webhooks";
   if (publicPath) return next();
@@ -2097,6 +2892,7 @@ app.use(
     if (apiPath === "/api/companies" && req.method === "POST") return next();
     if (apiPath.startsWith("/api/customers")) return next();
     if (apiPath.startsWith("/api/storefront")) return next();
+    if (apiPath.startsWith("/api/public")) return next();
     if (apiPath === "/api/qbo/callback") return next();
     if (apiPath === "/api/qbo/webhooks") return next();
 
@@ -3080,6 +3876,31 @@ const customerAccountProfileUpload = multer({
   },
 });
 
+const customerLinkUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const link = req.customerShareLink;
+      if (!link?.id) return cb(new Error("Invalid share link."));
+      const submissionId = getOrCreateUploadSubmissionId(req);
+      req.body.submissionId = submissionId;
+      const dir = safeUploadPath("customer-links", `link-${link.id}`, `submission-${submissionId}`);
+      if (!dir) return cb(new Error("Invalid upload path."));
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname || "");
+      const safeExt = ext && ext.length <= 12 ? ext.replace(/[^a-zA-Z0-9.]/g, "") : "";
+      cb(null, `${crypto.randomUUID()}${safeExt}`);
+    },
+  }),
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (rejectUnsafeUpload(file)) return cb(new Error("File type is not allowed."));
+    cb(null, true);
+  },
+});
+
 const importUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
@@ -3857,7 +4678,7 @@ app.post(
   "/api/customers/:id/documents",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { companyId, fileName, mime, sizeBytes, url } = req.body || {};
+    const { companyId, fileName, mime, sizeBytes, url, category } = req.body || {};
     if (!companyId || !fileName || !url) {
       return res.status(400).json({ error: "companyId, fileName, and url are required." });
     }
@@ -3868,6 +4689,7 @@ app.post(
       mime,
       sizeBytes,
       url,
+      category,
     });
     if (!created) return res.status(404).json({ error: "Customer not found" });
     res.status(201).json(created);
@@ -4167,6 +4989,356 @@ app.delete(
   })
 );
 
+app.post(
+  "/api/customer-share-links",
+  asyncHandler(async (req, res) => {
+    const {
+      companyId,
+      customerId,
+      rentalOrderId,
+      scope,
+      allowedFields,
+      allowedLineItemFields,
+      allowedDocumentCategories,
+      termsText,
+      requireEsignature,
+      singleUse,
+      expiresAt,
+    } = req.body || {};
+
+    const normalizedCustomerId = Number(customerId);
+    const normalizedRentalOrderId = Number(rentalOrderId);
+    const hasCustomerId = Number.isFinite(normalizedCustomerId) && normalizedCustomerId > 0;
+    const hasRentalOrderId = Number.isFinite(normalizedRentalOrderId) && normalizedRentalOrderId > 0;
+    const inferredScope =
+      scope ||
+      (hasRentalOrderId ? "order_update" : hasCustomerId ? "customer_update" : "new_customer");
+    const normalizedScope = normalizeCustomerShareScope(inferredScope);
+    const defaultCustomerFields = Array.from(ALLOWED_CUSTOMER_FIELDS);
+    const defaultOrderFields = Array.from(ALLOWED_ORDER_FIELDS);
+    const defaultLineItemFields = Array.from(ALLOWED_LINE_ITEM_FIELDS);
+    const shouldAllowOrder = normalizedScope === "new_quote" || normalizedScope === "order_update";
+    const defaultAllowedFields = shouldAllowOrder ? [...defaultCustomerFields, ...defaultOrderFields] : defaultCustomerFields;
+    const finalAllowedFields = filterAllowedFields(allowedFields, new Set(defaultAllowedFields), defaultAllowedFields);
+    const finalLineItemFields = shouldAllowOrder
+      ? filterAllowedFields(allowedLineItemFields, ALLOWED_LINE_ITEM_FIELDS, defaultLineItemFields)
+      : [];
+
+    const settings = await getCompanySettings(companyId);
+    const docCategories =
+      normalizeStringArray(allowedDocumentCategories).length > 0
+        ? normalizeStringArray(allowedDocumentCategories)
+        : settings.customer_document_categories || [];
+    const token = crypto.randomBytes(24).toString("hex");
+    const defaultExpiry = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    const created = await createCustomerShareLink({
+      companyId,
+      customerId,
+      rentalOrderId,
+      scope: normalizedScope,
+      tokenHash: hashShareToken(token),
+      allowedFields: finalAllowedFields,
+      allowedLineItemFields: finalLineItemFields,
+      allowedDocumentCategories: docCategories,
+      termsText: termsText || null,
+      requireEsignature: requireEsignature !== undefined ? requireEsignature === true : settings.customer_esign_required === true,
+      singleUse: singleUse === true,
+      expiresAt: expiresAt || defaultExpiry,
+      createdByUserId: req.auth?.userId || null,
+    });
+
+    const url = `/customer-link.html?token=${encodeURIComponent(token)}`;
+    res.status(201).json({ link: created, token, url });
+  })
+);
+
+app.get(
+  "/api/customer-change-requests",
+  asyncHandler(async (req, res) => {
+    const { companyId, status, customerId, rentalOrderId, limit, offset } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const requests = await listCustomerChangeRequests({
+      companyId,
+      status,
+      customerId,
+      rentalOrderId,
+      limit,
+      offset,
+    });
+    res.json({ requests });
+  })
+);
+
+app.get(
+  "/api/customer-change-requests/:id",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.query || {};
+    const { id } = req.params || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const request = await getCustomerChangeRequest({ companyId, id: Number(id) });
+    if (!request) return res.status(404).json({ error: "Change request not found." });
+    const [currentCustomer, currentOrder] = await Promise.all([
+      request.customer_id ? getCustomerById({ companyId, id: request.customer_id }) : null,
+      request.rental_order_id ? getRentalOrder({ companyId, id: request.rental_order_id }) : null,
+    ]);
+    res.json({ request, currentCustomer, currentOrder });
+  })
+);
+
+app.post(
+  "/api/customer-change-requests/:id/accept",
+  asyncHandler(async (req, res) => {
+    const { companyId, reviewNotes } = req.body || {};
+    const { id } = req.params || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const request = await getCustomerChangeRequest({ companyId, id: Number(id) });
+    if (!request) return res.status(404).json({ error: "Change request not found." });
+    if (String(request.status || "") !== "pending") {
+      return res.status(409).json({ error: "Change request has already been reviewed." });
+    }
+
+    const payload = request.payload || {};
+    const customerUpdate = payload.customer || {};
+    const orderUpdate = payload.order || {};
+    const lineItems = Array.isArray(payload.lineItems) ? payload.lineItems : [];
+    const normalizedGeneralNotesImages = normalizeGeneralNotesImages({
+      companyId,
+      images: orderUpdate?.generalNotesImages,
+    });
+
+    let customerId = request.customer_id;
+    if (!customerId && (request.scope === "new_customer" || request.scope === "new_quote")) {
+      const createdCustomer = await createCustomer({
+        companyId,
+        companyName: customerUpdate.companyName || customerUpdate.contactName || "New customer",
+        contactName: customerUpdate.contactName || null,
+        streetAddress: customerUpdate.streetAddress || null,
+        city: customerUpdate.city || null,
+        region: customerUpdate.region || null,
+        country: customerUpdate.country || null,
+        postalCode: customerUpdate.postalCode || null,
+        email: customerUpdate.email || null,
+        phone: customerUpdate.phone || null,
+      });
+      customerId = createdCustomer?.id || null;
+    } else if (customerId && Object.keys(customerUpdate).length) {
+      const existing = await getCustomerById({ companyId, id: customerId });
+      const merged = mergeCustomerPayload(
+        {
+          companyName: existing?.company_name || null,
+          contactName: existing?.contact_name || null,
+          streetAddress: existing?.street_address || null,
+          city: existing?.city || null,
+          region: existing?.region || null,
+          country: existing?.country || null,
+          postalCode: existing?.postal_code || null,
+          email: existing?.email || null,
+          phone: existing?.phone || null,
+        },
+        customerUpdate
+      );
+      await updateCustomer({
+        id: customerId,
+        companyId,
+        companyName: merged.companyName,
+        contactName: merged.contactName,
+        streetAddress: merged.streetAddress,
+        city: merged.city,
+        region: merged.region,
+        country: merged.country,
+        postalCode: merged.postalCode,
+        email: merged.email,
+        phone: merged.phone,
+      });
+    }
+
+    let orderId = request.rental_order_id;
+    if (request.scope === "order_update" || request.scope === "new_quote") {
+      if (!customerId) return res.status(400).json({ error: "Customer is required to accept this request." });
+      if (orderId) {
+        const existingOrder = await getRentalOrder({ companyId, id: orderId });
+        const existing = existingOrder?.order;
+        if (!existing) return res.status(404).json({ error: "Rental order not found." });
+        if (!isDemandOnlyStatus(existing.status)) {
+          return res.status(400).json({ error: "Only quotes or requests can be updated by customers." });
+        }
+        const mergedOrder = mergeOrderPayload(
+          {
+            customerPo: existing.customer_po || null,
+            fulfillmentMethod: existing.fulfillment_method || "pickup",
+            dropoffAddress: existing.dropoff_address || null,
+            siteAddress: existing.site_address || null,
+            siteAddressLat: existing.site_address_lat || null,
+            siteAddressLng: existing.site_address_lng || null,
+            siteAddressQuery: existing.site_address_query || null,
+            logisticsInstructions: existing.logistics_instructions || null,
+            specialInstructions: existing.special_instructions || null,
+            criticalAreas: existing.critical_areas || null,
+            notificationCircumstances: existing.notification_circumstances || [],
+            coverageHours: existing.coverage_hours || [],
+            emergencyContacts: existing.emergency_contacts || [],
+            siteContacts: existing.site_contacts || [],
+            generalNotes: existing.general_notes || null,
+          },
+          orderUpdate
+        );
+        const existingLineItems = Array.isArray(existingOrder?.lineItems) ? existingOrder.lineItems : [];
+        const requestedLineItems = lineItems.length
+          ? lineItems
+          : existingLineItems.map((li) => ({
+              lineItemId: li.id,
+              typeId: li.type_id,
+              bundleId: li.bundle_id,
+              startAt: li.start_at,
+              endAt: li.end_at,
+            }));
+        const mergedLineItems = mergeLineItemsWithExisting(existingLineItems, requestedLineItems);
+        await updateRentalOrder({
+          id: orderId,
+          companyId,
+          customerId,
+          customerPo: mergedOrder.customerPo,
+          fulfillmentMethod: mergedOrder.fulfillmentMethod,
+          dropoffAddress: mergedOrder.dropoffAddress,
+          siteAddress: mergedOrder.siteAddress,
+          siteAddressLat: mergedOrder.siteAddressLat,
+          siteAddressLng: mergedOrder.siteAddressLng,
+          siteAddressQuery: mergedOrder.siteAddressQuery,
+          logisticsInstructions: mergedOrder.logisticsInstructions,
+          specialInstructions: mergedOrder.specialInstructions,
+          criticalAreas: mergedOrder.criticalAreas,
+          notificationCircumstances: mergedOrder.notificationCircumstances,
+          coverageHours: mergedOrder.coverageHours,
+          emergencyContacts: mergedOrder.emergencyContacts,
+          siteContacts: mergedOrder.siteContacts,
+          generalNotes: mergedOrder.generalNotes,
+          status: existing.status || "quote",
+          lineItems: mergedLineItems,
+          actorName: req.auth?.user?.name || null,
+          actorEmail: req.auth?.user?.email || null,
+        });
+        if (normalizedGeneralNotesImages.length) {
+          const actorName = req.auth?.user?.name ? String(req.auth.user.name) : null;
+          const actorEmail = req.auth?.user?.email ? String(req.auth.user.email) : null;
+          for (const img of normalizedGeneralNotesImages) {
+            await addRentalOrderAttachment({
+              companyId,
+              orderId,
+              fileName: img.fileName,
+              mime: img.mime,
+              sizeBytes: img.sizeBytes,
+              url: img.url,
+              category: img.category,
+              actorName,
+              actorEmail,
+            });
+          }
+        }
+      } else {
+        const createdOrder = await createRentalOrder({
+          companyId,
+          customerId,
+          customerPo: orderUpdate.customerPo || null,
+          fulfillmentMethod: orderUpdate.fulfillmentMethod || "pickup",
+          dropoffAddress: orderUpdate.dropoffAddress || null,
+          siteAddress: orderUpdate.siteAddress || null,
+          siteAddressLat: orderUpdate.siteAddressLat || null,
+          siteAddressLng: orderUpdate.siteAddressLng || null,
+          siteAddressQuery: orderUpdate.siteAddressQuery || null,
+          logisticsInstructions: orderUpdate.logisticsInstructions || null,
+          specialInstructions: orderUpdate.specialInstructions || null,
+          criticalAreas: orderUpdate.criticalAreas || null,
+          notificationCircumstances: orderUpdate.notificationCircumstances || [],
+          coverageHours: orderUpdate.coverageHours || [],
+          emergencyContacts: orderUpdate.emergencyContacts || [],
+          siteContacts: orderUpdate.siteContacts || [],
+          generalNotes: orderUpdate.generalNotes || null,
+          status: "quote",
+          lineItems: lineItems.map((li) => ({
+            typeId: li.typeId,
+            bundleId: li.bundleId,
+            startAt: li.startAt,
+            endAt: li.endAt,
+          })),
+          actorName: req.auth?.user?.name || null,
+          actorEmail: req.auth?.user?.email || null,
+        });
+        orderId = createdOrder?.id || null;
+        if (orderId && normalizedGeneralNotesImages.length) {
+          const actorName = req.auth?.user?.name ? String(req.auth.user.name) : null;
+          const actorEmail = req.auth?.user?.email ? String(req.auth.user.email) : null;
+          for (const img of normalizedGeneralNotesImages) {
+            await addRentalOrderAttachment({
+              companyId,
+              orderId,
+              fileName: img.fileName,
+              mime: img.mime,
+              sizeBytes: img.sizeBytes,
+              url: img.url,
+              category: img.category,
+              actorName,
+              actorEmail,
+            });
+          }
+        }
+      }
+    }
+
+    const docs = Array.isArray(request.documents) ? request.documents : [];
+    if (customerId && docs.length) {
+      for (const doc of docs) {
+        try {
+          await addCustomerDocument({
+            companyId,
+            customerId,
+            fileName: doc.fileName || doc.file_name,
+            mime: doc.mime || null,
+            sizeBytes: doc.sizeBytes || doc.size_bytes || null,
+            url: doc.url,
+            category: doc.category || null,
+          });
+        } catch {
+          // Ignore document insert errors to avoid blocking acceptance.
+        }
+      }
+    }
+
+    await updateCustomerChangeRequestStatus({
+      companyId,
+      id: Number(id),
+      status: "accepted",
+      reviewedByUserId: req.auth?.userId || null,
+      reviewNotes: reviewNotes || null,
+      appliedCustomerId: customerId || null,
+      appliedOrderId: orderId || null,
+    });
+
+    res.json({ ok: true, customerId, orderId });
+  })
+);
+
+app.post(
+  "/api/customer-change-requests/:id/reject",
+  asyncHandler(async (req, res) => {
+    const { companyId, reviewNotes } = req.body || {};
+    const { id } = req.params || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const request = await getCustomerChangeRequest({ companyId, id: Number(id) });
+    if (!request) return res.status(404).json({ error: "Change request not found." });
+    if (String(request.status || "") !== "pending") {
+      return res.status(409).json({ error: "Change request has already been reviewed." });
+    }
+    await updateCustomerChangeRequestStatus({
+      companyId,
+      id: Number(id),
+      status: "rejected",
+      reviewedByUserId: req.auth?.userId || null,
+      reviewNotes: reviewNotes || null,
+    });
+    res.json({ ok: true });
+  })
+);
+
 app.get(
   "/api/sales-people",
   asyncHandler(async (req, res) => {
@@ -4309,11 +5481,14 @@ app.put(
         defaultTaxRate,
           taxRegistrationNumber,
           taxInclusivePricing,
-          autoApplyCustomerCredit,
-          autoWorkOrderOnReturn,
-          logoUrl,
-          requiredStorefrontCustomerFields,
-          rentalInfoFields,
+      autoApplyCustomerCredit,
+      autoWorkOrderOnReturn,
+      logoUrl,
+      requiredStorefrontCustomerFields,
+      rentalInfoFields,
+      customerDocumentCategories,
+      customerTermsTemplate,
+      customerEsignRequired,
       qboEnabled,
       qboBillingDay,
       qboAdjustmentPolicy,
@@ -4336,6 +5511,9 @@ app.put(
           logoUrl,
           requiredStorefrontCustomerFields,
           rentalInfoFields,
+          customerDocumentCategories,
+          customerTermsTemplate,
+          customerEsignRequired,
       qboEnabled: qboEnabled ?? null,
       qboBillingDay: qboBillingDay ?? null,
       qboAdjustmentPolicy: qboAdjustmentPolicy ?? null,
@@ -6061,6 +7239,25 @@ app.put(
         console.warn("Order update email failed:", err?.message || err);
       }
     })();
+  })
+);
+
+app.delete(
+  "/api/rental-orders/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    try {
+      const result = await deleteRentalOrder({ id: Number(id), companyId: Number(companyId) });
+      if (result?.notFound) return res.status(404).json({ error: "Rental order not found" });
+      res.status(204).end();
+    } catch (err) {
+      if (err?.code === "rental_order_closed") {
+        return res.status(409).json({ error: err.message || "Closed rental orders cannot be deleted." });
+      }
+      throw err;
+    }
   })
 );
 

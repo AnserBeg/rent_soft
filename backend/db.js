@@ -533,10 +533,13 @@ async function ensureTables() {
         mime TEXT,
         size_bytes INTEGER,
         url TEXT NOT NULL,
+        category TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    await client.query(`ALTER TABLE customer_documents ADD COLUMN IF NOT EXISTS category TEXT;`);
     await client.query(`CREATE INDEX IF NOT EXISTS customer_documents_customer_id_idx ON customer_documents (customer_id);`);
+
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS storefront_customers (
@@ -1007,6 +1010,64 @@ async function ensureTables() {
     await client.query(`CREATE INDEX IF NOT EXISTS rental_order_audits_company_id_idx ON rental_order_audits (company_id);`);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS customer_share_links (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+        rental_order_id INTEGER REFERENCES rental_orders(id) ON DELETE SET NULL,
+        scope TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        allowed_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+        allowed_line_item_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+        allowed_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+        terms_text TEXT,
+        require_esignature BOOLEAN NOT NULL DEFAULT TRUE,
+        single_use BOOLEAN NOT NULL DEFAULT FALSE,
+        expires_at TIMESTAMPTZ,
+        created_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        used_at TIMESTAMPTZ,
+        revoked_at TIMESTAMPTZ,
+        last_used_ip TEXT,
+        last_used_user_agent TEXT,
+        last_change_request_id INTEGER
+      );
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS customer_share_links_company_id_idx ON customer_share_links (company_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS customer_share_links_customer_id_idx ON customer_share_links (customer_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS customer_share_links_order_id_idx ON customer_share_links (rental_order_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS customer_share_links_expires_at_idx ON customer_share_links (expires_at);`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS customer_change_requests (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+        rental_order_id INTEGER REFERENCES rental_orders(id) ON DELETE SET NULL,
+        link_id INTEGER REFERENCES customer_share_links(id) ON DELETE SET NULL,
+        scope TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        documents JSONB NOT NULL DEFAULT '[]'::jsonb,
+        signature JSONB NOT NULL DEFAULT '{}'::jsonb,
+        proof_pdf_path TEXT,
+        submitted_at TIMESTAMPTZ DEFAULT NOW(),
+        reviewed_at TIMESTAMPTZ,
+        reviewed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        review_notes TEXT,
+        source_ip TEXT,
+        user_agent TEXT,
+        applied_customer_id INTEGER,
+        applied_order_id INTEGER
+      );
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS customer_change_requests_company_id_idx ON customer_change_requests (company_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS customer_change_requests_customer_id_idx ON customer_change_requests (customer_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS customer_change_requests_order_id_idx ON customer_change_requests (rental_order_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS customer_change_requests_link_id_idx ON customer_change_requests (link_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS customer_change_requests_status_idx ON customer_change_requests (status);`);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS company_settings (
         company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
         billing_rounding_mode TEXT NOT NULL DEFAULT 'ceil',
@@ -1027,6 +1088,9 @@ async function ensureTables() {
         auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE,
         required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
         rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
+        customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+        customer_terms_template TEXT,
+        customer_esign_required BOOLEAN NOT NULL DEFAULT TRUE,
         email_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         email_smtp_provider TEXT NOT NULL DEFAULT 'custom',
         email_smtp_host TEXT,
@@ -1063,6 +1127,9 @@ async function ensureTables() {
     await client.query(
       `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb;`
     );
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_terms_template TEXT;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_esign_required BOOLEAN NOT NULL DEFAULT TRUE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_smtp_provider TEXT NOT NULL DEFAULT 'custom';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_smtp_host TEXT;`);
@@ -3394,18 +3461,50 @@ function normalizeOrderContacts(contacts) {
 }
 
 function normalizeCoverageHours(value) {
-  let raw = {};
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    raw = value;
-  } else if (typeof value === "string") {
+  let raw = value;
+  if (typeof raw === "string") {
     try {
-      const parsed = JSON.parse(value);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed;
+      raw = JSON.parse(raw);
     } catch {
-      raw = {};
+      raw = null;
     }
   }
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && Array.isArray(raw.slots)) {
+    raw = raw.slots;
+  }
+
   const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+  const dayMap = {
+    mon: "mon",
+    monday: "mon",
+    tue: "tue",
+    tues: "tue",
+    tuesday: "tue",
+    wed: "wed",
+    weds: "wed",
+    wednesday: "wed",
+    thu: "thu",
+    thur: "thu",
+    thurs: "thu",
+    thursday: "thu",
+    fri: "fri",
+    friday: "fri",
+    sat: "sat",
+    saturday: "sat",
+    sun: "sun",
+    sunday: "sun",
+  };
+  const normalizeDay = (val) => dayMap[String(val || "").trim().toLowerCase()] || "";
+  const normalizeTime = (val) => {
+    const match = String(val || "").trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return "";
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      return "";
+    }
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  };
   const timeToMinutes = (val) => {
     const match = String(val || "").trim().match(/^(\d{2}):(\d{2})$/);
     if (!match) return null;
@@ -3414,26 +3513,69 @@ function normalizeCoverageHours(value) {
     if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
     return hour * 60 + minute;
   };
-  const normalized = {};
-  days.forEach((day) => {
-    const entry = raw[day] || {};
-    const start = typeof entry.start === "string" ? entry.start.trim() : "";
-    const end = typeof entry.end === "string" ? entry.end.trim() : "";
-    if (!start && !end) return;
-    let endDayOffset = 0;
-    const explicitOffset = entry.endDayOffset ?? entry.end_day_offset;
-    if (explicitOffset === 1 || explicitOffset === "1" || explicitOffset === true) {
-      endDayOffset = 1;
-    } else if (entry.spansMidnight === true) {
-      endDayOffset = 1;
-    } else {
-      const startMinutes = timeToMinutes(start);
-      const endMinutes = timeToMinutes(end);
-      if (startMinutes !== null && endMinutes !== null && endMinutes <= startMinutes) endDayOffset = 1;
-    }
-    normalized[day] = { start, end, endDayOffset };
+  const dayIndex = (day) => days.indexOf(day);
+  const addDayOffset = (day, offset) => {
+    const idx = dayIndex(day);
+    if (idx === -1) return day;
+    return days[(idx + offset + days.length) % days.length];
+  };
+
+  const slots = [];
+  if (Array.isArray(raw)) {
+    raw.forEach((entry) => {
+      if (!entry || typeof entry !== "object") return;
+      const startDay = normalizeDay(entry.startDay ?? entry.start_day ?? entry.day ?? entry.startDayKey);
+      const endDayRaw = normalizeDay(entry.endDay ?? entry.end_day ?? entry.endDayKey ?? entry.day_end);
+      const startTime = normalizeTime(entry.startTime ?? entry.start_time ?? entry.start);
+      const endTime = normalizeTime(entry.endTime ?? entry.end_time ?? entry.end);
+      if (!startDay || !startTime || !endTime) return;
+      let endDay = endDayRaw || startDay;
+      const explicitOffset = entry.endDayOffset ?? entry.end_day_offset;
+      if (!endDayRaw) {
+        if (explicitOffset === 1 || explicitOffset === "1" || explicitOffset === true || entry.spansMidnight === true) {
+          endDay = addDayOffset(startDay, 1);
+        } else {
+          const startMinutes = timeToMinutes(startTime);
+          const endMinutes = timeToMinutes(endTime);
+          if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) {
+            endDay = addDayOffset(startDay, 1);
+          }
+        }
+      }
+      slots.push({ startDay, startTime, endDay, endTime });
+    });
+  } else if (raw && typeof raw === "object") {
+    days.forEach((day) => {
+      const entry = raw[day] || {};
+      const startTime = normalizeTime(entry.start);
+      const endTime = normalizeTime(entry.end);
+      if (!startTime && !endTime) return;
+      if (!startTime || !endTime) return;
+      let endDay = day;
+      const explicitOffset = entry.endDayOffset ?? entry.end_day_offset;
+      if (explicitOffset === 1 || explicitOffset === "1" || explicitOffset === true || entry.spansMidnight === true) {
+        endDay = addDayOffset(day, 1);
+      } else {
+        const startMinutes = timeToMinutes(startTime);
+        const endMinutes = timeToMinutes(endTime);
+        if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) {
+          endDay = addDayOffset(day, 1);
+        }
+      }
+      slots.push({ startDay: day, startTime, endDay, endTime });
+    });
+  }
+
+  return slots.sort((a, b) => {
+    const dayDiff = dayIndex(a.startDay) - dayIndex(b.startDay);
+    if (dayDiff) return dayDiff;
+    const aStart = timeToMinutes(a.startTime) ?? 0;
+    const bStart = timeToMinutes(b.startTime) ?? 0;
+    if (aStart !== bStart) return aStart - bStart;
+    const aEnd = timeToMinutes(a.endTime) ?? 0;
+    const bEnd = timeToMinutes(b.endTime) ?? 0;
+    return aEnd - bEnd;
   });
-  return normalized;
 }
 
 function normalizeNotificationCircumstances(value) {
@@ -4631,7 +4773,10 @@ async function getCompanySettings(companyId) {
             auto_apply_customer_credit,
             auto_work_order_on_return,
                 required_storefront_customer_fields,
-                rental_info_fields
+                rental_info_fields,
+                customer_document_categories,
+                customer_terms_template,
+                customer_esign_required
      FROM company_settings
      WHERE company_id = $1
      LIMIT 1`,
@@ -4658,6 +4803,9 @@ async function getCompanySettings(companyId) {
       auto_work_order_on_return: res.rows[0].auto_work_order_on_return === true,
         required_storefront_customer_fields: normalizeStorefrontCustomerRequirements(res.rows[0].required_storefront_customer_fields),
         rental_info_fields: normalizeRentalInfoFields(res.rows[0].rental_info_fields),
+        customer_document_categories: normalizeCustomerDocumentCategories(res.rows[0].customer_document_categories),
+        customer_terms_template: res.rows[0].customer_terms_template || null,
+        customer_esign_required: res.rows[0].customer_esign_required === true,
     };
   }
   return {
@@ -4680,6 +4828,9 @@ async function getCompanySettings(companyId) {
     auto_work_order_on_return: false,
       required_storefront_customer_fields: [],
       rental_info_fields: normalizeRentalInfoFields(null),
+      customer_document_categories: [],
+      customer_terms_template: null,
+      customer_esign_required: true,
   };
 }
 
@@ -4846,6 +4997,9 @@ async function upsertCompanySettings({
   logoUrl = undefined,
   requiredStorefrontCustomerFields = undefined,
   rentalInfoFields = undefined,
+  customerDocumentCategories = undefined,
+  customerTermsTemplate = undefined,
+  customerEsignRequired = undefined,
   qboEnabled = null,
   qboBillingDay = null,
   qboAdjustmentPolicy = null,
@@ -4898,6 +5052,17 @@ async function upsertCompanySettings({
   const nextRentalInfoFields = normalizeRentalInfoFields(
     rentalInfoFields === undefined ? current.rental_info_fields : rentalInfoFields
   );
+  const nextCustomerDocumentCategories = normalizeCustomerDocumentCategories(
+    customerDocumentCategories === undefined ? current.customer_document_categories : customerDocumentCategories
+  );
+  const nextCustomerTermsTemplate =
+    customerTermsTemplate === undefined
+      ? current.customer_terms_template || null
+      : (customerTermsTemplate ? String(customerTermsTemplate).trim() : null);
+  const nextCustomerEsignRequired =
+    customerEsignRequired === undefined
+      ? current.customer_esign_required === true
+      : customerEsignRequired === true;
   const nextQboEnabled =
     qboEnabled === null || qboEnabled === undefined ? current.qbo_enabled === true : qboEnabled === true;
   const nextQboBillingDay =
@@ -4916,8 +5081,8 @@ async function upsertCompanySettings({
   const res = await pool.query(
     `
     INSERT INTO company_settings
-      (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb)
+      (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields, customer_document_categories, customer_terms_template, customer_esign_required)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21, $22)
     ON CONFLICT (company_id)
     DO UPDATE SET billing_rounding_mode = EXCLUDED.billing_rounding_mode,
                   billing_rounding_granularity = EXCLUDED.billing_rounding_granularity,
@@ -4937,6 +5102,9 @@ async function upsertCompanySettings({
                   auto_work_order_on_return = EXCLUDED.auto_work_order_on_return,
                   required_storefront_customer_fields = EXCLUDED.required_storefront_customer_fields,
                   rental_info_fields = EXCLUDED.rental_info_fields,
+                  customer_document_categories = EXCLUDED.customer_document_categories,
+                  customer_terms_template = EXCLUDED.customer_terms_template,
+                  customer_esign_required = EXCLUDED.customer_esign_required,
                   updated_at = NOW()
     RETURNING company_id,
               billing_rounding_mode,
@@ -4956,7 +5124,10 @@ async function upsertCompanySettings({
               auto_apply_customer_credit,
               auto_work_order_on_return,
               required_storefront_customer_fields,
-              rental_info_fields
+              rental_info_fields,
+              customer_document_categories,
+              customer_terms_template,
+              customer_esign_required
     `,
     [
       companyId,
@@ -4978,6 +5149,9 @@ async function upsertCompanySettings({
       nextAutoWorkOrderOnReturn,
       JSON.stringify(nextRequired),
       JSON.stringify(nextRentalInfoFields),
+      JSON.stringify(nextCustomerDocumentCategories),
+      nextCustomerTermsTemplate,
+      nextCustomerEsignRequired,
     ]
     );
   return res.rows[0];
@@ -5025,6 +5199,32 @@ function normalizeStorefrontCustomerRequirements(value) {
       )
     );
   }
+
+function normalizeCustomerDocumentCategories(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? (() => {
+          try {
+            const parsed = JSON.parse(value);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })()
+      : value && typeof value === "object"
+        ? value
+        : [];
+  const arr = Array.isArray(raw) ? raw : [];
+  return Array.from(
+    new Set(
+      arr
+        .map((v) => String(v || "").trim())
+        .filter(Boolean)
+        .slice(0, 50)
+    )
+  );
+}
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
@@ -10291,6 +10491,30 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
   };
 }
 
+async function deleteRentalOrder({ id, companyId }) {
+  const cid = Number(companyId);
+  const oid = Number(id);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(oid) || oid <= 0) throw new Error("id is required.");
+
+  const existingRes = await pool.query(
+    `SELECT status FROM rental_orders WHERE id = $1 AND company_id = $2 LIMIT 1`,
+    [oid, cid]
+  );
+  const existing = existingRes.rows?.[0] || null;
+  if (!existing) return { deleted: false, notFound: true };
+
+  const normalized = normalizeRentalOrderStatus(existing.status);
+  if (normalized === "closed") {
+    const err = new Error("Closed rental orders cannot be deleted.");
+    err.code = "rental_order_closed";
+    throw err;
+  }
+
+  await pool.query(`DELETE FROM rental_orders WHERE id = $1 AND company_id = $2`, [oid, cid]);
+  return { deleted: true };
+}
+
 async function updateRentalOrderSiteAddress({ companyId, orderId, siteAddress, siteAddressLat, siteAddressLng, siteAddressQuery }) {
   const res = await pool.query(
     `
@@ -10410,7 +10634,7 @@ async function listCustomerDocuments({ companyId, customerId }) {
 
   const result = await pool.query(
     `
-    SELECT d.id, d.file_name, d.mime, d.size_bytes, d.url, d.created_at
+    SELECT d.id, d.file_name, d.mime, d.size_bytes, d.url, d.category, d.created_at
       FROM customer_documents d
       JOIN customers c ON c.id = d.customer_id
      WHERE d.customer_id = $1 AND c.company_id = $2
@@ -10421,7 +10645,7 @@ async function listCustomerDocuments({ companyId, customerId }) {
   return result.rows || [];
 }
 
-async function addCustomerDocument({ companyId, customerId, fileName, mime, sizeBytes, url }) {
+async function addCustomerDocument({ companyId, customerId, fileName, mime, sizeBytes, url, category = null }) {
   const cid = Number(companyId);
   const customer = Number(customerId);
   if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
@@ -10432,13 +10656,13 @@ async function addCustomerDocument({ companyId, customerId, fileName, mime, size
 
   const result = await pool.query(
     `
-    INSERT INTO customer_documents (customer_id, file_name, mime, size_bytes, url)
-    SELECT c.id, $1, $2, $3, $4
+    INSERT INTO customer_documents (customer_id, file_name, mime, size_bytes, url, category)
+    SELECT c.id, $1, $2, $3, $4, $5
       FROM customers c
-     WHERE c.id = $5 AND c.company_id = $6
-     RETURNING id, file_name, mime, size_bytes, url, created_at
+     WHERE c.id = $6 AND c.company_id = $7
+     RETURNING id, file_name, mime, size_bytes, url, category, created_at
     `,
-    [cleanName, mime || null, sizeBytes || null, cleanUrl, customer, cid]
+    [cleanName, mime || null, sizeBytes || null, cleanUrl, category ? String(category).trim() : null, customer, cid]
   );
   return result.rows?.[0] || null;
 }
@@ -10459,6 +10683,335 @@ async function deleteCustomerDocument({ companyId, customerId, documentId }) {
     `,
     [docId, customer, cid]
   );
+}
+
+function normalizeJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return value && typeof value === "object" ? value : [];
+}
+
+function normalizeJsonObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+async function createCustomerShareLink({
+  companyId,
+  customerId = null,
+  rentalOrderId = null,
+  scope,
+  tokenHash,
+  allowedFields = [],
+  allowedLineItemFields = [],
+  allowedDocumentCategories = [],
+  termsText = null,
+  requireEsignature = true,
+  singleUse = false,
+  expiresAt = null,
+  createdByUserId = null,
+} = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const token = String(tokenHash || "").trim();
+  if (!token) throw new Error("tokenHash is required.");
+  const normalizedCustomerId = Number(customerId);
+  const normalizedRentalOrderId = Number(rentalOrderId);
+  const res = await pool.query(
+    `
+    INSERT INTO customer_share_links
+      (company_id, customer_id, rental_order_id, scope, token_hash, allowed_fields, allowed_line_item_fields, allowed_document_categories, terms_text, require_esignature, single_use, expires_at, created_by_user_id)
+    VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8::jsonb,$9,$10,$11,$12::timestamptz,$13)
+    RETURNING id, company_id, customer_id, rental_order_id, scope, allowed_fields, allowed_line_item_fields, allowed_document_categories, terms_text, require_esignature, single_use, expires_at, created_at, used_at, revoked_at, last_change_request_id
+    `,
+    [
+      cid,
+      Number.isFinite(normalizedCustomerId) && normalizedCustomerId > 0 ? normalizedCustomerId : null,
+      Number.isFinite(normalizedRentalOrderId) && normalizedRentalOrderId > 0 ? normalizedRentalOrderId : null,
+      String(scope || "").trim(),
+      token,
+      JSON.stringify(allowedFields || []),
+      JSON.stringify(allowedLineItemFields || []),
+      JSON.stringify(allowedDocumentCategories || []),
+      termsText ? String(termsText) : null,
+      requireEsignature === true,
+      singleUse === true,
+      expiresAt ? normalizeTimestamptz(expiresAt) : null,
+      Number.isFinite(Number(createdByUserId)) ? Number(createdByUserId) : null,
+    ]
+  );
+  return res.rows?.[0] || null;
+}
+
+async function getCustomerShareLinkByHash(tokenHash) {
+  const token = String(tokenHash || "").trim();
+  if (!token) return null;
+  const res = await pool.query(
+    `
+    SELECT id, company_id, customer_id, rental_order_id, scope, token_hash, allowed_fields, allowed_line_item_fields, allowed_document_categories, terms_text,
+           require_esignature, single_use, expires_at, created_at, used_at, revoked_at, last_used_ip, last_used_user_agent, last_change_request_id
+      FROM customer_share_links
+     WHERE token_hash = $1
+     LIMIT 1
+    `,
+    [token]
+  );
+  const row = res.rows?.[0];
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    company_id: Number(row.company_id),
+    customer_id: row.customer_id === null ? null : Number(row.customer_id),
+    rental_order_id: row.rental_order_id === null ? null : Number(row.rental_order_id),
+    scope: row.scope || null,
+    allowed_fields: normalizeJsonArray(row.allowed_fields),
+    allowed_line_item_fields: normalizeJsonArray(row.allowed_line_item_fields),
+    allowed_document_categories: normalizeJsonArray(row.allowed_document_categories),
+    terms_text: row.terms_text || null,
+    require_esignature: row.require_esignature === true,
+    single_use: row.single_use === true,
+    expires_at: row.expires_at || null,
+    created_at: row.created_at || null,
+    used_at: row.used_at || null,
+    revoked_at: row.revoked_at || null,
+    last_used_ip: row.last_used_ip || null,
+    last_used_user_agent: row.last_used_user_agent || null,
+    last_change_request_id: row.last_change_request_id === null ? null : Number(row.last_change_request_id),
+  };
+}
+
+async function markCustomerShareLinkUsed({ linkId, ip = null, userAgent = null, changeRequestId = null } = {}) {
+  const id = Number(linkId);
+  if (!Number.isFinite(id) || id <= 0) throw new Error("linkId is required.");
+  const res = await pool.query(
+    `
+    UPDATE customer_share_links
+       SET used_at = COALESCE(used_at, NOW()),
+           last_used_ip = $1,
+           last_used_user_agent = $2,
+           last_change_request_id = COALESCE($3, last_change_request_id)
+     WHERE id = $4
+     RETURNING id, used_at, last_change_request_id
+    `,
+    [ip || null, userAgent || null, Number.isFinite(Number(changeRequestId)) ? Number(changeRequestId) : null, id]
+  );
+  return res.rows?.[0] || null;
+}
+
+async function revokeCustomerShareLink({ companyId, linkId }) {
+  const cid = Number(companyId);
+  const id = Number(linkId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(id) || id <= 0) throw new Error("linkId is required.");
+  const res = await pool.query(
+    `UPDATE customer_share_links SET revoked_at = NOW() WHERE id = $1 AND company_id = $2 RETURNING id, revoked_at`,
+    [id, cid]
+  );
+  return res.rows?.[0] || null;
+}
+
+async function createCustomerChangeRequest({
+  companyId,
+  customerId = null,
+  rentalOrderId = null,
+  linkId = null,
+  scope,
+  status = "pending",
+  payload = {},
+  documents = [],
+  signature = {},
+  proofPdfPath = null,
+  sourceIp = null,
+  userAgent = null,
+} = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const normalizedStatus = String(status || "pending").trim().toLowerCase();
+  const res = await pool.query(
+    `
+    INSERT INTO customer_change_requests
+      (company_id, customer_id, rental_order_id, link_id, scope, status, payload, documents, signature, proof_pdf_path, source_ip, user_agent)
+    VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12)
+    RETURNING id, company_id, customer_id, rental_order_id, link_id, scope, status, payload, documents, signature, proof_pdf_path, submitted_at
+    `,
+    [
+      cid,
+      Number.isFinite(Number(customerId)) ? Number(customerId) : null,
+      Number.isFinite(Number(rentalOrderId)) ? Number(rentalOrderId) : null,
+      Number.isFinite(Number(linkId)) ? Number(linkId) : null,
+      String(scope || "").trim(),
+      normalizedStatus,
+      JSON.stringify(payload || {}),
+      JSON.stringify(documents || []),
+      JSON.stringify(signature || {}),
+      proofPdfPath ? String(proofPdfPath) : null,
+      sourceIp || null,
+      userAgent || null,
+    ]
+  );
+  return res.rows?.[0] || null;
+}
+
+async function updateCustomerChangeRequestStatus({
+  companyId,
+  id,
+  status,
+  reviewedByUserId = null,
+  reviewNotes = null,
+  appliedCustomerId = null,
+  appliedOrderId = null,
+  proofPdfPath = undefined,
+} = {}) {
+  const cid = Number(companyId);
+  const reqId = Number(id);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(reqId) || reqId <= 0) throw new Error("id is required.");
+  const updates = [];
+  const params = [];
+  const push = (sql, value) => {
+    params.push(value);
+    updates.push(`${sql} $${params.length}`);
+  };
+  if (status) push("status =", String(status).trim().toLowerCase());
+  if (reviewedByUserId !== null) push("reviewed_by_user_id =", Number(reviewedByUserId));
+  if (reviewNotes !== null) push("review_notes =", reviewNotes ? String(reviewNotes) : null);
+  if (appliedCustomerId !== null) push("applied_customer_id =", Number(appliedCustomerId));
+  if (appliedOrderId !== null) push("applied_order_id =", Number(appliedOrderId));
+  if (proofPdfPath !== undefined) push("proof_pdf_path =", proofPdfPath ? String(proofPdfPath) : null);
+  const shouldSetReviewedAt =
+    (status && String(status).trim() && String(status).trim().toLowerCase() !== "pending") ||
+    reviewedByUserId !== null ||
+    reviewNotes !== null;
+  if (shouldSetReviewedAt) updates.push("reviewed_at = COALESCE(reviewed_at, NOW())");
+  if (!updates.length) return null;
+  params.push(reqId, cid);
+  const res = await pool.query(
+    `
+    UPDATE customer_change_requests
+       SET ${updates.join(", ")}
+     WHERE id = $${params.length - 1} AND company_id = $${params.length}
+     RETURNING id, status, reviewed_at, reviewed_by_user_id, review_notes, applied_customer_id, applied_order_id, proof_pdf_path
+    `,
+    params
+  );
+  return res.rows?.[0] || null;
+}
+
+async function listCustomerChangeRequests({ companyId, status = null, customerId = null, rentalOrderId = null, limit = 200, offset = 0 } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const params = [cid];
+  const where = ["r.company_id = $1"];
+  if (status) {
+    params.push(String(status).trim().toLowerCase());
+    where.push(`LOWER(TRIM(r.status)) = $${params.length}`);
+  }
+  const normalizedCustomerId = Number(customerId);
+  if (Number.isFinite(normalizedCustomerId) && normalizedCustomerId > 0) {
+    params.push(normalizedCustomerId);
+    where.push(`r.customer_id = $${params.length}`);
+  }
+  const normalizedRentalOrderId = Number(rentalOrderId);
+  if (Number.isFinite(normalizedRentalOrderId) && normalizedRentalOrderId > 0) {
+    params.push(normalizedRentalOrderId);
+    where.push(`r.rental_order_id = $${params.length}`);
+  }
+  params.push(Math.max(1, Math.min(500, Number(limit) || 200)));
+  params.push(Math.max(0, Number(offset) || 0));
+  const res = await pool.query(
+    `
+    SELECT r.id,
+           r.scope,
+           r.status,
+           r.customer_id,
+           r.rental_order_id,
+           r.link_id,
+           r.submitted_at,
+           r.reviewed_at,
+           c.company_name AS customer_name,
+           ro.quote_number,
+           ro.ro_number,
+           ro.status AS order_status
+      FROM customer_change_requests r
+      LEFT JOIN customers c ON c.id = r.customer_id
+      LEFT JOIN rental_orders ro ON ro.id = r.rental_order_id
+     WHERE ${where.join(" AND ")}
+     ORDER BY r.submitted_at DESC, r.id DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}
+    `,
+    params
+  );
+  return res.rows || [];
+}
+
+async function getCustomerChangeRequest({ companyId, id }) {
+  const cid = Number(companyId);
+  const reqId = Number(id);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(reqId) || reqId <= 0) throw new Error("id is required.");
+  const res = await pool.query(
+    `
+    SELECT id, company_id, customer_id, rental_order_id, link_id, scope, status, payload, documents, signature, proof_pdf_path, submitted_at, reviewed_at, reviewed_by_user_id, review_notes, applied_customer_id, applied_order_id
+      FROM customer_change_requests
+     WHERE id = $1 AND company_id = $2
+     LIMIT 1
+    `,
+    [reqId, cid]
+  );
+  const row = res.rows?.[0];
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    company_id: Number(row.company_id),
+    customer_id: row.customer_id === null ? null : Number(row.customer_id),
+    rental_order_id: row.rental_order_id === null ? null : Number(row.rental_order_id),
+    link_id: row.link_id === null ? null : Number(row.link_id),
+    scope: row.scope || null,
+    status: row.status || null,
+    payload: normalizeJsonObject(row.payload),
+    documents: normalizeJsonArray(row.documents),
+    signature: normalizeJsonObject(row.signature),
+    proof_pdf_path: row.proof_pdf_path || null,
+    submitted_at: row.submitted_at || null,
+    reviewed_at: row.reviewed_at || null,
+    reviewed_by_user_id: row.reviewed_by_user_id === null ? null : Number(row.reviewed_by_user_id),
+    review_notes: row.review_notes || null,
+    applied_customer_id: row.applied_customer_id === null ? null : Number(row.applied_customer_id),
+    applied_order_id: row.applied_order_id === null ? null : Number(row.applied_order_id),
+  };
+}
+
+async function getLatestCustomerChangeRequestForLink({ companyId, linkId }) {
+  const cid = Number(companyId);
+  const lid = Number(linkId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(lid) || lid <= 0) throw new Error("linkId is required.");
+  const res = await pool.query(
+    `
+    SELECT id, proof_pdf_path, status, submitted_at
+      FROM customer_change_requests
+     WHERE company_id = $1 AND link_id = $2
+     ORDER BY submitted_at DESC, id DESC
+     LIMIT 1
+    `,
+    [cid, lid]
+  );
+  return res.rows?.[0] || null;
 }
 
 async function getCustomerStorefrontExtras({ companyId, customerId }) {
@@ -12035,21 +12588,25 @@ async function createStorefrontReservation({
   const generalNotesValue = useRentalInfoField("generalNotes") ? String(generalNotes || "").trim() || null : null;
   const emergencyContactList = useRentalInfoField("emergencyContacts") ? normalizeOrderContacts(emergencyContacts) : [];
   const siteContactList = useRentalInfoField("siteContacts") ? normalizeOrderContacts(siteContacts) : [];
-  const coverageHoursValue = useRentalInfoField("coverageHours") ? normalizeCoverageHours(coverageHours) : {};
+  const coverageHoursValue = useRentalInfoField("coverageHours") ? normalizeCoverageHours(coverageHours) : [];
 
   const missingRentalInfo = [];
   const contactIsValid = (list) =>
     Array.isArray(list) &&
     list.length > 0 &&
     list.every((entry) => String(entry?.name || "").trim() && (String(entry?.email || "").trim() || String(entry?.phone || "").trim()));
-  const coverageIsValid = (coverageMap) => {
-    if (!coverageMap || typeof coverageMap !== "object") return false;
-    const days = Object.keys(coverageMap);
-    if (!days.length) return false;
-    return days.every((day) => {
-      const entry = coverageMap[day] || {};
-      return String(entry.start || "").trim() && String(entry.end || "").trim();
-    });
+  const coverageIsValid = (coverageValue) => {
+    if (!coverageValue) return false;
+    if (!Array.isArray(coverageValue)) return false;
+    if (!coverageValue.length) return false;
+    return coverageValue.every(
+      (slot) =>
+        slot &&
+        String(slot.startDay || "").trim() &&
+        String(slot.startTime || "").trim() &&
+        String(slot.endDay || "").trim() &&
+        String(slot.endTime || "").trim()
+    );
   };
 
   if (rentalInfoFields?.siteAddress?.enabled && rentalInfoFields?.siteAddress?.required && !siteAddressValue) {
@@ -12094,7 +12651,7 @@ async function createStorefrontReservation({
     };
   }
 
-  const coverageDays = Object.keys(coverageHoursValue || {});
+  const coverageDays = coverageHoursValue.length;
 
   const lineItems = Array.from({ length: qty }, () => ({
     typeId: tid,
@@ -13025,12 +13582,22 @@ module.exports = {
   updateRentalOrder,
   updateRentalOrderSiteAddress,
   updateRentalOrderStatus,
+  deleteRentalOrder,
   addRentalOrderNote,
   addRentalOrderAttachment,
   deleteRentalOrderAttachment,
   listCustomerDocuments,
   addCustomerDocument,
   deleteCustomerDocument,
+  createCustomerShareLink,
+  getCustomerShareLinkByHash,
+  markCustomerShareLinkUsed,
+  revokeCustomerShareLink,
+  createCustomerChangeRequest,
+  updateCustomerChangeRequestStatus,
+  listCustomerChangeRequests,
+  getCustomerChangeRequest,
+  getLatestCustomerChangeRequestForLink,
   getCustomerStorefrontExtras,
   listRentalOrderAudits,
   listAvailableInventory,

@@ -100,6 +100,7 @@
                   <button class="ghost small" id="request-undo" type="button">Undo</button>
                 </div>
                 <button class="ghost danger" id="close-open" type="button" style="display:none;"></button>
+                <button class="ghost danger" id="delete-order" type="button" style="display:none;">Delete</button>
                 <button class="ghost" id="open-history" type="button" style="display:none;">History</button>
                 <button class="ghost" id="download-order-pdf" type="button">PDF</button>
                 <button class="primary" id="save-order">Save RO</button>
@@ -108,7 +109,14 @@
 
             <div class="stack">
               <p class="hint" id="company-meta">Loading your company…</p>
-              <div class="two-col">
+              <div class="inline-actions" style="justify-content:flex-start;">
+                <button class="ghost" id="create-order-link" type="button">Generate customer link</button>
+              </div>
+              <label>Share link
+                <input id="order-link-output" readonly />
+              </label>
+              <p class="hint" id="order-link-hint"></p>
+              <div class="three-col">
                 <label>Customer
                   <select id="customer-select">
                     <option value="">Select customer</option>
@@ -118,16 +126,15 @@
                 <label>Customer PO # (optional)
                   <input id="customer-po" />
                 </label>
+                <label>Salesperson
+                  <select id="sales-select">
+                    <option value="">Select salesperson</option>
+                    <option value="__new_sales__">+ Add salesperson...</option>
+                  </select>
+                </label>
               </div>
 
               <div class="details-panel" id="customer-details" style="display:none;"></div>
-
-              <label>Salesperson
-                <select id="sales-select">
-                  <option value="">Select salesperson</option>
-                  <option value="__new_sales__">+ Add salesperson...</option>
-                </select>
-              </label>
             </div>
           </section>
 
@@ -257,21 +264,66 @@
                     map</button>
                 </div>
               </div>
-              <div data-rental-info-field="criticalAreas">
-                <label>Critical Areas on Site
-                  <textarea id="critical-areas"></textarea>
-                </label>
-              </div>
-              <div data-rental-info-field="generalNotes">
-                <label>General notes
-                  <textarea id="general-notes"></textarea>
-                </label>
-                <div class="inline-actions" style="justify-content:flex-start; margin-top:8px;">
-                  <label class="ghost small" for="general-notes-images">Add photos</label>
-                  <input id="general-notes-images" type="file" accept="image/*" multiple hidden />
-                  <span class="hint" id="general-notes-images-status"></span>
+              <div class="stack rental-info-notes">
+                <div data-rental-info-field="criticalAreas">
+                  <label>Critical Areas on Site
+                    <textarea id="critical-areas"></textarea>
+                  </label>
                 </div>
-                <div class="guard-notes-previews" id="general-notes-previews"></div>
+                <div data-rental-info-field="generalNotes">
+                  <label>General notes</label>
+                  <div class="rich-editor" id="general-notes-editor-wrap">
+                    <div class="rich-toolbar" id="general-notes-toolbar" role="toolbar" aria-label="General notes editor">
+                      <select data-rich="font" aria-label="Font">
+                        <option value="">Font</option>
+                        <option value="Inter">Inter</option>
+                        <option value="Georgia">Georgia</option>
+                        <option value="Times New Roman">Times New Roman</option>
+                        <option value="Arial">Arial</option>
+                        <option value="Verdana">Verdana</option>
+                        <option value="Courier New">Courier New</option>
+                      </select>
+                      <select data-rich="size" aria-label="Font size">
+                        <option value="">Size</option>
+                        <option value="1">10</option>
+                        <option value="2">12</option>
+                        <option value="3">14</option>
+                        <option value="4">16</option>
+                        <option value="5">18</option>
+                        <option value="6">24</option>
+                        <option value="7">32</option>
+                      </select>
+                      <select data-rich="block" aria-label="Text style">
+                        <option value="">Style</option>
+                        <option value="p">Normal</option>
+                        <option value="h1">Heading 1</option>
+                        <option value="h2">Heading 2</option>
+                        <option value="h3">Heading 3</option>
+                      </select>
+                      <button type="button" class="ghost tiny" data-rich-cmd="bold" aria-label="Bold"><strong>B</strong></button>
+                      <button type="button" class="ghost tiny" data-rich-cmd="italic" aria-label="Italic"><em>I</em></button>
+                      <button type="button" class="ghost tiny" data-rich-cmd="underline" aria-label="Underline"><span style="text-decoration:underline;">U</span></button>
+                      <button type="button" class="ghost tiny" data-rich-cmd="insertUnorderedList" aria-label="Bullet list">Bullets</button>
+                      <button type="button" class="ghost tiny" data-rich-cmd="insertOrderedList" aria-label="Numbered list">Numbers</button>
+                      <button type="button" class="ghost tiny" data-rich-action="link" aria-label="Insert link">Link</button>
+                      <button type="button" class="ghost tiny" id="general-notes-insert-image" data-rich-action="image" aria-label="Insert image">Image</button>
+                      <button type="button" class="ghost tiny" data-rich-action="clear" aria-label="Clear formatting">Clear</button>
+                    </div>
+                    <div
+                      id="general-notes-editor"
+                      class="rich-editor__body"
+                      contenteditable="true"
+                      data-placeholder="Capture any additional instructions for the owner."
+                    ></div>
+                    <textarea id="general-notes" hidden></textarea>
+                  </div>
+                  <div class="inline-actions" style="justify-content:flex-start; margin-top:8px;">
+                    <label class="ghost small" for="general-notes-images">Add photos</label>
+                    <input id="general-notes-images" type="file" accept="image/*" multiple hidden />
+                    <span class="hint" id="general-notes-images-status"></span>
+                  </div>
+                  <div class="guard-notes-previews" id="general-notes-previews"></div>
+                </div>
               </div>
               <div class="contact-block" data-rental-info-field="emergencyContacts">
                 <div class="contact-header">
@@ -311,83 +363,11 @@
                 <div class="coverage-header">
                   <strong>Hours of coverage required</strong>
                   <div class="inline-actions" style="gap:12px;">
-                    <span class="hint">Use 24-hour time</span>
-                    <button type="button" class="ghost small" id="copy-monday-coverage">Copy Mon to all</button>
+                    <span class="hint">Use 24-hour time - 5-minute steps</span>
+                    <button type="button" class="ghost small" id="add-coverage-slot">+ Add time slot</button>
                   </div>
                 </div>
-                <table class="coverage-table">
-                  <thead>
-                    <tr>
-                      <th>Mon</th>
-                      <th>Tue</th>
-                      <th>Wed</th>
-                      <th>Thu</th>
-                      <th>Fri</th>
-                      <th>Sat</th>
-                      <th>Sun</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td>
-                        <div class="coverage-inputs">
-                          <input id="coverage-mon-start" type="time" step="900" aria-label="Monday start time" />
-                          <span>to</span>
-                          <input id="coverage-mon-end" type="time" step="900" aria-label="Monday end time" />
-                          <span class="coverage-next-day" data-coverage-next-day="mon"></span>
-                        </div>
-                      </td>
-                      <td>
-                        <div class="coverage-inputs">
-                          <input id="coverage-tue-start" type="time" step="900" aria-label="Tuesday start time" />
-                          <span>to</span>
-                          <input id="coverage-tue-end" type="time" step="900" aria-label="Tuesday end time" />
-                          <span class="coverage-next-day" data-coverage-next-day="tue"></span>
-                        </div>
-                      </td>
-                      <td>
-                        <div class="coverage-inputs">
-                          <input id="coverage-wed-start" type="time" step="900" aria-label="Wednesday start time" />
-                          <span>to</span>
-                          <input id="coverage-wed-end" type="time" step="900" aria-label="Wednesday end time" />
-                          <span class="coverage-next-day" data-coverage-next-day="wed"></span>
-                        </div>
-                      </td>
-                      <td>
-                        <div class="coverage-inputs">
-                          <input id="coverage-thu-start" type="time" step="900" aria-label="Thursday start time" />
-                          <span>to</span>
-                          <input id="coverage-thu-end" type="time" step="900" aria-label="Thursday end time" />
-                          <span class="coverage-next-day" data-coverage-next-day="thu"></span>
-                        </div>
-                      </td>
-                      <td>
-                        <div class="coverage-inputs">
-                          <input id="coverage-fri-start" type="time" step="900" aria-label="Friday start time" />
-                          <span>to</span>
-                          <input id="coverage-fri-end" type="time" step="900" aria-label="Friday end time" />
-                          <span class="coverage-next-day" data-coverage-next-day="fri"></span>
-                        </div>
-                      </td>
-                      <td>
-                        <div class="coverage-inputs">
-                          <input id="coverage-sat-start" type="time" step="900" aria-label="Saturday start time" />
-                          <span>to</span>
-                          <input id="coverage-sat-end" type="time" step="900" aria-label="Saturday end time" />
-                          <span class="coverage-next-day" data-coverage-next-day="sat"></span>
-                        </div>
-                      </td>
-                      <td>
-                        <div class="coverage-inputs">
-                          <input id="coverage-sun-start" type="time" step="900" aria-label="Sunday start time" />
-                          <span>to</span>
-                          <input id="coverage-sun-end" type="time" step="900" aria-label="Sunday end time" />
-                          <span class="coverage-next-day" data-coverage-next-day="sun"></span>
-                        </div>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+                <div class="coverage-slots" id="coverage-slots"></div>
               </div>
             </div>
           </section>

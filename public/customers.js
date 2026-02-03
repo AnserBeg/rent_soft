@@ -30,6 +30,7 @@ let sortDir = "asc";
 let searchTerm = "";
 let qboSearchTerm = "";
 let qboLocalSearchTerm = "";
+let pendingCustomerUpdates = new Set();
 
 const LIST_STATE_KEY = "rentsoft.customers.listState";
 const ALLOWED_SORT_FIELDS = new Set(["company_name", "parent_company_name", "contact_name", "email", "phone", "city", "region", "country", "postal_code", "follow_up_date", "sales"]);
@@ -75,7 +76,7 @@ function renderCustomers(rows) {
       <span class="sort ${sortField === "postal_code" ? "active" : ""}" data-sort="postal_code">Postal ${indicator("postal_code")}</span>
       <span class="sort ${sortField === "follow_up_date" ? "active" : ""}" data-sort="follow_up_date">Follow up ${indicator("follow_up_date")}</span>
       <span class="sort ${sortField === "sales" ? "active" : ""}" data-sort="sales">Sales ${indicator("sales")}</span>
-      <span></span>
+      <span>Updates</span>
     </div>`;
   rows.forEach((row) => {
     const sales = salesCache.find((s) => s.id === row.sales_person_id);
@@ -94,7 +95,7 @@ function renderCustomers(rows) {
       <span>${row.postal_code || "--"}</span>
       <span>${row.follow_up_date || "--"}</span>
       <span>${sales?.name || "--"}</span>
-      <span></span>
+      <span>${pendingCustomerUpdates.has(Number(row.id)) ? "Pending" : ""}</span>
     `;
     customersTable.appendChild(div);
   });
@@ -525,10 +526,23 @@ async function createQboFromLocal(localId) {
 async function loadCustomers() {
   if (!activeCompanyId) return;
   try {
-    const res = await fetch(`/api/customers?companyId=${activeCompanyId}`);
-    if (!res.ok) throw new Error("Unable to fetch customers");
-    const data = await res.json();
+    const [customersRes, updatesRes] = await Promise.all([
+      fetch(`/api/customers?companyId=${activeCompanyId}`),
+      fetch(`/api/customer-change-requests?companyId=${activeCompanyId}&status=pending`),
+    ]);
+    if (!customersRes.ok) throw new Error("Unable to fetch customers");
+    const data = await customersRes.json();
     customersCache = data.customers || [];
+    if (updatesRes.ok) {
+      const updatesData = await updatesRes.json();
+      pendingCustomerUpdates = new Set(
+        (updatesData.requests || [])
+          .map((r) => Number(r.customer_id))
+          .filter((id) => Number.isFinite(id))
+      );
+    } else {
+      pendingCustomerUpdates = new Set();
+    }
     renderCustomers(applyFilters());
     renderQboTables();
   } catch (err) {

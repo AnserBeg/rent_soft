@@ -24,11 +24,15 @@ const orderDetails = document.getElementById("order-details");
 const lineItemDetails = document.getElementById("line-item-details");
 const guardNotesList = document.getElementById("guard-notes-list");
 const guardNotesEmpty = document.getElementById("guard-notes-empty");
+const guardNotesEditor = document.getElementById("guard-notes-editor");
+const guardNotesToolbar = document.getElementById("guard-notes-toolbar");
 const guardNotesInput = document.getElementById("guard-notes-input");
+const guardNotesInsertImageBtn = document.getElementById("guard-notes-insert-image");
 const guardNotesImages = document.getElementById("guard-notes-images");
 const guardNotesPreviews = document.getElementById("guard-notes-previews");
 const guardNotesClear = document.getElementById("guard-notes-clear");
 const guardNotesStatus = document.getElementById("guard-notes-status");
+const guardNotesSubmitBtn = document.getElementById("guard-notes-submit");
 const createWorkOrderBtn = document.getElementById("create-work-order");
 const openSiteAddressPickerBtn = document.getElementById("open-site-address-picker");
 const siteAddressStatus = document.getElementById("site-address-status");
@@ -78,6 +82,8 @@ let guardNotesUploadsInFlight = 0;
 let guardNotesUploadToken = 0;
 let guardNotesEditing = null;
 let guardNotesEditingToken = 0;
+const guardNotesSelection = { lastRange: null };
+let guardNotesInsertMode = null;
 
 function fmtDate(value, withTime = false) {
   if (!value) return "--";
@@ -131,15 +137,16 @@ function formatContactLines(label, contacts) {
 
 function formatCoverageHours(coverage) {
   if (!coverage) return "--";
-  let normalized = coverage;
-  if (typeof coverage === "string") {
+  let raw = coverage;
+  if (typeof raw === "string") {
     try {
-      normalized = JSON.parse(coverage);
+      raw = JSON.parse(raw);
     } catch {
       return "--";
     }
   }
-  if (!normalized || typeof normalized !== "object") return "--";
+  if (!raw || typeof raw !== "object") return "--";
+
   const dayLabels = {
     mon: "Mon",
     tue: "Tue",
@@ -149,16 +156,72 @@ function formatCoverageHours(coverage) {
     sat: "Sat",
     sun: "Sun",
   };
-  const lines = Object.keys(dayLabels)
-    .map((key) => {
-      const entry = normalized[key] || {};
-      if (!entry.start && !entry.end) return null;
-      const endDayOffset =
-        entry.endDayOffset === 1 || entry.end_day_offset === 1 || entry.spansMidnight === true ? 1 : 0;
-      const suffix = endDayOffset ? " (+1 day)" : "";
-      return `${dayLabels[key]}: ${entry.start || "--"} - ${entry.end || "--"}${suffix}`;
-    })
-    .filter(Boolean);
+  const dayKeys = Object.keys(dayLabels);
+  const timeToMinutes = (value) => {
+    const match = String(value || "").trim().match(/^(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+    return hour * 60 + minute;
+  };
+
+  const slots = [];
+  if (Array.isArray(raw)) {
+    raw.forEach((entry) => {
+      if (!entry || typeof entry !== "object") return;
+      const startDay = String(entry.startDay || entry.start_day || "").toLowerCase();
+      const endDay = String(entry.endDay || entry.end_day || startDay || "").toLowerCase();
+      const startTime = entry.startTime || entry.start_time || entry.start || "";
+      const endTime = entry.endTime || entry.end_time || entry.end || "";
+      if (!startDay || !endDay || (!startTime && !endTime)) return;
+      slots.push({ startDay, endDay, startTime, endTime });
+    });
+  } else {
+    dayKeys.forEach((day) => {
+      const entry = raw[day] || {};
+      const startTime = entry.start || "";
+      const endTime = entry.end || "";
+      if (!startTime && !endTime) return;
+      let endDay = day;
+      const explicit = entry.endDayOffset ?? entry.end_day_offset;
+      if (explicit === 1 || explicit === "1" || explicit === true || entry.spansMidnight === true) {
+        const idx = dayKeys.indexOf(day);
+        endDay = dayKeys[(idx + 1) % dayKeys.length];
+      } else if (startTime && endTime) {
+        const startMinutes = timeToMinutes(startTime);
+        const endMinutes = timeToMinutes(endTime);
+        if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) {
+          const idx = dayKeys.indexOf(day);
+          endDay = dayKeys[(idx + 1) % dayKeys.length];
+        }
+      }
+      slots.push({ startDay: day, endDay, startTime, endTime });
+    });
+  }
+
+  const sorted = slots.sort((a, b) => {
+    const dayDiff = dayKeys.indexOf(a.startDay) - dayKeys.indexOf(b.startDay);
+    if (dayDiff) return dayDiff;
+    const aStart = timeToMinutes(a.startTime) ?? 0;
+    const bStart = timeToMinutes(b.startTime) ?? 0;
+    if (aStart !== bStart) return aStart - bStart;
+    const aEnd = timeToMinutes(a.endTime) ?? 0;
+    const bEnd = timeToMinutes(b.endTime) ?? 0;
+    return aEnd - bEnd;
+  });
+
+  const lines = sorted.map((slot) => {
+    const startLabel = dayLabels[slot.startDay] || slot.startDay || "--";
+    const endLabel = dayLabels[slot.endDay] || slot.endDay || "--";
+    const start = slot.startTime || "--";
+    const end = slot.endTime || "--";
+    if (slot.startDay === slot.endDay) {
+      return `${startLabel}: ${start} - ${end}`;
+    }
+    return `${startLabel} ${start} - ${endLabel} ${end}`;
+  });
+
   return lines.length ? lines.join("<br />") : "--";
 }
 
@@ -213,9 +276,10 @@ function applyRentalInfoConfig() {
   if (siteAddressPickerModal) siteAddressPickerModal.style.display = siteEnabled ? "" : "none";
 }
 
-function detailItem(label, value) {
+function detailItem(label, value, className = "") {
+  const classes = ["detail-item", className].filter(Boolean).join(" ");
   return `
-    <div class="detail-item">
+    <div class="${classes}">
       <div class="detail-label">${label}</div>
       <div class="detail-value">${value ?? "--"}</div>
     </div>
@@ -247,6 +311,307 @@ function escapeHtml(s) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+const GENERAL_NOTES_ALLOWED_TAGS = new Set([
+  "b",
+  "strong",
+  "i",
+  "em",
+  "u",
+  "s",
+  "strike",
+  "p",
+  "br",
+  "div",
+  "span",
+  "h1",
+  "h2",
+  "h3",
+  "ul",
+  "ol",
+  "li",
+  "a",
+  "img",
+  "font",
+]);
+
+const GENERAL_NOTES_ALLOWED_ATTRS = {
+  a: new Set(["href", "target", "rel"]),
+  img: new Set(["src", "alt", "title"]),
+  span: new Set(["style"]),
+  div: new Set(["style"]),
+  p: new Set(["style"]),
+  h1: new Set(["style"]),
+  h2: new Set(["style"]),
+  h3: new Set(["style"]),
+  li: new Set(["style"]),
+  font: new Set(["size", "face", "color"]),
+};
+
+const GENERAL_NOTES_ALLOWED_STYLES = new Set([
+  "font-size",
+  "font-family",
+  "font-weight",
+  "font-style",
+  "text-decoration",
+  "text-align",
+  "color",
+]);
+
+const GENERAL_NOTES_ALLOWED_FONTS = new Set([
+  "Inter",
+  "Georgia",
+  "Times New Roman",
+  "Arial",
+  "Verdana",
+  "Courier New",
+]);
+
+function isSafeUrl(url, { allowDataImage = false } = {}) {
+  if (!url) return false;
+  const value = String(url || "").trim();
+  if (!value) return false;
+  const lower = value.toLowerCase();
+  if (lower.startsWith("javascript:") || lower.startsWith("vbscript:")) return false;
+  if (lower.startsWith("data:")) {
+    return allowDataImage && lower.startsWith("data:image/");
+  }
+  if (lower.startsWith("/uploads/")) return true;
+  if (lower.startsWith("http://") || lower.startsWith("https://")) return true;
+  return false;
+}
+
+function sanitizeRichText(html) {
+  const raw = String(html || "");
+  if (!raw.trim()) return "";
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<div>${raw}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  if (!root) return "";
+
+  const sanitizeStyle = (style) => {
+    if (!style) return "";
+    const parts = String(style)
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const cleaned = [];
+    parts.forEach((entry) => {
+      const idx = entry.indexOf(":");
+      if (idx === -1) return;
+      const prop = entry.slice(0, idx).trim().toLowerCase();
+      let value = entry.slice(idx + 1).trim();
+      if (!GENERAL_NOTES_ALLOWED_STYLES.has(prop)) return;
+      if (!value || /url\s*\(/i.test(value) || /expression\s*\(/i.test(value)) return;
+      if (prop === "font-family") {
+        const family = value.replace(/['"]/g, "").split(",")[0].trim();
+        if (!GENERAL_NOTES_ALLOWED_FONTS.has(family)) return;
+        value = family;
+      }
+      if (prop === "font-size" && !/^\d+(px|pt|em|rem|%)?$/.test(value)) return;
+      if (prop === "font-weight" && !/^(bold|normal|[1-9]00)$/.test(value)) return;
+      if (prop === "text-align" && !/^(left|right|center|justify)$/.test(value)) return;
+      if (prop === "text-decoration" && !/^(underline|line-through|none)$/.test(value)) return;
+      if (prop === "color" && !/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value) && !/^rgb(a)?\(/i.test(value)) return;
+      cleaned.push(`${prop}: ${value}`);
+    });
+    return cleaned.join("; ");
+  };
+
+  const sanitizeNode = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) return;
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      node.remove();
+      return;
+    }
+    const tag = node.tagName.toLowerCase();
+    if (!GENERAL_NOTES_ALLOWED_TAGS.has(tag)) {
+      const fragment = doc.createDocumentFragment();
+      while (node.firstChild) fragment.appendChild(node.firstChild);
+      node.replaceWith(fragment);
+      return;
+    }
+    const allowed = GENERAL_NOTES_ALLOWED_ATTRS[tag] || new Set();
+    Array.from(node.attributes || []).forEach((attr) => {
+      const name = attr.name.toLowerCase();
+      const value = attr.value;
+      if (name.startsWith("on")) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+      if (!allowed.has(name)) {
+        node.removeAttribute(attr.name);
+        return;
+      }
+      if (name === "href") {
+        if (!isSafeUrl(value)) {
+          node.removeAttribute(attr.name);
+          return;
+        }
+        node.setAttribute("rel", "noopener noreferrer");
+        node.setAttribute("target", "_blank");
+      }
+      if (name === "src") {
+        if (!isSafeUrl(value, { allowDataImage: true })) {
+          node.remove();
+          return;
+        }
+      }
+      if (name === "style") {
+        const nextStyle = sanitizeStyle(value);
+        if (nextStyle) node.setAttribute("style", nextStyle);
+        else node.removeAttribute("style");
+      }
+      if (tag === "font" && name === "size") {
+        const size = String(value || "").trim();
+        if (!/^[1-7]$/.test(size)) node.removeAttribute("size");
+      }
+      if (tag === "font" && name === "face") {
+        const face = String(value || "").replace(/['"]/g, "").trim();
+        if (!GENERAL_NOTES_ALLOWED_FONTS.has(face)) node.removeAttribute("face");
+      }
+    });
+    Array.from(node.childNodes).forEach((child) => sanitizeNode(child));
+  };
+
+  Array.from(root.childNodes).forEach((child) => sanitizeNode(child));
+  return root.innerHTML.trim();
+}
+
+function formatRichText(value) {
+  const raw = String(value || "");
+  if (!raw.trim()) return "";
+  const looksLikeHtml = /<\s*[a-z][\s\S]*>/i.test(raw);
+  const html = looksLikeHtml ? raw : escapeHtml(raw).replaceAll("\n", "<br />");
+  return sanitizeRichText(html);
+}
+
+function normalizeRichTextValue(value) {
+  const raw = String(value || "");
+  if (!raw.trim()) return "";
+  const looksLikeHtml = /<\s*[a-z][\s\S]*>/i.test(raw);
+  const html = looksLikeHtml ? raw : escapeHtml(raw).replaceAll("\n", "<br />");
+  return sanitizeRichText(html);
+}
+
+function setRichTextValue(editor, hiddenInput, value) {
+  const cleaned = normalizeRichTextValue(value);
+  if (editor) editor.innerHTML = cleaned;
+  if (hiddenInput) hiddenInput.value = cleaned;
+  return cleaned;
+}
+
+function getRichTextValue(editor, hiddenInput) {
+  const raw = editor ? editor.innerHTML : String(hiddenInput?.value || "");
+  const cleaned = normalizeRichTextValue(raw);
+  if (hiddenInput) hiddenInput.value = cleaned;
+  return cleaned;
+}
+
+function richTextHasContent(value) {
+  const cleaned = normalizeRichTextValue(value);
+  if (!cleaned) return false;
+  if (/<img\b/i.test(cleaned)) return true;
+  const doc = new DOMParser().parseFromString(`<div>${cleaned}</div>`, "text/html");
+  const text = String(doc.body.textContent || "").replace(/\s+/g, " ").trim();
+  return Boolean(text);
+}
+
+function richTextToPlainText(value) {
+  const cleaned = normalizeRichTextValue(value);
+  if (!cleaned) return "";
+  const doc = new DOMParser().parseFromString(`<div>${cleaned}</div>`, "text/html");
+  return String(doc.body.textContent || "").replace(/\s+/g, " ").trim();
+}
+
+function storeRichTextSelection(editor, state) {
+  if (!editor || !state) return;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
+  const range = sel.getRangeAt(0);
+  if (!editor.contains(range.commonAncestorContainer)) return;
+  state.lastRange = range.cloneRange();
+}
+
+function restoreRichTextSelection(editor, state) {
+  if (!editor || !state?.lastRange) return;
+  const sel = window.getSelection();
+  if (!sel) return;
+  if (!editor.contains(state.lastRange.commonAncestorContainer)) return;
+  sel.removeAllRanges();
+  sel.addRange(state.lastRange);
+}
+
+function execRichTextCommand(editor, state, command, value) {
+  if (!editor) return;
+  editor.focus();
+  restoreRichTextSelection(editor, state);
+  document.execCommand(command, false, value);
+  storeRichTextSelection(editor, state);
+}
+
+function insertRichTextImage(editor, state, url, name) {
+  if (!editor || !url) return;
+  editor.focus();
+  restoreRichTextSelection(editor, state);
+  document.execCommand("insertImage", false, url);
+  if (name) {
+    const imgs = Array.from(editor.querySelectorAll("img"));
+    const matching = imgs.filter((img) => String(img.getAttribute("src") || "") === String(url));
+    const last = (matching.length ? matching : imgs)[(matching.length ? matching : imgs).length - 1];
+    if (last) last.alt = String(name || "Guard notes image");
+  }
+  storeRichTextSelection(editor, state);
+}
+
+function setGuardNotesHtml(value) {
+  return setRichTextValue(guardNotesEditor, guardNotesInput, value);
+}
+
+function getGuardNotesHtml() {
+  return getRichTextValue(guardNotesEditor, guardNotesInput);
+}
+
+function getGuardNotesPlainText() {
+  return richTextToPlainText(getGuardNotesHtml());
+}
+
+function storeGuardNotesSelection() {
+  storeRichTextSelection(guardNotesEditor, guardNotesSelection);
+}
+
+function restoreGuardNotesSelection() {
+  restoreRichTextSelection(guardNotesEditor, guardNotesSelection);
+}
+
+function execGuardNotesCommand(command, value) {
+  execRichTextCommand(guardNotesEditor, guardNotesSelection, command, value);
+}
+
+function insertGuardNotesImage(url, name) {
+  insertRichTextImage(guardNotesEditor, guardNotesSelection, url, name);
+}
+
+function storeGuardNoteEditSelection(editor) {
+  if (!guardNotesEditing) return;
+  storeRichTextSelection(editor, guardNotesEditing);
+}
+
+function restoreGuardNoteEditSelection(editor) {
+  if (!guardNotesEditing) return;
+  restoreRichTextSelection(editor, guardNotesEditing);
+}
+
+function execGuardNoteEditCommand(editor, command, value) {
+  if (!guardNotesEditing) return;
+  execRichTextCommand(editor, guardNotesEditing, command, value);
+  if (editor) guardNotesEditing.noteText = editor.innerHTML || "";
+}
+
+function insertGuardNoteEditImage(editor, url, name) {
+  if (!guardNotesEditing) return;
+  insertRichTextImage(editor, guardNotesEditing, url, name);
 }
 
 async function getPublicConfig() {
@@ -871,15 +1236,15 @@ function renderOrderDetail(row, detail) {
   const emergencyContacts = parseContacts(order.emergency_contacts || order.emergencyContacts || []);
   const siteContacts = parseContacts(order.site_contacts || order.siteContacts || []);
   const notificationCircumstances = order.notification_circumstances || order.notificationCircumstances || [];
-  const coverageHours = order.coverage_hours || order.coverageHours || {};
+  const coverageHours = order.coverage_hours || order.coverageHours || [];
   const siteAddress = order.site_address || order.siteAddress || "--";
   const criticalAreas = order.critical_areas || order.criticalAreas || "--";
   const generalNotes = order.general_notes || order.generalNotes || "";
   const generalNotesImages = generalNotesImagesFromDetail(detail);
-  const generalNotesText = generalNotes ? escapeHtml(generalNotes).replaceAll("\n", "<br />") : "--";
+  const generalNotesText = formatRichText(generalNotes);
   const generalNotesValue = generalNotesImages.length
-    ? `${generalNotesText}<div class="general-notes-media">${renderGeneralNotesImages(generalNotesImages)}</div>`
-    : generalNotesText;
+    ? `${generalNotesText || "--"}<div class="general-notes-media">${renderGeneralNotesImages(generalNotesImages)}</div>`
+    : (generalNotesText || "--");
 
   const orderDetailItems = [];
   if (isRentalInfoEnabled("siteContacts")) {
@@ -900,14 +1265,14 @@ function renderOrderDetail(row, detail) {
   if (isRentalInfoEnabled("criticalAreas")) {
     lineDetailItems.push(detailItem("Critical areas on site", criticalAreas || "--"));
   }
-  if (isRentalInfoEnabled("generalNotes")) {
-    lineDetailItems.push(detailItem("General notes", generalNotesValue));
-  }
   if (isRentalInfoEnabled("notificationCircumstances")) {
     const notifValue = Array.isArray(notificationCircumstances) && notificationCircumstances.length
       ? notificationCircumstances.map(v => escapeHtml(v)).join(", ")
       : "--";
     lineDetailItems.push(detailItem("Notification circumstance", notifValue));
+  }
+  if (isRentalInfoEnabled("generalNotes")) {
+    lineDetailItems.push(detailItem("General notes", generalNotesValue, "detail-item-wide"));
   }
   lineItemDetails.innerHTML = lineDetailItems.join("");
 }
@@ -971,14 +1336,14 @@ function normalizeGuardNotesList(raw) {
   const normalized = [];
   list.forEach((item) => {
     if (!item || typeof item !== "object") return;
-    const noteText = String(item.note || item.text || "").trim();
+    const noteHtml = normalizeRichTextValue(item.note || item.text || "");
     const images = normalizeGuardNoteImages(item.images || item.photos || []);
-    if (!noteText && images.length === 0) return;
+    if (!richTextHasContent(noteHtml) && images.length === 0) return;
     normalized.push({
       id: item.id || makeGuardNoteId(),
       userName: String(item.userName || item.user_name || "Unknown user"),
       createdAt: item.createdAt || item.created_at || null,
-      note: noteText,
+      note: noteHtml,
       images,
     });
   });
@@ -994,12 +1359,14 @@ function readGuardNotesFromStorage(key) {
   } catch {
     const legacy = String(raw || "").trim();
     if (!legacy) return [];
+    const cleaned = normalizeRichTextValue(legacy);
+    if (!richTextHasContent(cleaned)) return [];
     return [
       {
         id: makeGuardNoteId(),
         userName: "Imported note",
         createdAt: null,
-        note: legacy,
+        note: cleaned,
         images: [],
       },
     ];
@@ -1007,12 +1374,12 @@ function readGuardNotesFromStorage(key) {
 }
 
 function buildDispatchWorkOrderSummary() {
-  const inputNote = String(guardNotesInput?.value || "").trim();
+  const inputNote = getGuardNotesPlainText();
   if (inputNote) return inputNote;
 
   const latest = guardNotesState.length ? guardNotesState[guardNotesState.length - 1] : null;
   if (!latest) return "";
-  const noteText = String(latest.note || "").trim();
+  const noteText = richTextToPlainText(latest.note || "");
   const imageUrls = (latest.images || []).map((img) => img?.url).filter(Boolean);
   const metaParts = [];
   if (latest.userName) metaParts.push(`By ${latest.userName}`);
@@ -1086,11 +1453,14 @@ function renderGuardNoteEditImages(images, noteId) {
 function renderGuardNoteView(note) {
   const name = escapeHtml(note.userName || "Unknown user");
   const when = fmtDate(note.createdAt, true);
-  const text = escapeHtml(note.note || "").replaceAll("\n", "<br />");
+  const text = formatRichText(note.note || "");
   return `
     <div class="note-meta note-meta-row">
       <span>${name} | ${when}</span>
-      <button class="ghost tiny" type="button" data-edit-note="${escapeHtml(note.id)}">Edit</button>
+      <div class="note-meta-actions">
+        <button class="ghost tiny" type="button" data-edit-note="${escapeHtml(note.id)}">Edit</button>
+        <button class="ghost tiny" type="button" data-delete-note="${escapeHtml(note.id)}">Delete</button>
+      </div>
     </div>
     ${text ? `<div>${text}</div>` : ""}
     ${renderGuardNoteImages(note.images)}
@@ -1100,20 +1470,59 @@ function renderGuardNoteView(note) {
 function renderGuardNoteEditor(note, editing) {
   const name = escapeHtml(note.userName || "Unknown user");
   const when = fmtDate(note.createdAt, true);
-  const noteText = escapeHtml(editing.noteText || "");
+  const noteText = formatRichText(editing.noteText || "");
   const noteId = escapeHtml(note.id);
   return `
     <div class="note-meta note-meta-row">
       <span>${name} | ${when}</span>
       <span class="pill">Editing</span>
     </div>
-    <textarea class="guard-note-edit-input" data-note-edit-input="${noteId}">${noteText}</textarea>
+    <div class="rich-editor guard-note-editor">
+      <div class="rich-toolbar guard-note-toolbar" data-note-toolbar="${noteId}" role="toolbar" aria-label="Guard note editor">
+        <select data-rich="font" aria-label="Font">
+          <option value="">Font</option>
+          <option value="Inter">Inter</option>
+          <option value="Georgia">Georgia</option>
+          <option value="Times New Roman">Times New Roman</option>
+          <option value="Arial">Arial</option>
+          <option value="Verdana">Verdana</option>
+          <option value="Courier New">Courier New</option>
+        </select>
+        <select data-rich="size" aria-label="Font size">
+          <option value="">Size</option>
+          <option value="1">10</option>
+          <option value="2">12</option>
+          <option value="3">14</option>
+          <option value="4">16</option>
+          <option value="5">18</option>
+          <option value="6">24</option>
+          <option value="7">32</option>
+        </select>
+        <select data-rich="block" aria-label="Text style">
+          <option value="">Style</option>
+          <option value="p">Normal</option>
+          <option value="h1">Heading 1</option>
+          <option value="h2">Heading 2</option>
+          <option value="h3">Heading 3</option>
+        </select>
+        <button type="button" class="ghost tiny" data-rich-cmd="bold" aria-label="Bold"><strong>B</strong></button>
+        <button type="button" class="ghost tiny" data-rich-cmd="italic" aria-label="Italic"><em>I</em></button>
+        <button type="button" class="ghost tiny" data-rich-cmd="underline" aria-label="Underline"><span style="text-decoration:underline;">U</span></button>
+        <button type="button" class="ghost tiny" data-rich-cmd="insertUnorderedList" aria-label="Bullet list">Bullets</button>
+        <button type="button" class="ghost tiny" data-rich-cmd="insertOrderedList" aria-label="Numbered list">Numbers</button>
+        <button type="button" class="ghost tiny" data-rich-action="link" aria-label="Insert link">Link</button>
+        <button type="button" class="ghost tiny" data-rich-action="image" aria-label="Insert image">Image</button>
+        <button type="button" class="ghost tiny" data-rich-action="clear" aria-label="Clear formatting">Clear</button>
+      </div>
+      <div class="rich-editor__body guard-note-edit-input" contenteditable="true" data-note-editor="${noteId}" data-placeholder="Update guard note...">${noteText}</div>
+    </div>
     ${renderGuardNoteEditImages(editing.images, note.id)}
     <div class="guard-note-edit-actions">
       <label class="ghost tiny" for="guard-note-images-${noteId}">Add photos</label>
       <input id="guard-note-images-${noteId}" data-note-image-input="${noteId}" type="file" accept="image/*" multiple hidden />
       <button class="primary small" type="button" data-save-note="${noteId}">Save</button>
       <button class="ghost small" type="button" data-cancel-note="${noteId}">Cancel</button>
+      <button class="ghost small" type="button" data-delete-note="${noteId}">Delete</button>
       <span class="hint" data-edit-status="${noteId}"></span>
     </div>
   `;
@@ -1225,7 +1634,8 @@ function loadGuardNotes(row) {
   guardNotesUploadToken += 1;
   guardNotesEditing = null;
   guardNotesEditingToken += 1;
-  if (guardNotesInput) guardNotesInput.value = "";
+  setGuardNotesHtml("");
+  guardNotesSelection.lastRange = null;
   renderGuardNotesPreviews();
   if (!row) {
     renderGuardNotesList([]);
@@ -1248,7 +1658,8 @@ async function clearGuardNotes(row) {
   guardNotesUploadToken += 1;
   guardNotesEditing = null;
   guardNotesEditingToken += 1;
-  if (guardNotesInput) guardNotesInput.value = "";
+  setGuardNotesHtml("");
+  guardNotesSelection.lastRange = null;
   renderGuardNotesList([]);
   renderGuardNotesPreviews();
   const ok = persistGuardNotes(row, []);
@@ -1267,9 +1678,9 @@ function submitGuardNote() {
     if (guardNotesStatus) guardNotesStatus.textContent = "Wait for image uploads to finish.";
     return;
   }
-  const text = String(guardNotesInput?.value || "").trim();
+  const noteHtml = getGuardNotesHtml();
   const images = guardNotesPendingImages.map((img) => ({ ...img }));
-  if (!text && images.length === 0) {
+  if (!richTextHasContent(noteHtml) && images.length === 0) {
     if (guardNotesStatus) guardNotesStatus.textContent = "Enter a note or attach photos.";
     return;
   }
@@ -1279,14 +1690,15 @@ function submitGuardNote() {
     id: makeGuardNoteId(),
     userName,
     createdAt: new Date().toISOString(),
-    note: text,
+    note: noteHtml,
     images,
   });
 
   if (!persistGuardNotes(selectedUnit, next)) return;
   guardNotesState = next;
   guardNotesPendingImages = [];
-  if (guardNotesInput) guardNotesInput.value = "";
+  setGuardNotesHtml("");
+  guardNotesSelection.lastRange = null;
   renderGuardNotesPreviews();
   renderGuardNotesList(guardNotesState);
   if (guardNotesStatus) {
@@ -1310,11 +1722,13 @@ function startGuardNoteEdit(noteId) {
   const images = (target.images || []).map(cloneGuardNoteImage).filter(Boolean);
   guardNotesEditing = {
     id: target.id,
-    noteText: target.note || "",
+    noteText: normalizeRichTextValue(target.note || ""),
     images,
     newUploadIds: new Set(),
     removedUrls: new Set(),
     uploadsInFlight: 0,
+    lastRange: null,
+    insertMode: null,
     uploadToken: ++guardNotesEditingToken,
   };
   renderGuardNotesList(guardNotesState);
@@ -1340,16 +1754,17 @@ function saveGuardNoteEdit(noteId) {
     setGuardNoteEditStatus(noteId, "Wait for image uploads to finish.");
     return;
   }
-  const text = String(guardNotesEditing.noteText || "").trim();
+  const editor = guardNotesList?.querySelector?.(`[data-note-editor="${noteId}"]`) || null;
+  const noteHtml = editor ? getRichTextValue(editor, null) : normalizeRichTextValue(guardNotesEditing.noteText || "");
   const images = guardNotesEditing.images.map(cloneGuardNoteImage).filter(Boolean);
-  if (!text && images.length === 0) {
+  if (!richTextHasContent(noteHtml) && images.length === 0) {
     setGuardNoteEditStatus(noteId, "Note cannot be empty.");
     return;
   }
 
   const next = guardNotesState.map((note) => {
     if (String(note.id) !== String(noteId)) return note;
-    return { ...note, note: text, images };
+    return { ...note, note: noteHtml, images };
   });
   if (!persistGuardNotes(selectedUnit, next)) return;
   guardNotesState = next;
@@ -1363,6 +1778,34 @@ function saveGuardNoteEdit(noteId) {
   }
   if (guardNotesStatus) {
     guardNotesStatus.textContent = `Note updated at ${new Date().toLocaleTimeString()}`;
+  }
+}
+
+function deleteGuardNote(noteId) {
+  if (!selectedUnit) {
+    if (guardNotesStatus) guardNotesStatus.textContent = "Select a unit to delete guard notes.";
+    return;
+  }
+  const target = guardNotesState.find((note) => String(note.id) === String(noteId));
+  if (!target) return;
+  if (guardNotesEditing && String(guardNotesEditing.id) === String(noteId) && guardNotesEditing.uploadsInFlight > 0) {
+    setGuardNoteEditStatus(noteId, "Wait for image uploads to finish.");
+    return;
+  }
+  if (!window.confirm("Delete this guard note?")) return;
+  if (guardNotesEditing && String(guardNotesEditing.id) === String(noteId)) {
+    cancelGuardNoteEdit();
+  }
+  const next = guardNotesState.filter((note) => String(note.id) !== String(noteId));
+  if (!persistGuardNotes(selectedUnit, next)) return;
+  guardNotesState = next;
+  renderGuardNotesList(guardNotesState);
+  if (guardNotesStatus) {
+    guardNotesStatus.textContent = `Note deleted at ${new Date().toLocaleTimeString()}`;
+  }
+  const urls = collectGuardNoteImageUrls([target]);
+  if (urls.length) {
+    Promise.allSettled(urls.map((url) => deleteGuardNoteImage(url)));
   }
 }
 
@@ -1546,16 +1989,137 @@ async function loadDetail() {
 }
 
 
-guardNotesInput?.addEventListener("keydown", (e) => {
-  if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+if (guardNotesEditor) {
+  guardNotesEditor.addEventListener("input", () => {
+    storeGuardNotesSelection();
+    if (guardNotesStatus) guardNotesStatus.textContent = "";
+  });
+  guardNotesEditor.addEventListener("keyup", storeGuardNotesSelection);
+  guardNotesEditor.addEventListener("mouseup", storeGuardNotesSelection);
+  guardNotesEditor.addEventListener("blur", () => {
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (guardNotesToolbar && active && guardNotesToolbar.contains(active)) return;
+      setGuardNotesHtml(guardNotesEditor.innerHTML);
+    });
+  });
+}
+
+if (guardNotesToolbar) {
+  guardNotesToolbar.addEventListener("mousedown", (e) => {
+    storeGuardNotesSelection();
+    const btn = e.target.closest?.("[data-rich-cmd],[data-rich-action]");
+    if (btn) e.preventDefault();
+  });
+  guardNotesToolbar.addEventListener("click", (e) => {
+    const btn = e.target.closest?.("[data-rich-cmd],[data-rich-action]");
+    if (!btn) return;
+    e.preventDefault();
+    const command = btn.getAttribute("data-rich-cmd");
+    if (command) {
+      execGuardNotesCommand(command);
+      return;
+    }
+    const action = btn.getAttribute("data-rich-action");
+    if (action === "link") {
+      const url = window.prompt("Enter link URL");
+      if (url) execGuardNotesCommand("createLink", url);
+      return;
+    }
+    if (action === "clear") {
+      execGuardNotesCommand("removeFormat");
+      return;
+    }
+    if (action === "image") {
+      guardNotesInsertMode = "inline";
+      storeGuardNotesSelection();
+      guardNotesImages?.click();
+    }
+  });
+
+  guardNotesToolbar.addEventListener("change", (e) => {
+    const target = e.target;
+    if (!target || !target.matches) return;
+    if (target.matches('[data-rich="font"]')) {
+      const value = target.value;
+      if (value) execGuardNotesCommand("fontName", value);
+      target.value = "";
+      return;
+    }
+    if (target.matches('[data-rich="size"]')) {
+      const value = target.value;
+      if (value) execGuardNotesCommand("fontSize", value);
+      target.value = "";
+      return;
+    }
+    if (target.matches('[data-rich="block"]')) {
+      const value = target.value;
+      if (value) {
+        const block = value.startsWith("<") ? value : `<${value}>`;
+        execGuardNotesCommand("formatBlock", block);
+      }
+      target.value = "";
+    }
+  });
+}
+
+guardNotesSubmitBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   submitGuardNote();
 });
 
+guardNotesList?.addEventListener("mousedown", (e) => {
+  const toolbarBtn = e.target?.closest?.(".guard-note-toolbar [data-rich-cmd],[data-rich-action]");
+  if (!toolbarBtn) return;
+  const toolbar = toolbarBtn.closest(".guard-note-toolbar");
+  const noteId = toolbar?.dataset?.noteToolbar;
+  if (!noteId || !guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
+  const editor = guardNotesList.querySelector(`[data-note-editor="${noteId}"]`);
+  storeGuardNoteEditSelection(editor);
+  e.preventDefault();
+});
+
 guardNotesList?.addEventListener("click", (e) => {
+  const toolbarBtn = e.target?.closest?.(".guard-note-toolbar [data-rich-cmd],[data-rich-action]");
+  if (toolbarBtn) {
+    const toolbar = toolbarBtn.closest(".guard-note-toolbar");
+    const noteId = toolbar?.dataset?.noteToolbar;
+    if (!noteId || !guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
+    const editor = guardNotesList.querySelector(`[data-note-editor="${noteId}"]`);
+    if (!editor) return;
+    e.preventDefault();
+    const command = toolbarBtn.getAttribute("data-rich-cmd");
+    if (command) {
+      execGuardNoteEditCommand(editor, command);
+      return;
+    }
+    const action = toolbarBtn.getAttribute("data-rich-action");
+    if (action === "link") {
+      const url = window.prompt("Enter link URL");
+      if (url) execGuardNoteEditCommand(editor, "createLink", url);
+      return;
+    }
+    if (action === "clear") {
+      execGuardNoteEditCommand(editor, "removeFormat");
+      return;
+    }
+    if (action === "image") {
+      guardNotesEditing.insertMode = "inline";
+      storeGuardNoteEditSelection(editor);
+      const input = guardNotesList.querySelector(`[data-note-image-input="${noteId}"]`);
+      input?.click();
+    }
+    return;
+  }
+
   const editBtn = e.target?.closest?.("[data-edit-note]");
   if (editBtn) {
     startGuardNoteEdit(editBtn.dataset.editNote);
+    return;
+  }
+  const deleteBtn = e.target?.closest?.("[data-delete-note]");
+  if (deleteBtn) {
+    deleteGuardNote(deleteBtn.dataset.deleteNote);
     return;
   }
   const saveBtn = e.target?.closest?.("[data-save-note]");
@@ -1587,21 +2151,71 @@ guardNotesList?.addEventListener("click", (e) => {
 });
 
 guardNotesList?.addEventListener("input", (e) => {
-  const noteId = e.target?.dataset?.noteEditInput;
+  const editor = e.target?.closest?.("[data-note-editor]");
+  const noteId = editor?.dataset?.noteEditor;
   if (!noteId) return;
   if (!guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
-  guardNotesEditing.noteText = e.target.value || "";
+  guardNotesEditing.noteText = editor.innerHTML || "";
+  storeGuardNoteEditSelection(editor);
+});
+
+guardNotesList?.addEventListener("keyup", (e) => {
+  const editor = e.target?.closest?.("[data-note-editor]");
+  const noteId = editor?.dataset?.noteEditor;
+  if (!noteId) return;
+  if (!guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
+  storeGuardNoteEditSelection(editor);
+});
+
+guardNotesList?.addEventListener("mouseup", (e) => {
+  const editor = e.target?.closest?.("[data-note-editor]");
+  const noteId = editor?.dataset?.noteEditor;
+  if (!noteId) return;
+  if (!guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
+  storeGuardNoteEditSelection(editor);
 });
 
 guardNotesList?.addEventListener("change", async (e) => {
-  const noteId = e.target?.dataset?.noteImageInput;
+  const target = e.target;
+  if (target?.matches?.('[data-rich="font"],[data-rich="size"],[data-rich="block"]')) {
+    const toolbar = target.closest(".guard-note-toolbar");
+    const noteId = toolbar?.dataset?.noteToolbar;
+    if (!noteId || !guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
+    const editor = guardNotesList.querySelector(`[data-note-editor="${noteId}"]`);
+    if (!editor) return;
+    if (target.matches('[data-rich="font"]')) {
+      const value = target.value;
+      if (value) execGuardNoteEditCommand(editor, "fontName", value);
+      target.value = "";
+      return;
+    }
+    if (target.matches('[data-rich="size"]')) {
+      const value = target.value;
+      if (value) execGuardNoteEditCommand(editor, "fontSize", value);
+      target.value = "";
+      return;
+    }
+    if (target.matches('[data-rich="block"]')) {
+      const value = target.value;
+      if (value) {
+        const block = value.startsWith("<") ? value : `<${value}>`;
+        execGuardNoteEditCommand(editor, "formatBlock", block);
+      }
+      target.value = "";
+      return;
+    }
+  }
+
+  const noteId = target?.dataset?.noteImageInput;
   if (!noteId) return;
   if (!guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
-  const files = Array.from(e.target?.files || []);
+  const files = Array.from(target?.files || []);
+  const insertInline = guardNotesEditing.insertMode === "inline";
+  guardNotesEditing.insertMode = null;
   if (!files.length) return;
   if (!activeCompanyId) {
     setGuardNoteEditStatus(noteId, "No active company session.");
-    e.target.value = "";
+    target.value = "";
     return;
   }
   const token = guardNotesEditing.uploadToken;
@@ -1620,7 +2234,7 @@ guardNotesList?.addEventListener("change", async (e) => {
   guardNotesEditing.uploadsInFlight = Math.max(0, guardNotesEditing.uploadsInFlight - files.length);
   if (!guardNotesEditing || guardNotesEditing.uploadToken !== token) {
     await Promise.allSettled(uploaded.map((img) => deleteGuardNoteImage(img.url)));
-    e.target.value = "";
+    target.value = "";
     return;
   }
   if (uploaded.length) {
@@ -1628,6 +2242,13 @@ guardNotesList?.addEventListener("change", async (e) => {
       guardNotesEditing.images.push(img);
       guardNotesEditing.newUploadIds.add(img.id);
     });
+    if (insertInline) {
+      const editor = guardNotesList.querySelector(`[data-note-editor="${noteId}"]`);
+      uploaded.forEach((img) => {
+        insertGuardNoteEditImage(editor, img.url, img.name || img.fileName || "Guard notes image");
+      });
+      if (editor) guardNotesEditing.noteText = editor.innerHTML || "";
+    }
     renderGuardNotesList(guardNotesState);
   }
   if (failures.length) {
@@ -1636,15 +2257,18 @@ guardNotesList?.addEventListener("change", async (e) => {
   } else {
     setGuardNoteEditStatus(noteId, uploaded.length ? "Images added." : "No images uploaded.");
   }
-  e.target.value = "";
+  target.value = "";
 });
 
 guardNotesImages?.addEventListener("change", async (e) => {
-  const files = Array.from(e.target?.files || []);
+  const target = e.target;
+  const files = Array.from(target?.files || []);
+  const insertInline = guardNotesInsertMode === "inline";
+  guardNotesInsertMode = null;
   if (!files.length) return;
   if (!activeCompanyId) {
     if (guardNotesStatus) guardNotesStatus.textContent = "No active company session.";
-    guardNotesImages.value = "";
+    if (target) target.value = "";
     return;
   }
   const token = guardNotesUploadToken;
@@ -1663,12 +2287,17 @@ guardNotesImages?.addEventListener("change", async (e) => {
   guardNotesUploadsInFlight = Math.max(0, guardNotesUploadsInFlight - files.length);
   if (token !== guardNotesUploadToken) {
     await Promise.allSettled(uploaded.map((img) => deleteGuardNoteImage(img.url)));
-    guardNotesImages.value = "";
+    if (target) target.value = "";
     return;
   }
   if (uploaded.length) {
     guardNotesPendingImages = guardNotesPendingImages.concat(uploaded);
     renderGuardNotesPreviews();
+    if (insertInline) {
+      uploaded.forEach((img) => {
+        insertGuardNotesImage(img.url, img.name || img.fileName || "Guard notes image");
+      });
+    }
   }
   if (guardNotesStatus) {
     if (failures.length) {
@@ -1678,7 +2307,7 @@ guardNotesImages?.addEventListener("change", async (e) => {
       guardNotesStatus.textContent = uploaded.length ? "Images ready." : "No images uploaded.";
     }
   }
-  guardNotesImages.value = "";
+  if (target) target.value = "";
 });
 
 guardNotesPreviews?.addEventListener("click", (e) => {

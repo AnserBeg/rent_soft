@@ -15,6 +15,7 @@ let quotesCache = [];
 let sortField = "created_at";
 let sortDir = "desc";
 let searchTerm = "";
+let pendingQuoteUpdates = new Set();
 const LIST_STATE_KEY = "rentsoft.rental-quotes.listState";
 const ALLOWED_SORT_FIELDS = new Set(["quote", "status", "customer", "sales", "start_at", "end_at", "equipment_count", "fee_total", "ro_number", "created_at"]);
 
@@ -232,6 +233,7 @@ function renderQuotes(rows) {
       <span class="sort ${sortField === "fee_total" ? "active" : ""}" data-sort="fee_total">Fees ${indicator("fee_total")}</span>
       <span class="sort ${sortField === "ro_number" ? "active" : ""}" data-sort="ro_number">RO # ${indicator("ro_number")}</span>
       <span>Actions</span>
+      <span>Updates</span>
       <span>History</span>
     </div>`;
 
@@ -258,6 +260,7 @@ function renderQuotes(rows) {
           ${canUndo(row) ? `<button class="ghost small" type="button" data-undo>Undo</button>` : ""}
         </div>
       </span>
+      <span>${pendingQuoteUpdates.has(Number(row.id)) ? "Pending" : ""}</span>
       <span style="justify-self:end;">
         <button class="ghost small" type="button" data-history>History</button>
       </span>
@@ -269,10 +272,23 @@ function renderQuotes(rows) {
 async function loadQuotes() {
   if (!activeCompanyId) return;
   try {
-    const res = await fetch(`/api/rental-quotes?companyId=${activeCompanyId}`);
-    if (!res.ok) throw new Error("Unable to fetch quotes");
-    const data = await res.json();
+    const [quotesRes, updatesRes] = await Promise.all([
+      fetch(`/api/rental-quotes?companyId=${activeCompanyId}`),
+      fetch(`/api/customer-change-requests?companyId=${activeCompanyId}&status=pending`),
+    ]);
+    if (!quotesRes.ok) throw new Error("Unable to fetch quotes");
+    const data = await quotesRes.json();
     quotesCache = data.orders || [];
+    if (updatesRes.ok) {
+      const updatesData = await updatesRes.json();
+      pendingQuoteUpdates = new Set(
+        (updatesData.requests || [])
+          .map((r) => Number(r.rental_order_id))
+          .filter((id) => Number.isFinite(id))
+      );
+    } else {
+      pendingQuoteUpdates = new Set();
+    }
     renderQuotes(applyFilters());
   } catch (err) {
     companyMeta.textContent = err.message;

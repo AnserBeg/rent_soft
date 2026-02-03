@@ -110,22 +110,67 @@
                 <div class="dispatch-detail-section">
                   <div class="dispatch-detail-title">Rental information</div>
                   <div class="details-grid" id="order-details"></div>
-                  <div class="details-grid" id="line-item-details"></div>
                   <div class="inline-actions" style="justify-content:flex-start; margin-top:8px;">
                     <button class="ghost small" id="open-site-address-picker" type="button">Pick site address</button>
                     <span class="hint" id="site-address-status"></span>
                   </div>
+                  <div class="details-grid" id="line-item-details"></div>
                 </div>
                 <div class="dispatch-detail-section">
                   <div class="dispatch-detail-title">Guard Notes</div>
                   <div class="guard-notes-list" id="guard-notes-list"></div>
                   <p class="guard-notes-empty" id="guard-notes-empty">No guard notes yet.</p>
                   <div class="guard-notes-composer">
-                    <label class="guard-notes-label" for="guard-notes-input">Add note</label>
-                    <textarea id="guard-notes-input" class="guard-notes-input" placeholder="Type a note and press Enter (Shift+Enter for a new line)..."></textarea>
+                    <label class="guard-notes-label">Add note</label>
+                    <div class="rich-editor" id="guard-notes-editor-wrap">
+                      <div class="rich-toolbar" id="guard-notes-toolbar" role="toolbar" aria-label="Guard notes editor">
+                        <select data-rich="font" aria-label="Font">
+                          <option value="">Font</option>
+                          <option value="Inter">Inter</option>
+                          <option value="Georgia">Georgia</option>
+                          <option value="Times New Roman">Times New Roman</option>
+                          <option value="Arial">Arial</option>
+                          <option value="Verdana">Verdana</option>
+                          <option value="Courier New">Courier New</option>
+                        </select>
+                        <select data-rich="size" aria-label="Font size">
+                          <option value="">Size</option>
+                          <option value="1">10</option>
+                          <option value="2">12</option>
+                          <option value="3">14</option>
+                          <option value="4">16</option>
+                          <option value="5">18</option>
+                          <option value="6">24</option>
+                          <option value="7">32</option>
+                        </select>
+                        <select data-rich="block" aria-label="Text style">
+                          <option value="">Style</option>
+                          <option value="p">Normal</option>
+                          <option value="h1">Heading 1</option>
+                          <option value="h2">Heading 2</option>
+                          <option value="h3">Heading 3</option>
+                        </select>
+                        <button type="button" class="ghost tiny" data-rich-cmd="bold" aria-label="Bold"><strong>B</strong></button>
+                        <button type="button" class="ghost tiny" data-rich-cmd="italic" aria-label="Italic"><em>I</em></button>
+                        <button type="button" class="ghost tiny" data-rich-cmd="underline" aria-label="Underline"><span style="text-decoration:underline;">U</span></button>
+                        <button type="button" class="ghost tiny" data-rich-cmd="insertUnorderedList" aria-label="Bullet list">Bullets</button>
+                        <button type="button" class="ghost tiny" data-rich-cmd="insertOrderedList" aria-label="Numbered list">Numbers</button>
+                        <button type="button" class="ghost tiny" data-rich-action="link" aria-label="Insert link">Link</button>
+                        <button type="button" class="ghost tiny" id="guard-notes-insert-image" data-rich-action="image" aria-label="Insert image">Image</button>
+                        <button type="button" class="ghost tiny" data-rich-action="clear" aria-label="Clear formatting">Clear</button>
+                      </div>
+                      <div
+                        id="guard-notes-editor"
+                        class="rich-editor__body"
+                        contenteditable="true"
+                        data-placeholder="Capture dispatch notes, site updates, or handling instructions."
+                      ></div>
+                      <textarea id="guard-notes-input" hidden></textarea>
+                    </div>
                     <div class="guard-notes-actions">
                       <label class="ghost small" for="guard-notes-images">Add photos</label>
                       <input id="guard-notes-images" class="guard-notes-images" type="file" accept="image/*" multiple hidden />
+                      <button class="primary small" id="guard-notes-submit" type="button">Add note</button>
                       <button class="ghost small" id="guard-notes-clear" type="button">Clear notes</button>
                       <button class="primary small" id="create-work-order" type="button">Create work order</button>
                       <span class="hint" id="guard-notes-status"></span>

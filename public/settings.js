@@ -12,6 +12,11 @@ const saveStorefrontRequirementsBtn = document.getElementById("save-storefront-r
 const rentalInfoFieldsContainer = document.getElementById("rental-info-fields");
 const rentalInfoFieldsHint = document.getElementById("rental-info-fields-hint");
 const saveRentalInfoFieldsBtn = document.getElementById("save-rental-info-fields");
+const customerDocCategoriesInput = document.getElementById("customer-doc-categories");
+const customerTermsTemplateInput = document.getElementById("customer-terms-template");
+const customerEsignRequiredToggle = document.getElementById("customer-esign-required");
+const customerLinkSettingsHint = document.getElementById("customer-link-settings-hint");
+const saveCustomerLinkSettingsBtn = document.getElementById("save-customer-link-settings");
 
 const saveCompanyBtn = document.getElementById("save-company");
 const companyNameInput = document.getElementById("company-name");
@@ -70,6 +75,7 @@ let currentLogoUrl = null;
 let companyProfileLoaded = false;
 let storefrontRequirementsLoaded = false;
 let rentalInfoFieldsLoaded = false;
+let customerLinkSettingsLoaded = false;
 let userModeLoaded = false;
 let emailSettingsLoaded = false;
 let qboSettingsLoaded = false;
@@ -153,6 +159,11 @@ function setStorefrontRequirementsHint(message) {
 function setRentalInfoFieldsHint(message) {
   if (!rentalInfoFieldsHint) return;
   rentalInfoFieldsHint.textContent = String(message || "");
+}
+
+function setCustomerLinkSettingsHint(message) {
+  if (!customerLinkSettingsHint) return;
+  customerLinkSettingsHint.textContent = String(message || "");
 }
 
 function renderStorefrontRequirements(selected) {
@@ -675,6 +686,14 @@ async function loadSettings() {
   renderRentalInfoFields(data.settings?.rental_info_fields || null);
   rentalInfoFieldsLoaded = true;
   if (saveRentalInfoFieldsBtn) saveRentalInfoFieldsBtn.disabled = false;
+  if (customerDocCategoriesInput) {
+    const categories = Array.isArray(data.settings?.customer_document_categories) ? data.settings.customer_document_categories : [];
+    customerDocCategoriesInput.value = categories.join("\n");
+  }
+  if (customerTermsTemplateInput) customerTermsTemplateInput.value = data.settings?.customer_terms_template || "";
+  if (customerEsignRequiredToggle) customerEsignRequiredToggle.checked = data.settings?.customer_esign_required === true;
+  customerLinkSettingsLoaded = true;
+  if (saveCustomerLinkSettingsBtn) saveCustomerLinkSettingsBtn.disabled = false;
   setQboSettingsFields(data.settings || null);
   qboSettingsLoaded = true;
   if (saveQboSettingsBtn) saveQboSettingsBtn.disabled = false;
@@ -907,6 +926,46 @@ saveRentalInfoFieldsBtn?.addEventListener("click", async (e) => {
     setRentalInfoFieldsHint(err?.message ? String(err.message) : "Unable to save rental info fields.");
   } finally {
     saveRentalInfoFieldsBtn.disabled = !rentalInfoFieldsLoaded;
+  }
+});
+
+saveCustomerLinkSettingsBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  setCustomerLinkSettingsHint("Saving...");
+  saveCustomerLinkSettingsBtn.disabled = true;
+  try {
+    const categories = (customerDocCategoriesInput?.value || "")
+      .split(/\r?\n/)
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const res = await fetch("/api/company-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId: activeCompanyId,
+        customerDocumentCategories: categories,
+        customerTermsTemplate: customerTermsTemplateInput?.value || "",
+        customerEsignRequired: customerEsignRequiredToggle?.checked === true,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to save customer update settings");
+    if (customerDocCategoriesInput) {
+      const next = Array.isArray(data.settings?.customer_document_categories) ? data.settings.customer_document_categories : categories;
+      customerDocCategoriesInput.value = next.join("\n");
+    }
+    if (customerTermsTemplateInput) {
+      customerTermsTemplateInput.value = data.settings?.customer_terms_template || "";
+    }
+    if (customerEsignRequiredToggle) {
+      customerEsignRequiredToggle.checked = data.settings?.customer_esign_required === true;
+    }
+    setCustomerLinkSettingsHint("Customer update settings saved.");
+  } catch (err) {
+    setCustomerLinkSettingsHint(err?.message ? String(err.message) : "Unable to save customer update settings.");
+  } finally {
+    saveCustomerLinkSettingsBtn.disabled = !customerLinkSettingsLoaded;
   }
 });
 

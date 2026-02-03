@@ -197,7 +197,7 @@
 
 document.addEventListener("DOMContentLoaded", () => {
   window.RentSoft?.requireAuth?.();
-  window.RentSoft?.refreshSession?.();
+  const refreshPromise = window.RentSoft?.refreshSession?.();
 
   const sidebar = document.querySelector(".sidebar");
   const shell = document.querySelector(".app-shell");
@@ -232,6 +232,64 @@ document.addEventListener("DOMContentLoaded", () => {
       inventoryGroup.parentElement.insertBefore(group, inventoryGroup.nextSibling);
     } else {
       navLinks.appendChild(group);
+    }
+  }
+
+  function ensureCustomerUpdatesNav() {
+    const navLinks = sidebar.querySelector(".nav-links");
+    if (!navLinks) return null;
+    let link = navLinks.querySelector('a.nav-link[href="customer-updates.html"]');
+    if (link) return link;
+
+    const groups = Array.from(navLinks.querySelectorAll(".nav-group"));
+    const operationsGroup = groups.find((group) => {
+      const title = group.querySelector(".nav-group-title");
+      return String(title?.textContent || "").trim().toLowerCase() === "operations";
+    });
+    const fallbackGroup = operationsGroup || groups[0] || navLinks;
+
+    link = document.createElement("a");
+    link.className = "nav-link";
+    link.href = "customer-updates.html";
+    link.textContent = "Customer Updates";
+
+    const insertAfter =
+      fallbackGroup.querySelector?.('a.nav-link[href="rental-orders.html"]') ||
+      fallbackGroup.querySelector?.('a.nav-link[href="customers.html"]');
+    if (insertAfter && insertAfter.parentNode) {
+      insertAfter.insertAdjacentElement("afterend", link);
+    } else if (fallbackGroup instanceof HTMLElement) {
+      fallbackGroup.appendChild(link);
+    } else {
+      navLinks.appendChild(link);
+    }
+
+    return link;
+  }
+
+  async function refreshCustomerUpdatesBadge() {
+    const link = ensureCustomerUpdatesNav();
+    if (!link) return;
+    const companyId = window.RentSoft?.getCompanyId?.();
+    if (!companyId) return;
+    try {
+      const res = await fetch(`/api/customer-change-requests?companyId=${encodeURIComponent(companyId)}&status=pending`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return;
+      const count = Array.isArray(data.requests) ? data.requests.length : 0;
+      let badge = link.querySelector(".nav-badge");
+      if (count > 0) {
+        if (!badge) {
+          badge = document.createElement("span");
+          badge.className = "nav-badge";
+          link.appendChild(badge);
+        }
+        badge.textContent = count > 99 ? "99+" : String(count);
+      } else if (badge) {
+        badge.remove();
+      }
+    } catch {
+      // ignore
     }
   }
 
@@ -296,6 +354,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (href.includes("reports")) return "bar-chart";
     if (href.includes("purchase-order") || href.includes("purchase-orders")) return "clipboard";
     if (href.includes("rental-orders")) return "clipboard";
+    if (href.includes("customer-updates")) return "user-check";
     if (href.includes("work-orders")) return "file-text";
     if (href.includes("rental-quotes")) return "file-text";
     if (href.includes("equipment")) return "boxes";
@@ -523,9 +582,16 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   ensurePurchaseNavGroup();
+  ensureCustomerUpdatesNav();
   setActiveLink();
   mountNavGroupToggles();
   mountNavIcons();
   mountSidebarCollapse();
   mountNavScrollPersistence();
+
+  if (refreshPromise && typeof refreshPromise.then === "function") {
+    refreshPromise.finally(() => refreshCustomerUpdatesBadge());
+  } else {
+    refreshCustomerUpdatesBadge();
+  }
 });

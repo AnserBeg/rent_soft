@@ -32,6 +32,7 @@ let ordersCache = [];
 let sortField = "created_at";
 let sortDir = "desc";
 let searchTerm = "";
+let pendingOrderUpdates = new Set();
 
 const LIST_STATE_KEY = "rentsoft.rental-orders.listState";
 const ALLOWED_SORT_FIELDS = new Set(["doc", "status", "customer", "po", "sales", "start_at", "end_at", "total", "created_at"]);
@@ -220,6 +221,7 @@ function renderOrders(rows) {
       <span class="sort ${sortField === "start_at" ? "active" : ""}" data-sort="start_at">Start ${indicator("start_at")}</span>
       <span class="sort ${sortField === "end_at" ? "active" : ""}" data-sort="end_at">End ${indicator("end_at")}</span>
       <span class="sort ${sortField === "total" ? "active" : ""}" data-sort="total">Total ${indicator("total")}</span>
+      <span>Updates</span>
       <span>History</span>
     </div>`;
 
@@ -247,6 +249,7 @@ function renderOrders(rows) {
       <span>${fmtDateTime(row.start_at)}</span>
       <span>${fmtDateTime(row.end_at)}</span>
       <span>${fmtMoney(total)}</span>
+      <span>${pendingOrderUpdates.has(Number(row.id)) ? "Pending" : ""}</span>
       <span style="justify-self:end;">
         <button class="ghost small" type="button" data-history>History</button>
       </span>
@@ -265,10 +268,23 @@ async function loadOrders() {
       return;
     }
     const statusesParam = statuses.length ? `&statuses=${encodeURIComponent(statuses.join(","))}` : "";
-    const res = await fetch(`/api/rental-orders?companyId=${activeCompanyId}${statusesParam}`);
-    if (!res.ok) throw new Error("Unable to fetch rental orders");
-    const data = await res.json();
+    const [ordersRes, updatesRes] = await Promise.all([
+      fetch(`/api/rental-orders?companyId=${activeCompanyId}${statusesParam}`),
+      fetch(`/api/customer-change-requests?companyId=${activeCompanyId}&status=pending`),
+    ]);
+    if (!ordersRes.ok) throw new Error("Unable to fetch rental orders");
+    const data = await ordersRes.json();
     ordersCache = data.orders || [];
+    if (updatesRes.ok) {
+      const updatesData = await updatesRes.json();
+      pendingOrderUpdates = new Set(
+        (updatesData.requests || [])
+          .map((r) => Number(r.rental_order_id))
+          .filter((id) => Number.isFinite(id))
+      );
+    } else {
+      pendingOrderUpdates = new Set();
+    }
     renderOrders(applyFilters());
   } catch (err) {
     companyMeta.textContent = err.message;

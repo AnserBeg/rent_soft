@@ -46,6 +46,10 @@ const customerDocumentHint = document.getElementById("customer-document-hint");
 const customerDocumentsList = document.getElementById("customer-documents-list");
 const customerStorefrontDocumentsList = document.getElementById("customer-storefront-documents-list");
 const customerVerificationPanel = document.getElementById("customer-verification-panel");
+const createCustomerLinkBtn = document.getElementById("create-customer-link");
+const customerLinkOutput = document.getElementById("customer-link-output");
+const copyCustomerLinkBtn = document.getElementById("copy-customer-link");
+const customerLinkHint = document.getElementById("customer-link-hint");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let editingCustomerId = initialCustomerId ? Number(initialCustomerId) : null;
@@ -929,6 +933,47 @@ customerDocumentsList?.addEventListener("click", async (e) => {
     await loadCustomerExtras();
   } catch (err) {
     if (customerDocumentHint) customerDocumentHint.textContent = err.message;
+  }
+});
+
+createCustomerLinkBtn?.addEventListener("click", async () => {
+  if (!activeCompanyId) {
+    if (customerLinkHint) customerLinkHint.textContent = "Log in to continue.";
+    return;
+  }
+  if (customerLinkHint) customerLinkHint.textContent = "Generating link...";
+  createCustomerLinkBtn.disabled = true;
+  try {
+    const scope = editingCustomerId ? "customer_update" : "new_customer";
+    const res = await fetch("/api/customer-share-links", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId: activeCompanyId,
+        customerId: editingCustomerId,
+        scope,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to create link.");
+    const url = `${window.location.origin}${data.url || ""}`;
+    if (customerLinkOutput) customerLinkOutput.value = url;
+    if (customerLinkHint) customerLinkHint.textContent = "Link generated.";
+  } catch (err) {
+    if (customerLinkHint) customerLinkHint.textContent = err?.message ? String(err.message) : "Unable to create link.";
+  } finally {
+    createCustomerLinkBtn.disabled = false;
+  }
+});
+
+copyCustomerLinkBtn?.addEventListener("click", async () => {
+  const value = customerLinkOutput?.value || "";
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    if (customerLinkHint) customerLinkHint.textContent = "Copied to clipboard.";
+  } catch {
+    if (customerLinkHint) customerLinkHint.textContent = "Copy failed.";
   }
 });
 

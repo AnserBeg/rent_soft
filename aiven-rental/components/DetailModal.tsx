@@ -18,9 +18,10 @@ type ContactRow = {
 };
 
 type CoverageRow = {
-  day: string;
-  start: string;
-  end: string;
+  startDay: string;
+  startTime: string;
+  endDay: string;
+  endTime: string;
 };
 
 const coverageDayOptions = [
@@ -33,8 +34,14 @@ const coverageDayOptions = [
   { key: 'sun', label: 'Sun' },
 ];
 
+const coverageDayKeys = coverageDayOptions.map((option) => option.key);
+const coverageDayIndex = coverageDayOptions.reduce<Record<string, number>>((acc, option, index) => {
+  acc[option.key] = index;
+  return acc;
+}, {});
+
 const defaultContactRow = (): ContactRow => ({ name: '', email: '', phone: '' });
-const defaultCoverageRow = (): CoverageRow => ({ day: 'mon', start: '', end: '' });
+const defaultCoverageRow = (): CoverageRow => ({ startDay: 'mon', startTime: '', endDay: 'mon', endTime: '' });
 
 const isContactRowValid = (contact: ContactRow) => {
   const name = String(contact.name || '').trim();
@@ -52,21 +59,60 @@ const normalizeContactList = (contacts: ContactRow[]) =>
     }))
     .filter((contact) => isContactRowValid(contact));
 
+const normalizeTimeValue = (value: string) => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  const parts = trimmed.split(':');
+  if (parts.length < 2) return trimmed;
+  const hour = Number(parts[0]);
+  const minute = Number(parts[1]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return trimmed;
+  const safeHour = Math.min(23, Math.max(0, hour));
+  const safeMinute = Math.min(59, Math.max(0, minute));
+  return `${String(safeHour).padStart(2, '0')}:${String(safeMinute).padStart(2, '0')}`;
+};
+
+const coerceCoverageDay = (value: string, fallback = 'mon') => {
+  const key = String(value || '').trim().toLowerCase();
+  return coverageDayIndex[key] !== undefined ? key : fallback;
+};
+
+const normalizeCoverageSlot = (slot: CoverageRow) => ({
+  startDay: coerceCoverageDay(slot.startDay),
+  startTime: normalizeTimeValue(slot.startTime),
+  endDay: coerceCoverageDay(slot.endDay),
+  endTime: normalizeTimeValue(slot.endTime),
+});
+
+const coverageSlotKey = (slot: CoverageRow) =>
+  `${slot.startDay}|${slot.startTime}|${slot.endDay}|${slot.endTime}`;
+
+const coverageDayOffset = (startDay: string, endDay: string) => {
+  const startIdx = coverageDayIndex[coerceCoverageDay(startDay)];
+  const endIdx = coverageDayIndex[coerceCoverageDay(endDay)];
+  if (startIdx === undefined || endIdx === undefined) return 0;
+  const diff = endIdx - startIdx;
+  return diff < 0 ? diff + 7 : diff;
+};
+
+const shiftCoverageDay = (startDay: string, offset: number) => {
+  const startIdx = coverageDayIndex[coerceCoverageDay(startDay)];
+  if (startIdx === undefined) return 'mon';
+  const nextIdx = (startIdx + offset + 7) % 7;
+  return coverageDayOptions[nextIdx]?.key || 'mon';
+};
+
 const coverageRowsToPayload = (rows: CoverageRow[]) => {
-  const payload: Record<string, { start: string; end: string }> = {};
-  rows.forEach((row) => {
-    const start = String(row.start || '').trim();
-    const end = String(row.end || '').trim();
-    const dayKey = String(row.day || 'mon').trim() || 'mon';
-    if (start && end) {
-      payload[dayKey] = { start, end };
-    }
-  });
-  return payload;
+  return rows
+    .map((row) => normalizeCoverageSlot(row))
+    .filter((slot) => slot.startDay && slot.startTime && slot.endDay && slot.endTime);
 };
 
 const hasCoverageHours = (rows: CoverageRow[]) =>
-  rows.some((row) => String(row.start || '').trim() && String(row.end || '').trim());
+  rows.some((row) => {
+    const slot = normalizeCoverageSlot(row);
+    return Boolean(slot.startDay && slot.startTime && slot.endDay && slot.endTime);
+  });
 
 export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose }) => {
   const [step, setStep] = useState<'details' | 'auth' | 'form' | 'profile' | 'success'>('details');
@@ -112,6 +158,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
   const [emergencyContacts, setEmergencyContacts] = useState<ContactRow[]>([defaultContactRow()]);
   const [siteContacts, setSiteContacts] = useState<ContactRow[]>([defaultContactRow()]);
   const [coverageRows, setCoverageRows] = useState<CoverageRow[]>([defaultCoverageRow()]);
+  const [coverageCopyIndex, setCoverageCopyIndex] = useState<number | null>(null);
+  const [coverageCopyDays, setCoverageCopyDays] = useState<Record<string, boolean>>({});
 
   const updateContactRow = (
     index: number,
@@ -136,11 +184,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
   const addContactRow = (setter: React.Dispatch<React.SetStateAction<ContactRow[]>>) =>
     setter((prev) => [...prev, defaultContactRow()]);
 
-  const updateCoverageRow = (
-    index: number,
-    field: keyof CoverageRow,
-    value: string
-  ) => {
+  const updateCoverageRow = (index: number, field: keyof CoverageRow, value: string) => {
     setCoverageRows((prev) =>
       prev.map((row, idx) => (idx === index ? { ...row, [field]: value } : row))
     );
@@ -151,12 +195,67 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
       ...prev,
       {
         ...defaultCoverageRow(),
-        day: coverageDayOptions[prev.length % coverageDayOptions.length].key,
+        startDay: coverageDayOptions[prev.length % coverageDayOptions.length].key,
+        endDay: coverageDayOptions[prev.length % coverageDayOptions.length].key,
       },
     ]);
 
+  const duplicateCoverageRow = (index: number) => {
+    setCoverageRows((prev) => {
+      const slot = prev[index];
+      if (!slot) return prev;
+      return [...prev, { ...slot }];
+    });
+  };
+
   const removeCoverageRow = (index: number) => {
     setCoverageRows((prev) => (prev.length <= 1 ? prev : prev.filter((_, idx) => idx !== index)));
+  };
+
+  const openCoverageCopy = (index: number) => {
+    setCoverageCopyIndex(index);
+    const initialDays: Record<string, boolean> = {};
+    coverageDayKeys.forEach((key) => {
+      initialDays[key] = false;
+    });
+    setCoverageCopyDays(initialDays);
+  };
+
+  const toggleCoverageCopyDay = (day: string) => {
+    setCoverageCopyDays((prev) => ({ ...prev, [day]: !prev[day] }));
+  };
+
+  const applyCoverageCopy = () => {
+    if (coverageCopyIndex === null) return;
+    setCoverageRows((prev) => {
+      const base = prev[coverageCopyIndex];
+      if (!base) return prev;
+      const normalizedBase = normalizeCoverageSlot(base);
+      const offset = coverageDayOffset(normalizedBase.startDay, normalizedBase.endDay);
+      const existingKeys = new Set(prev.map((row) => coverageSlotKey(normalizeCoverageSlot(row))));
+      const additions = coverageDayKeys
+        .filter((day) => coverageCopyDays[day])
+        .map((day) => ({
+          ...normalizedBase,
+          startDay: day,
+          endDay: shiftCoverageDay(day, offset),
+        }))
+        .filter((slot) => {
+          const key = coverageSlotKey(slot);
+          if (existingKeys.has(key)) return false;
+          existingKeys.add(key);
+          return true;
+        });
+      if (!additions.length) return prev;
+      return [...prev, ...additions];
+    });
+    setCoverageCopyIndex(null);
+    setCoverageCopyDays({});
+  };
+
+  const cancelCoverageCopy = () => {
+    setCoverageCopyIndex(null);
+    setCoverageCopyDays({});
   };
 
   useEffect(() => {
@@ -248,7 +347,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
         !generalNotes ||
         !sanitizedEmergencyContacts.length ||
         !sanitizedSiteContacts.length ||
-        !Object.keys(coveragePayload).length
+        !coveragePayload.length
       ) {
         throw new Error('Please complete the rental information before submitting your booking request.');
       }
@@ -944,56 +1043,114 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
                                   <strong>Hours of coverage required</strong>
                                   <span className="hint text-xs">Use 24-hour time</span>
                                </div>
-                               <div className="stack" style={{ gap: '8px' }}>
+                               <div className="stack" style={{ gap: '12px' }}>
                                   {coverageRows.map((row, idx) => (
-                                    <div key={`coverage-${idx}`} className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
-                                       <label className="text-xs font-bold text-slate-500">
-                                          Day
-                                          <select
-                                            value={row.day}
-                                            onChange={(e) => updateCoverageRow(idx, 'day', e.target.value)}
-                                            className="mt-1 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all"
+                                    <div key={`coverage-${idx}`} className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                                       <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+                                          <label className="text-xs font-bold text-slate-500">
+                                             Start day
+                                             <select
+                                               value={row.startDay}
+                                               onChange={(e) => updateCoverageRow(idx, 'startDay', e.target.value)}
+                                               className="mt-1 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all"
+                                             >
+                                               {coverageDayOptions.map((option) => (
+                                                 <option key={option.key} value={option.key}>
+                                                   {option.label}
+                                                 </option>
+                                               ))}
+                                             </select>
+                                          </label>
+                                          <label className="text-xs font-bold text-slate-500">
+                                             Start time
+                                             <input
+                                               type="time"
+                                               step={300}
+                                               value={row.startTime}
+                                               onChange={(e) => updateCoverageRow(idx, 'startTime', e.target.value)}
+                                               className="mt-1 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all"
+                                             />
+                                          </label>
+                                          <label className="text-xs font-bold text-slate-500">
+                                             End day
+                                             <select
+                                               value={row.endDay}
+                                               onChange={(e) => updateCoverageRow(idx, 'endDay', e.target.value)}
+                                               className="mt-1 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all"
+                                             >
+                                               {coverageDayOptions.map((option) => (
+                                                 <option key={option.key} value={option.key}>
+                                                   {option.label}
+                                                 </option>
+                                               ))}
+                                             </select>
+                                          </label>
+                                          <label className="text-xs font-bold text-slate-500">
+                                             End time
+                                             <input
+                                               type="time"
+                                               step={300}
+                                               value={row.endTime}
+                                               onChange={(e) => updateCoverageRow(idx, 'endTime', e.target.value)}
+                                               className="mt-1 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all"
+                                             />
+                                          </label>
+                                       </div>
+                                       <div className="flex flex-wrap gap-2 mt-3">
+                                          <button
+                                            type="button"
+                                            className="ghost small"
+                                            onClick={() => duplicateCoverageRow(idx)}
                                           >
-                                            {coverageDayOptions.map((option) => (
-                                              <option key={option.key} value={option.key}>
-                                                {option.label}
-                                              </option>
-                                            ))}
-                                          </select>
-                                       </label>
-                                       <label className="text-xs font-bold text-slate-500">
-                                          Start
-                                          <input
-                                            type="time"
-                                            value={row.start}
-                                            onChange={(e) => updateCoverageRow(idx, 'start', e.target.value)}
-                                            className="mt-1 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all"
-                                          />
-                                       </label>
-                                       <label className="text-xs font-bold text-slate-500">
-                                          End
-                                          <input
-                                            type="time"
-                                            value={row.end}
-                                            onChange={(e) => updateCoverageRow(idx, 'end', e.target.value)}
-                                            className="mt-1 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all"
-                                          />
-                                       </label>
-                                       {coverageRows.length > 1 ? (
-                                         <button
-                                           type="button"
-                                           className="ghost small danger"
-                                           onClick={() => removeCoverageRow(idx)}
-                                         >
-                                           Remove
-                                         </button>
-                                       ) : (
-                                         <span />
+                                            Duplicate
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="ghost small"
+                                            onClick={() => openCoverageCopy(idx)}
+                                          >
+                                            Copy to days
+                                          </button>
+                                          {coverageRows.length > 1 && (
+                                            <button
+                                              type="button"
+                                              className="ghost small danger"
+                                              onClick={() => removeCoverageRow(idx)}
+                                            >
+                                              Remove
+                                            </button>
+                                          )}
+                                       </div>
+                                       {coverageCopyIndex === idx && (
+                                         <div className="mt-3 rounded-xl border border-dashed border-gray-200 bg-slate-50 p-3">
+                                            <div className="text-xs font-bold text-slate-500 mb-2">Copy this slot to:</div>
+                                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                                               {coverageDayOptions.map((option) => (
+                                                 <label key={`copy-${option.key}`} className="flex items-center gap-2">
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={Boolean(coverageCopyDays[option.key])}
+                                                      onChange={() => toggleCoverageCopyDay(option.key)}
+                                                      className="h-4 w-4 rounded border-gray-300 text-brand-accent focus:ring-brand-accent"
+                                                    />
+                                                    <span>{option.label}</span>
+                                                 </label>
+                                               ))}
+                                            </div>
+                                            <div className="flex flex-wrap gap-2 mt-3">
+                                               <button type="button" className="ghost small" onClick={applyCoverageCopy}>
+                                                  Apply copy
+                                               </button>
+                                               <button type="button" className="ghost small danger" onClick={cancelCoverageCopy}>
+                                                  Cancel
+                                               </button>
+                                            </div>
+                                         </div>
                                        )}
                                     </div>
                                   ))}
                                   <button type="button" className="ghost small" onClick={addCoverageRow}>
-                                    + Add coverage period
+                                    + Add time slot
                                   </button>
                                </div>
                             </div>

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Aiven Rental – Customers</title>
+  <title>Aiven Rental - Customer Updates</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="no-top-headers">
@@ -36,7 +36,7 @@
           </div>
           <div class="nav-group">
             <div class="nav-group-title">People</div>
-            <a class="nav-link active" href="customers.html">Customers</a>
+            <a class="nav-link" href="customers.html">Customers</a>
             <a class="nav-link" href="sales-people.html">Sales People</a>
           </div>
           <div class="nav-group">
@@ -66,53 +66,37 @@
         </header>
         <header class="hero">
           <div>
-            <p class="eyebrow">CRM</p>
-            <h1>Customers</h1>
-            <p class="lede">Manage customers for the current company. Add, edit, or remove records quickly.</p>
-          </div>
-          <div class="hero-badge">
-            <span>Multi-tenant</span>
-            <span>Contacts</span>
-            <span>Addresses</span>
+            <h1>Customer updates</h1>
+            <p class="lede">Review and accept customer-submitted changes.</p>
           </div>
         </header>
 
         <main class="grid">
-          <section class="card company-context-card">
+          <section class="card wide">
             <div class="card-header">
               <div>
-                <p class="eyebrow">Context</p>
-                <h2>Company</h2>
+                <h2>Pending updates</h2>
+                <p class="hint" id="updates-meta">Loading...</p>
               </div>
             </div>
-            <p class="hint" id="company-meta">Loading your company…</p>
+            <div class="stack">
+              <div id="updates-table" class="table"></div>
+            </div>
           </section>
 
-
-          <section class="card wide">
-              <div class="card-header">
-                <div>
-                  <h2>Customer directory</h2>
-                </div>
-                <div class="inline-actions">
-                  <button class="ghost" id="import-customers">Import</button>
-                  <a class="ghost" href="customer-updates.html">Customer updates</a>
-                  <a class="ghost" href="qbo-customers.html">QBO customer sync</a>
-                  <button class="primary" id="new-customer">New customer</button>
-                </div>
+          <section class="card wide" id="detail-card" style="display:none;">
+            <div class="card-header">
+              <div>
+                <h2>Update details</h2>
+                <p class="hint" id="detail-meta"></p>
               </div>
-              <input type="file" id="import-file" accept=".csv,.tsv,.txt" style="display:none;" />
-              <p class="hint" id="import-status" style="margin: 0 0 10px;"></p>
-
-            <div class="table-shell">
-              <div class="table-head">
-                <p>All customers</p>
-                <div class="inline">
-                  <input id="search" class="search-input" placeholder="Search customers..." />
-                </div>
+              <div class="inline-actions">
+                <button class="primary" id="accept-update">Accept</button>
+                <button class="ghost danger" id="reject-update">Reject</button>
               </div>
-              <div class="table" id="customers-table"></div>
             </div>
+            <div class="stack" id="detail-body"></div>
+            <p class="hint" id="detail-hint"></p>
           </section>
         </main>
       </div>
@@ -120,15 +104,6 @@
   </div>
 
   <script src="session.js"></script>
-  <script src="customers.js"></script>
-  <script src="table-export.js"></script>
+  <script src="customer-updates.js"></script>
 </body>
 </html>
-
-
-
-
-
-
-
-

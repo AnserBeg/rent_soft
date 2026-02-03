@@ -147,74 +147,12 @@
               <div class="coverage-block" data-rental-info-field="coverageHours">
                 <div class="coverage-header">
                   <strong>Hours of coverage required</strong>
-                  <span class="hint">Use 24-hour time</span>
+                  <div class="inline-actions" style="gap:12px;">
+                    <span class="hint">Use 24-hour time - 5-minute steps</span>
+                    <button type="button" class="ghost small" id="reserve-add-coverage-slot">+ Add time slot</button>
+                  </div>
                 </div>
-                <table class="coverage-table">
-                <thead>
-                  <tr>
-                    <th>Mon</th>
-                    <th>Tue</th>
-                    <th>Wed</th>
-                    <th>Thu</th>
-                    <th>Fri</th>
-                    <th>Sat</th>
-                    <th>Sun</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>
-                      <div class="coverage-inputs">
-                        <input id="reserve-coverage-mon-start" type="time" aria-label="Monday start time" />
-                        <span>to</span>
-                        <input id="reserve-coverage-mon-end" type="time" aria-label="Monday end time" />
-                      </div>
-                    </td>
-                    <td>
-                      <div class="coverage-inputs">
-                        <input id="reserve-coverage-tue-start" type="time" aria-label="Tuesday start time" />
-                        <span>to</span>
-                        <input id="reserve-coverage-tue-end" type="time" aria-label="Tuesday end time" />
-                      </div>
-                    </td>
-                    <td>
-                      <div class="coverage-inputs">
-                        <input id="reserve-coverage-wed-start" type="time" aria-label="Wednesday start time" />
-                        <span>to</span>
-                        <input id="reserve-coverage-wed-end" type="time" aria-label="Wednesday end time" />
-                      </div>
-                    </td>
-                    <td>
-                      <div class="coverage-inputs">
-                        <input id="reserve-coverage-thu-start" type="time" aria-label="Thursday start time" />
-                        <span>to</span>
-                        <input id="reserve-coverage-thu-end" type="time" aria-label="Thursday end time" />
-                      </div>
-                    </td>
-                    <td>
-                      <div class="coverage-inputs">
-                        <input id="reserve-coverage-fri-start" type="time" aria-label="Friday start time" />
-                        <span>to</span>
-                        <input id="reserve-coverage-fri-end" type="time" aria-label="Friday end time" />
-                      </div>
-                    </td>
-                    <td>
-                      <div class="coverage-inputs">
-                        <input id="reserve-coverage-sat-start" type="time" aria-label="Saturday start time" />
-                        <span>to</span>
-                        <input id="reserve-coverage-sat-end" type="time" aria-label="Saturday end time" />
-                      </div>
-                    </td>
-                    <td>
-                      <div class="coverage-inputs">
-                        <input id="reserve-coverage-sun-start" type="time" aria-label="Sunday start time" />
-                        <span>to</span>
-                        <input id="reserve-coverage-sun-end" type="time" aria-label="Sunday end time" />
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                <div class="coverage-slots" id="reserve-coverage-slots"></div>
             </div>
           </div>
         </div>

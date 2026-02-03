@@ -6,6 +6,22 @@ function safeText(value) {
   return String(value ?? "").trim();
 }
 
+function stripHtml(value) {
+  const raw = String(value ?? "");
+  if (!raw.trim()) return "";
+  const withBreaks = raw
+    .replace(/<\s*br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/h[1-6]>/gi, "\n")
+    .replace(/<\/li>/gi, "\n");
+  return withBreaks
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
@@ -71,41 +87,85 @@ function formatContactLines(value, label) {
 }
 
 function normalizeCoverageHours(value) {
-  let raw = {};
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    raw = value;
-  } else if (typeof value === "string") {
+  let raw = value;
+  if (typeof raw === "string") {
     try {
-      const parsed = JSON.parse(value);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed;
+      raw = JSON.parse(raw);
     } catch {
-      raw = {};
+      raw = null;
     }
   }
-  return raw && typeof raw === "object" ? raw : {};
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && Array.isArray(raw.slots)) {
+    raw = raw.slots;
+  }
+  const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+  const timeToMinutes = (val) => {
+    const match = String(val || "").trim().match(/^(\d{2}):(\d{2})$/);
+    if (!match) return null;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      return null;
+    }
+    return hour * 60 + minute;
+  };
+  const slots = [];
+  if (Array.isArray(raw)) {
+    raw.forEach((entry) => {
+      if (!entry || typeof entry !== "object") return;
+      const startDay = String(entry.startDay || entry.start_day || "").toLowerCase();
+      const endDay = String(entry.endDay || entry.end_day || startDay || "").toLowerCase();
+      const startTime = safeText(entry.startTime || entry.start_time || entry.start);
+      const endTime = safeText(entry.endTime || entry.end_time || entry.end);
+      if (!startDay || !endDay || (!startTime && !endTime)) return;
+      slots.push({ startDay, endDay, startTime, endTime });
+    });
+    return slots;
+  }
+  if (raw && typeof raw === "object") {
+    days.forEach((day, idx) => {
+      const entry = raw[day] || {};
+      const startTime = safeText(entry.start);
+      const endTime = safeText(entry.end);
+      if (!startTime && !endTime) return;
+      let endDay = day;
+      const explicit = entry.endDayOffset ?? entry.end_day_offset;
+      if (explicit === 1 || explicit === "1" || explicit === true || entry.spansMidnight === true) {
+        endDay = days[(idx + 1) % days.length];
+      } else if (startTime && endTime) {
+        const startMinutes = timeToMinutes(startTime);
+        const endMinutes = timeToMinutes(endTime);
+        if (startMinutes !== null && endMinutes !== null && endMinutes < startMinutes) {
+          endDay = days[(idx + 1) % days.length];
+        }
+      }
+      slots.push({ startDay: day, endDay, startTime, endTime });
+    });
+  }
+  return slots;
 }
 
 function formatCoverageHours(value) {
-  const days = [
-    ["mon", "Mon"],
-    ["tue", "Tue"],
-    ["wed", "Wed"],
-    ["thu", "Thu"],
-    ["fri", "Fri"],
-    ["sat", "Sat"],
-    ["sun", "Sun"],
-  ];
-  const raw = normalizeCoverageHours(value);
-  const parts = [];
-  days.forEach(([key, label]) => {
-    const entry = raw[key] || {};
-    const start = safeText(entry.start);
-    const end = safeText(entry.end);
-    const endDayOffset =
-      entry.endDayOffset === 1 || entry.end_day_offset === 1 || entry.spansMidnight === true ? 1 : 0;
-    if (!start && !end) return;
-    const suffix = endDayOffset ? " (+1 day)" : "";
-    parts.push(`${label} ${start || "--"}-${end || "--"}${suffix}`);
+  const dayLabels = {
+    mon: "Mon",
+    tue: "Tue",
+    wed: "Wed",
+    thu: "Thu",
+    fri: "Fri",
+    sat: "Sat",
+    sun: "Sun",
+  };
+  const slots = normalizeCoverageHours(value);
+  if (!slots.length) return "";
+  const parts = slots.map((slot) => {
+    const startLabel = dayLabels[slot.startDay] || slot.startDay || "--";
+    const endLabel = dayLabels[slot.endDay] || slot.endDay || "--";
+    const start = slot.startTime || "--";
+    const end = slot.endTime || "--";
+    if (slot.startDay === slot.endDay) {
+      return `${startLabel} ${start}-${end}`;
+    }
+    return `${startLabel} ${start}-${endLabel} ${end}`;
   });
   return parts.join(", ");
 }
@@ -427,7 +487,7 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
   const rentalInfoLines = [];
   const siteAddress = safeText(order?.site_address || order?.siteAddress);
   const criticalAreas = safeText(order?.critical_areas || order?.criticalAreas);
-  const generalNotes = safeText(order?.general_notes || order?.generalNotes);
+  const generalNotes = safeText(stripHtml(order?.general_notes || order?.generalNotes));
   const emergencyContacts = formatContactLines(order?.emergency_contacts || order?.emergencyContacts, "Emergency");
   const siteContacts = formatContactLines(order?.site_contacts || order?.siteContacts, "Site");
   const coverageText = formatCoverageHours(order?.coverage_hours || order?.coverageHours);

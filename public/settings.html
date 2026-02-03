@@ -132,6 +132,32 @@
           <section class="card wide">
             <div class="card-header">
               <div>
+                <h2>Customer update settings</h2>
+                <p class="hint" style="margin:6px 0 0;">Define required documents, terms, and e-signature for customer update links.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="save-customer-link-settings" disabled>Save</button>
+              </div>
+            </div>
+
+            <div class="stack">
+              <label>Document categories (one per line)
+                <textarea id="customer-doc-categories" class="notes-area" rows="4"></textarea>
+              </label>
+              <label>Terms shown to customers
+                <textarea id="customer-terms-template" class="notes-area" rows="6"></textarea>
+              </label>
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="customer-esign-required" type="checkbox" />
+                <span>Require e-signature (typed + drawn)</span>
+              </label>
+              <p class="hint" id="customer-link-settings-hint" style="margin:0;"></p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
                 <h2>Company information</h2>
               </div>
               <div class="inline-actions">
