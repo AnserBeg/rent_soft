@@ -23,7 +23,7 @@
             <div class="nav-group-title">Operations</div>
             <a class="nav-link" href="rental-quotes.html">Quotes</a>
             <a class="nav-link active" href="rental-orders.html">Rental Orders</a>
-            <a class="nav-link" href="invoices.html">Invoices</a>
+            <a class="nav-link" href="invoices.html">Finance</a>
           </div>
           <div class="nav-group">
             <div class="nav-group-title">Repairs</div>
@@ -102,6 +102,7 @@
                 <button class="ghost danger" id="close-open" type="button" style="display:none;"></button>
                 <button class="ghost danger" id="delete-order" type="button" style="display:none;">Delete</button>
                 <button class="ghost" id="open-history" type="button" style="display:none;">History</button>
+                <button class="ghost" id="open-monthly-charges" type="button" style="display:none;">Monthly charges</button>
                 <button class="ghost" id="download-order-pdf" type="button">PDF</button>
                 <button class="primary" id="save-order">Save RO</button>
               </div>
@@ -118,7 +119,11 @@
               <p class="hint" id="order-link-hint"></p>
               <div class="three-col">
                 <label>Customer
-                  <select id="customer-select">
+                  <input id="customer-search-input" type="text" placeholder="Select customer" autocomplete="off"
+                    role="combobox" aria-autocomplete="list" aria-expanded="false"
+                    aria-controls="customer-suggestions" />
+                  <div id="customer-suggestions" class="rs-autocomplete rs-autocomplete--scroll" role="listbox" hidden></div>
+                  <select id="customer-select" style="display:none;" aria-hidden="true" tabindex="-1">
                     <option value="">Select customer</option>
                     <option value="__new__">+ Add new customer...</option>
                   </select>
@@ -474,6 +479,10 @@
       <div class="stack">
         <div class="inline-actions" style="justify-content: space-between;">
           <span class="hint">Fees apply to the entire Rental Order.</span>
+          <div class="inline-actions" style="gap:8px; justify-content:flex-end;">
+            <span class="hint" id="fees-save-hint"></span>
+            <button class="primary small" id="save-fees" type="button">Save fees</button>
+          </div>
         </div>
         <div class="stack" id="fees"></div>
         <div class="totals-row">
@@ -574,14 +583,15 @@
           <details id="lineitem-pause-details">
             <summary>Pause periods</summary>
             <div class="stack">
-              <div class="inline">
-                <label>Pause start
-                  <input id="lineitem-pause-start" type="datetime-local" step="900" />
-                </label>
-                <label>Pause end
-                  <input id="lineitem-pause-end" type="datetime-local" step="900" />
-                </label>
-              </div>
+              <label>Pause start
+                <input id="lineitem-pause-start" type="datetime-local" step="900" />
+              </label>
+              <label>Pause end (optional)
+                <input id="lineitem-pause-end" type="datetime-local" step="900" />
+              </label>
+              <p class="hint" style="margin:0;">
+                Leave end blank to keep the pause ongoing. To end it later, enter only an end date and click Add pause.
+              </p>
               <div class="inline-actions">
                 <button class="ghost small" id="add-lineitem-pause" type="button">Add pause</button>
               </div>
@@ -686,3 +696,4 @@
 </body>
 
 </html>
+

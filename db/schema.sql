@@ -179,6 +179,9 @@ CREATE TABLE IF NOT EXISTS rental_orders (
   coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb,
   emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
   site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  monthly_recurring_subtotal NUMERIC(12, 2),
+  monthly_recurring_total NUMERIC(12, 2),
+  show_monthly_recurring BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -255,6 +258,7 @@ CREATE TABLE IF NOT EXISTS rental_order_line_conditions (
   line_item_id INTEGER PRIMARY KEY REFERENCES rental_order_line_items(id) ON DELETE CASCADE,
   before_notes TEXT,
   after_notes TEXT,
+  unit_description TEXT,
   before_images JSONB NOT NULL DEFAULT '[]'::jsonb,
   after_images JSONB NOT NULL DEFAULT '[]'::jsonb,
   ai_report_markdown TEXT,
@@ -265,6 +269,7 @@ CREATE TABLE IF NOT EXISTS rental_order_fees (
   id SERIAL PRIMARY KEY,
   rental_order_id INTEGER NOT NULL REFERENCES rental_orders(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  fee_date DATE,
   amount NUMERIC(12, 2) NOT NULL DEFAULT 0
 );
 

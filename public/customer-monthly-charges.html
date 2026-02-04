@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Customer Monthly Charges</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="no-top-headers">
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link active" href="invoices.html">Finance</a>
+            <a class="nav-link" href="customer-monthly-charges.html">Monthly Charges</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <header class="hero">
+          <div>
+            <p class="eyebrow">Finance</p>
+            <h1>Customer monthly charges</h1>
+            <p class="lede">Pick a month to see customer totals based on prorated rental order charges.</p>
+          </div>
+          <div class="hero-badge">
+            <span>Monthly totals</span>
+            <span>Prorated</span>
+            <span>Per customer</span>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card company-context-card">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Context</p>
+                <h2>Company</h2>
+              </div>
+            </div>
+            <p class="hint" id="company-meta">Loading your company...</p>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Monthly customer totals</h2>
+                <p class="hint" id="page-helper">Prorated by time out in each month (no rounding), minus pauses, plus fees dated in that month.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost" id="refresh-monthly" type="button">Refresh</button>
+              </div>
+            </div>
+
+            <div class="monthly-total-hero is-empty" id="monthly-total-hero">
+              <div class="total-graphic">
+                <div class="month-bar-card">
+                  <div class="month-bar-header">
+                    <div>
+                      <span class="month-bar-label">Total</span>
+                      <span class="month-bar-value" id="monthly-total-value" aria-live="polite">$0.00</span>
+                    </div>
+                    <div>
+                      <span class="month-bar-label">Selected</span>
+                      <span class="month-bar-month" id="monthly-total-month">Select a month</span>
+                    </div>
+                  </div>
+                  <div class="month-bar" id="monthly-month-bar" role="list" aria-label="Months"></div>
+                </div>
+              </div>
+              <div class="total-meta-grid">
+                <div class="total-meta-card">
+                  <span class="total-meta-label">Customers</span>
+                  <span class="total-meta-value" id="monthly-total-customers">0</span>
+                  <span class="total-meta-foot">with charges</span>
+                </div>
+                <div class="total-meta-card">
+                  <span class="total-meta-label">Orders</span>
+                  <span class="total-meta-value" id="monthly-total-orders">0</span>
+                  <span class="total-meta-foot">included</span>
+                </div>
+                <div class="total-meta-card">
+                  <span class="total-meta-label">Statuses</span>
+                  <span class="total-meta-value" id="monthly-total-statuses">0</span>
+                  <span class="total-meta-foot">selected</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="stack">
+              <div class="two-col">
+                <label>Month
+                  <input type="month" id="month-picker" />
+                </label>
+                <div class="stack">
+                  <div class="hint">Statuses</div>
+                  <div class="inline-actions" style="justify-content:flex-start; flex-wrap:wrap;">
+                    <label class="filter-pill"><input type="checkbox" id="filter-requested" value="requested" checked /> Requested</label>
+                    <label class="filter-pill"><input type="checkbox" id="filter-reservation" value="reservation" checked /> Reservation</label>
+                    <label class="filter-pill"><input type="checkbox" id="filter-ordered" value="ordered" checked /> Ordered</label>
+                    <label class="filter-pill"><input type="checkbox" id="filter-received" value="received" /> Received</label>
+                    <label class="filter-pill"><input type="checkbox" id="filter-closed" value="closed" /> Closed</label>
+                  </div>
+                </div>
+              </div>
+              <p class="hint" id="page-meta">Select a month to load totals.</p>
+              <p class="hint">Click a customer row to expand their rental orders.</p>
+              <p class="hint" id="as-of-meta" style="display:none;"></p>
+            </div>
+
+            <div class="table-shell">
+              <div class="table-head">
+                <p>Customers</p>
+                <div class="inline">
+                  <input class="search-input" id="customer-search" type="search" placeholder="Search customers..." aria-label="Search customers" />
+                  <span class="pill" id="customer-count">0</span>
+                </div>
+              </div>
+              <div class="table" id="customer-monthly-table"></div>
+            </div>
+
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="customer-monthly-charges.js"></script>
+  <script src="table-export.js"></script>
+</body>
+</html>
+

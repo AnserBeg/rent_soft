@@ -873,6 +873,9 @@ async function ensureTables() {
         coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb,
         emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
         site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
+        monthly_recurring_subtotal NUMERIC(12, 2),
+        monthly_recurring_total NUMERIC(12, 2),
+        show_monthly_recurring BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
@@ -904,6 +907,9 @@ async function ensureTables() {
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS monthly_recurring_subtotal NUMERIC(12, 2);`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS monthly_recurring_total NUMERIC(12, 2);`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS show_monthly_recurring BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
 
     await client.query(`
@@ -946,6 +952,7 @@ async function ensureTables() {
         line_item_id INTEGER PRIMARY KEY REFERENCES rental_order_line_items(id) ON DELETE CASCADE,
         before_notes TEXT,
         after_notes TEXT,
+        unit_description TEXT,
         before_images JSONB NOT NULL DEFAULT '[]'::jsonb,
         after_images JSONB NOT NULL DEFAULT '[]'::jsonb,
         pause_periods JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -956,15 +963,18 @@ async function ensureTables() {
     await client.query(`ALTER TABLE rental_order_line_conditions ADD COLUMN IF NOT EXISTS ai_report_markdown TEXT;`);
     await client.query(`ALTER TABLE rental_order_line_conditions ADD COLUMN IF NOT EXISTS ai_report_generated_at TIMESTAMPTZ;`);
     await client.query(`ALTER TABLE rental_order_line_conditions ADD COLUMN IF NOT EXISTS pause_periods JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE rental_order_line_conditions ADD COLUMN IF NOT EXISTS unit_description TEXT;`);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS rental_order_fees (
         id SERIAL PRIMARY KEY,
         rental_order_id INTEGER NOT NULL REFERENCES rental_orders(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
+        fee_date DATE,
         amount NUMERIC(12, 2) NOT NULL DEFAULT 0
       );
     `);
+    await client.query(`ALTER TABLE rental_order_fees ADD COLUMN IF NOT EXISTS fee_date DATE;`);
     await client.query(`CREATE INDEX IF NOT EXISTS rental_order_fees_order_id_idx ON rental_order_fees (rental_order_id);`);
 
     await client.query(`
@@ -4447,6 +4457,15 @@ function normalizeTimestamptz(value) {
   return date.toISOString();
 }
 
+function normalizeDateOnly(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const isoMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  return isoMatch ? isoMatch[1] : null;
+}
+
 function normalizeBillingRoundingMode(value) {
   const v = String(value || "").toLowerCase();
   if (v === "prorate" || v === "none") return "none";
@@ -4720,13 +4739,15 @@ function computeBillableUnits({
   const mode = normalizeBillingRoundingMode(roundingMode);
   const granularity = normalizeBillingRoundingGranularity(roundingGranularity);
   if (basis === "monthly") {
+    const monthlyMode = "none";
+    const monthlyGranularity = "unit";
     raw = computeMonthlyUnits({
       startAt: start,
       endAt: end,
       pausePeriods,
       prorationMethod: monthlyProrationMethod,
-      roundingMode: mode,
-      roundingGranularity: granularity,
+      roundingMode: monthlyMode,
+      roundingGranularity: monthlyGranularity,
     });
   } else {
     const periodDays = billingPeriodDays(basis);
@@ -4748,6 +4769,7 @@ function computeBillableUnits({
     }
   }
   if (raw === null || raw === undefined || !Number.isFinite(raw)) return null;
+  if (basis === "monthly") return raw;
   if (mode === "none") return raw;
   if (granularity !== "unit") return raw;
   return applyRoundingValue(raw, mode);
@@ -5264,6 +5286,388 @@ function normalizeRentalInfoFields(value) {
   return normalized;
 }
 
+function isDemandOnlyStatus(status) {
+  const s = String(status || "").trim().toLowerCase();
+  return s === "quote" || s === "quote_rejected" || s === "reservation" || s === "requested";
+}
+
+function splitIntoCalendarMonthsInTimeZone({ startAt, endAt, timeZone }) {
+  const startIso = normalizeTimestamptz(startAt);
+  const endIso = normalizeTimestamptz(endAt);
+  if (!startIso || !endIso) return [];
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return [];
+
+  const tz = normalizeBillingTimeZone(timeZone);
+  const segments = [];
+  let cursorIso = start.toISOString();
+  let guard = 0;
+  while (Date.parse(cursorIso) < Date.parse(endIso) && guard < 1200) {
+    const cursorDate = new Date(cursorIso);
+    const parts = getTimeZoneParts(cursorDate, tz);
+    const nextMonth = parts.month === 12 ? 1 : parts.month + 1;
+    const nextYear = parts.month === 12 ? parts.year + 1 : parts.year;
+    const nextBoundary = zonedTimeToUtc({ year: nextYear, month: nextMonth, day: 1 }, tz);
+    if (!nextBoundary) break;
+    const nextBoundaryMs = Date.parse(nextBoundary);
+    const endMs = Date.parse(endIso);
+    const segmentEnd = nextBoundaryMs < endMs ? nextBoundary : endIso;
+    if (Date.parse(segmentEnd) <= Date.parse(cursorIso)) break;
+    segments.push({
+      startAt: cursorIso,
+      endAt: segmentEnd,
+      daysInMonth: daysInMonthUTC(parts.year, parts.month - 1),
+    });
+    cursorIso = segmentEnd;
+    guard += 1;
+  }
+  return segments;
+}
+
+function computeMonthlyUnitsInTimeZone({
+  startAt,
+  endAt,
+  prorationMethod = null,
+  roundingMode = null,
+  roundingGranularity = null,
+  timeZone = null,
+} = {}) {
+  const segments = splitIntoCalendarMonthsInTimeZone({ startAt, endAt, timeZone });
+  if (!segments.length) return null;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const method = normalizeMonthlyProrationMethod(prorationMethod);
+  const mode = normalizeBillingRoundingMode(roundingMode);
+  const granularity = normalizeBillingRoundingGranularity(roundingGranularity);
+  let units = 0;
+  for (const segment of segments) {
+    const segmentStart = Date.parse(segment.startAt);
+    const segmentEnd = Date.parse(segment.endAt);
+    if (!Number.isFinite(segmentStart) || !Number.isFinite(segmentEnd) || segmentEnd <= segmentStart) continue;
+    const activeMs = segmentEnd - segmentStart;
+    if (activeMs <= 0) continue;
+    if (method === "days") {
+      let days = activeMs / dayMs;
+      if (mode !== "none" && granularity === "day") {
+        days = applyRoundingValue(days, mode);
+      } else {
+        days = Math.ceil(days - 1e-9);
+      }
+      units += days / segment.daysInMonth;
+    } else {
+      const adjustedMs =
+        mode !== "none" && (granularity === "hour" || granularity === "day")
+          ? applyDurationRoundingMs({
+              activeMs,
+              roundingMode: mode,
+              roundingGranularity: granularity,
+            })
+          : activeMs;
+      units += adjustedMs / (segment.daysInMonth * dayMs);
+    }
+  }
+  if (!Number.isFinite(units) || units <= 0) return null;
+  return units;
+}
+
+function computeDisplayLineAmount({
+  startAt,
+  endAt,
+  rateBasis,
+  rateAmount,
+  qty,
+  billingRoundingMode,
+  billingRoundingGranularity,
+  monthlyProrationMethod,
+  billingTimeZone,
+}) {
+  const basis = normalizeRateBasis(rateBasis);
+  const amount = rateAmount === null || rateAmount === undefined ? null : Number(rateAmount);
+  const quantity = qty === null || qty === undefined ? 0 : Number(qty);
+  if (!basis || amount === null || !Number.isFinite(amount) || !Number.isFinite(quantity) || quantity <= 0) return null;
+  const startIso = normalizeTimestamptz(startAt);
+  const endIso = normalizeTimestamptz(endAt);
+  if (!startIso || !endIso) return null;
+  const startMs = Date.parse(startIso);
+  const endMs = Date.parse(endIso);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const mode = normalizeBillingRoundingMode(billingRoundingMode);
+  const granularity = normalizeBillingRoundingGranularity(billingRoundingGranularity);
+  const monthlyMethod = normalizeMonthlyProrationMethod(monthlyProrationMethod);
+  const isMonthly = basis === "monthly";
+  const effectiveMode = isMonthly ? "none" : mode;
+  const effectiveGranularity = isMonthly ? "unit" : granularity;
+  let unitsRaw = null;
+  if (basis === "monthly") {
+    unitsRaw = computeMonthlyUnitsInTimeZone({
+      startAt: startIso,
+      endAt: endIso,
+      prorationMethod: monthlyMethod,
+      roundingMode: effectiveMode,
+      roundingGranularity: effectiveGranularity,
+      timeZone: billingTimeZone,
+    });
+  } else {
+    const adjustedMs =
+      effectiveMode !== "none" && (effectiveGranularity === "hour" || effectiveGranularity === "day")
+        ? applyDurationRoundingMs({
+            activeMs: endMs - startMs,
+            roundingMode: effectiveMode,
+            roundingGranularity: effectiveGranularity,
+          })
+        : endMs - startMs;
+    unitsRaw = (adjustedMs / dayMs) / billingPeriodDays(basis);
+  }
+  if (!Number.isFinite(unitsRaw)) return null;
+  const units =
+    effectiveMode !== "none" && effectiveGranularity === "unit"
+      ? applyRoundingValue(unitsRaw, effectiveMode)
+      : unitsRaw;
+  return units * amount * quantity;
+}
+
+function computeMonthlyRecurringForItems({
+  items,
+  orderStatus,
+  monthlyProrationMethod,
+  billingTimeZone,
+  billingRoundingMode,
+  billingRoundingGranularity,
+}) {
+  const basisOrder = ["daily", "weekly", "monthly"];
+  const basisTotals = new Map(basisOrder.map((basis) => [basis, 0]));
+  const demandOnly = isDemandOnlyStatus(orderStatus);
+  const dayMs = 24 * 60 * 60 * 1000;
+  let monthlyRecurringSubtotal = 0;
+  let earliestMs = null;
+  let latestMs = null;
+
+  for (const item of items || []) {
+    const effectiveStart = item.fulfilled_at || item.start_at;
+    const effectiveEnd = item.returned_at || item.end_at;
+    const startIso = normalizeTimestamptz(effectiveStart);
+    const endIso = normalizeTimestamptz(effectiveEnd);
+    if (!startIso || !endIso) continue;
+
+    const startMs = Date.parse(startIso);
+    const endMs = Date.parse(endIso);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+    earliestMs = earliestMs === null ? startMs : Math.min(earliestMs, startMs);
+    latestMs = latestMs === null ? endMs : Math.max(latestMs, endMs);
+    const durationDays = Math.max(1, Math.ceil((endMs - startMs) / dayMs - 1e-9));
+
+    const inventoryCount = Number(item.inventory_count || 0);
+    const qty = item.bundle_id ? 1 : inventoryCount > 0 ? 1 : demandOnly ? 1 : 0;
+    const computedLineAmount = computeDisplayLineAmount({
+      startAt: startIso,
+      endAt: endIso,
+      rateBasis: item.rate_basis,
+      rateAmount: item.rate_amount,
+      qty,
+      billingRoundingMode,
+      billingRoundingGranularity,
+      monthlyProrationMethod,
+      billingTimeZone,
+    });
+    const lineAmount = Number.isFinite(computedLineAmount)
+      ? computedLineAmount
+      : item.line_amount === null || item.line_amount === undefined
+        ? null
+        : Number(item.line_amount);
+    const hasLineAmount = Number.isFinite(lineAmount);
+    const basis = normalizeRateBasis(item.rate_basis);
+    const rateAmount = item.rate_amount === null || item.rate_amount === undefined ? null : Number(item.rate_amount);
+    const billableUnits =
+      item.billable_units === null || item.billable_units === undefined ? null : Number(item.billable_units);
+
+    if (basis && basisTotals.has(basis) && hasLineAmount) {
+      basisTotals.set(basis, (basisTotals.get(basis) || 0) + lineAmount);
+    }
+    if (!hasLineAmount) continue;
+
+    if (basis === "daily") {
+      let perDay = Number.isFinite(rateAmount) ? rateAmount : null;
+      if (!Number.isFinite(perDay) && Number.isFinite(billableUnits) && billableUnits > 0 && qty > 0) {
+        perDay = lineAmount / (billableUnits * qty);
+      }
+      if (!Number.isFinite(perDay) && qty > 0 && durationDays > 0) {
+        perDay = lineAmount / (durationDays * qty);
+      }
+      if (Number.isFinite(perDay) && qty > 0) {
+        const recurringDays = Math.min(30, durationDays);
+        monthlyRecurringSubtotal += perDay * recurringDays * qty;
+      }
+    } else if (basis === "weekly") {
+      let perWeek = Number.isFinite(rateAmount) ? rateAmount : null;
+      if (!Number.isFinite(perWeek) && Number.isFinite(billableUnits) && billableUnits > 0 && qty > 0) {
+        perWeek = lineAmount / (billableUnits * qty);
+      }
+      if (!Number.isFinite(perWeek) && qty > 0 && durationDays > 0) {
+        perWeek = lineAmount / ((durationDays / 7) * qty);
+      }
+      if (Number.isFinite(perWeek) && qty > 0) {
+        const recurringWeeks = Math.min(30, durationDays) / 7;
+        monthlyRecurringSubtotal += perWeek * recurringWeeks * qty;
+      }
+    } else {
+      const monthlyUnits = computeMonthlyUnitsInTimeZone({
+        startAt: startIso,
+        endAt: endIso,
+        prorationMethod: monthlyProrationMethod,
+        roundingMode: "none",
+        roundingGranularity: "unit",
+        timeZone: billingTimeZone,
+      });
+      if (Number.isFinite(monthlyUnits) && monthlyUnits > 0) {
+        monthlyRecurringSubtotal += lineAmount / monthlyUnits;
+      }
+    }
+  }
+
+  const recurringSubtotal = Number.isFinite(monthlyRecurringSubtotal) ? monthlyRecurringSubtotal : 0;
+  const recurringTotal = recurringSubtotal * 1.05;
+
+  const activeBases = basisOrder.filter((basis) => (basisTotals.get(basis) || 0) > 0);
+  const days =
+    Number.isFinite(earliestMs) && Number.isFinite(latestMs) && latestMs > earliestMs
+      ? Math.round((latestMs - earliestMs) / dayMs)
+      : 0;
+  const months =
+    Number.isFinite(earliestMs) && Number.isFinite(latestMs) && latestMs > earliestMs
+      ? computeMonthlyUnitsInTimeZone({
+          startAt: new Date(earliestMs).toISOString(),
+          endAt: new Date(latestMs).toISOString(),
+          prorationMethod: monthlyProrationMethod,
+          roundingMode: "none",
+          roundingGranularity: "unit",
+          timeZone: billingTimeZone,
+        }) || 0
+      : 0;
+
+  let showRecurring = true;
+  if (activeBases.length === 1) {
+    const basis = activeBases[0];
+    if (basis === "monthly") showRecurring = months > 1;
+    else if (basis === "weekly") showRecurring = days > 7;
+    else if (basis === "daily") showRecurring = days > 1;
+  }
+
+  return {
+    recurringSubtotal,
+    recurringTotal,
+    showRecurring: showRecurring && recurringSubtotal > 0,
+  };
+}
+
+async function recomputeMonthlyRecurringForOrder({
+  client,
+  companyId,
+  orderId,
+  orderStatus,
+  settings,
+}) {
+  const lineItemsRes = await client.query(
+    `
+      SELECT li.start_at,
+             li.end_at,
+             li.fulfilled_at,
+             li.returned_at,
+             li.rate_basis,
+             li.rate_amount,
+             li.billable_units,
+             li.line_amount,
+             li.bundle_id,
+             (SELECT COUNT(*) FROM rental_order_line_inventory liv WHERE liv.line_item_id = li.id) AS inventory_count
+        FROM rental_order_line_items li
+       WHERE li.rental_order_id = $1
+    `,
+    [orderId]
+  );
+
+  const recurring = computeMonthlyRecurringForItems({
+    items: lineItemsRes.rows || [],
+    orderStatus,
+    monthlyProrationMethod: settings?.monthly_proration_method || "hours",
+    billingTimeZone: settings?.billing_timezone || "UTC",
+    billingRoundingMode: settings?.billing_rounding_mode || "ceil",
+    billingRoundingGranularity: settings?.billing_rounding_granularity || "unit",
+  });
+
+  await client.query(
+    `
+      UPDATE rental_orders
+         SET monthly_recurring_subtotal = $1,
+             monthly_recurring_total = $2,
+             show_monthly_recurring = $3
+       WHERE id = $4 AND company_id = $5
+    `,
+    [recurring.recurringSubtotal, recurring.recurringTotal, recurring.showRecurring, orderId, companyId]
+  );
+
+  return recurring;
+}
+
+async function attachMonthlyRecurringTotals(companyId, orders) {
+  if (!Array.isArray(orders) || orders.length === 0) return orders;
+
+  const orderIds = orders.map((order) => Number(order.id)).filter(Number.isFinite);
+  if (orderIds.length === 0) return orders;
+
+  const settings = await getCompanySettings(companyId).catch(() => null);
+  const monthlyProrationMethod = settings?.monthly_proration_method || "hours";
+  const billingTimeZone = settings?.billing_timezone || "UTC";
+  const billingRoundingMode = settings?.billing_rounding_mode || "ceil";
+  const billingRoundingGranularity = settings?.billing_rounding_granularity || "unit";
+
+  const lineItemsRes = await pool.query(
+    `
+      SELECT li.id,
+             li.rental_order_id,
+             li.start_at,
+             li.end_at,
+             li.fulfilled_at,
+             li.returned_at,
+             li.rate_basis,
+             li.rate_amount,
+             li.billable_units,
+             li.line_amount,
+             li.bundle_id,
+             (SELECT COUNT(*) FROM rental_order_line_inventory liv WHERE liv.line_item_id = li.id) AS inventory_count
+        FROM rental_order_line_items li
+       WHERE li.rental_order_id = ANY($1::int[])
+    `,
+    [orderIds]
+  );
+
+  const itemsByOrder = new Map();
+  for (const row of lineItemsRes.rows || []) {
+    const orderId = Number(row.rental_order_id);
+    if (!Number.isFinite(orderId)) continue;
+    const list = itemsByOrder.get(orderId);
+    if (list) list.push(row);
+    else itemsByOrder.set(orderId, [row]);
+  }
+
+  for (const order of orders) {
+    const items = itemsByOrder.get(Number(order.id)) || [];
+    const recurring = computeMonthlyRecurringForItems({
+      items,
+      orderStatus: order.status,
+      monthlyProrationMethod,
+      billingTimeZone,
+      billingRoundingMode,
+      billingRoundingGranularity,
+    });
+
+    order.monthly_recurring_subtotal = recurring.recurringSubtotal;
+    order.monthly_recurring_total = recurring.recurringTotal;
+    order.show_monthly_recurring = recurring.showRecurring;
+  }
+
+  return orders;
+}
+
 async function listRentalOrders(companyId, { statuses = null, quoteOnly = false } = {}) {
   const normalizedStatuses = Array.isArray(statuses)
     ? statuses.map((s) => normalizeRentalOrderStatus(s)).filter(Boolean)
@@ -5294,6 +5698,9 @@ async function listRentalOrders(companyId, { statuses = null, quoteOnly = false 
            ro.site_address,
            ro.critical_areas,
            ro.coverage_hours,
+           ro.monthly_recurring_subtotal,
+           ro.monthly_recurring_total,
+           ro.show_monthly_recurring,
            ro.created_at,
            ro.updated_at,
            ro.customer_id,
@@ -5394,6 +5801,9 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
            ro.site_address,
            ro.critical_areas,
            ro.coverage_hours,
+           ro.monthly_recurring_subtotal,
+           ro.monthly_recurring_total,
+           ro.show_monthly_recurring,
            ro.created_at,
            ro.updated_at,
            ro.customer_id,
@@ -5913,6 +6323,14 @@ async function rescheduleLineItemEnd({ companyId, lineItemId, endAt }) {
     }
 
     await client.query(`UPDATE rental_order_line_items SET end_at = $1 WHERE id = $2`, [endIso, lineItemId]);
+    const rescheduleSettings = await getCompanySettings(companyId).catch(() => null);
+    await recomputeMonthlyRecurringForOrder({
+      client,
+      companyId,
+      orderId: Number(li.order_id),
+      orderStatus: status,
+      settings: rescheduleSettings,
+    });
     await client.query("COMMIT");
     return { ok: true, endAt: endIso };
   } catch (err) {
@@ -6162,6 +6580,15 @@ async function setLineItemPickedUp({
       ]);
     }
 
+    const pickupSettings = await getCompanySettings(cid).catch(() => null);
+    await recomputeMonthlyRecurringForOrder({
+      client,
+      companyId: cid,
+      orderId,
+      orderStatus: nextStatus || status,
+      settings: pickupSettings,
+    });
+
     await insertRentalOrderAudit({
       client,
       companyId: cid,
@@ -6303,6 +6730,15 @@ async function setLineItemReturned({
         cid,
       ]);
     }
+
+    const returnSettings = await getCompanySettings(cid).catch(() => null);
+    await recomputeMonthlyRecurringForOrder({
+      client,
+      companyId: cid,
+      orderId,
+      orderStatus: nextStatus || status,
+      settings: returnSettings,
+    });
 
     await insertRentalOrderAudit({
       client,
@@ -8262,7 +8698,7 @@ async function getRentalOrder({ companyId, id }) {
            li.fulfilled_at, li.returned_at,
            li.rate_basis, li.rate_amount, li.billable_units, li.line_amount,
            li.bundle_id, b.name AS bundle_name,
-           cond.before_notes, cond.after_notes, cond.before_images, cond.after_images,
+           cond.before_notes, cond.after_notes, cond.unit_description, cond.before_images, cond.after_images,
            cond.pause_periods, cond.ai_report_markdown, cond.ai_report_generated_at
       FROM rental_order_line_items li
       JOIN equipment_types et ON et.id = li.type_id
@@ -8292,6 +8728,7 @@ async function getRentalOrder({ companyId, id }) {
     inventoryDetails: [],
     beforeNotes: r.before_notes || "",
     afterNotes: r.after_notes || "",
+    unitDescription: r.unit_description || "",
     beforeImages: r.before_images || [],
     afterImages: r.after_images || [],
     pausePeriods: Array.isArray(r.pause_periods) ? r.pause_periods : [],
@@ -8368,7 +8805,8 @@ async function getRentalOrder({ companyId, id }) {
     `
     SELECT f.id,
            f.name,
-           f.amount
+           f.amount,
+           f.fee_date AS "feeDate"
       FROM rental_order_fees f
      WHERE f.rental_order_id = $1
      ORDER BY f.id
@@ -8560,7 +8998,8 @@ async function createRentalOrder({
         }
       }
       const qty = bundleData ? 1 : inventoryIds.length;
-      const effectiveQty = bundleData ? 1 : (qty || (demandOnly ? 1 : 0));
+      const isRerent = !!String(item.unitDescription || item.unit_description || "").trim();
+      const effectiveQty = bundleData ? 1 : (qty ? qty : isRerent ? 1 : (demandOnly ? 1 : 0));
       const computedUnits = computeBillableUnits({
         startAt,
         endAt,
@@ -8604,13 +9043,14 @@ async function createRentalOrder({
       await client.query(
         `
         INSERT INTO rental_order_line_conditions
-          (line_item_id, before_notes, after_notes, before_images, after_images, pause_periods, ai_report_markdown, ai_report_generated_at)
-        VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8)
+          (line_item_id, before_notes, after_notes, unit_description, before_images, after_images, pause_periods, ai_report_markdown, ai_report_generated_at)
+        VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9)
         `,
         [
           lineItemId,
           item.beforeNotes || null,
           item.afterNotes || null,
+          item.unitDescription || item.unit_description || null,
           JSON.stringify(item.beforeImages || []),
           JSON.stringify(item.afterImages || []),
           JSON.stringify(pausePeriods),
@@ -8624,11 +9064,20 @@ async function createRentalOrder({
       const name = String(fee.name || "").trim();
       if (!name) continue;
       const amount = fee.amount === "" || fee.amount === null || fee.amount === undefined ? 0 : Number(fee.amount);
+      const feeDate = normalizeDateOnly(fee.feeDate ?? fee.fee_date);
       await client.query(
-        `INSERT INTO rental_order_fees (rental_order_id, name, amount) VALUES ($1,$2,$3)`,
-        [orderId, name, Number.isFinite(amount) ? amount : 0]
+        `INSERT INTO rental_order_fees (rental_order_id, name, amount, fee_date) VALUES ($1,$2,$3,$4)`,
+        [orderId, name, Number.isFinite(amount) ? amount : 0, feeDate]
       );
     }
+
+    await recomputeMonthlyRecurringForOrder({
+      client,
+      companyId,
+      orderId,
+      orderStatus: effectiveStatus,
+      settings,
+    });
 
     await insertRentalOrderAudit({
       client,
@@ -10234,7 +10683,8 @@ async function updateRentalOrder({
         }
       }
       const qty = bundleData ? 1 : inventoryIds.length;
-      const effectiveQty = bundleData ? 1 : (qty || (demandOnly ? 1 : 0));
+      const isRerent = !!String(item.unitDescription || item.unit_description || "").trim();
+      const effectiveQty = bundleData ? 1 : (qty ? qty : isRerent ? 1 : (demandOnly ? 1 : 0));
       const billableUnits = computeBillableUnits({
         startAt,
         endAt,
@@ -10274,13 +10724,14 @@ async function updateRentalOrder({
       await client.query(
         `
         INSERT INTO rental_order_line_conditions
-          (line_item_id, before_notes, after_notes, before_images, after_images, pause_periods, ai_report_markdown, ai_report_generated_at)
-        VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8)
+          (line_item_id, before_notes, after_notes, unit_description, before_images, after_images, pause_periods, ai_report_markdown, ai_report_generated_at)
+        VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9)
         `,
         [
           lineItemId,
           item.beforeNotes || null,
           item.afterNotes || null,
+          item.unitDescription || item.unit_description || null,
           JSON.stringify(item.beforeImages || []),
           JSON.stringify(item.afterImages || []),
           JSON.stringify(pausePeriods),
@@ -10301,17 +10752,18 @@ async function updateRentalOrder({
       const name = String(fee.name || "").trim();
       if (!name) continue;
       const amount = fee.amount === "" || fee.amount === null || fee.amount === undefined ? 0 : Number(fee.amount);
+      const feeDate = normalizeDateOnly(fee.feeDate ?? fee.fee_date);
       const feeId = Number(fee.id);
       if (Number.isFinite(feeId) && existingFeeIds.has(feeId)) {
         await client.query(
-          `UPDATE rental_order_fees SET name = $1, amount = $2 WHERE id = $3 AND rental_order_id = $4`,
-          [name, Number.isFinite(amount) ? amount : 0, feeId, id]
+          `UPDATE rental_order_fees SET name = $1, amount = $2, fee_date = $3 WHERE id = $4 AND rental_order_id = $5`,
+          [name, Number.isFinite(amount) ? amount : 0, feeDate, feeId, id]
         );
         keepFeeIds.add(feeId);
       } else {
         const insertRes = await client.query(
-          `INSERT INTO rental_order_fees (rental_order_id, name, amount) VALUES ($1,$2,$3) RETURNING id`,
-          [id, name, Number.isFinite(amount) ? amount : 0]
+          `INSERT INTO rental_order_fees (rental_order_id, name, amount, fee_date) VALUES ($1,$2,$3,$4) RETURNING id`,
+          [id, name, Number.isFinite(amount) ? amount : 0, feeDate]
         );
         const insertedId = Number(insertRes.rows?.[0]?.id);
         if (Number.isFinite(insertedId)) keepFeeIds.add(insertedId);
@@ -10326,6 +10778,14 @@ async function updateRentalOrder({
     } else {
       await client.query(`DELETE FROM rental_order_fees WHERE rental_order_id = $1`, [id]);
     }
+
+    await recomputeMonthlyRecurringForOrder({
+      client,
+      companyId,
+      orderId: id,
+      orderStatus: effectiveStatus,
+      settings,
+    });
 
     const before = {
       status: existing.status,
@@ -10458,6 +10918,15 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
         [id]
       );
     }
+
+    const statusSettings = await getCompanySettings(companyId).catch(() => null);
+    await recomputeMonthlyRecurringForOrder({
+      client,
+      companyId,
+      orderId: id,
+      orderStatus: normalizedStatus,
+      settings: statusSettings,
+    });
 
     await insertRentalOrderAudit({
       client,

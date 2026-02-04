@@ -5,6 +5,9 @@ const workOrderNumber = document.getElementById("work-order-number");
 const workSummaryInput = document.getElementById("work-summary");
 const workDateInput = document.getElementById("work-date");
 const unitSelect = document.getElementById("unit-select");
+const unitSearchInput = document.getElementById("unit-search-input");
+const unitSuggestions = document.getElementById("unit-suggestions");
+const unitSelectedList = document.getElementById("unit-selected");
 const orderStatusInput = document.getElementById("order-status");
 const serviceStatusSelect = document.getElementById("service-status");
 const returnInspectionToggle = document.getElementById("return-inspection");
@@ -56,6 +59,15 @@ function safeJsonParse(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function escapeHtml(s) {
+  return String(s || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 function formatMoney(value) {
@@ -114,6 +126,40 @@ function normalizeUnitLabels(order) {
   return [];
 }
 
+function equipmentLabel(item) {
+  if (!item) return "";
+  const model = String(item.model_name || item.modelName || "").trim();
+  const serial = String(item.serial_number || item.serialNumber || "").trim();
+  if (model && serial) return `${model} - ${serial}`;
+  return model || serial || (item.id ? `Unit ${item.id}` : "Unit");
+}
+
+function equipmentModelName(item) {
+  return String(item?.model_name || item?.modelName || "").trim();
+}
+
+function equipmentSerial(item) {
+  return String(item?.serial_number || item?.serialNumber || item?.serial || item?.id || "").trim();
+}
+
+function sortEquipmentByModel(items) {
+  return [...(items || [])].sort((a, b) => {
+    const am = equipmentModelName(a).toLowerCase();
+    const bm = equipmentModelName(b).toLowerCase();
+    if (am < bm) return -1;
+    if (am > bm) return 1;
+    const as = equipmentSerial(a).toLowerCase();
+    const bs = equipmentSerial(b).toLowerCase();
+    if (as < bs) return -1;
+    if (as > bs) return 1;
+    return 0;
+  });
+}
+
+function equipmentSearchKey(item) {
+  return `${equipmentLabel(item)} ${equipmentModelName(item)} ${equipmentSerial(item)}`.toLowerCase();
+}
+
 function dedupeStringList(values) {
   return Array.from(new Set((values || []).map((value) => String(value)).filter(Boolean)));
 }
@@ -126,6 +172,129 @@ function getSelectedUnitIds() {
 function getSelectedUnitLabels() {
   if (!unitSelect) return [];
   return dedupeStringList(Array.from(unitSelect.selectedOptions || []).map((opt) => opt.textContent || ""));
+}
+
+function labelForUnitId(unitId) {
+  const match = equipmentCache.find((item) => String(item.id) === String(unitId));
+  return equipmentLabel(match) || `Unit ${unitId}`;
+}
+
+function setSelectedUnitIds(unitIds) {
+  if (!unitSelect) return;
+  const ids = dedupeStringList(unitIds);
+  Array.from(unitSelect.options).forEach((opt) => {
+    opt.selected = ids.includes(String(opt.value));
+  });
+  if (!ids.length) {
+    renderSelectedUnits();
+    return;
+  }
+  const labels = ids.map((id) => labelForUnitId(id));
+  applyUnitSelectionToSelect(ids, labels);
+  renderSelectedUnits();
+}
+
+function renderSelectedUnits() {
+  if (!unitSelectedList) return;
+  unitSelectedList.replaceChildren();
+  const selectedIds = getSelectedUnitIds();
+  if (!selectedIds.length) {
+    const empty = document.createElement("span");
+    empty.className = "hint";
+    empty.textContent = "No units selected.";
+    unitSelectedList.appendChild(empty);
+    return;
+  }
+  selectedIds.forEach((unitId) => {
+    const pill = document.createElement("span");
+    pill.className = "selection-pill";
+    pill.dataset.unitId = String(unitId);
+    const label = labelForUnitId(unitId);
+    pill.innerHTML = `
+      <span>${escapeHtml(label)}</span>
+      <button type="button" data-remove-unit="${escapeHtml(String(unitId))}" aria-label="Remove unit">×</button>
+    `;
+    unitSelectedList.appendChild(pill);
+  });
+}
+
+function hideUnitSuggestions() {
+  if (!unitSuggestions || !unitSearchInput) return;
+  unitSuggestions.hidden = true;
+  unitSuggestions.replaceChildren();
+  unitSearchInput.setAttribute("aria-expanded", "false");
+}
+
+function renderUnitSuggestions({ term = "", showAll = false } = {}) {
+  if (!unitSuggestions || !unitSearchInput) return;
+  const query = String(term || "").trim().toLowerCase();
+  if (!query && !showAll) {
+    hideUnitSuggestions();
+    return;
+  }
+
+  const available = sortEquipmentByModel(equipmentCache);
+  const filtered = query
+    ? available.filter((item) => equipmentSearchKey(item).includes(query))
+    : available;
+
+  unitSuggestions.replaceChildren();
+  const selectedIds = new Set(getSelectedUnitIds());
+
+  if (!available.length) {
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "No units found.";
+    unitSuggestions.appendChild(empty);
+  } else if (!filtered.length) {
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "No matching units.";
+    unitSuggestions.appendChild(empty);
+  } else {
+    filtered.forEach((item) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.dataset.unitId = String(item.id);
+      const label = equipmentLabel(item);
+      if (selectedIds.has(String(item.id))) {
+        btn.disabled = true;
+      }
+      btn.innerHTML = `
+        <div class="rs-autocomplete-primary">${escapeHtml(label)}</div>
+        <div class="rs-autocomplete-secondary">${selectedIds.has(String(item.id)) ? "Selected" : "Click to add"}</div>
+      `;
+      btn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        addUnitSelection(item.id);
+      });
+      btn.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        addUnitSelection(item.id);
+      });
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        addUnitSelection(item.id);
+      });
+      unitSuggestions.appendChild(btn);
+    });
+  }
+
+  unitSuggestions.hidden = false;
+  unitSearchInput.setAttribute("aria-expanded", "true");
+}
+
+function addUnitSelection(unitId) {
+  if (!unitId) return;
+  const ids = new Set(getSelectedUnitIds());
+  ids.add(String(unitId));
+  setSelectedUnitIds(Array.from(ids));
+  updateServiceHint();
+  if (unitSearchInput) {
+    unitSearchInput.value = "";
+    renderUnitSuggestions({ term: "", showAll: true });
+    unitSearchInput.focus();
+  }
 }
 
 function ensureUnitOption(unitId, label) {
@@ -155,6 +324,7 @@ function applyUnitSelectionToSelect(unitIds, unitLabels) {
   Array.from(unitSelect.options).forEach((opt) => {
     if (ids.includes(String(opt.value))) opt.selected = true;
   });
+  renderSelectedUnits();
 }
 
 function getOutOfServiceMap(excludeId = null) {
@@ -474,6 +644,7 @@ function applyWorkOrderToForm(order) {
     });
     applyUnitSelectionToSelect(normalizeUnitIds(order), normalizeUnitLabels(order));
   }
+  renderSelectedUnits();
   if (orderStatusInput) orderStatusInput.value = order?.orderStatus || "open";
   if (serviceStatusSelect) serviceStatusSelect.value = order?.serviceStatus || "in_service";
   if (returnInspectionToggle) returnInspectionToggle.checked = order?.returnInspection === true;
@@ -506,10 +677,11 @@ async function loadEquipment() {
     if (!res.ok) throw new Error("Unable to fetch equipment");
     const data = await res.json();
     equipmentCache = Array.isArray(data.equipment) ? data.equipment : [];
+    equipmentCache = sortEquipmentByModel(equipmentCache);
     unitSelect.innerHTML = `<option value="">Select a unit</option>`;
     equipmentCache.forEach((item) => {
       const option = document.createElement("option");
-      const label = [item.model_name, item.serial_number].filter(Boolean).join(" - ") || `Unit ${item.id}`;
+      const label = equipmentLabel(item);
       option.value = item.id;
       option.textContent = label;
       unitSelect.appendChild(option);
@@ -523,6 +695,7 @@ async function loadEquipment() {
       applyUnitSelectionToSelect([pendingUnitId], [`Unit ${pendingUnitId} (from dispatch)`]);
       pendingUnitId = null;
     }
+    renderSelectedUnits();
     unitSelect.disabled = false;
     if (unitMeta) unitMeta.textContent = equipmentCache.length ? `${equipmentCache.length} units available` : "No units found.";
     updateServiceHint();
@@ -666,7 +839,89 @@ addLaborLineBtn?.addEventListener("click", () => {
   laborLines?.appendChild(buildLaborRow());
 });
 
-unitSelect?.addEventListener("change", updateServiceHint);
+unitSelect?.addEventListener("change", () => {
+  renderSelectedUnits();
+  updateServiceHint();
+});
+
+unitSearchInput?.addEventListener("focus", () => {
+  renderUnitSuggestions({ term: unitSearchInput.value, showAll: true });
+});
+
+unitSearchInput?.addEventListener("input", () => {
+  renderUnitSuggestions({ term: unitSearchInput.value, showAll: true });
+});
+
+unitSearchInput?.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    hideUnitSuggestions();
+    unitSearchInput.value = "";
+    return;
+  }
+  if (e.key === "ArrowDown") {
+    renderUnitSuggestions({ term: unitSearchInput.value, showAll: true });
+    const first = unitSuggestions?.querySelector?.("button[data-unit-id]");
+    if (first) {
+      e.preventDefault();
+      first.focus();
+    }
+    return;
+  }
+  if (e.key === "Enter") {
+    const first = unitSuggestions?.querySelector?.("button[data-unit-id]");
+    if (first) {
+      e.preventDefault();
+      first.click();
+      return;
+    }
+    const term = String(unitSearchInput.value || "").trim();
+    if (!term) {
+      e.preventDefault();
+      hideUnitSuggestions();
+      return;
+    }
+    const available = sortEquipmentByModel(equipmentCache);
+    const exact = available.find(
+      (item) => equipmentLabel(item).toLowerCase() === term.toLowerCase()
+    );
+    if (exact) {
+      e.preventDefault();
+      addUnitSelection(exact.id);
+    }
+  }
+});
+
+unitSearchInput?.addEventListener("blur", () => {
+  setTimeout(() => {
+    if (unitSuggestions?.contains(document.activeElement)) return;
+    hideUnitSuggestions();
+  }, 80);
+});
+
+unitSuggestions?.addEventListener("click", (e) => {
+  const btn = e.target.closest?.("button[data-unit-id]");
+  if (!btn) return;
+  e.preventDefault();
+  addUnitSelection(btn.dataset.unitId);
+});
+
+unitSelectedList?.addEventListener("click", (e) => {
+  const btn = e.target.closest?.("[data-remove-unit]");
+  if (!btn) return;
+  e.preventDefault();
+  const removeId = btn.dataset.removeUnit;
+  const ids = getSelectedUnitIds().filter((id) => String(id) !== String(removeId));
+  setSelectedUnitIds(ids);
+  updateServiceHint();
+});
+
+document.addEventListener("click", (e) => {
+  if (!unitSearchInput || !unitSuggestions) return;
+  const target = e.target;
+  if (unitSearchInput.contains(target) || unitSuggestions.contains(target)) return;
+  hideUnitSuggestions();
+});
+
 serviceStatusSelect?.addEventListener("change", updateServiceHint);
 returnInspectionToggle?.addEventListener("change", () => {
   if (returnInspectionToggle.checked && serviceStatusSelect) {

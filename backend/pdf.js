@@ -530,13 +530,20 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
     doc.fillColor("#111").font("Helvetica-Bold").fontSize(9).text(title, tableX + 8, y + 6, { width: outW - 16 });
 
     const rate = li.rateAmount === null || li.rateAmount === undefined ? "--" : fmtMoney(li.rateAmount);
+    const unitDescription = safeText(li.unitDescription || li.unit_description || "");
+    const isRerent =
+      !!unitDescription &&
+      !li.bundleId &&
+      (!Array.isArray(li.inventoryIds) || li.inventoryIds.length === 0);
     const qty = li.bundleId
       ? 1
       : Array.isArray(li.inventoryIds) && li.inventoryIds.length
         ? li.inventoryIds.length
-        : isDemandOnlyStatus(order?.status)
+        : isRerent
           ? 1
-          : 0;
+          : isDemandOnlyStatus(order?.status)
+            ? 1
+            : 0;
     const lineTotal = li.lineAmount === null || li.lineAmount === undefined ? "--" : fmtMoney(li.lineAmount);
     doc.fillColor("#111").font("Helvetica").fontSize(9);
     doc.text(rate, tableX + outW, y + 6, { width: rateW, align: "right" });
@@ -554,7 +561,8 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
       .slice(0, 6)
       .join(", ");
     doc.fillColor("#475569").font("Helvetica").fontSize(8);
-    if (invText) doc.text(invText, tableX + 8, y + 24, { width: outW - 16 });
+    const detailText = unitDescription || invText;
+    if (detailText) doc.text(detailText, tableX + 8, y + 24, { width: outW - 16 });
     doc.text(`Out: ${fmtDateTime(li.startAt)}`, tableX + 8, y + 34, { width: outW - 16 });
 
     doc.y = y + 44;

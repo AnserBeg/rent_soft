@@ -21,7 +21,7 @@
             <div class="nav-group-title">Operations</div>
             <a class="nav-link" href="rental-quotes.html">Quotes</a>
             <a class="nav-link" href="rental-orders.html">Rental Orders</a>
-            <a class="nav-link" href="invoices.html">Invoices</a>
+            <a class="nav-link" href="invoices.html">Finance</a>
           </div>
           <div class="nav-group">
             <div class="nav-group-title">Repairs</div>
@@ -98,7 +98,12 @@
                 <input id="work-date" type="date" />
               </label>
               <label>Units (stock)
-                <select id="unit-select" multiple size="4">
+                <input id="unit-search-input" type="text" placeholder="Select units" autocomplete="off"
+                  role="combobox" aria-autocomplete="list" aria-expanded="false"
+                  aria-controls="unit-suggestions" />
+                <div id="unit-suggestions" class="rs-autocomplete" role="listbox" hidden></div>
+                <div id="unit-selected" class="selection-pills"></div>
+                <select id="unit-select" multiple size="4" style="display:none;" aria-hidden="true" tabindex="-1">
                   <option value="">Select a unit</option>
                 </select>
               </label>
@@ -109,7 +114,7 @@
                 </select>
               </label>
             </div>
-            <p class="hint" style="margin: 10px 0 0;">Select one or more units (Ctrl/Cmd click).</p>
+            <p class="hint" style="margin: 10px 0 0;">Select one or more units (type to search).</p>
             <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff; margin-top:12px;">
               <input id="return-inspection" type="checkbox" />
               <span>Return inspection work order</span>
@@ -200,6 +205,7 @@
   <script src="work-order-form.js"></script>
 </body>
 </html>
+
 
 
 

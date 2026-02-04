@@ -21,7 +21,7 @@
             <div class="nav-group-title">Operations</div>
             <a class="nav-link" href="rental-quotes.html">Quotes</a>
             <a class="nav-link" href="rental-orders.html">Rental Orders</a>
-            <a class="nav-link" href="invoices.html">Invoices</a>
+            <a class="nav-link" href="invoices.html">Finance</a>
           </div>
           <div class="nav-group">
             <div class="nav-group-title">Repairs</div>
@@ -104,10 +104,11 @@
                 <p>All work orders</p>
                 <div class="inline">
                   <input id="search" class="search-input" placeholder="Search by unit, summary, number..." />
-                  <label class="filter-pill">
-                    <input type="checkbox" id="show-closed" />
-                    Show closed
-                  </label>
+                  <div class="view-toggle" id="status-toggle" role="group" aria-label="Work order status filter">
+                    <button class="view-toggle-btn" type="button" data-status="open" aria-pressed="true">Open</button>
+                    <button class="view-toggle-btn" type="button" data-status="completed" aria-pressed="false">Completed</button>
+                    <button class="view-toggle-btn" type="button" data-status="closed" aria-pressed="false">Closed</button>
+                  </div>
                 </div>
               </div>
               <div class="table" id="work-orders-table"></div>
@@ -123,6 +124,7 @@
   <script src="table-export.js"></script>
 </body>
 </html>
+
 
 
 

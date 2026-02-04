@@ -81,6 +81,34 @@ function fmtMoney(v) {
   return `$${n.toFixed(2)}`;
 }
 
+function getMonthlyRecurringTotal(row) {
+  const raw = row?.monthly_recurring_total ?? row?.monthlyRecurringTotal ?? null;
+  if (raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function shouldShowMonthlyRecurring(row) {
+  return row?.show_monthly_recurring === true || row?.showMonthlyRecurring === true;
+}
+
+function displayAmountFor(row) {
+  const monthlyTotal = getMonthlyRecurringTotal(row);
+  const totalRaw = row?.total ?? row?.order_total ?? null;
+  const total = totalRaw === null || totalRaw === undefined ? null : Number(totalRaw);
+  const showMonthly = shouldShowMonthlyRecurring(row);
+  if (showMonthly && Number.isFinite(monthlyTotal) && monthlyTotal > 0) {
+    return { value: monthlyTotal, kind: "monthly" };
+  }
+  if (Number.isFinite(total)) {
+    return { value: total, kind: "total" };
+  }
+  if (Number.isFinite(monthlyTotal)) {
+    return { value: monthlyTotal, kind: showMonthly ? "monthly" : "total" };
+  }
+  return { value: null, kind: "total" };
+}
+
 function fmtDateTime(v) {
   if (!v) return "--";
   const d = new Date(v);
@@ -190,7 +218,7 @@ function applyFilters() {
       case "end_at":
         return dateKey(row[sortField]);
       case "total":
-        return numKey(row.total);
+        return numKey(displayAmountFor(row).value);
       case "created_at":
       default:
         return dateKey(row.created_at);
@@ -220,7 +248,7 @@ function renderOrders(rows) {
       <span class="sort ${sortField === "sales" ? "active" : ""}" data-sort="sales">Sales ${indicator("sales")}</span>
       <span class="sort ${sortField === "start_at" ? "active" : ""}" data-sort="start_at">Start ${indicator("start_at")}</span>
       <span class="sort ${sortField === "end_at" ? "active" : ""}" data-sort="end_at">End ${indicator("end_at")}</span>
-      <span class="sort ${sortField === "total" ? "active" : ""}" data-sort="total">Total ${indicator("total")}</span>
+      <span class="sort ${sortField === "total" ? "active" : ""}" data-sort="total">Monthly / Total ${indicator("total")}</span>
       <span>Updates</span>
       <span>History</span>
     </div>`;
@@ -239,7 +267,8 @@ function renderOrders(rows) {
     div.dataset.id = row.id;
     const docNumber = docNumberFor(row);
     const poOrLegacy = poOrLegacyFor(row);
-    const total = row.total ?? row.order_total ?? null;
+    const amountInfo = displayAmountFor(row);
+    const amountTitle = amountInfo.kind === "monthly" ? "Monthly recurring" : "Total (monthly recurring not available)";
     div.innerHTML = `
       <span>${docNumber}</span>
       <span>${statusLabel(row.status, row.is_overdue)}</span>
@@ -248,7 +277,7 @@ function renderOrders(rows) {
       <span>${row.salesperson_name || "--"}</span>
       <span>${fmtDateTime(row.start_at)}</span>
       <span>${fmtDateTime(row.end_at)}</span>
-      <span>${fmtMoney(total)}</span>
+      <span title="${amountTitle}">${fmtMoney(amountInfo.value)}</span>
       <span>${pendingOrderUpdates.has(Number(row.id)) ? "Pending" : ""}</span>
       <span style="justify-self:end;">
         <button class="ghost small" type="button" data-history>History</button>

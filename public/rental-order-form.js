@@ -39,6 +39,7 @@ const statusPill = document.getElementById("status-pill");
 const orderNumberPill = document.getElementById("order-number-pill");
 const downloadOrderPdfBtn = document.getElementById("download-order-pdf");
 const openHistoryBtn = document.getElementById("open-history");
+const openMonthlyChargesBtn = document.getElementById("open-monthly-charges");
 const qboDocumentsList = document.getElementById("qbo-documents-list");
 const qboDocumentsHint = document.getElementById("qbo-documents-hint");
 const qboSyncNowBtn = document.getElementById("qbo-sync-now");
@@ -53,6 +54,8 @@ function setCompanyMeta(message) {
 setCompanyMeta("");
 
 const customerSelect = document.getElementById("customer-select");
+const customerSearchInput = document.getElementById("customer-search-input");
+const customerSuggestions = document.getElementById("customer-suggestions");
 const customerPoInput = document.getElementById("customer-po");
 const salesSelect = document.getElementById("sales-select");
 const customerDetailsEl = document.getElementById("customer-details");
@@ -144,6 +147,8 @@ const pricingContractGstEl = document.getElementById("pricing-contract-gst");
 
 const feesModal = document.getElementById("fees-modal");
 const closeFeesModalBtn = document.getElementById("close-fees-modal");
+const saveFeesBtn = document.getElementById("save-fees");
+const feesSaveHint = document.getElementById("fees-save-hint");
 
 const lineItemDocsModal = document.getElementById("lineitem-docs-modal");
 const closeLineItemDocsModalBtn = document.getElementById("close-lineitem-docs-modal");
@@ -214,6 +219,8 @@ let editingOrderId = initialOrderId ? Number(initialOrderId) : null;
 let editingLineItemTempId = null;
 let editingLineItemTimeTempId = null;
 let editingLineItemActualTempId = null;
+let editingLineItemActualPauseSignature = null;
+let editingLineItemPauseIndex = null;
 let lineItemReturnLocationResolver = null;
 
 let customersCache = [];
@@ -231,6 +238,45 @@ let monthlyProrationMethod = "hours";
 let billingTimeZone = "UTC";
 let autoWorkOrderOnReturn = false;
 let rentalInfoFields = null;
+
+const RERENT_TYPE_LABEL = "Rerent";
+const RERENT_OPTION_VALUE = "__rerent__";
+
+function normalizeTypeName(name) {
+  return String(name || "").trim().toLowerCase();
+}
+
+function isRerentType(type) {
+  return normalizeTypeName(type?.name) === "rerent";
+}
+
+function getRerentType() {
+  return (typesCache || []).find((t) => isRerentType(t)) || null;
+}
+
+function getRerentTypeId() {
+  const type = getRerentType();
+  return type ? String(type.id) : null;
+}
+
+function isRerentLineItem(li) {
+  if (!li) return false;
+  if (li.isRerent === true) return true;
+  const rerentId = getRerentTypeId();
+  return !!(rerentId && String(li.typeId || "") === rerentId);
+}
+
+function buildTypeOptions(selectedTypeId) {
+  const selectedId = selectedTypeId === null || selectedTypeId === undefined ? "" : String(selectedTypeId);
+  const rerentType = getRerentType();
+  const options = typesCache
+    .filter((t) => !isRerentType(t))
+    .map((t) => `<option value="${t.id}" ${String(t.id) === selectedId ? "selected" : ""}>${t.name}</option>`);
+  const rerentValue = rerentType ? rerentType.id : RERENT_OPTION_VALUE;
+  const rerentSelected = rerentType ? String(rerentType.id) === selectedId : selectedId === RERENT_OPTION_VALUE;
+  options.push(`<option value="${rerentValue}" ${rerentSelected ? "selected" : ""}>${RERENT_TYPE_LABEL}</option>`);
+  return options.join("");
+}
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
@@ -360,6 +406,21 @@ function parseDateParts(value) {
 
 function toISODate(date) {
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function normalizeDateOnlyValue(value) {
+  if (!value) return "";
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return "";
+    return toISODate(value);
+  }
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) return match[1];
+  const parsed = Date.parse(raw);
+  if (!Number.isNaN(parsed)) return toISODate(new Date(parsed));
+  return "";
 }
 
 function to12HourParts(hour24) {
@@ -754,15 +815,22 @@ function createTimePickerInstance(input) {
 function positionTimePicker(instance) {
   const rect = instance.input.getBoundingClientRect();
   const popover = instance.popover;
-  const minWidth = instance.type === "time" ? 200 : 360;
-  const maxWidth = instance.type === "time" ? 240 : 460;
-  const targetWidth = Math.min(Math.max(rect.width, minWidth), maxWidth);
+  const viewportW = window.innerWidth;
+  const padding = 8;
+  const maxAllowed = Math.max(0, viewportW - padding * 2);
+  const fullMinWidth = 408;
+  const useCompact =
+    instance.type === "datetime-local" && maxAllowed > 0 && maxAllowed < fullMinWidth;
+  if (instance.type === "datetime-local") {
+    popover.classList.toggle("is-compact", useCompact);
+  }
+  const minWidth = instance.type === "time" ? 200 : useCompact ? 280 : 420;
+  const maxWidth = instance.type === "time" ? 240 : useCompact ? 360 : 460;
+  const targetWidth = Math.min(Math.max(rect.width, minWidth), maxWidth, maxAllowed || maxWidth);
   popover.style.width = `${targetWidth}px`;
   const width = popover.offsetWidth || targetWidth;
   const height = popover.offsetHeight || 320;
-  const viewportW = window.innerWidth;
   const viewportH = window.innerHeight;
-  const padding = 8;
   let left = rect.left;
   let top = rect.bottom + 6;
   const maxLeft = viewportW - width - padding;
@@ -2661,26 +2729,31 @@ function computeLineAmount({ startLocal, endLocal, rateBasis, rateAmount, qty })
   const monthlyMethod = normalizeMonthlyProrationMethod(monthlyProrationMethod);
   const activeMs = endMs - startMs;
   if (!Number.isFinite(activeMs) || activeMs <= 0) return null;
+  const isMonthly = basis === "monthly";
+  const effectiveMode = isMonthly ? "none" : mode;
+  const effectiveGranularity = isMonthly ? "unit" : granularity;
   let unitsRaw = null;
   if (basis === "monthly") {
     unitsRaw = computeMonthlyUnits({
       startAt,
       endAt,
       prorationMethod: monthlyMethod,
-      roundingMode: mode,
-      roundingGranularity: granularity,
+      roundingMode: effectiveMode,
+      roundingGranularity: effectiveGranularity,
       timeZone: billingTimeZone,
     });
   } else {
     const adjustedMs =
-      mode !== "none" && (granularity === "hour" || granularity === "day")
-        ? applyDurationRoundingMs(activeMs, mode, granularity)
+      effectiveMode !== "none" && (effectiveGranularity === "hour" || effectiveGranularity === "day")
+        ? applyDurationRoundingMs(activeMs, effectiveMode, effectiveGranularity)
         : activeMs;
     unitsRaw = (adjustedMs / dayMs) / billingPeriodDays(basis);
   }
   if (!Number.isFinite(unitsRaw)) return null;
   const units =
-    mode !== "none" && granularity === "unit" ? applyRoundingValue(unitsRaw, mode) : unitsRaw;
+    effectiveMode !== "none" && effectiveGranularity === "unit"
+      ? applyRoundingValue(unitsRaw, effectiveMode)
+      : unitsRaw;
   const lineAmount = units * amount * quantity;
   return {
     billableUnits: units,
@@ -2688,7 +2761,30 @@ function computeLineAmount({ startLocal, endLocal, rateBasis, rateAmount, qty })
   };
 }
 
+function resolveLineItemAmounts({
+  startLocal,
+  endLocal,
+  rateBasis,
+  rateAmount,
+  qty,
+  fallbackLineAmount = null,
+  fallbackBillableUnits = null,
+}) {
+  const calc = computeLineAmount({ startLocal, endLocal, rateBasis, rateAmount, qty });
+  if (calc && Number.isFinite(calc.lineAmount)) return calc;
+  const fallbackAmount = numberOrNull(fallbackLineAmount);
+  if (Number.isFinite(fallbackAmount)) {
+    const fallbackUnits = numberOrNull(fallbackBillableUnits);
+    return {
+      lineAmount: fallbackAmount,
+      billableUnits: Number.isFinite(fallbackUnits) ? fallbackUnits : null,
+    };
+  }
+  return null;
+}
+
 function lineItemQty(li) {
+  if (isRerentLineItem(li)) return 1;
   if (isDemandOnlyStatus(draft.status)) return 1;
   if (li?.bundleId) return 1;
   return (li.inventoryIds || []).length ? 1 : 0;
@@ -2911,6 +3007,9 @@ function updateModeLabels() {
   if (openHistoryBtn) {
     openHistoryBtn.style.display = editingOrderId ? "inline-flex" : "none";
   }
+  if (openMonthlyChargesBtn) {
+    openMonthlyChargesBtn.style.display = editingOrderId ? "inline-flex" : "none";
+  }
   if (editingOrderId) {
     const label = primary ? `Edit ${primary}` : `Edit #${editingOrderId}`;
     modeLabel.textContent = label;
@@ -3081,6 +3180,7 @@ function ensureAtLeastOneLineItem() {
         rateManual: false,
         inventoryIds: [],
         inventoryOptions: [],
+        unitDescription: "",
         beforeNotes: "",
         afterNotes: "",
         beforeImages: [],
@@ -3094,7 +3194,7 @@ function ensureAtLeastOneLineItem() {
 
 function ensureAtLeastOneFeeRow() {
   if (!draft.fees || draft.fees.length === 0) {
-    draft.fees = [{ name: "", amount: "" }];
+    draft.fees = [{ name: "", amount: "", feeDate: "" }];
   }
 }
 
@@ -3266,27 +3366,38 @@ function updateOrderTotals() {
   let monthlyRecurringSubtotal = 0;
   const lineSubtotal = (draft.lineItems || []).reduce((sum, li) => {
     const { startLocal, endLocal } = effectiveLineItemLocalPeriod(li);
-    const calc = computeLineAmount({
+    const qty = lineItemQty(li);
+    const calc = resolveLineItemAmounts({
       startLocal,
       endLocal,
       rateBasis: li.rateBasis,
       rateAmount: li.rateAmount,
-      qty: lineItemQty(li),
+      qty,
+      fallbackLineAmount: li.lineAmount,
+      fallbackBillableUnits: li.billableUnits,
     });
     const basis = normalizeRateBasis(li.rateBasis);
-    if (!calc || !Number.isFinite(calc.lineAmount)) return sum;
+    const lineAmount = calc && Number.isFinite(calc.lineAmount) ? calc.lineAmount : null;
+    if (!Number.isFinite(lineAmount)) return sum;
+    const fallbackUnits = numberOrNull(li.billableUnits);
+    const billableUnits =
+      calc && Number.isFinite(calc.billableUnits)
+        ? calc.billableUnits
+        : Number.isFinite(fallbackUnits)
+          ? fallbackUnits
+          : null;
+    const rateAmount = numberOrNull(li.rateAmount);
     if (basis) {
       const summary = periodSummaries.get(basis) || { totalAmount: 0, unitCount: 0, periodSubtotal: 0 };
-      summary.totalAmount += calc.lineAmount;
-      if (Number.isFinite(calc.billableUnits)) {
-        summary.unitCount += calc.billableUnits;
+      summary.totalAmount += lineAmount;
+      if (Number.isFinite(billableUnits)) {
+        summary.unitCount += billableUnits;
       }
-      const qty = lineItemQty(li);
       const perPeriod =
-        Number.isFinite(Number(li.rateAmount)) && Number.isFinite(qty) && qty > 0
-          ? Number(li.rateAmount) * qty
-          : Number.isFinite(calc.billableUnits) && calc.billableUnits > 0
-            ? calc.lineAmount / calc.billableUnits
+        Number.isFinite(rateAmount) && Number.isFinite(qty) && qty > 0
+          ? rateAmount * qty
+          : Number.isFinite(billableUnits) && billableUnits > 0
+            ? lineAmount / billableUnits
             : 0;
       summary.periodSubtotal += Number.isFinite(perPeriod) ? perPeriod : 0;
       periodSummaries.set(basis, summary);
@@ -3294,19 +3405,53 @@ function updateOrderTotals() {
     const startAt = fromLocalInputValue(startLocal);
     const endAt = fromLocalInputValue(endLocal);
     if (startAt && endAt) {
-      const monthlyUnits = computeMonthlyUnits({
-        startAt,
-        endAt,
-        prorationMethod: monthlyProrationMethod,
-        roundingMode: billingRoundingMode,
-        roundingGranularity: billingRoundingGranularity,
-        timeZone: billingTimeZone,
-      });
-      if (Number.isFinite(monthlyUnits) && monthlyUnits > 0) {
-        monthlyRecurringSubtotal += calc.lineAmount / monthlyUnits;
+      if (basis === "daily" || basis === "weekly") {
+        const startMs = Date.parse(startAt);
+        const endMs = Date.parse(endAt);
+        if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs && qty > 0) {
+          const dayMs = 24 * 60 * 60 * 1000;
+          const durationDays = Math.max(1, Math.ceil((endMs - startMs) / dayMs - 1e-9));
+          if (basis === "daily") {
+            let perDay = Number.isFinite(rateAmount) ? rateAmount : null;
+            if (!Number.isFinite(perDay) && Number.isFinite(billableUnits) && billableUnits > 0) {
+              perDay = lineAmount / (billableUnits * qty);
+            }
+            if (!Number.isFinite(perDay)) {
+              perDay = lineAmount / (durationDays * qty);
+            }
+            if (Number.isFinite(perDay)) {
+              const recurringDays = Math.min(30, durationDays);
+              monthlyRecurringSubtotal += perDay * recurringDays * qty;
+            }
+          } else {
+            let perWeek = Number.isFinite(rateAmount) ? rateAmount : null;
+            if (!Number.isFinite(perWeek) && Number.isFinite(billableUnits) && billableUnits > 0) {
+              perWeek = lineAmount / (billableUnits * qty);
+            }
+            if (!Number.isFinite(perWeek)) {
+              perWeek = lineAmount / ((durationDays / 7) * qty);
+            }
+            if (Number.isFinite(perWeek)) {
+              const recurringWeeks = Math.min(30, durationDays) / 7;
+              monthlyRecurringSubtotal += perWeek * recurringWeeks * qty;
+            }
+          }
+        }
+      } else {
+        const monthlyUnits = computeMonthlyUnits({
+          startAt,
+          endAt,
+          prorationMethod: monthlyProrationMethod,
+          roundingMode: "none",
+          roundingGranularity: "unit",
+          timeZone: billingTimeZone,
+        });
+        if (Number.isFinite(monthlyUnits) && monthlyUnits > 0) {
+          monthlyRecurringSubtotal += lineAmount / monthlyUnits;
+        }
       }
     }
-    return sum + calc.lineAmount;
+    return sum + lineAmount;
   }, 0);
 
   const subtotal = lineSubtotal + feesTotal;
@@ -3326,7 +3471,8 @@ function renderFees() {
   feesEl.innerHTML = "";
   (draft.fees || []).forEach((fee, index) => {
     const row = document.createElement("div");
-    row.className = "two-col";
+    row.className = "three-col";
+    const feeDateValue = normalizeDateOnlyValue(fee.feeDate);
     row.innerHTML = `
       <label class="fee-label">
         <div class="fee-label-row">
@@ -3336,6 +3482,9 @@ function renderFees() {
       </label>
       <label>Fee amount
         <input data-fee-amount="${index}" value="${fee.amount ?? ""}" type="number" min="0" step="0.01" />
+      </label>
+      <label>Fee date
+        <input data-fee-date="${index}" value="${feeDateValue}" type="date" />
       </label>
     `;
     const actions = document.createElement("div");
@@ -3755,6 +3904,119 @@ function renderCustomerDetails() {
   });
 }
 
+function customerLabelFor(customer) {
+  return customer?.company_name || customer?.companyName || customer?.name || "";
+}
+
+function customerSecondaryFor(customer) {
+  const parts = [
+    customer?.contact_name || customer?.contactName || "",
+    customer?.email || "",
+    customer?.phone || "",
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+function findCustomerById(id) {
+  return customersCache.find((c) => String(c.id) === String(id)) || null;
+}
+
+function syncCustomerSearchInput({ preserveIfActive = false } = {}) {
+  if (!customerSearchInput) return;
+  if (preserveIfActive && document.activeElement === customerSearchInput) return;
+  const customer = draft.customerId ? findCustomerById(draft.customerId) : null;
+  customerSearchInput.value = customer ? customerLabelFor(customer) : "";
+}
+
+function hideCustomerSuggestions() {
+  if (!customerSuggestions) return;
+  customerSuggestions.hidden = true;
+  customerSuggestions.replaceChildren();
+  customerSearchInput?.setAttribute("aria-expanded", "false");
+}
+
+function renderCustomerSuggestions({ term = "", showAll = false } = {}) {
+  if (!customerSuggestions) return;
+  const query = String(term || "").trim().toLowerCase();
+  if (!query && !showAll) {
+    hideCustomerSuggestions();
+    return;
+  }
+
+  const matches = query
+    ? customersCache.filter((c) => {
+      const haystack = [
+        customerLabelFor(c),
+        c.contact_name,
+        c.contactName,
+        c.email,
+        c.phone,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    })
+    : customersCache;
+
+  const visible = matches;
+  customerSuggestions.replaceChildren();
+
+  if (!visible.length) {
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "No matching customers.";
+    customerSuggestions.appendChild(empty);
+  } else {
+    visible.forEach((customer) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.dataset.customerId = String(customer.id);
+      const secondary = customerSecondaryFor(customer);
+      btn.innerHTML = `
+        <div class="rs-autocomplete-primary">${escapeHtml(customerLabelFor(customer))}</div>
+        ${secondary ? `<div class="rs-autocomplete-secondary">${escapeHtml(secondary)}</div>` : ""}
+      `;
+      btn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        selectCustomerFromSuggestion(String(customer.id));
+      });
+      btn.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        selectCustomerFromSuggestion(String(customer.id));
+      });
+      customerSuggestions.appendChild(btn);
+    });
+  }
+
+  const addNewBtn = document.createElement("button");
+  addNewBtn.type = "button";
+  addNewBtn.dataset.customerId = "__new__";
+  addNewBtn.innerHTML = `
+    <div class="rs-autocomplete-primary">+ Add new customer...</div>
+  `;
+  addNewBtn.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    selectCustomerFromSuggestion("__new__");
+  });
+  addNewBtn.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    selectCustomerFromSuggestion("__new__");
+  });
+  customerSuggestions.appendChild(addNewBtn);
+
+  customerSuggestions.hidden = false;
+  customerSearchInput?.setAttribute("aria-expanded", "true");
+}
+
+function selectCustomerFromSuggestion(customerId) {
+  if (!customerSelect) return;
+  customerSelect.value = customerId ? String(customerId) : "";
+  customerSelect.dispatchEvent(new Event("change", { bubbles: true }));
+  hideCustomerSuggestions();
+  syncCustomerSearchInput();
+}
+
 function selectedInventoryDetails(ids) {
   const byId = new Map(equipmentCache.map((e) => [String(e.id), e]));
   return (ids || []).map((id) => byId.get(String(id)) || { id, serial_number: `#${id}`, model_name: "" });
@@ -3795,6 +4057,192 @@ function unitLabel(inv) {
   const current = inv?.current_location ? String(inv.current_location) : "";
   const location = current && current !== base ? `${base} (${current})` : base;
   return `${model} - ${location}`;
+}
+
+function unitModelName(inv) {
+  return String(inv?.model_name || inv?.modelName || "").trim();
+}
+
+function unitSerialNumber(inv) {
+  return String(inv?.serial_number || inv?.serialNumber || inv?.serial || inv?.id || "").trim();
+}
+
+function unitBundleParts(inv) {
+  return Array.isArray(inv?.bundle_items)
+    ? inv.bundle_items
+      .map((item) => {
+        const qty = Number(item.qty || item.count || 0);
+        const name = String(item.type_name || item.typeName || "").trim();
+        if (!name) return null;
+        return `${qty || 1}x ${name}`;
+      })
+      .filter(Boolean)
+    : [];
+}
+
+function unitBundleText(inv) {
+  const parts = unitBundleParts(inv);
+  return parts.length ? ` (Bundle: ${parts.join("; ")})` : "";
+}
+
+function unitOptionLabel(inv) {
+  return `${unitLabel(inv)}${unitBundleText(inv)}`;
+}
+
+function sortedUnitsForDisplay(units) {
+  return [...(units || [])].sort((a, b) => {
+    const am = unitModelName(a).toLowerCase();
+    const bm = unitModelName(b).toLowerCase();
+    if (am < bm) return -1;
+    if (am > bm) return 1;
+    const as = unitSerialNumber(a).toLowerCase();
+    const bs = unitSerialNumber(b).toLowerCase();
+    if (as < bs) return -1;
+    if (as > bs) return 1;
+    return 0;
+  });
+}
+
+function unitSearchKey(inv) {
+  const base = unitLabel(inv);
+  const serial = unitSerialNumber(inv);
+  const bundle = unitBundleParts(inv).join(" ");
+  return `${base} ${serial} ${bundle}`.toLowerCase();
+}
+
+function unitDisplayValueForLineItem(li) {
+  const selectedUnitId = selectedUnitIdForLineItem(li);
+  if (!selectedUnitId) return "";
+  const availableUnits = availableUnitsForLineItem(li);
+  const match = availableUnits.find((unit) => String(unit.id) === String(selectedUnitId));
+  if (match) return unitOptionLabel(match);
+  const fallback = selectedInventoryDetails([selectedUnitId])[0];
+  return unitLabel(fallback || { id: selectedUnitId });
+}
+
+function syncUnitSearchInputForLineItem(li, input) {
+  if (!input) return;
+  input.value = unitDisplayValueForLineItem(li);
+}
+
+function hideUnitSuggestionsForInput(input) {
+  if (!input) return;
+  const card = input.closest(".line-item-card");
+  if (!card) return;
+  const suggestions = card.querySelector("[data-unit-suggestions]");
+  if (!suggestions) return;
+  suggestions.hidden = true;
+  suggestions.replaceChildren();
+  input.setAttribute("aria-expanded", "false");
+}
+
+function renderUnitSuggestionsForInput(input, { showAll = false } = {}) {
+  if (!input) return;
+  const card = input.closest(".line-item-card");
+  if (!card) return;
+  const li = draft.lineItems.find((x) => x.tempId === card.dataset.tempId);
+  if (!li) return;
+  const suggestions = card.querySelector("[data-unit-suggestions]");
+  if (!suggestions) return;
+  const query = String(input.value || "").trim().toLowerCase();
+  if (!query && !showAll) {
+    hideUnitSuggestionsForInput(input);
+    return;
+  }
+
+  const availableUnits = sortedUnitsForDisplay(availableUnitsForLineItem(li));
+  const filtered = query
+    ? availableUnits.filter((unit) => unitSearchKey(unit).includes(query))
+    : availableUnits;
+
+  suggestions.replaceChildren();
+
+  const selectedUnitId = selectedUnitIdForLineItem(li);
+  const reservedIds = reservedUnitIdsForLineItem(li.tempId);
+  if (selectedUnitId && !availableUnits.some((unit) => String(unit.id) === String(selectedUnitId))) {
+    const selectedUnit = selectedInventoryDetails([selectedUnitId])[0];
+    const status = reservedIds.has(Number(selectedUnitId))
+      ? "Already selected on another line item"
+      : "Unavailable";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.disabled = true;
+    btn.innerHTML = `
+      <div class="rs-autocomplete-primary">${escapeHtml(
+        `${status}: ${unitLabel(selectedUnit || { id: selectedUnitId })}`
+      )}</div>
+    `;
+    suggestions.appendChild(btn);
+  }
+
+  if (!availableUnits.length) {
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "No available units for dates.";
+    suggestions.appendChild(empty);
+  } else if (!filtered.length) {
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "No matching units.";
+    suggestions.appendChild(empty);
+  } else {
+    filtered.forEach((unit) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.dataset.unitId = String(unit.id);
+      if (unit.bundle_id) btn.dataset.bundleId = String(unit.bundle_id);
+      const secondary = unitSerialNumber(unit);
+      btn.innerHTML = `
+        <div class="rs-autocomplete-primary">${escapeHtml(unitOptionLabel(unit))}</div>
+        ${secondary ? `<div class="rs-autocomplete-secondary">SN ${escapeHtml(secondary)}</div>` : ""}
+      `;
+      const pick = async () => {
+        await applyUnitSelection(li, { unitId: unit.id, bundleId: unit.bundle_id });
+      };
+      btn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        pick();
+      });
+      btn.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        pick();
+      });
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        pick();
+      });
+      suggestions.appendChild(btn);
+    });
+  }
+
+  suggestions.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+}
+
+async function applyUnitSelection(li, { unitId, bundleId } = {}) {
+  const nextId = unitId ? Number(unitId) : null;
+  li.inventoryIds = nextId ? [nextId] : [];
+  const nextBundleId = bundleId ? Number(bundleId) : null;
+  if (nextBundleId) {
+    li.bundleId = nextBundleId;
+    li.bundleItems = [];
+    li.bundleAvailable = null;
+    li.rateManual = false;
+    const bundle = findBundle(nextBundleId);
+    li.rateBasis = defaultRateBasisForBundle(bundle);
+    li.rateAmount = suggestedBundleRateAmount({ bundleId: nextBundleId, basis: li.rateBasis });
+  } else {
+    li.bundleId = null;
+    li.bundleItems = [];
+    li.bundleAvailable = null;
+    if (li.typeId && !li.rateManual) {
+      li.rateBasis = defaultRateBasisForType(li.typeId);
+      li.rateAmount = suggestedRateAmount({ customerId: draft.customerId, typeId: li.typeId, basis: li.rateBasis });
+    }
+  }
+  await refreshAvailabilityForLineItem(li).catch(() => { });
+  renderLineItems();
+  scheduleDraftSave();
 }
 
 function workOrdersStorageKey(companyId) {
@@ -4038,7 +4486,8 @@ function lineItemPersistedSignature(li) {
     ? li.inventoryIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
     : [];
   ids.sort((a, b) => a - b);
-  return `${typeKey}|${startAt || ""}|${endAt || ""}|${ids.join(",")}`;
+  const unitDescription = String(li.unitDescription || "").trim();
+  return `${typeKey}|${startAt || ""}|${endAt || ""}|${ids.join(",")}|${unitDescription}`;
 }
 
 function lineItemNeedsOrderSave(li) {
@@ -4171,12 +4620,16 @@ function renderLineItemTimeModal() {
 
 function openLineItemActualModal(tempId) {
   editingLineItemActualTempId = tempId;
+  const li = getEditingLineItemActual();
+  editingLineItemActualPauseSignature = li ? pausePeriodsSignature(li) : null;
   renderLineItemActualModal();
   lineItemActualModal?.classList.add("show");
 }
 
 function closeLineItemActualModal() {
   editingLineItemActualTempId = null;
+  editingLineItemActualPauseSignature = null;
+  resetLineItemPauseEditor();
   lineItemActualModal?.classList.remove("show");
   if (lineItemActualHint) lineItemActualHint.textContent = "";
 }
@@ -4223,6 +4676,61 @@ function normalizePausePeriods(li) {
   if (!li.pausePeriods || !Array.isArray(li.pausePeriods)) li.pausePeriods = [];
 }
 
+function pausePeriodsSignature(li) {
+  normalizePausePeriods(li);
+  const normalized = li.pausePeriods.map((p) => ({
+    startAt: p?.startAt ? String(p.startAt) : "",
+    endAt: p?.endAt ? String(p.endAt) : "",
+    source: p?.source ? String(p.source) : "",
+    workOrderNumber: p?.workOrderNumber ? String(p.workOrderNumber) : "",
+  }));
+  return JSON.stringify(normalized);
+}
+
+function resetLineItemPauseEditor({ keepInputs = false } = {}) {
+  editingLineItemPauseIndex = null;
+  if (keepInputs) return;
+  if (lineItemPauseStartInput) {
+    lineItemPauseStartInput.value = "";
+    syncTimeOverlayState(lineItemPauseStartInput);
+    refreshTimePickerForInput(lineItemPauseStartInput);
+  }
+  if (lineItemPauseEndInput) {
+    lineItemPauseEndInput.value = "";
+    syncTimeOverlayState(lineItemPauseEndInput);
+    refreshTimePickerForInput(lineItemPauseEndInput);
+  }
+}
+
+function startLineItemPauseEditing(li, index) {
+  if (!li) return;
+  normalizePausePeriods(li);
+  const pause = li.pausePeriods[index];
+  if (!pause) {
+    resetLineItemPauseEditor();
+    renderLineItemPausePeriods(li);
+    return;
+  }
+  if (editingLineItemPauseIndex === index) {
+    resetLineItemPauseEditor();
+    renderLineItemPausePeriods(li);
+    return;
+  }
+  editingLineItemPauseIndex = index;
+  if (lineItemPauseDetails) lineItemPauseDetails.open = true;
+  if (lineItemPauseStartInput) {
+    lineItemPauseStartInput.value = toLocalInputValue(pause.startAt);
+    syncTimeOverlayState(lineItemPauseStartInput);
+    refreshTimePickerForInput(lineItemPauseStartInput);
+  }
+  if (lineItemPauseEndInput) {
+    lineItemPauseEndInput.value = pause.endAt ? toLocalInputValue(pause.endAt) : "";
+    syncTimeOverlayState(lineItemPauseEndInput);
+    refreshTimePickerForInput(lineItemPauseEndInput);
+  }
+  renderLineItemPausePeriods(li);
+}
+
 function getActivePauseLabel(li) {
   normalizePausePeriods(li);
   const now = Date.now();
@@ -4244,15 +4752,19 @@ function getActivePauseLabel(li) {
 function renderLineItemPausePeriods(li) {
   if (!lineItemPauseList) return;
   normalizePausePeriods(li);
-  if (lineItemPauseDetails) lineItemPauseDetails.open = li.pausePeriods.length > 0;
+  if (lineItemPauseDetails) {
+    lineItemPauseDetails.open = li.pausePeriods.length > 0 || Number.isFinite(editingLineItemPauseIndex);
+  }
   const rows = li.pausePeriods
     .map((p, index) => {
       const startLabel = formatActualAt(p?.startAt) || "--";
       const endLabel = p?.endAt ? formatActualAt(p.endAt) || "--" : "Ongoing";
       const workOrderLabel =
         p?.source === "work_order" && p?.workOrderNumber ? `Work order ${p.workOrderNumber}` : "";
+      const isEditing = Number.isFinite(editingLineItemPauseIndex) && editingLineItemPauseIndex === index;
+      const rowClass = isEditing ? "pause-period-row is-editing" : "pause-period-row";
       return `
-          <div class="pause-period-row">
+          <div class="${rowClass}" data-edit-pause="${index}" role="button" tabindex="0">
             <div>
               <div class="text-sm font-medium">${startLabel}</div>
               <div class="text-xs text-slate-500">${endLabel}</div>
@@ -4266,9 +4778,109 @@ function renderLineItemPausePeriods(li) {
   lineItemPauseList.innerHTML = rows || `<div class="hint">No pause periods yet.</div>`;
 }
 
+function addPendingPauseFromInputs(li, { allowEmpty = false } = {}) {
+  if (!li) return { added: false };
+  snapInputToMinuteStep(lineItemPauseStartInput);
+  snapInputToMinuteStep(lineItemPauseEndInput);
+  const startLocal = lineItemPauseStartInput?.value || "";
+  const endLocal = lineItemPauseEndInput?.value || "";
+  const hasAnyInput = !!startLocal || !!endLocal;
+  const editingIndex = Number.isFinite(editingLineItemPauseIndex) ? editingLineItemPauseIndex : null;
+  if (!hasAnyInput) {
+    if (allowEmpty) return { added: false };
+    return { added: false, error: "Enter a pause start or end time." };
+  }
+  const startAt = startLocal ? fromLocalInputValue(startLocal) : null;
+  const endAt = endLocal ? fromLocalInputValue(endLocal) : null;
+  if (startLocal && !startAt) {
+    return { added: false, error: "Pause start is required." };
+  }
+  if (endLocal && !endAt) {
+    return { added: false, error: "Pause end is required." };
+  }
+  if (editingIndex !== null) {
+    if (!startAt) {
+      return { added: false, error: "Pause start is required." };
+    }
+    if (endAt && !(new Date(endAt) > new Date(startAt))) {
+      return { added: false, error: "Pause end must be after pause start." };
+    }
+    normalizePausePeriods(li);
+    const pause = li.pausePeriods[editingIndex];
+    if (!pause) {
+      resetLineItemPauseEditor();
+      return { added: false, error: "Select a pause to edit." };
+    }
+    const openPauses = li.pausePeriods.filter((p, idx) => {
+      if (idx === editingIndex) return false;
+      const startMs = Date.parse(p?.startAt);
+      if (!Number.isFinite(startMs)) return false;
+      if (!p?.endAt) return true;
+      const endMs = Date.parse(p.endAt);
+      if (!Number.isFinite(endMs)) return false;
+      return false;
+    });
+    if (!endAt && openPauses.length) {
+      return { added: false, error: "Close the current pause before starting another." };
+    }
+    li.pausePeriods[editingIndex] = { ...pause, startAt, endAt: endAt || null };
+    resetLineItemPauseEditor();
+    renderLineItemPausePeriods(li);
+    renderLineItems();
+    return { added: true };
+  }
+  normalizePausePeriods(li);
+  const openPauses = li.pausePeriods.filter((p) => {
+    const startMs = Date.parse(p?.startAt);
+    if (!Number.isFinite(startMs)) return false;
+    if (!p?.endAt) return true;
+    const endMs = Date.parse(p.endAt);
+    if (!Number.isFinite(endMs)) return false;
+    return false;
+  });
+  const latestOpenPause = openPauses.reduce((latest, p) => {
+    if (!latest) return p;
+    return Date.parse(p.startAt) > Date.parse(latest.startAt) ? p : latest;
+  }, null);
+
+  if (startAt && endAt) {
+    if (!(new Date(endAt) > new Date(startAt))) {
+      return { added: false, error: "Pause end must be after pause start." };
+    }
+    li.pausePeriods.push({ startAt, endAt });
+  } else if (startAt && !endAt) {
+    if (latestOpenPause) {
+      return { added: false, error: "Close the current pause before starting another." };
+    }
+    li.pausePeriods.push({ startAt, endAt: null });
+  } else if (!startAt && endAt) {
+    if (!latestOpenPause) {
+      return { added: false, error: "No open pause to end. Add a pause start first." };
+    }
+    if (!(new Date(endAt) > new Date(latestOpenPause.startAt))) {
+      return { added: false, error: "Pause end must be after pause start." };
+    }
+    latestOpenPause.endAt = endAt;
+  }
+  if (lineItemPauseStartInput) {
+    lineItemPauseStartInput.value = "";
+    syncTimeOverlayState(lineItemPauseStartInput);
+    refreshTimePickerForInput(lineItemPauseStartInput);
+  }
+  if (lineItemPauseEndInput) {
+    lineItemPauseEndInput.value = "";
+    syncTimeOverlayState(lineItemPauseEndInput);
+    refreshTimePickerForInput(lineItemPauseEndInput);
+  }
+  renderLineItemPausePeriods(li);
+  renderLineItems();
+  return { added: true };
+}
+
 function renderLineItemActualModal() {
   const li = getEditingLineItemActual();
   if (!li) return;
+  resetLineItemPauseEditor({ keepInputs: true });
   applyOrderedPickup(li);
   const hasUnit = lineItemHasUnit(li);
 
@@ -4440,37 +5052,13 @@ function renderLineItems() {
       pauseLabel || (li.returnedAt ? "Returned" : li.pickedUpAt ? "Return pending" : "Awaiting pickup/delivery");
     const actualButtonLabel = "Actual period";
 
-    const typeOptions = typesCache
-      .map((t) => `<option value="${t.id}" ${String(t.id) === String(li.typeId || "") ? "selected" : ""}>${t.name}</option>`)
-      .join("");
-    const availableUnits = availableUnitsForLineItem(li);
-    const selectedUnitId = selectedUnitIdForLineItem(li);
-    const reservedUnitIds = reservedUnitIdsForLineItem(li.tempId);
-    const selectedUnit = selectedUnitId ? selectedInventoryDetails([selectedUnitId])[0] : null;
-    const unitOptions = availableUnits
-      .map((e) => {
-        const selected = String(e.id) === String(selectedUnitId) ? "selected" : "";
-        const bundleParts = Array.isArray(e.bundle_items)
-          ? e.bundle_items
-            .map((item) => {
-              const qty = Number(item.qty || item.count || 0);
-              const name = String(item.type_name || item.typeName || "").trim();
-              if (!name) return null;
-              return `${qty || 1}x ${name}`;
-            })
-            .filter(Boolean)
-          : [];
-        const bundleText = bundleParts.length ? ` (Bundle: ${bundleParts.join("; ")})` : "";
-        const bundleId = e.bundle_id ? ` data-bundle-id="${e.bundle_id}"` : "";
-        return `<option value="${e.id}"${bundleId} ${selected}>${unitLabel(e)}${bundleText}</option>`;
-      })
-      .join("");
-    const selectedUnavailable =
-      selectedUnitId && !availableUnits.some((e) => String(e.id) === String(selectedUnitId))
-        ? `<option value="${selectedUnitId}" selected>${reservedUnitIds.has(selectedUnitId) ? "Already selected on another line item" : "Unavailable"}: ${unitLabel(selectedUnit || { id: selectedUnitId })}</option>`
-        : "";
-    const emptyHint = availableUnits.length ? "" : `<option value="" disabled>No available units for dates</option>`;
-    const unitOptionsHtml = `${selectedUnavailable}<option value="">Select unit</option>${emptyHint}${unitOptions}`;
+    const typeOptions = buildTypeOptions(li.typeId);
+    const isRerent = isRerentLineItem(li);
+    const availableUnits = isRerent ? [] : sortedUnitsForDisplay(availableUnitsForLineItem(li));
+    const unitSearchValue = isRerent
+      ? escapeHtml(String(li.unitDescription || ""))
+      : escapeHtml(unitDisplayValueForLineItem(li));
+    const unitSuggestionsId = `unit-suggestions-${li.tempId}`;
     const capacityLabel = Number.isFinite(li.capacityUnits) ? String(li.capacityUnits) : "--";
     const totalLabel = Number.isFinite(li.totalUnits) ? String(li.totalUnits) : "--";
     const bundleItems = Array.isArray(li.bundleItems) ? li.bundleItems : [];
@@ -4510,28 +5098,39 @@ function renderLineItems() {
     const bundleHintUnitHtml = li.bundleId
       ? `<div class="hint">Bundle items: ${escapeHtml(bundleModelText)}${bundleAvailabilitySuffix}</div>`
       : "";
-    const unitFieldHtml = lockUnits
+    const unitFieldHtml = isRerent
       ? `
           <label>
             <div class="label-head">
-              <span>Units</span>
-              <span class="hint">Capacity: ${capacityLabel} (of ${totalLabel})</span>
+              <span>Unit</span>
+              <span class="hint">Product description</span>
             </div>
-            <input value="No unit assigned until ordered." disabled />
+            <input data-unit-description placeholder="Enter product description" value="${unitSearchValue}" />
           </label>
         `
-      : `
-          <label>
-            <div class="label-head">
-              <span>Unit</span>
-              <span class="hint">Available: ${availableUnits.length}</span>
-            </div>
-            <select data-unit>
-              ${unitOptionsHtml}
-            </select>
-            ${bundleHintUnitHtml}
-          </label>
-        `;
+      : lockUnits
+        ? `
+            <label>
+              <div class="label-head">
+                <span>Units</span>
+                <span class="hint">Capacity: ${capacityLabel} (of ${totalLabel})</span>
+              </div>
+              <input value="No unit assigned until ordered." disabled />
+            </label>
+          `
+        : `
+            <label>
+              <div class="label-head">
+                <span>Unit</span>
+                <span class="hint">Available: ${availableUnits.length}</span>
+              </div>
+              <input data-unit-search placeholder="Select unit" autocomplete="off" role="combobox"
+                aria-autocomplete="list" aria-expanded="false" aria-controls="${unitSuggestionsId}"
+                value="${unitSearchValue}" />
+              <div class="rs-autocomplete" data-unit-suggestions id="${unitSuggestionsId}" role="listbox" hidden></div>
+              ${bundleHintUnitHtml}
+            </label>
+          `;
 
 
     card.innerHTML = `
@@ -4574,12 +5173,14 @@ function renderLineItems() {
           </div>
           <label>Line amount
             <input data-line-amount readonly value="${(() => {
-        const calc = computeLineAmount({
+        const calc = resolveLineItemAmounts({
           startLocal,
           endLocal,
           rateBasis: li.rateBasis,
           rateAmount: li.rateAmount,
           qty: lineItemQty(li),
+          fallbackLineAmount: li.lineAmount,
+          fallbackBillableUnits: li.billableUnits,
         });
         if (!calc) return "";
         return fmtMoneyNullable(calc.lineAmount);
@@ -4647,6 +5248,14 @@ async function deleteUploadedFile(url) {
 async function refreshAvailabilityForLineItem(li) {
   const startAt = li.pickedUpAt || fromLocalInputValue(li.startLocal);
   const endAt = li.returnedAt || fromLocalInputValue(li.endLocal);
+  if (isRerentLineItem(li)) {
+    li.inventoryOptions = [];
+    li.inventoryIds = [];
+    li.totalUnits = null;
+    li.demandUnits = null;
+    li.capacityUnits = null;
+    return;
+  }
   if (!li.typeId || !startAt || !endAt) {
     li.inventoryOptions = [];
     li.totalUnits = null;
@@ -4765,6 +5374,7 @@ async function loadCustomers() {
   } else if (draft.customerId) {
     customerSelect.value = String(draft.customerId);
   }
+  syncCustomerSearchInput();
   renderCustomerDetails();
   if (draft.customerId) {
     await loadCustomerContactOptions(draft.customerId);
@@ -4821,6 +5431,27 @@ async function loadTypes() {
   if (!res.ok) throw new Error("Unable to fetch equipment types");
   const data = await res.json();
   typesCache = data.types || [];
+}
+
+async function ensureRerentType() {
+  if (!activeCompanyId) throw new Error("Select a company first.");
+  const existing = getRerentType();
+  if (existing) return existing;
+  const res = await fetch("/api/equipment-types", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId: activeCompanyId, name: RERENT_TYPE_LABEL }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to create rerent equipment type.");
+  if (data && data.id) {
+    typesCache = [...typesCache, data];
+    return data;
+  }
+  await loadTypes();
+  const created = getRerentType();
+  if (!created) throw new Error("Unable to load rerent equipment type.");
+  return created;
 }
 
 async function loadLocations() {
@@ -5004,6 +5635,7 @@ async function loadOrder() {
     id: f.id,
     name: f.name,
     amount: f.amount,
+    feeDate: normalizeDateOnlyValue(f.feeDate || f.fee_date || ""),
   }));
   draft.lineItems = (data.lineItems || []).map((li) => {
     const item = {
@@ -5020,9 +5652,12 @@ async function loadOrder() {
       returnedAt: li.returnedAt || null,
       rateBasis: normalizeRateBasis(li.rateBasis) || "daily",
       rateAmount: li.rateAmount === null || li.rateAmount === undefined ? null : Number(li.rateAmount),
+      billableUnits: li.billableUnits === null || li.billableUnits === undefined ? null : Number(li.billableUnits),
+      lineAmount: li.lineAmount === null || li.lineAmount === undefined ? null : Number(li.lineAmount),
       rateManual: true,
       inventoryIds: li.inventoryIds || [],
       inventoryOptions: [],
+      unitDescription: String(li.unitDescription || li.unit_description || ""),
       beforeNotes: li.beforeNotes || "",
       afterNotes: li.afterNotes || "",
       beforeImages: li.beforeImages || [],
@@ -5068,11 +5703,19 @@ function closeSalesModal() {
 }
 
 function openFeesModal() {
+  setFeesSaveHint("");
   feesModal?.classList.add("show");
 }
 
 function closeFeesModal() {
   feesModal?.classList.remove("show");
+}
+
+function setFeesSaveHint(message) {
+  if (!feesSaveHint) return;
+  const msg = String(message || "").trim();
+  feesSaveHint.textContent = msg;
+  feesSaveHint.style.display = msg ? "inline-flex" : "none";
 }
 
 customerSelect.addEventListener("change", (e) => {
@@ -5088,6 +5731,7 @@ customerSelect.addEventListener("change", (e) => {
     return;
   }
   draft.customerId = e.target.value ? Number(e.target.value) : null;
+  syncCustomerSearchInput();
   renderCustomerDetails();
   loadCustomerContactOptions(draft.customerId).catch(() => { });
   loadCustomerPricing(draft.customerId)
@@ -5100,6 +5744,142 @@ customerSelect.addEventListener("change", (e) => {
 });
 
 // Edit customer action is rendered inside the customer details panel.
+
+customerSearchInput?.addEventListener("focus", () => {
+  renderCustomerSuggestions({ term: customerSearchInput.value, showAll: true });
+});
+
+customerSearchInput?.addEventListener("input", () => {
+  renderCustomerSuggestions({ term: customerSearchInput.value, showAll: true });
+});
+
+customerSearchInput?.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    hideCustomerSuggestions();
+    syncCustomerSearchInput();
+    return;
+  }
+  if (e.key === "ArrowDown") {
+    const first = customerSuggestions?.querySelector?.("button[data-customer-id]");
+    if (first) {
+      e.preventDefault();
+      first.focus();
+    }
+    return;
+  }
+  if (e.key === "Enter") {
+    const term = String(customerSearchInput.value || "").trim();
+    if (!term) {
+      e.preventDefault();
+      if (draft.customerId) selectCustomerFromSuggestion("");
+      else hideCustomerSuggestions();
+      return;
+    }
+    const first = customerSuggestions?.querySelector?.("button[data-customer-id]");
+    if (first) {
+      e.preventDefault();
+      selectCustomerFromSuggestion(first.dataset.customerId);
+      return;
+    }
+    const exact = customersCache.find(
+      (c) => customerLabelFor(c).toLowerCase() === term.toLowerCase()
+    );
+    if (exact) {
+      e.preventDefault();
+      selectCustomerFromSuggestion(String(exact.id));
+    }
+  }
+});
+
+customerSearchInput?.addEventListener("blur", () => {
+  setTimeout(() => {
+    if (customerSuggestions?.contains(document.activeElement)) return;
+    hideCustomerSuggestions();
+    syncCustomerSearchInput();
+  }, 80);
+});
+
+customerSuggestions?.addEventListener("click", (e) => {
+  const btn = e.target.closest?.("button[data-customer-id]");
+  if (!btn) return;
+  e.preventDefault();
+  selectCustomerFromSuggestion(btn.dataset.customerId);
+});
+
+document.addEventListener("click", (e) => {
+  if (!customerSuggestions || !customerSearchInput) return;
+  const target = e.target;
+  if (customerSearchInput.contains(target) || customerSuggestions.contains(target)) return;
+  hideCustomerSuggestions();
+  syncCustomerSearchInput();
+});
+
+lineItemsEl.addEventListener("focusin", (e) => {
+  if (e.target.matches("[data-unit-search]")) {
+    renderUnitSuggestionsForInput(e.target, { showAll: true });
+  }
+});
+
+lineItemsEl.addEventListener("keydown", async (e) => {
+  if (!e.target.matches("[data-unit-search]")) return;
+  const input = e.target;
+  const card = input.closest(".line-item-card");
+  if (!card) return;
+  const li = draft.lineItems.find((x) => x.tempId === card.dataset.tempId);
+  if (!li) return;
+  if (e.key === "Escape") {
+    hideUnitSuggestionsForInput(input);
+    syncUnitSearchInputForLineItem(li, input);
+    return;
+  }
+  if (e.key === "ArrowDown") {
+    renderUnitSuggestionsForInput(input, { showAll: true });
+    const first = card.querySelector("[data-unit-suggestions] button[data-unit-id]");
+    if (first) {
+      e.preventDefault();
+      first.focus();
+    }
+    return;
+  }
+  if (e.key === "Enter") {
+    const suggestions = card.querySelector("[data-unit-suggestions]");
+    const first = suggestions?.querySelector("button[data-unit-id]");
+    if (first) {
+      e.preventDefault();
+      first.click();
+      return;
+    }
+    const term = String(input.value || "").trim();
+    if (!term) {
+      e.preventDefault();
+      hideUnitSuggestionsForInput(input);
+      syncUnitSearchInputForLineItem(li, input);
+      return;
+    }
+    const availableUnits = sortedUnitsForDisplay(availableUnitsForLineItem(li));
+    const exact = availableUnits.find(
+      (unit) => unitOptionLabel(unit).toLowerCase() === term.toLowerCase()
+    );
+    if (exact) {
+      e.preventDefault();
+      await applyUnitSelection(li, { unitId: exact.id, bundleId: exact.bundle_id });
+    }
+  }
+});
+
+lineItemsEl.addEventListener("focusout", (e) => {
+  if (!e.target.matches("[data-unit-search]")) return;
+  const input = e.target;
+  setTimeout(() => {
+    const card = input.closest(".line-item-card");
+    if (!card) return;
+    const suggestions = card.querySelector("[data-unit-suggestions]");
+    if (suggestions?.contains(document.activeElement)) return;
+    const li = draft.lineItems.find((x) => x.tempId === card.dataset.tempId);
+    hideUnitSuggestionsForInput(input);
+    if (li) syncUnitSearchInputForLineItem(li, input);
+  }, 80);
+});
 
 salesSelect.addEventListener("change", (e) => {
   if (e.target.value === "__new_sales__") {
@@ -5550,6 +6330,7 @@ addLineItemBtn.addEventListener("click", (e) => {
     rateManual: false,
     inventoryIds: [],
     inventoryOptions: [],
+    unitDescription: "",
     beforeNotes: "",
     afterNotes: "",
     beforeImages: [],
@@ -5568,11 +6349,31 @@ openFeesBtn?.addEventListener("click", (e) => {
   openFeesModal();
 });
 
+saveFeesBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) {
+    setFeesSaveHint("Select a company first.");
+    return;
+  }
+  saveFeesBtn.disabled = true;
+  setFeesSaveHint("Saving fees...");
+  const result = await saveOrderDraft({
+    skipPickupInvoice: !!editingOrderId,
+    onError: (message) => setFeesSaveHint(message),
+  });
+  if (result?.ok) {
+    setFeesSaveHint("Fees saved.");
+  }
+  saveFeesBtn.disabled = false;
+});
+
 feesEl.addEventListener("input", (e) => {
   const nameIdx = e.target.getAttribute("data-fee-name");
   const amtIdx = e.target.getAttribute("data-fee-amount");
+  const dateIdx = e.target.getAttribute("data-fee-date");
   if (nameIdx !== null) draft.fees[Number(nameIdx)].name = e.target.value;
   if (amtIdx !== null) draft.fees[Number(amtIdx)].amount = e.target.value;
+  if (dateIdx !== null) draft.fees[Number(dateIdx)].feeDate = e.target.value;
   updateFeeTotals();
   scheduleDraftSave();
 });
@@ -5582,7 +6383,7 @@ feesEl.addEventListener("click", (e) => {
   if (insertIdx !== null) {
     e.preventDefault();
     const idx = Number(insertIdx);
-    const next = { name: "", amount: "" };
+    const next = { name: "", amount: "", feeDate: "" };
     if (Number.isFinite(idx) && idx >= 0) draft.fees.splice(idx + 1, 0, next);
     else draft.fees.push(next);
     renderFees();
@@ -5605,8 +6406,27 @@ lineItemsEl.addEventListener("change", async (e) => {
   if (!li) return;
 
   if (e.target.matches("[data-type]")) {
-    li.typeId = e.target.value ? Number(e.target.value) : null;
+    const selectedValue = e.target.value;
+    const rerentType = getRerentType();
+    const isRerentSelection =
+      selectedValue === RERENT_OPTION_VALUE ||
+      (rerentType && String(selectedValue) === String(rerentType.id));
+    if (isRerentSelection) {
+      try {
+        const ensured = rerentType || (await ensureRerentType());
+        li.typeId = ensured?.id ? Number(ensured.id) : null;
+        li.isRerent = true;
+      } catch (err) {
+        setCompanyMeta(err?.message || "Unable to create rerent equipment type.");
+        renderLineItems();
+        return;
+      }
+    } else {
+      li.typeId = selectedValue ? Number(selectedValue) : null;
+      li.isRerent = false;
+    }
     li.inventoryIds = [];
+    li.inventoryOptions = [];
     li.bundleId = null;
     li.bundleItems = [];
     li.bundleAvailable = null;
@@ -5646,47 +6466,39 @@ lineItemsEl.addEventListener("change", async (e) => {
   }
 
   if (e.target.matches("[data-unit]")) {
-    const nextId = e.target.value ? Number(e.target.value) : null;
-    li.inventoryIds = nextId ? [nextId] : [];
     const selected = e.target.selectedOptions?.[0];
-    const nextBundleId = selected?.dataset?.bundleId ? Number(selected.dataset.bundleId) : null;
-    if (nextBundleId) {
-      li.bundleId = nextBundleId;
-      li.bundleItems = [];
-      li.bundleAvailable = null;
-      li.rateManual = false;
-      const bundle = findBundle(nextBundleId);
-      li.rateBasis = defaultRateBasisForBundle(bundle);
-      li.rateAmount = suggestedBundleRateAmount({ bundleId: nextBundleId, basis: li.rateBasis });
-    } else {
-      li.bundleId = null;
-      li.bundleItems = [];
-      li.bundleAvailable = null;
-      if (li.typeId && !li.rateManual) {
-        li.rateBasis = defaultRateBasisForType(li.typeId);
-        li.rateAmount = suggestedRateAmount({ customerId: draft.customerId, typeId: li.typeId, basis: li.rateBasis });
-      }
-    }
-    await refreshAvailabilityForLineItem(li).catch(() => { });
-    renderLineItems();
-    scheduleDraftSave();
+    await applyUnitSelection(li, {
+      unitId: e.target.value || null,
+      bundleId: selected?.dataset?.bundleId || null,
+    });
   }
-});
+  });
 
 lineItemsEl.addEventListener("input", (e) => {
   const card = e.target.closest(".line-item-card");
   if (!card) return;
   const li = draft.lineItems.find((x) => x.tempId === card.dataset.tempId);
   if (!li) return;
+  if (e.target.matches("[data-unit-search]")) {
+    renderUnitSuggestionsForInput(e.target, { showAll: true });
+    return;
+  }
+  if (e.target.matches("[data-unit-description]")) {
+    li.unitDescription = e.target.value;
+    scheduleDraftSave();
+    return;
+  }
   if (e.target.matches("[data-rate-amount]")) {
     li.rateAmount = numberOrNull(e.target.value);
     li.rateManual = true;
-    const calc = computeLineAmount({
+    const calc = resolveLineItemAmounts({
       startLocal: li.startLocal,
       endLocal: li.endLocal,
       rateBasis: li.rateBasis,
       rateAmount: li.rateAmount,
       qty: lineItemQty(li),
+      fallbackLineAmount: li.lineAmount,
+      fallbackBillableUnits: li.billableUnits,
     });
     const out = card.querySelector("[data-line-amount]");
     if (out) out.value = calc ? fmtMoneyNullable(calc.lineAmount) : "";
@@ -5759,6 +6571,13 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
       reportError("Line item end time must be after start time.");
       return { ok: false, error: "Line item end time must be after start time." };
     }
+    if (isRerentLineItem(li)) {
+      if (!String(li.unitDescription || "").trim()) {
+        reportError("Enter a product description for rerent line items.");
+        return { ok: false, error: "Enter a product description for rerent line items." };
+      }
+      continue;
+    }
     if (requireUnits) {
       if (li.bundleId) {
         if (li.bundleAvailable === false) {
@@ -5825,6 +6644,7 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
       rateBasis: normalizeRateBasis(li.rateBasis),
       rateAmount: numberOrNull(li.rateAmount),
       inventoryIds: lockUnits ? [] : (li.inventoryIds || []),
+      unitDescription: isRerentLineItem(li) ? (String(li.unitDescription || "").trim() || null) : null,
       beforeNotes: li.beforeNotes || "",
       afterNotes: li.afterNotes || "",
       beforeImages: li.beforeImages || [],
@@ -5834,7 +6654,12 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     })),
     fees: (draft.fees || [])
       .filter((f) => String(f.name || "").trim())
-      .map((f) => ({ id: f.id, name: f.name, amount: moneyNumber(f.amount) })),
+      .map((f) => ({
+        id: f.id,
+        name: f.name,
+        amount: moneyNumber(f.amount),
+        feeDate: normalizeDateOnlyValue(f.feeDate) || null,
+      })),
   };
 
   try {
@@ -5922,6 +6747,21 @@ openHistoryBtn?.addEventListener("click", (e) => {
   const fromParam = params.get("from");
   const from = fromParam ? `&from=${encodeURIComponent(fromParam)}` : "";
   window.location.href = `rental-order-history.html?id=${encodeURIComponent(String(editingOrderId))}${from}`;
+});
+
+openMonthlyChargesBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) {
+    setCompanyMeta("Set company first.");
+    return;
+  }
+  if (!editingOrderId) {
+    setCompanyMeta("Save the document first.");
+    return;
+  }
+  const fromParam = params.get("from");
+  const from = fromParam ? `&from=${encodeURIComponent(fromParam)}` : "";
+  window.location.href = `rental-order-monthly.html?id=${encodeURIComponent(String(editingOrderId))}${from}`;
 });
 
 let extrasDrawerOpen = false;
@@ -6239,8 +7079,27 @@ lineItemActualModal?.addEventListener("click", (e) => {
     if (!li) return;
     normalizePausePeriods(li);
     li.pausePeriods.splice(Number(removePauseIndex), 1);
+    if (Number.isFinite(editingLineItemPauseIndex)) {
+      const removedIndex = Number(removePauseIndex);
+      if (editingLineItemPauseIndex === removedIndex) {
+        resetLineItemPauseEditor();
+      } else if (removedIndex < editingLineItemPauseIndex) {
+        editingLineItemPauseIndex -= 1;
+      }
+    }
     renderLineItemPausePeriods(li);
+    renderLineItems();
     scheduleDraftSave();
+    return;
+  }
+  const editPauseTarget = e.target.closest?.("[data-edit-pause]");
+  if (editPauseTarget) {
+    e.preventDefault();
+    const li = getEditingLineItemActual();
+    if (!li) return;
+    const editIndex = Number(editPauseTarget.getAttribute("data-edit-pause"));
+    if (!Number.isFinite(editIndex)) return;
+    startLineItemPauseEditing(li, editIndex);
   }
 });
 
@@ -6277,25 +7136,11 @@ lineItemPauseAddBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   const li = getEditingLineItemActual();
   if (!li) return;
-  snapInputToMinuteStep(lineItemPauseStartInput);
-  snapInputToMinuteStep(lineItemPauseEndInput);
-  const startLocal = lineItemPauseStartInput?.value || "";
-  const endLocal = lineItemPauseEndInput?.value || "";
-  const startAt = fromLocalInputValue(startLocal);
-  const endAt = fromLocalInputValue(endLocal);
-  if (!startAt || !endAt) {
-    if (lineItemActualHint) lineItemActualHint.textContent = "Pause start and end are required.";
+  const result = addPendingPauseFromInputs(li);
+  if (result?.error) {
+    if (lineItemActualHint) lineItemActualHint.textContent = result.error;
     return;
   }
-  if (!(new Date(endAt) > new Date(startAt))) {
-    if (lineItemActualHint) lineItemActualHint.textContent = "Pause end must be after pause start.";
-    return;
-  }
-  normalizePausePeriods(li);
-  li.pausePeriods.push({ startAt, endAt });
-  if (lineItemPauseStartInput) lineItemPauseStartInput.value = "";
-  if (lineItemPauseEndInput) lineItemPauseEndInput.value = "";
-  renderLineItemPausePeriods(li);
   scheduleDraftSave();
 });
 
@@ -6307,15 +7152,21 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
     setCompanyMeta("Set company first.");
     return;
   }
+  const pauseInputResult = addPendingPauseFromInputs(li, { allowEmpty: true });
+  if (pauseInputResult?.error) {
+    if (lineItemActualHint) lineItemActualHint.textContent = pauseInputResult.error;
+    return;
+  }
   const { targetPickup, targetReturn } = collectActualModalTargets();
   const pickupChanged = targetPickup !== (li.pickedUpAt || null);
   const returnChanged = targetReturn !== (li.returnedAt || null);
+  const pauseChanged = pausePeriodsSignature(li) !== editingLineItemActualPauseSignature;
   const returnAdded = !!targetReturn && !li.returnedAt;
   let returnLocationChoice = "none";
   if (returnAdded) {
     returnLocationChoice = await openReturnLocationModal();
   }
-  if (!pickupChanged && !returnChanged) {
+  if (!pickupChanged && !returnChanged && !pauseChanged) {
     if (lineItemActualHint) lineItemActualHint.textContent = "No changes to save.";
     return;
   }
@@ -6325,10 +7176,14 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
   }
 
   lineItemActualSaveBtn.disabled = true;
-  if (lineItemActualHint) lineItemActualHint.textContent = "Saving actual period...";
+  if (lineItemActualHint) {
+    lineItemActualHint.textContent =
+      pauseChanged && !pickupChanged && !returnChanged ? "Saving pause periods..." : "Saving actual period...";
+  }
   try {
     let updatedLineItem = li;
-    if (lineItemNeedsOrderSave(li)) {
+    const needsOrderSave = lineItemNeedsOrderSave(li) || (!!editingOrderId && pauseChanged);
+    if (needsOrderSave) {
       const signature = lineItemPersistedSignature(li);
       const signatureIndex = lineItemSignatureIndex(signature, li.tempId);
       const saveResult = await saveOrderDraft({
@@ -6344,11 +7199,16 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
         if (lineItemActualHint) lineItemActualHint.textContent = "Unable to locate updated line item after save.";
         return;
       }
-      const forcePickup = pickupChanged && !!targetPickup;
-      await applyActualPeriodToLineItem(refreshed, { targetPickup, targetReturn, forcePickup });
       updatedLineItem = refreshed;
+      editingLineItemActualPauseSignature = pausePeriodsSignature(refreshed);
+      if (pickupChanged || returnChanged) {
+        const forcePickup = pickupChanged && !!targetPickup;
+        await applyActualPeriodToLineItem(refreshed, { targetPickup, targetReturn, forcePickup });
+      }
     } else {
-      await applyActualPeriodToLineItem(li, { targetPickup, targetReturn });
+      if (pickupChanged || returnChanged) {
+        await applyActualPeriodToLineItem(li, { targetPickup, targetReturn });
+      }
     }
     if (returnLocationChoice === "base") {
       const equipmentIds = uniqueEquipmentIdsFromLineItems([updatedLineItem]);
@@ -6356,7 +7216,10 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
     }
     renderLineItems();
     scheduleDraftSave();
-    if (lineItemActualHint) lineItemActualHint.textContent = "Actual rental period saved.";
+    if (lineItemActualHint) {
+      lineItemActualHint.textContent =
+        pauseChanged && !pickupChanged && !returnChanged ? "Pause periods saved." : "Actual rental period saved.";
+    }
     closeLineItemActualModal();
   } catch (err) {
     if (lineItemActualHint) lineItemActualHint.textContent = err?.message || "Unable to save actual period.";
@@ -6371,6 +7234,17 @@ lineItemActualSaveAllBtn?.addEventListener("click", async (e) => {
     setCompanyMeta("Set company first.");
     return;
   }
+  const editingLineItem = getEditingLineItemActual();
+  const pauseInputResult = editingLineItem
+    ? addPendingPauseFromInputs(editingLineItem, { allowEmpty: true })
+    : null;
+  if (pauseInputResult?.error) {
+    if (lineItemActualHint) lineItemActualHint.textContent = pauseInputResult.error;
+    return;
+  }
+  const pauseChanged = editingLineItem
+    ? pausePeriodsSignature(editingLineItem) !== editingLineItemActualPauseSignature
+    : false;
   const { targetPickup, targetReturn } = collectActualModalTargets();
   const returnAddedAny =
     !!targetReturn && (draft.lineItems || []).some((li) => lineItemHasUnit(li) && !li.returnedAt);
@@ -6385,7 +7259,8 @@ lineItemActualSaveAllBtn?.addEventListener("click", async (e) => {
   lineItemActualSaveAllBtn.disabled = true;
   if (lineItemActualHint) lineItemActualHint.textContent = "Saving actual period for all line items...";
   try {
-    const needsSave = (draft.lineItems || []).some((li) => lineItemNeedsOrderSave(li));
+    const needsSave =
+      (draft.lineItems || []).some((li) => lineItemNeedsOrderSave(li)) || (!!editingOrderId && pauseChanged);
     if (needsSave) {
       const saveResult = await saveOrderDraft({
         onError: (message) => {
@@ -6819,6 +7694,9 @@ function init() {
 
   if (openHistoryBtn) {
     openHistoryBtn.style.display = editingOrderId ? "inline-flex" : "none";
+  }
+  if (openMonthlyChargesBtn) {
+    openMonthlyChargesBtn.style.display = editingOrderId ? "inline-flex" : "none";
   }
   syncExtrasDisabledState();
 

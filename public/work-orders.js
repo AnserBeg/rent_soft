@@ -2,7 +2,8 @@ const companyMeta = document.getElementById("company-meta");
 const workOrdersTable = document.getElementById("work-orders-table");
 const newWorkOrderBtn = document.getElementById("new-work-order");
 const searchInput = document.getElementById("search");
-const showClosedInput = document.getElementById("show-closed");
+const statusToggle = document.getElementById("status-toggle");
+const statusButtons = statusToggle ? Array.from(statusToggle.querySelectorAll("button[data-status]")) : [];
 
 const params = new URLSearchParams(window.location.search);
 const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
@@ -10,9 +11,10 @@ const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyI
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let workOrdersCache = [];
 let searchTerm = "";
-let showClosed = false;
+let statusFilter = "open";
 
 const LIST_STATE_KEY = "rentsoft.work-orders.listState";
+const STATUS_OPTIONS = ["open", "completed", "closed"];
 
 function loadListState() {
   const raw = localStorage.getItem(LIST_STATE_KEY);
@@ -20,7 +22,13 @@ function loadListState() {
   try {
     const saved = JSON.parse(raw);
     if (typeof saved.searchTerm === "string") searchTerm = saved.searchTerm;
-    if (typeof saved.showClosed === "boolean") showClosed = saved.showClosed;
+    if (typeof saved.statusFilter === "string" && STATUS_OPTIONS.includes(saved.statusFilter)) {
+      statusFilter = saved.statusFilter;
+      return;
+    }
+    if (typeof saved.showClosed === "boolean") {
+      statusFilter = saved.showClosed ? "closed" : "open";
+    }
   } catch { }
 }
 
@@ -29,7 +37,7 @@ function persistListState() {
     LIST_STATE_KEY,
     JSON.stringify({
       searchTerm: String(searchTerm || ""),
-      showClosed: !!showClosed,
+      statusFilter,
     })
   );
 }
@@ -158,11 +166,25 @@ function renderWorkOrders(rows) {
   });
 }
 
+function normalizeOrderStatus(order) {
+  return order?.orderStatus || "open";
+}
+
+function setStatusFilter(nextStatus) {
+  if (!STATUS_OPTIONS.includes(nextStatus)) return;
+  statusFilter = nextStatus;
+  statusButtons.forEach((button) => {
+    const isActive = button.dataset.status === statusFilter;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+}
+
 function applyFilters() {
   let rows = [...workOrdersCache];
 
-  if (!showClosed) {
-    rows = rows.filter((order) => order?.orderStatus !== "closed");
+  if (statusFilter) {
+    rows = rows.filter((order) => normalizeOrderStatus(order) === statusFilter);
   }
 
   if (searchTerm) {
@@ -230,6 +252,15 @@ searchInput?.addEventListener("input", (e) => {
   persistListState();
 });
 
+statusToggle?.addEventListener("click", (e) => {
+  const button = e.target.closest?.("button[data-status]");
+  const nextStatus = button?.dataset?.status;
+  if (!nextStatus) return;
+  setStatusFilter(nextStatus);
+  renderWorkOrders(applyFilters());
+  persistListState();
+});
+
 workOrdersTable?.addEventListener("click", (e) => {
   const action = e.target.closest?.("button[data-action]")?.getAttribute?.("data-action");
   if (action === "close") {
@@ -246,20 +277,13 @@ workOrdersTable?.addEventListener("click", (e) => {
   window.location.href = `work-order-form.html?id=${encodeURIComponent(id)}`;
 });
 
-showClosedInput?.addEventListener("change", (e) => {
-  showClosed = !!e.target.checked;
-  renderWorkOrders(applyFilters());
-  persistListState();
-});
-
 if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
   companyMeta.textContent = "";
 
   loadListState();
-  if (showClosedInput) {
-    if (showClosedInput.checked && !showClosed) showClosed = true;
-    showClosedInput.checked = showClosed;
+  if (statusButtons.length) {
+    setStatusFilter(statusFilter);
   }
   if (searchInput) {
     if (searchInput.value && !searchTerm) searchTerm = searchInput.value;

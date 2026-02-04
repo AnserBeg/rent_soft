@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Aiven Rental - Finance</title>
+  <title>Aiven Rental - Monthly Charges</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="no-top-headers">
@@ -20,8 +20,8 @@
           <div class="nav-group">
             <div class="nav-group-title">Operations</div>
             <a class="nav-link" href="rental-quotes.html">Quotes</a>
-            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
-            <a class="nav-link active" href="invoices.html">Finance</a>
+            <a class="nav-link active" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="invoices.html">Finance</a>
           </div>
           <div class="nav-group">
             <div class="nav-group-title">Repairs</div>
@@ -64,95 +64,38 @@
             </div>
           </div>
         </header>
-        <header class="hero">
-          <div>
-            <p class="eyebrow">Finance</p>
-            <h1>Finance</h1>
-            <p class="lede">Connect QuickBooks Online and review all draft invoices and credits synced from QBO.</p>
-          </div>
-          <div class="hero-badge">
-            <span>Draft-only</span>
-            <span>Read-only sync</span>
-            <span>Unassigned</span>
-          </div>
-        </header>
 
         <main class="grid">
           <section class="card company-context-card">
             <div class="card-header">
               <div>
                 <p class="eyebrow">Context</p>
-                <h2>Company</h2>
+                <h2>Rental order</h2>
+              </div>
+              <div class="inline-actions">
+                <a class="ghost small" id="back-to-order" href="rental-orders.html">Back to order</a>
               </div>
             </div>
             <p class="hint" id="company-meta">Loading your company...</p>
+            <div class="details-panel" id="order-summary"></div>
           </section>
-
-          <div class="two-col" style="grid-column: 1 / -1; gap: 18px;">
-            <section class="card">
-              <div class="card-header">
-                <div>
-                  <h2>QuickBooks Online</h2>
-                  <p class="hint" style="margin:6px 0 0;">Connect to QBO to view draft-only invoices and credits.</p>
-                </div>
-                <div class="inline-actions">
-                  <button class="primary" id="qbo-connect" type="button">Connect</button>
-                  <button class="ghost danger" id="qbo-disconnect" type="button" disabled>Disconnect</button>
-                </div>
-              </div>
-              <div class="stack">
-                <p class="hint" id="qbo-status">Checking QBO connection...</p>
-                <p class="hint" id="qbo-hint" style="margin:0;"></p>
-              </div>
-            </section>
-            <section class="card">
-              <div class="card-header">
-                <div>
-                  <p class="eyebrow">Shortcut</p>
-                  <h2>Monthly customer charges</h2>
-                </div>
-                <div class="inline-actions">
-                  <a class="primary" href="customer-monthly-charges.html">Open</a>
-                </div>
-              </div>
-              <p class="hint">Pick a month to see customer totals based on prorated rental order charges.</p>
-            </section>
-          </div>
 
           <section class="card wide">
             <div class="card-header">
               <div>
-                <h2>All invoices & credits</h2>
-              </div>
-              <div class="inline-actions">
-                <button class="ghost" id="qbo-sync">Sync QBO</button>
+                <h2>Monthly charges</h2>
+                <p class="hint" id="page-helper">Prorated by time out in each month (no rounding), minus pauses, plus fees dated in that month.</p>
               </div>
             </div>
 
             <div class="table-shell">
               <div class="table-head">
-                <div class="inline-actions" style="flex-wrap:wrap;">
-                  <label>Assignment
-                    <select id="assigned-filter">
-                      <option value="">All</option>
-                      <option value="assigned">Assigned to RO</option>
-                      <option value="unassigned">Unassigned</option>
-                    </select>
-                  </label>
-                  <label>Sync from
-                    <input id="sync-since" type="date" />
-                  </label>
-                  <label>Sync to
-                    <input id="sync-until" type="date" />
-                  </label>
-                </div>
-                <div class="inline">
-                  <input id="search" class="search-input" placeholder="Search doc #, RO, or status..." />
-                </div>
+                <p class="hint" id="page-meta">Loading monthly charges...</p>
               </div>
-              <div class="table" id="invoices-table"></div>
-              <p class="hint" id="invoices-hint" style="margin:10px 0 0;"></p>
+              <div class="table" id="monthly-charges-table"></div>
             </div>
+
+            <div class="stack" id="monthly-details"></div>
           </section>
         </main>
       </div>
@@ -160,8 +103,7 @@
   </div>
 
   <script src="session.js"></script>
-  <script src="invoices.js"></script>
-  <script src="table-export.js"></script>
+  <script src="rental-order-monthly.js"></script>
 </body>
 </html>
 
