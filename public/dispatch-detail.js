@@ -1223,10 +1223,9 @@ function updateDetailEmpty(show) {
 function renderUnitDetail(row) {
   const eq = row?.equipment || {};
   unitDetails.innerHTML = `
-    ${detailItem("Unit", equipmentLabel(eq))}
+    ${detailItem("Type of equipment", eq.type_name || eq.type || "--")}
     ${detailItem("Serial", eq.serial_number || "--")}
     ${detailItem("Model", eq.model_name || "--")}
-    ${detailItem("Type", eq.type_name || eq.type || "--")}
   `;
 }
 
@@ -1256,9 +1255,6 @@ function renderOrderDetail(row, detail) {
   orderDetails.innerHTML = orderDetailItems.join("");
 
   const lineDetailItems = [];
-  if (isRentalInfoEnabled("coverageHours")) {
-    lineDetailItems.push(detailItem("Hours of coverage", formatCoverageHours(coverageHours)));
-  }
   if (isRentalInfoEnabled("siteAddress")) {
     lineDetailItems.push(detailItem("Site address", siteAddress || "--"));
   }
@@ -1270,6 +1266,9 @@ function renderOrderDetail(row, detail) {
       ? notificationCircumstances.map(v => escapeHtml(v)).join(", ")
       : "--";
     lineDetailItems.push(detailItem("Notification circumstance", notifValue));
+  }
+  if (isRentalInfoEnabled("coverageHours")) {
+    lineDetailItems.push(detailItem("Hours of coverage", formatCoverageHours(coverageHours)));
   }
   if (isRentalInfoEnabled("generalNotes")) {
     lineDetailItems.push(detailItem("General notes", generalNotesValue, "detail-item-wide"));
