@@ -476,6 +476,7 @@ async function ensureTables() {
         sales_person_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL,
         follow_up_date DATE,
         notes TEXT,
+        is_pending BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
@@ -495,6 +496,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS sales_person_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS follow_up_date DATE;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS notes TEXT;`);
+    await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_pending BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`CREATE INDEX IF NOT EXISTS customers_parent_customer_id_idx ON customers (parent_customer_id);`);
 
     await client.query(`
@@ -853,7 +855,7 @@ async function ensureTables() {
         ro_number TEXT,
         external_contract_number TEXT,
         legacy_data JSONB NOT NULL DEFAULT '{}'::jsonb,
-        customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE RESTRICT,
         customer_po TEXT,
         salesperson_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL,
         fulfillment_method TEXT NOT NULL DEFAULT 'pickup',
@@ -884,6 +886,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS ro_number TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS external_contract_number TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS legacy_data JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+    await client.query(`ALTER TABLE rental_orders ALTER COLUMN customer_id DROP NOT NULL;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS customer_po TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS salesperson_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS fulfillment_method TEXT NOT NULL DEFAULT 'pickup';`);
@@ -3299,6 +3302,7 @@ async function listCustomers(companyId, { from = null, to = null, dateField = "c
             c.sales_person_id,
             c.follow_up_date,
             c.notes,
+            c.is_pending,
             c.parent_customer_id,
             c.created_at,
             p.company_name AS parent_company_name,
@@ -3334,6 +3338,7 @@ async function getCustomerById({ companyId, id }) {
             c.sales_person_id,
             c.follow_up_date,
             c.notes,
+            c.is_pending,
             c.parent_customer_id,
             p.company_name AS parent_company_name,
             CASE
@@ -3373,7 +3378,7 @@ async function updateCustomerQboLink({
             company_name = COALESCE($2, company_name),
             contact_name = COALESCE($3, contact_name)
       WHERE id = $4 AND company_id = $5
-      RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id`,
+      RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id, is_pending`,
     [qboId, companyName, contactName, id, companyId]
   );
   return result.rows[0] || null;
@@ -3695,6 +3700,7 @@ async function createCustomer({
   notes,
   contacts,
   accountingContacts,
+  isPending = false,
 }) {
   const parent = await resolveParentCustomer({ companyId, parentCustomerId });
   const isBranch = !!parent;
@@ -3706,9 +3712,9 @@ async function createCustomer({
   const primaryPhone = normalizeContactField(primary.phone) || normalizeContactField(phone);
   const finalCompanyName = parent?.company_name || companyName;
   const result = await pool.query(
-    `INSERT INTO customers (company_id, parent_customer_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id`,
+    `INSERT INTO customers (company_id, parent_customer_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, is_pending)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id, is_pending`,
     [
       companyId,
       parent?.id || null,
@@ -3728,6 +3734,7 @@ async function createCustomer({
       salesPersonId || null,
       followUpDate || null,
       notes || null,
+      isPending === true,
     ]
   );
   return result.rows[0];
@@ -3787,7 +3794,7 @@ async function updateCustomer({
          follow_up_date = $16,
          notes = $17
      WHERE id = $18 AND company_id = $19
-     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id`,
+     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id, is_pending`,
     [
       parent?.id || null,
       finalCompanyName,
@@ -3811,6 +3818,21 @@ async function updateCustomer({
     ]
   );
   return result.rows[0];
+}
+
+async function setCustomerPendingStatus({ companyId, customerId, isPending }) {
+  const cid = Number(companyId);
+  const id = Number(customerId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(id) || id <= 0) throw new Error("customerId is required.");
+  const result = await pool.query(
+    `UPDATE customers
+        SET is_pending = $1
+      WHERE id = $2 AND company_id = $3
+      RETURNING id, is_pending`,
+    [isPending === true, id, cid]
+  );
+  return result.rows[0] || null;
 }
 
 function normalizeCustomerMatchKey(value) {
@@ -5749,7 +5771,7 @@ async function listRentalOrders(companyId, { statuses = null, quoteOnly = false 
              ) * 1.05
            ) AS total
       FROM rental_orders ro
-      JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers c ON c.id = ro.customer_id
  LEFT JOIN sales_people sp ON sp.id = ro.salesperson_id
  LEFT JOIN locations l ON l.id = ro.pickup_location_id
      WHERE ${where.join(" AND ")}
@@ -5852,7 +5874,7 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
              ) * 1.05
            ) AS total
       FROM rental_orders ro
-      JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers c ON c.id = ro.customer_id
  LEFT JOIN sales_people sp ON sp.id = ro.salesperson_id
  LEFT JOIN locations l ON l.id = ro.pickup_location_id
      WHERE ${where.join(" AND ")}
@@ -8681,7 +8703,7 @@ async function getRentalOrder({ companyId, id }) {
              ELSE FALSE
            END AS is_overdue
       FROM rental_orders ro
-      JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers c ON c.id = ro.customer_id
  LEFT JOIN sales_people sp ON sp.id = ro.salesperson_id
  LEFT JOIN locations l ON l.id = ro.pickup_location_id
      WHERE ro.company_id = $1 AND ro.id = $2
@@ -11311,6 +11333,9 @@ async function createCustomerChangeRequest({
   const cid = Number(companyId);
   if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
   const normalizedStatus = String(status || "pending").trim().toLowerCase();
+  const normalizedCustomerId = normalizeCustomerId(customerId);
+  const normalizedRentalOrderId = Number(rentalOrderId);
+  const normalizedLinkId = Number(linkId);
   const res = await pool.query(
     `
     INSERT INTO customer_change_requests
@@ -11320,9 +11345,11 @@ async function createCustomerChangeRequest({
     `,
     [
       cid,
-      Number.isFinite(Number(customerId)) ? Number(customerId) : null,
-      Number.isFinite(Number(rentalOrderId)) ? Number(rentalOrderId) : null,
-      Number.isFinite(Number(linkId)) ? Number(linkId) : null,
+      normalizedCustomerId,
+      Number.isFinite(normalizedRentalOrderId) && normalizedRentalOrderId > 0
+        ? normalizedRentalOrderId
+        : null,
+      Number.isFinite(normalizedLinkId) && normalizedLinkId > 0 ? normalizedLinkId : null,
       String(scope || "").trim(),
       normalizedStatus,
       JSON.stringify(payload || {}),
@@ -14012,6 +14039,7 @@ module.exports = {
   updateCustomerQboLink,
   createCustomer,
   updateCustomer,
+  setCustomerPendingStatus,
   deleteCustomer,
   listVendors,
   createVendor,

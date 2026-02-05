@@ -952,6 +952,7 @@ createCustomerLinkBtn?.addEventListener("click", async () => {
         companyId: activeCompanyId,
         customerId: editingCustomerId,
         scope,
+        singleUse: true,
       }),
     });
     const data = await res.json().catch(() => ({}));

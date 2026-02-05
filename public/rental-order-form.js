@@ -40,6 +40,7 @@ const orderNumberPill = document.getElementById("order-number-pill");
 const downloadOrderPdfBtn = document.getElementById("download-order-pdf");
 const openHistoryBtn = document.getElementById("open-history");
 const openMonthlyChargesBtn = document.getElementById("open-monthly-charges");
+const openCustomerUpdatesBtn = document.getElementById("open-customer-updates");
 const qboDocumentsList = document.getElementById("qbo-documents-list");
 const qboDocumentsHint = document.getElementById("qbo-documents-hint");
 const qboSyncNowBtn = document.getElementById("qbo-sync-now");
@@ -3009,6 +3010,9 @@ function updateModeLabels() {
   }
   if (openMonthlyChargesBtn) {
     openMonthlyChargesBtn.style.display = editingOrderId ? "inline-flex" : "none";
+  }
+  if (openCustomerUpdatesBtn) {
+    openCustomerUpdatesBtn.style.display = editingOrderId ? "inline-flex" : "none";
   }
   if (editingOrderId) {
     const label = primary ? `Edit ${primary}` : `Edit #${editingOrderId}`;
@@ -6552,9 +6556,9 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     reportError("Set company first.");
     return { ok: false, error: "Set company first." };
   }
-  if (!draft.customerId) {
-    reportError("Select a customer.");
-    return { ok: false, error: "Select a customer." };
+  if (!draft.customerId && !isDemandOnlyStatus(draft.status)) {
+    reportError("Select a customer before ordering.");
+    return { ok: false, error: "Select a customer before ordering." };
   }
   const validLines = (draft.lineItems || []).filter((li) => li.typeId && li.startLocal && li.endLocal);
   if (validLines.length === 0) {
@@ -6762,6 +6766,22 @@ openMonthlyChargesBtn?.addEventListener("click", (e) => {
   const fromParam = params.get("from");
   const from = fromParam ? `&from=${encodeURIComponent(fromParam)}` : "";
   window.location.href = `rental-order-monthly.html?id=${encodeURIComponent(String(editingOrderId))}${from}`;
+});
+
+openCustomerUpdatesBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) {
+    setCompanyMeta("Set company first.");
+    return;
+  }
+  if (!editingOrderId) {
+    setCompanyMeta("Save the document first.");
+    return;
+  }
+  const qs = new URLSearchParams();
+  qs.set("rentalOrderId", String(editingOrderId));
+  qs.set("status", "all");
+  window.location.href = `customer-updates.html?${qs.toString()}`;
 });
 
 let extrasDrawerOpen = false;
@@ -7698,6 +7718,9 @@ function init() {
   if (openMonthlyChargesBtn) {
     openMonthlyChargesBtn.style.display = editingOrderId ? "inline-flex" : "none";
   }
+  if (openCustomerUpdatesBtn) {
+    openCustomerUpdatesBtn.style.display = editingOrderId ? "inline-flex" : "none";
+  }
   syncExtrasDisabledState();
 
   try {
@@ -7754,6 +7777,7 @@ createOrderLinkBtn?.addEventListener("click", async () => {
         rentalOrderId: editingOrderId,
         customerId: draft.customerId || null,
         scope,
+        singleUse: true,
       }),
     });
     const data = await res.json().catch(() => ({}));

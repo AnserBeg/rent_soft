@@ -3,26 +3,40 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Customer Update</title>
+  <title>Aiven Rental - Customer Update</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="landing-shell">
-    <header class="hero" style="margin-bottom: 18px;">
-      <div>
-        <p class="eyebrow">Customer update</p>
-        <h1 id="page-title">Complete your details</h1>
-        <p class="lede" id="page-subtitle">Review and submit your information below.</p>
-      </div>
-    </header>
-
     <main style="max-width: 1100px; margin: 0 auto;">
+      <section class="card wide" id="link-used-card" style="display:none;">
+        <div class="card-header">
+          <div>
+            <h1 style="margin:0;">Thank you!</h1>
+            <p class="hint">This link has already been used.</p>
+          </div>
+        </div>
+        <div class="inline-actions" style="justify-content:flex-start; display:none;" id="link-used-proof-actions">
+          <a class="ghost" id="link-used-proof" href="#" target="_blank" rel="noreferrer">Download proof PDF</a>
+        </div>
+      </section>
+      <section class="card wide" id="link-expired-card" style="display:none;">
+        <div class="card-header">
+          <div>
+            <h1 style="margin:0;">Link expired</h1>
+            <p class="hint">This link has expired.</p>
+          </div>
+        </div>
+      </section>
       <form id="customer-link-form" class="grid" enctype="multipart/form-data">
         <section class="card wide">
           <div class="card-header">
             <div>
-              <p class="eyebrow">Customer &amp; sales</p>
-              <h2>Customer details</h2>
+              <div class="title-row">
+                <h1 id="page-title" style="margin:0;">Complete your details</h1>
+              </div>
+              <h2>Customer &amp; sales</h2>
+              <p class="hint" id="page-subtitle">Review and submit your information below.</p>
             </div>
           </div>
           <div class="stack">
@@ -31,22 +45,16 @@
               <label>Company name
                 <input id="company-name" autocomplete="organization" />
               </label>
-              <div class="two-col">
-                <label>Contact name
-                  <input id="contact-name" autocomplete="name" />
-                </label>
-                <label>Email
-                  <input id="email" type="email" autocomplete="email" />
-                </label>
+              <div class="contact-block">
+                <div class="contact-header">
+                  <strong>Contacts</strong>
+                  <button type="button" class="ghost small" id="add-contact-row">+ Add contact</button>
+                </div>
+                <div class="contacts-list stack" id="contacts-list"></div>
               </div>
-              <div class="two-col">
-                <label>Phone
-                  <input id="phone" type="tel" autocomplete="tel" />
-                </label>
-                <label>Street address
-                  <input id="street-address" autocomplete="street-address" />
-                </label>
-              </div>
+              <label>Street address
+                <input id="street-address" autocomplete="street-address" />
+              </label>
               <div class="three-col">
                 <label>City
                   <input id="city" autocomplete="address-level2" />
@@ -74,7 +82,6 @@
         <section class="card wide" id="order-section" style="display:none;">
           <div class="card-header">
             <div>
-              <p class="eyebrow">Logistics</p>
               <h2>Pickup &amp; drop-off</h2>
             </div>
           </div>
@@ -99,7 +106,6 @@
         <section class="card wide" id="line-items-section" style="display:none;">
           <div class="card-header">
             <div>
-              <p class="eyebrow">Core</p>
               <h2>Rental line items</h2>
             </div>
             <div class="inline-actions">
@@ -112,7 +118,6 @@
         <section class="card wide" id="rental-info-section" style="display:none;">
           <div class="card-header">
             <div>
-              <p class="eyebrow">Details</p>
               <h2>Rental information</h2>
             </div>
           </div>
@@ -128,15 +133,58 @@
               </label>
             </div>
             <div data-rental-info-field="generalNotes">
-              <label>General notes
-                <textarea id="general-notes" class="notes-area"></textarea>
-              </label>
-              <div class="guard-notes-actions" style="margin-top: 8px;">
+              <label>General notes</label>
+              <div class="rich-editor" id="general-notes-editor-wrap">
+                <div class="rich-toolbar" id="general-notes-toolbar" role="toolbar" aria-label="General notes editor">
+                  <select data-rich="font" aria-label="Font">
+                    <option value="">Font</option>
+                    <option value="Inter">Inter</option>
+                    <option value="Georgia">Georgia</option>
+                    <option value="Times New Roman">Times New Roman</option>
+                    <option value="Arial">Arial</option>
+                    <option value="Verdana">Verdana</option>
+                    <option value="Courier New">Courier New</option>
+                  </select>
+                  <select data-rich="size" aria-label="Font size">
+                    <option value="">Size</option>
+                    <option value="1">10</option>
+                    <option value="2">12</option>
+                    <option value="3">14</option>
+                    <option value="4">16</option>
+                    <option value="5">18</option>
+                    <option value="6">24</option>
+                    <option value="7">32</option>
+                  </select>
+                  <select data-rich="block" aria-label="Text style">
+                    <option value="">Style</option>
+                    <option value="p">Normal</option>
+                    <option value="h1">Heading 1</option>
+                    <option value="h2">Heading 2</option>
+                    <option value="h3">Heading 3</option>
+                  </select>
+                  <button type="button" class="ghost tiny" data-rich-cmd="bold" aria-label="Bold"><strong>B</strong></button>
+                  <button type="button" class="ghost tiny" data-rich-cmd="italic" aria-label="Italic"><em>I</em></button>
+                  <button type="button" class="ghost tiny" data-rich-cmd="underline" aria-label="Underline"><span style="text-decoration:underline;">U</span></button>
+                  <button type="button" class="ghost tiny" data-rich-cmd="insertUnorderedList" aria-label="Bullet list">Bullets</button>
+                  <button type="button" class="ghost tiny" data-rich-cmd="insertOrderedList" aria-label="Numbered list">Numbers</button>
+                  <button type="button" class="ghost tiny" data-rich-action="link" aria-label="Insert link">Link</button>
+                  <button type="button" class="ghost tiny" id="general-notes-insert-image" data-rich-action="image" aria-label="Insert image">Image</button>
+                  <button type="button" class="ghost tiny" data-rich-action="clear" aria-label="Clear formatting">Clear</button>
+                </div>
+                <div
+                  id="general-notes-editor"
+                  class="rich-editor__body"
+                  contenteditable="true"
+                  data-placeholder="Capture any additional instructions for the owner."
+                ></div>
+                <textarea id="general-notes" hidden></textarea>
+              </div>
+              <div class="inline-actions" style="justify-content:flex-start; margin-top: 8px;">
                 <label class="ghost small" for="general-notes-images">Add photos</label>
                 <input id="general-notes-images" class="guard-notes-images" type="file" accept="image/*" multiple hidden />
                 <span class="hint" id="general-notes-images-status"></span>
               </div>
-              <div class="guard-notes-previews" id="general-notes-previews" hidden></div>
+              <div class="guard-notes-previews" id="general-notes-previews"></div>
             </div>
             <div class="contact-block" data-rental-info-field="emergencyContacts">
               <div class="contact-header">
@@ -188,7 +236,6 @@
         <section class="card wide" id="documents-section" style="display:none;">
           <div class="card-header">
             <div>
-              <p class="eyebrow">Documents</p>
               <h2>Requested documents</h2>
             </div>
           </div>
@@ -198,7 +245,6 @@
         <section class="card wide" id="terms-section" style="display:none;">
           <div class="card-header">
             <div>
-              <p class="eyebrow">Terms</p>
               <h2>Terms</h2>
             </div>
           </div>
@@ -208,7 +254,6 @@
         <section class="card wide" id="signature-section" style="display:none;">
           <div class="card-header">
             <div>
-              <p class="eyebrow">Signature</p>
               <h2>E-signature</h2>
             </div>
           </div>

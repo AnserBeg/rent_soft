@@ -64,6 +64,7 @@ const {
   getCustomerById,
   createCustomer,
   updateCustomer,
+  setCustomerPendingStatus,
   deleteCustomer,
   listVendors,
   createVendor,
@@ -948,11 +949,13 @@ app.get(
       const rateAmount = li.rateAmount ?? li.rate_amount ?? null;
       const billableUnits = li.billableUnits ?? li.billable_units ?? null;
       const lineAmount = li.lineAmount ?? li.line_amount ?? null;
+      const unitDescription = li.unitDescription ?? li.unit_description ?? null;
       const hasPricing = rateAmount !== null && rateAmount !== undefined || lineAmount !== null && lineAmount !== undefined;
       return {
         lineItemId: lineItemId === null ? null : Number(lineItemId),
         typeId: typeId === null ? null : Number(typeId),
         bundleId: bundleId === null ? null : Number(bundleId),
+        unitDescription: unitDescription ? String(unitDescription) : "",
         startAt,
         endAt,
         rateBasis: hasPricing ? rateBasis || null : null,
@@ -995,6 +998,7 @@ app.get(
             postalCode: customer.postal_code || null,
             email: customer.email || null,
             phone: customer.phone || null,
+            contacts: Array.isArray(customer.contacts) ? customer.contacts : [],
           }
         : null,
       order: order
@@ -1076,7 +1080,9 @@ app.post(
       if (!orderPayload.generalNotesImages.length) delete orderPayload.generalNotesImages;
     }
 
-    if (["new_customer", "new_quote"].includes(link.scope) && !customerPayload.companyName && !customerPayload.contactName) {
+    const needsNewCustomer =
+      !link.customer_id && ["new_customer", "new_quote", "order_update"].includes(link.scope);
+    if (needsNewCustomer && !customerPayload.companyName && !customerPayload.contactName) {
       return res.status(400).json({ error: "Customer name is required." });
     }
     if (allowOrderData && lineItemsPayload.length === 0) {
@@ -1183,9 +1189,27 @@ app.post(
       typeName: li.typeId ? typeNameById.get(String(li.typeId)) || null : null,
     }));
 
+    let pendingCustomer = null;
+    if (!link.customer_id && (customerPayload.companyName || customerPayload.contactName)) {
+      pendingCustomer = await createCustomer({
+        companyId: link.company_id,
+        companyName: customerPayload.companyName || customerPayload.contactName || "New customer",
+        contactName: customerPayload.contactName || null,
+        streetAddress: customerPayload.streetAddress || null,
+        city: customerPayload.city || null,
+        region: customerPayload.region || null,
+        country: customerPayload.country || null,
+        postalCode: customerPayload.postalCode || null,
+        email: customerPayload.email || null,
+        phone: customerPayload.phone || null,
+        contacts: customerPayload.contacts || null,
+        isPending: true,
+      });
+    }
+
     const changeRequest = await createCustomerChangeRequest({
       companyId: link.company_id,
-      customerId: link.customer_id,
+      customerId: pendingCustomer?.id || link.customer_id,
       rentalOrderId: link.rental_order_id,
       linkId: link.id,
       scope: link.scope,
@@ -1446,6 +1470,7 @@ const ALLOWED_CUSTOMER_FIELDS = new Set([
   "contactName",
   "email",
   "phone",
+  "contacts",
   "streetAddress",
   "city",
   "region",
@@ -1697,6 +1722,19 @@ function sanitizeCustomerPayload(input, allowedFields) {
   if (allowedFields.includes("contactName")) out.contactName = read("contactName") || null;
   if (allowedFields.includes("email")) out.email = read("email") || null;
   if (allowedFields.includes("phone")) out.phone = read("phone") || null;
+  if (allowedFields.includes("contacts")) {
+    const normalized = parseJsonArray(src.contacts)
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const name = String(entry.name || entry.contactName || entry.contact_name || "").trim();
+        const email = String(entry.email || "").trim();
+        const phone = String(entry.phone || "").trim();
+        if (!name && !email && !phone) return null;
+        return { name, email, phone };
+      })
+      .filter(Boolean);
+    if (normalized.length) out.contacts = normalized;
+  }
   if (allowedFields.includes("streetAddress")) out.streetAddress = read("streetAddress") || null;
   if (allowedFields.includes("city")) out.city = read("city") || null;
   if (allowedFields.includes("region")) out.region = read("region") || null;
@@ -5030,7 +5068,7 @@ app.post(
         ? normalizeStringArray(allowedDocumentCategories)
         : settings.customer_document_categories || [];
     const token = crypto.randomBytes(24).toString("hex");
-    const defaultExpiry = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    const defaultExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
     const created = await createCustomerShareLink({
       companyId,
       customerId,
@@ -5119,6 +5157,7 @@ app.post(
         postalCode: customerUpdate.postalCode || null,
         email: customerUpdate.email || null,
         phone: customerUpdate.phone || null,
+        contacts: customerUpdate.contacts || null,
       });
       customerId = createdCustomer?.id || null;
     } else if (customerId && Object.keys(customerUpdate).length) {
@@ -5134,6 +5173,7 @@ app.post(
           postalCode: existing?.postal_code || null,
           email: existing?.email || null,
           phone: existing?.phone || null,
+          contacts: Array.isArray(existing?.contacts) ? existing.contacts : [],
         },
         customerUpdate
       );
@@ -5149,7 +5189,12 @@ app.post(
         postalCode: merged.postalCode,
         email: merged.email,
         phone: merged.phone,
+        contacts: merged.contacts,
       });
+    }
+
+    if (customerId) {
+      await setCustomerPendingStatus({ companyId, customerId, isPending: false });
     }
 
     let orderId = request.rental_order_id;
@@ -7034,12 +7079,17 @@ app.post(
       actorName,
       actorEmail,
     } = req.body;
-    if (!companyId || !customerId) return res.status(400).json({ error: "companyId and customerId are required." });
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const normalizedStatus = status ? String(status).trim().toLowerCase() : "quote";
+    const normalizedCustomerId = customerId ? Number(customerId) : null;
+    if (!isDemandOnlyStatus(normalizedStatus) && !normalizedCustomerId) {
+      return res.status(400).json({ error: "customerId is required for ordered rental orders." });
+    }
     let created;
     try {
       created = await createRentalOrder({
         companyId,
-        customerId,
+        customerId: normalizedCustomerId,
         customerPo,
         salespersonId,
         actorName,
@@ -7142,13 +7192,18 @@ app.put(
       actorName,
       actorEmail,
     } = req.body;
-    if (!companyId || !customerId) return res.status(400).json({ error: "companyId and customerId are required." });
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const normalizedStatus = status ? String(status).trim().toLowerCase() : "quote";
+    const normalizedCustomerId = customerId ? Number(customerId) : null;
+    if (!isDemandOnlyStatus(normalizedStatus) && !normalizedCustomerId) {
+      return res.status(400).json({ error: "customerId is required for ordered rental orders." });
+    }
     let updated;
     try {
       updated = await updateRentalOrder({
         id: Number(id),
         companyId,
-        customerId,
+        customerId: normalizedCustomerId,
         customerPo,
         salespersonId,
         actorName,
@@ -7287,6 +7342,14 @@ app.put(
     const { companyId, status, actorName, actorEmail, note } = req.body;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     if (!status) return res.status(400).json({ error: "status is required." });
+    const normalizedStatus = String(status).trim().toLowerCase();
+    if (!isDemandOnlyStatus(normalizedStatus)) {
+      const detail = await getRentalOrder({ companyId: Number(companyId), id: Number(id) });
+      const orderCustomerId = detail?.order?.customer_id ?? detail?.order?.customerId ?? null;
+      if (!orderCustomerId) {
+        return res.status(400).json({ error: "customerId is required for ordered rental orders." });
+      }
+    }
     const updated = await updateRentalOrderStatus({
       id: Number(id),
       companyId: Number(companyId),
