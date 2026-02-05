@@ -1653,13 +1653,41 @@ async function getIncomeTotals({ companyId, startDate, endDate, debug = false })
     endDate
   )}`;
   const accrualQuery = `${baseQuery}&accounting_method=Accrual`;
-  let data;
+  let data = null;
+  let pAndLError = null;
   try {
     data = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
   } catch (err) {
     if (!isQboUnexpectedInternalError(err)) throw err;
-    data = await qboApiRequest({ companyId, method: "GET", path: baseQuery });
+    try {
+      data = await qboApiRequest({ companyId, method: "GET", path: baseQuery });
+    } catch (retryErr) {
+      if (!isQboUnexpectedInternalError(retryErr)) throw retryErr;
+      pAndLError = retryErr;
+      data = null;
+    }
   }
+  if (!data) {
+    const quick = await getIncomeTotalsFromQuickReports({
+      companyId,
+      selectedIds: selected,
+      startDate,
+      endDate,
+      debug,
+    });
+    if (debug) {
+      return {
+        total: quick.total,
+        selectedAccounts: selected,
+        debug: {
+          pAndLError: pAndLError?.message ? String(pAndLError.message) : null,
+          quickReports: quick.debugReports,
+        },
+      };
+    }
+    return { total: quick.total, selectedAccounts: selected };
+  }
+
   const rows = data?.Rows?.Row || [];
   const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
   const total = sumReportIncomeRows(rows, selected, selectedNames);
@@ -1698,12 +1726,40 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
     end
   )}&summarize_column_by=${encodeURIComponent(summarize)}`;
   const accrualQuery = `${query}&accounting_method=Accrual`;
-  let data;
+  let data = null;
+  let pAndLError = null;
   try {
     data = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
   } catch (err) {
     if (!isQboUnexpectedInternalError(err)) throw err;
-    data = await qboApiRequest({ companyId, method: "GET", path: query });
+    try {
+      data = await qboApiRequest({ companyId, method: "GET", path: query });
+    } catch (retryErr) {
+      if (!isQboUnexpectedInternalError(retryErr)) throw retryErr;
+      pAndLError = retryErr;
+      data = null;
+    }
+  }
+  if (!data) {
+    const quick = await getIncomeTimeSeriesFromQuickReports({
+      companyId,
+      selectedIds: selected,
+      startDate: start,
+      endDate: end,
+      bucket: bucketKey,
+      debug,
+    });
+    if (debug) {
+      return {
+        rows: quick.rows,
+        selectedAccounts: selected,
+        debug: {
+          pAndLError: pAndLError?.message ? String(pAndLError.message) : null,
+          quickReports: quick.debugReports,
+        },
+      };
+    }
+    return { rows: quick.rows, selectedAccounts: selected };
   }
   const columnDefs = extractReportBucketColumns(data, bucketKey, start, end);
   if (!columnDefs.length) {

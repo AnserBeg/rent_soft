@@ -69,7 +69,7 @@
           <div>
             <p class="eyebrow">Sales person</p>
             <h1 id="sp-title">Loading…</h1>
-            <p class="lede">Closed transactions over time.</p>
+            <p class="lede">Monthly charges vs QuickBooks invoices for this sales person.</p>
           </div>
         </header>
 
@@ -88,24 +88,20 @@
                       <option value="365" selected>365</option>
                     </select>
                   </label>
-                  <label>Bucket
-                    <select id="bucket">
-                      <option value="day">Day</option>
-                      <option value="week">Week</option>
-                      <option value="month" selected>Month</option>
-                    </select>
-                  </label>
                 </div>
               </div>
             </div>
 
             <div class="chart-card" style="margin-top: 0; min-height: 320px;">
               <div class="chart-head">
-                <div class="chart-title">Transactions closed</div>
+                <div>
+                  <div class="chart-title">Monthly charges vs QBO invoices</div>
+                  <p class="hint" id="sp-chart-hint">Prorated charges from monthly customer totals compared with QuickBooks invoices.</p>
+                </div>
               </div>
               <div class="chart-body">
                 <div class="chart-canvas">
-                  <canvas id="tx-chart"></canvas>
+                  <canvas id="sp-revenue-chart"></canvas>
                 </div>
                 <div class="chart-side-media" id="sp-image-wrap" hidden>
                   <img id="sp-image" alt="" loading="lazy" referrerpolicy="no-referrer" />
