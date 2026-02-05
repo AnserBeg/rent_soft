@@ -274,10 +274,16 @@ function seriesColor(i) {
 
 function bucketKey(d, bucket) {
   if (!d) return "";
-  const dt = new Date(d);
+  const raw = String(d);
+  const ymd = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const dt = ymd ? new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3])) : new Date(d);
   if (Number.isNaN(dt.getTime())) return "";
   const b = String(bucket || "month").toLowerCase();
-  if (b === "month") return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+  if (b === "month") {
+    if (ymd) return `${ymd[1]}-${ymd[2]}`;
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+  }
+  if (ymd) return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
   return dt.toISOString().slice(0, 10);
 }
 
