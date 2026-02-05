@@ -1553,7 +1553,18 @@ async function getIncomeTotalsFromQuickReports({ companyId, selectedIds, startDa
       report = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
     } catch (err) {
       if (!isQboUnexpectedInternalError(err)) throw err;
-      report = await qboApiRequest({ companyId, method: "GET", path: baseQuery });
+      try {
+        report = await qboApiRequest({ companyId, method: "GET", path: baseQuery });
+      } catch (retryErr) {
+        if (!isQboUnexpectedInternalError(retryErr)) throw retryErr;
+        if (debug) {
+          debugReports.push({
+            accountId: String(accountId),
+            error: retryErr?.message ? String(retryErr.message) : "QBO quick report failed.",
+          });
+        }
+        continue;
+      }
     }
     if (debug) {
       debugReports.push({
@@ -1592,7 +1603,18 @@ async function getIncomeTimeSeriesFromQuickReports({
       report = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
     } catch (err) {
       if (!isQboUnexpectedInternalError(err)) throw err;
-      report = await qboApiRequest({ companyId, method: "GET", path: baseQuery });
+      try {
+        report = await qboApiRequest({ companyId, method: "GET", path: baseQuery });
+      } catch (retryErr) {
+        if (!isQboUnexpectedInternalError(retryErr)) throw retryErr;
+        if (debug) {
+          debugReports.push({
+            accountId: String(accountId),
+            error: retryErr?.message ? String(retryErr.message) : "QBO quick report failed.",
+          });
+        }
+        continue;
+      }
     }
     if (debug) {
       debugReports.push({
