@@ -229,6 +229,26 @@ const QBO_ALLOWED_REDIRECTS = new Set(
     .filter(Boolean)
     .map((entry) => entry.split(/[?#]/)[0])
 );
+const DISPATCH_ALLOWED_PAGES = new Set([
+  "/dispatch.html",
+  "/dispatch-detail.html",
+  "/work-orders.html",
+  "/work-order-form.html",
+]);
+const DISPATCH_ALLOWED_API = [
+  { method: "GET", pattern: /^\/api\/auth\/me$/ },
+  { method: "POST", pattern: /^\/api\/logout$/ },
+  { method: "GET", pattern: /^\/api\/public-config$/ },
+  { method: "GET", pattern: /^\/api\/company-settings$/ },
+  { method: "GET", pattern: /^\/api\/geocode\/search$/ },
+  { method: "GET", pattern: /^\/api\/rental-orders\/timeline$/ },
+  { method: "GET", pattern: /^\/api\/rental-orders\/[^/]+$/ },
+  { method: "PUT", pattern: /^\/api\/rental-orders\/[^/]+\/site-address$/ },
+  { method: "GET", pattern: /^\/api\/equipment$/ },
+  { method: "POST", pattern: /^\/api\/equipment\/[^/]+\/work-order-pause$/ },
+  { method: "POST", pattern: /^\/api\/uploads\/image$/ },
+  { method: "DELETE", pattern: /^\/api\/uploads\/image$/ },
+];
 const HSTS_MAX_AGE = parseHstsMaxAge(process.env.HSTS_MAX_AGE, 60 * 60 * 24 * 180);
 const HSTS_INCLUDE_SUBDOMAINS = parseBoolean(process.env.HSTS_INCLUDE_SUBDOMAINS) !== false;
 const HSTS_PRELOAD = parseBoolean(process.env.HSTS_PRELOAD) === true;
@@ -345,10 +365,30 @@ app.use(
     const { token } = getCompanyUserToken(req);
     if (!token) return next();
     const session = await getCompanyUserByToken(token);
+    res.locals.companySession = session || null;
     if (session) {
       res.locals.noCacheHtml = true;
     }
     return next();
+  })
+);
+
+app.use(
+  asyncHandler(async (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    if (req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) return next();
+    if (!isHtmlRequest(req)) return next();
+
+    const session = res.locals.companySession;
+    if (!session) return next();
+
+    const role = session?.user?.role ? String(session.user.role).trim().toLowerCase() : "";
+    if (role !== "dispatch") return next();
+
+    const normalizedPath = req.path || "/";
+    if (DISPATCH_ALLOWED_PAGES.has(normalizedPath)) return next();
+
+    return res.status(403).send("Insufficient permissions.");
   })
 );
 
@@ -2953,6 +2993,22 @@ app.use(
 
     if (!ownerOnly) return next();
     return requireRole("owner")(req, res, next);
+  }
+);
+
+app.use(
+  "/api",
+  (req, res, next) => {
+    if (!req.auth) return next();
+    const role = req.auth?.role ? String(req.auth.role).trim().toLowerCase() : "";
+    if (role !== "dispatch") return next();
+
+    const apiPath = `${req.baseUrl || ""}${req.path || ""}`;
+    const method = String(req.method || "").toUpperCase();
+    const allowed = DISPATCH_ALLOWED_API.some((entry) => entry.method === method && entry.pattern.test(apiPath));
+    if (allowed) return next();
+
+    return res.status(403).json({ error: "Insufficient permissions." });
   }
 );
 

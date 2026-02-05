@@ -128,9 +128,11 @@ function formatContactLines(label, contacts) {
   return contacts
     .map((contact) => {
       const name = contact?.name || "--";
+      const title = contact?.title || "";
       const email = contact?.email || "--";
       const phone = contact?.phone || "--";
-      return `${label}: ${name} | ${email} | ${phone}`;
+      const nameLine = title ? `${name} - ${title}` : name;
+      return `${label}: ${nameLine} | ${email} | ${phone}`;
     })
     .join("<br />");
 }

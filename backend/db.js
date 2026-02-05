@@ -3406,19 +3406,21 @@ function normalizeCustomerContacts({ contacts, contactName, email, phone }) {
     .map((entry) => {
       if (!entry || typeof entry !== "object") return null;
       const name = normalizeContactField(entry.name || entry.contactName || entry.contact_name);
+      const title = normalizeContactField(entry.title || entry.contactTitle || entry.contact_title);
       const emailValue = normalizeContactField(entry.email);
       const phoneValue = normalizeContactField(entry.phone);
       if (!name && !emailValue && !phoneValue) return null;
-      return { name, email: emailValue, phone: phoneValue };
+      return { name, title, email: emailValue, phone: phoneValue };
     })
     .filter(Boolean);
 
   if (!normalized.length) {
     const name = normalizeContactField(contactName);
+    const title = null;
     const emailValue = normalizeContactField(email);
     const phoneValue = normalizeContactField(phone);
     if (name || emailValue || phoneValue) {
-      normalized.push({ name, email: emailValue, phone: phoneValue });
+      normalized.push({ name, title, email: emailValue, phone: phoneValue });
     }
   }
 
@@ -3442,10 +3444,11 @@ function normalizeAccountingContacts({ accountingContacts }) {
     .map((entry) => {
       if (!entry || typeof entry !== "object") return null;
       const name = normalizeContactField(entry.name || entry.contactName || entry.contact_name);
+      const title = normalizeContactField(entry.title || entry.contactTitle || entry.contact_title);
       const emailValue = normalizeContactField(entry.email);
       const phoneValue = normalizeContactField(entry.phone);
       if (!name && !emailValue && !phoneValue) return null;
-      return { name, email: emailValue, phone: phoneValue };
+      return { name, title, email: emailValue, phone: phoneValue };
     })
     .filter(Boolean);
 }
@@ -3467,10 +3470,11 @@ function normalizeOrderContacts(contacts) {
     .map((entry) => {
       if (!entry || typeof entry !== "object") return null;
       const name = normalizeContactField(entry.name || entry.contactName || entry.contact_name);
+      const title = normalizeContactField(entry.title || entry.contactTitle || entry.contact_title);
       const emailValue = normalizeContactField(entry.email);
       const phoneValue = normalizeContactField(entry.phone);
       if (!name && !emailValue && !phoneValue) return null;
-      return { name, email: emailValue, phone: phoneValue };
+      return { name, title, email: emailValue, phone: phoneValue };
     })
     .filter(Boolean);
 }

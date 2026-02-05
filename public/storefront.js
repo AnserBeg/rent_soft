@@ -293,20 +293,23 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  function addContactRow(list, { name = "", email = "", phone = "" } = {}, { focus = false } = {}) {
+  function addContactRow(list, { name = "", title = "", email = "", phone = "" } = {}, { focus = false } = {}) {
     if (!list) return;
     const row = document.createElement("div");
     row.className = "contact-row";
     row.innerHTML = `
       <label>Contact name <input data-contact-field="name" /></label>
+      <label>Title <input data-contact-field="title" /></label>
       <label>Email <input data-contact-field="email" type="email" /></label>
       <label>Phone number <input data-contact-field="phone" /></label>
       <button type="button" class="ghost small contact-remove" aria-label="Remove contact">Remove</button>
     `;
     const nameInput = row.querySelector('[data-contact-field="name"]');
+    const titleInput = row.querySelector('[data-contact-field="title"]');
     const emailInput = row.querySelector('[data-contact-field="email"]');
     const phoneInput = row.querySelector('[data-contact-field="phone"]');
     if (nameInput) nameInput.value = name;
+    if (titleInput) titleInput.value = title;
     if (emailInput) emailInput.value = email;
     if (phoneInput) phoneInput.value = phone;
     list.appendChild(row);
@@ -327,9 +330,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const rows = Array.from(list.querySelectorAll(".contact-row"));
     return rows.map((row) => {
       const name = normalizeContactValue(row.querySelector('[data-contact-field="name"]')?.value);
+      const title = normalizeContactValue(row.querySelector('[data-contact-field="title"]')?.value);
       const email = normalizeContactValue(row.querySelector('[data-contact-field="email"]')?.value);
       const phone = normalizeContactValue(row.querySelector('[data-contact-field="phone"]')?.value);
-      return { name, email, phone };
+      return { name, title, email, phone };
     });
   }
 

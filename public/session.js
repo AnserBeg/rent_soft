@@ -199,9 +199,42 @@ document.addEventListener("DOMContentLoaded", () => {
   window.RentSoft?.requireAuth?.();
   window.RentSoft?.refreshSession?.();
 
+  function getCurrentPage() {
+    const rawPath = window.location.pathname || "";
+    const file = rawPath.split("/").filter(Boolean).at(-1) || "";
+    return file || "index.html";
+  }
+
+  const session = window.RentSoft?.getSession?.();
+  const role = session?.user?.role ? String(session.user.role).trim().toLowerCase() : "";
+  const dispatchAllowedPages = new Set([
+    "work-orders.html",
+    "work-order-form.html",
+    "dispatch.html",
+    "dispatch-detail.html",
+  ]);
+
+  if (role === "dispatch" && !dispatchAllowedPages.has(getCurrentPage())) {
+    window.location.href = "dispatch.html";
+    return;
+  }
+
   const sidebar = document.querySelector(".sidebar");
   const shell = document.querySelector(".app-shell");
   if (!sidebar || !shell) return;
+
+  if (role === "dispatch") {
+    const links = Array.from(sidebar.querySelectorAll("a.nav-link[href]"));
+    links.forEach((link) => {
+      const href = (link.getAttribute("href") || "").split("#")[0];
+      if (!dispatchAllowedPages.has(href)) link.remove();
+    });
+
+    const groups = Array.from(sidebar.querySelectorAll(".nav-group"));
+    groups.forEach((group) => {
+      if (!group.querySelector("a.nav-link")) group.remove();
+    });
+  }
 
   const SIDEBAR_COLLAPSE_KEY = "rentSoft.sidebarCollapsed";
   const NAV_GROUP_STATE_KEY = "rentSoft.navGroupState";
@@ -233,12 +266,6 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       navLinks.appendChild(group);
     }
-  }
-
-  function getCurrentPage() {
-    const rawPath = window.location.pathname || "";
-    const file = rawPath.split("/").filter(Boolean).at(-1) || "";
-    return file || "index.html";
   }
 
   function setActiveLink() {
@@ -522,7 +549,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Escape") setOpen(false);
   });
 
-  ensurePurchaseNavGroup();
+  if (role !== "dispatch") ensurePurchaseNavGroup();
   setActiveLink();
   mountNavGroupToggles();
   mountNavIcons();

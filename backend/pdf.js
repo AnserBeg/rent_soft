@@ -99,10 +99,12 @@ function formatContactLines(value, label) {
   return contacts
     .map((contact) => {
       const name = safeText(contact?.name) || "--";
+      const title = safeText(contact?.title);
       const email = safeText(contact?.email);
       const phone = safeText(contact?.phone);
+      const nameLine = title ? `${name} - ${title}` : name;
       const details = [email, phone].filter(Boolean).join(" / ") || "--";
-      return `${label} ${name}: ${details}`;
+      return `${label} ${nameLine}: ${details}`;
     })
     .join("; ");
 }

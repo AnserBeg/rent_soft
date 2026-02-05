@@ -434,12 +434,16 @@
 
   function buildContactRow(type) {
     const row = document.createElement("div");
-    row.className = "grid grid-cols-1 md:grid-cols-[1fr,1fr,1fr,auto] gap-3 items-end";
+    row.className = "grid grid-cols-1 md:grid-cols-[1fr,1fr,1fr,1fr,auto] gap-3 items-end";
     row.dataset.contactRow = type;
     row.innerHTML = `
       <label class="block text-xs font-bold text-slate-500">
         Contact name
         <input data-contact-field="name" type="text" class="mt-1 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all" />
+      </label>
+      <label class="block text-xs font-bold text-slate-500">
+        Title
+        <input data-contact-field="title" type="text" class="mt-1 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all" />
       </label>
       <label class="block text-xs font-bold text-slate-500">
         Email
@@ -816,9 +820,10 @@
     return rows
       .map((row) => {
         const name = normalizeValue(row.querySelector('[data-contact-field="name"]')?.value);
+        const title = normalizeValue(row.querySelector('[data-contact-field="title"]')?.value);
         const email = normalizeValue(row.querySelector('[data-contact-field="email"]')?.value);
         const phone = normalizeValue(row.querySelector('[data-contact-field="phone"]')?.value);
-        return { name, email, phone };
+        return { name, title, email, phone };
       })
       .filter((entry) => entry.name || entry.email || entry.phone);
   }

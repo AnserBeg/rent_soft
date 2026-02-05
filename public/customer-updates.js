@@ -296,10 +296,12 @@ function formatContactHtml(value) {
   const rows = list
     .map((contact) => {
       const name = String(contact?.name || contact?.contactName || contact?.contact_name || "").trim();
+      const title = String(contact?.title || contact?.contactTitle || contact?.contact_title || "").trim();
       const email = String(contact?.email || "").trim();
       const phone = String(contact?.phone || "").trim();
-      if (!name && !email && !phone) return null;
-      return `${escapeHtml(name || "--")} | ${escapeHtml(email || "--")} | ${escapeHtml(phone || "--")}`;
+      if (!name && !title && !email && !phone) return null;
+      const nameLine = title ? `${name || "--"} - ${title}` : name || "--";
+      return `${escapeHtml(nameLine)} | ${escapeHtml(email || "--")} | ${escapeHtml(phone || "--")}`;
     })
     .filter(Boolean);
   return rows.length ? rows.join("<br />") : "";
