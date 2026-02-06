@@ -82,6 +82,7 @@ function matchesSearch(row, term) {
     a.customer_name,
     docNumberFor(a),
     a.pickup_location_name,
+    a.site_name || a.siteName,
   ].filter(Boolean);
 
   const loweredTerm = term.toLowerCase();
@@ -144,6 +145,7 @@ function renderTable(rows) {
       <span>Equipment type</span>
       <span>Model</span>
       <span>Customer</span>
+      <span>Site name</span>
     </div>`;
 
   if (!rows.length) {
@@ -165,6 +167,7 @@ function renderTable(rows) {
       <span>${type}</span>
       <span>${model}</span>
       <span>${row.assignment.customer_name || "--"}</span>
+      <span>${row.assignment.site_name || row.assignment.siteName || "--"}</span>
     `;
     dispatchTable.appendChild(div);
   });

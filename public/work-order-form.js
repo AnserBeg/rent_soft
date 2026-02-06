@@ -3,6 +3,7 @@ const unitMeta = document.getElementById("unit-meta");
 const workOrderTitle = document.getElementById("work-order-title");
 const workOrderNumber = document.getElementById("work-order-number");
 const workSummaryInput = document.getElementById("work-summary");
+const workIssuesInput = document.getElementById("work-issues");
 const workDateInput = document.getElementById("work-date");
 const unitSelect = document.getElementById("unit-select");
 const unitSearchInput = document.getElementById("unit-search-input");
@@ -637,6 +638,10 @@ function applyWorkOrderToForm(order) {
     workSummaryInput.value = order?.workSummary || "";
     autoResizeTextarea(workSummaryInput);
   }
+  if (workIssuesInput) {
+    workIssuesInput.value = order?.issues || "";
+    autoResizeTextarea(workIssuesInput);
+  }
   if (workDateInput) workDateInput.value = order?.date || "";
   if (unitSelect) {
     Array.from(unitSelect.options).forEach((opt) => {
@@ -714,6 +719,10 @@ function initForm() {
     autoResizeTextarea(workSummaryInput);
     workSummaryInput.addEventListener("input", () => autoResizeTextarea(workSummaryInput));
   }
+  if (workIssuesInput) {
+    autoResizeTextarea(workIssuesInput);
+    workIssuesInput.addEventListener("input", () => autoResizeTextarea(workIssuesInput));
+  }
 
   if (partsLines && !partsLines.children.length) partsLines.appendChild(buildPartRow());
   if (laborLines && !laborLines.children.length) laborLines.appendChild(buildLaborRow());
@@ -741,6 +750,7 @@ async function saveWorkOrder() {
   const unitIds = getSelectedUnitIds();
   const unitLabels = getSelectedUnitLabels();
   const workSummary = workSummaryInput?.value?.trim() || "";
+  const issues = workIssuesInput?.value?.trim() || "";
   const orderStatus = orderStatusInput?.value || "open";
   const returnInspection = returnInspectionToggle?.checked === true;
   const serviceStatus = returnInspection ? "out_of_service" : (serviceStatusSelect?.value || "in_service");
@@ -783,6 +793,7 @@ async function saveWorkOrder() {
   record.unitId = unitIds[0] || null;
   record.unitLabel = unitLabels[0] || "";
   record.workSummary = workSummary;
+  record.issues = issues;
   record.orderStatus = orderStatus;
   record.serviceStatus = serviceStatus;
   record.returnInspection = returnInspection;

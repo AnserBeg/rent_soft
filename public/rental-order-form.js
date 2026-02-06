@@ -37,6 +37,9 @@ const closeOpenBtn = document.getElementById("close-open");
 const deleteOrderBtn = document.getElementById("delete-order");
 const statusPill = document.getElementById("status-pill");
 const orderNumberPill = document.getElementById("order-number-pill");
+const orderDatesHint = document.getElementById("order-dates-hint");
+const orderStartDateEl = document.getElementById("order-start-date");
+const orderEndDateEl = document.getElementById("order-end-date");
 const downloadOrderPdfBtn = document.getElementById("download-order-pdf");
 const openHistoryBtn = document.getElementById("open-history");
 const openMonthlyChargesBtn = document.getElementById("open-monthly-charges");
@@ -80,6 +83,7 @@ const fulfillmentAddresses = [
 const logisticsInstructions = document.getElementById("logistics-instructions");
 const termsInput = document.getElementById("terms");
 const specialInstructions = document.getElementById("special-instructions");
+const siteNameInput = document.getElementById("site-name");
 const siteAddressInput = document.getElementById("site-address");
 const criticalAreasInput = document.getElementById("critical-areas");
 const generalNotesInput = document.getElementById("general-notes");
@@ -93,6 +97,7 @@ const notificationCircumstancesContainer = document.getElementById("notification
 const notificationOtherCheckbox = document.getElementById("notification-circumstance-other-cb");
 const notificationOtherInput = document.getElementById("notification-circumstance-other-input");
 const rentalInfoFieldContainers = {
+  siteName: document.querySelector('[data-rental-info-field="siteName"]'),
   siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
   criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
   generalNotes: document.querySelector('[data-rental-info-field="generalNotes"]'),
@@ -281,6 +286,7 @@ function buildTypeOptions(selectedTypeId) {
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
+  siteName: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -1026,6 +1032,11 @@ let sideAddressPicker = {
 };
 let sideAddressInputBound = false;
 
+let orderPeriod = {
+  startAt: null,
+  endAt: null,
+};
+
 let draft = {
   status: "quote",
   quoteNumber: null,
@@ -1039,6 +1050,7 @@ let draft = {
   logisticsInstructions: "",
   terms: "",
   specialInstructions: "",
+  siteName: "",
   siteAddress: "",
   siteAddressLat: null,
   siteAddressLng: null,
@@ -1060,6 +1072,7 @@ let generalNotesImages = [];
 let generalNotesUploadsInFlight = 0;
 
 function resetDraftForNew() {
+  orderPeriod = { startAt: null, endAt: null };
   draft = {
     status: "quote",
     quoteNumber: null,
@@ -1073,6 +1086,7 @@ function resetDraftForNew() {
     logisticsInstructions: "",
     terms: "",
     specialInstructions: "",
+    siteName: "",
     siteAddress: "",
     siteAddressLat: null,
     siteAddressLng: null,
@@ -2877,6 +2891,42 @@ function formatActualAt(iso) {
   const parsed = new Date(iso);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed.toLocaleString();
+}
+
+function formatOrderDate(value) {
+  if (!value) return "--";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "--";
+  return parsed.toLocaleDateString();
+}
+
+function deriveOrderRangeFromLineItems() {
+  let startMs = null;
+  let endMs = null;
+  (draft.lineItems || []).forEach((li) => {
+    const startIso = fromLocalInputValue(li?.startLocal);
+    const endIso = fromLocalInputValue(li?.endLocal);
+    if (!startIso || !endIso) return;
+    const startVal = Date.parse(startIso);
+    const endVal = Date.parse(endIso);
+    if (!Number.isFinite(startVal) || !Number.isFinite(endVal)) return;
+    if (startMs === null || startVal < startMs) startMs = startVal;
+    if (endMs === null || endVal > endMs) endMs = endVal;
+  });
+  if (startMs === null || endMs === null) return null;
+  return {
+    startAt: new Date(startMs).toISOString(),
+    endAt: new Date(endMs).toISOString(),
+  };
+}
+
+function updateOrderDateDisplay() {
+  if (!orderStartDateEl && !orderEndDateEl && !orderDatesHint) return;
+  const range = deriveOrderRangeFromLineItems() || orderPeriod;
+  const startLabel = formatOrderDate(range?.startAt);
+  const endLabel = formatOrderDate(range?.endAt);
+  if (orderStartDateEl) orderStartDateEl.textContent = startLabel;
+  if (orderEndDateEl) orderEndDateEl.textContent = endLabel;
 }
 
 function parseDurationToHours(input) {
@@ -5208,6 +5258,7 @@ function renderLineItems() {
   });
   updateOrderTotals();
   renderStatusControls();
+  updateOrderDateDisplay();
 }
 
 async function uploadImage({ file }) {
@@ -5529,6 +5580,7 @@ function applySuggestedRatesToLineItems() {
 
 function loadDraftFromStorage() {
   if (!activeCompanyId || editingOrderId) return;
+  orderPeriod = { startAt: null, endAt: null };
   try {
     const raw = localStorage.getItem(draftKey());
     if (!raw) return;
@@ -5541,6 +5593,7 @@ function loadDraftFromStorage() {
         fees: Array.isArray(stored.fees) ? stored.fees : [],
         emergencyContacts: Array.isArray(stored.emergencyContacts) ? stored.emergencyContacts : [],
         siteContacts: Array.isArray(stored.siteContacts) ? stored.siteContacts : [],
+        siteName: typeof stored.siteName === "string" ? stored.siteName : "",
         siteAddress: typeof stored.siteAddress === "string" ? stored.siteAddress : "",
         siteAddressLat: toFiniteCoordinate(stored.siteAddressLat),
         siteAddressLng: toFiniteCoordinate(stored.siteAddressLng),
@@ -5565,6 +5618,7 @@ function initFormFieldsFromDraft() {
   logisticsInstructions.value = draft.logisticsInstructions || "";
   termsInput.value = draft.terms || "";
   specialInstructions.value = draft.specialInstructions || "";
+  if (siteNameInput) siteNameInput.value = draft.siteName || "";
   if (siteAddressInput) siteAddressInput.value = draft.siteAddress || "";
   if (criticalAreasInput) criticalAreasInput.value = draft.criticalAreas || "";
   setGeneralNotesHtml(draft.generalNotes || "");
@@ -5591,6 +5645,7 @@ function syncRentalInfoDraft() {
   draft.logisticsInstructions = logisticsInstructions?.value || "";
   draft.terms = termsInput?.value || "";
   draft.specialInstructions = specialInstructions?.value || "";
+  draft.siteName = siteNameInput?.value || "";
   draft.siteAddress = siteAddressInput?.value || "";
   if (!String(draft.siteAddress || "").trim() || draft.siteAddress !== draft.siteAddressQuery) {
     draft.siteAddressLat = null;
@@ -5612,6 +5667,10 @@ async function loadOrder() {
   if (!res.ok) throw new Error(data.error || "Unable to fetch rental order");
 
   const o = data.order;
+  orderPeriod = {
+    startAt: o.start_at || o.startAt || null,
+    endAt: o.end_at || o.endAt || null,
+  };
   draft.status = normalizeOrderStatus(o.status || "quote");
   draft.isOverdue = !!(o.is_overdue || o.isOverdue);
   draft.quoteNumber = o.quote_number || o.quoteNumber || null;
@@ -5625,6 +5684,7 @@ async function loadOrder() {
   draft.logisticsInstructions = o.logistics_instructions || "";
   draft.terms = o.terms || "";
   draft.specialInstructions = o.special_instructions || "";
+  draft.siteName = o.site_name || o.siteName || "";
   draft.siteAddress = o.site_address || o.siteAddress || "";
   draft.siteAddressLat = toFiniteCoordinate(o.site_address_lat ?? o.siteAddressLat);
   draft.siteAddressLng = toFiniteCoordinate(o.site_address_lng ?? o.siteAddressLng);
@@ -6105,6 +6165,7 @@ const rentalInfoInputs = [
   logisticsInstructions,
   termsInput,
   specialInstructions,
+  siteNameInput,
   siteAddressInput,
   criticalAreasInput,
 ].filter(Boolean);
@@ -6629,6 +6690,7 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     logisticsInstructions: draft.logisticsInstructions || null,
     terms: draft.terms || null,
     specialInstructions: draft.specialInstructions || null,
+    siteName: draft.siteName || null,
     siteAddress: draft.siteAddress || null,
     siteAddressLat: toFiniteCoordinate(draft.siteAddressLat),
     siteAddressLng: toFiniteCoordinate(draft.siteAddressLng),

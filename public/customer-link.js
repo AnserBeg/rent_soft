@@ -39,6 +39,7 @@ const customerPoInput = document.getElementById("customer-po");
 const fulfillmentSelect = document.getElementById("fulfillment-method");
 const dropoffInput = document.getElementById("dropoff-address");
 const logisticsInstructionsInput = document.getElementById("logistics-instructions");
+const siteNameInput = document.getElementById("site-name");
 const siteAddressInput = document.getElementById("site-address");
 const criticalAreasInput = document.getElementById("critical-areas");
 const generalNotesInput = document.getElementById("general-notes");
@@ -67,6 +68,7 @@ const coverageDayLabels = {
 const coverageSlotsContainer = document.getElementById("coverage-slots");
 const addCoverageSlotBtn = document.getElementById("add-coverage-slot");
 const rentalInfoFieldContainers = {
+  siteName: document.querySelector('[data-rental-info-field="siteName"]'),
   siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
   criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
   generalNotes: document.querySelector('[data-rental-info-field="generalNotes"]'),
@@ -96,6 +98,7 @@ let submissionComplete = false;
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
+  siteName: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -1813,6 +1816,7 @@ async function loadLink() {
         }
       }
       if (logisticsInstructionsInput) logisticsInstructionsInput.value = order?.logisticsInstructions || "";
+      if (siteNameInput) siteNameInput.value = order?.siteName || "";
       siteAddressInput.value = order?.siteAddress || "";
       if (criticalAreasInput) criticalAreasInput.value = order?.criticalAreas || "";
       setGeneralNotesHtml(order?.generalNotes || "");
@@ -2275,6 +2279,7 @@ form?.addEventListener("submit", async (evt) => {
         fulfillmentMethod,
         dropoffAddress,
         logisticsInstructions: logisticsInstructionsInput?.value.trim() || "",
+        siteName: siteNameInput?.value.trim() || "",
         siteAddress: siteAddressInput.value.trim(),
         criticalAreas: criticalAreasInput?.value.trim() || "",
         generalNotes: getGeneralNotesHtml().trim(),

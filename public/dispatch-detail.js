@@ -229,6 +229,7 @@ function formatCoverageHours(coverage) {
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
+  siteName: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -1238,6 +1239,7 @@ function renderOrderDetail(row, detail) {
   const siteContacts = parseContacts(order.site_contacts || order.siteContacts || []);
   const notificationCircumstances = order.notification_circumstances || order.notificationCircumstances || [];
   const coverageHours = order.coverage_hours || order.coverageHours || [];
+  const siteName = order.site_name || order.siteName || "--";
   const siteAddress = order.site_address || order.siteAddress || "--";
   const criticalAreas = order.critical_areas || order.criticalAreas || "--";
   const generalNotes = order.general_notes || order.generalNotes || "";
@@ -1257,6 +1259,9 @@ function renderOrderDetail(row, detail) {
   orderDetails.innerHTML = orderDetailItems.join("");
 
   const lineDetailItems = [];
+  if (isRentalInfoEnabled("siteName")) {
+    lineDetailItems.push(detailItem("Site name", siteName || "--"));
+  }
   if (isRentalInfoEnabled("siteAddress")) {
     lineDetailItems.push(detailItem("Site address", siteAddress || "--"));
   }
@@ -1870,6 +1875,7 @@ async function buildFallbackRowFromOrder() {
     quote_number: order.quote_number || order.quoteNumber || null,
     external_contract_number: order.external_contract_number || order.externalContractNumber || null,
     customer_name: normalizeOrderCustomerName(order),
+    site_name: order.site_name || order.siteName || null,
     start_at: firstLine.startAt || firstLine.start_at || null,
     end_at: firstLine.endAt || firstLine.end_at || null,
     pickup_location_name: order.pickup_location_name || order.pickupLocationName || "--",

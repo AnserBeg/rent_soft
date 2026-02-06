@@ -75,6 +75,9 @@
                   <h1 id="form-title" style="margin:0;">Rental Order</h1>
                   <span class="pill" id="order-number-pill" style="display:none;"></span>
                 </div>
+                <p class="hint" id="order-dates-hint" style="margin-top:6px;">
+                  Start <span id="order-start-date">--</span> / End <span id="order-end-date">--</span>
+                </p>
                 <p class="eyebrow" style="display:none;">Header</p>
                 <h2>Customer & sales</h2>
               </div>
@@ -261,13 +264,20 @@
               </div>
             </div>
             <div class="stack">
-              <div data-rental-info-field="siteAddress">
-                <label>Site address
-                  <input id="site-address" type="text" />
-                </label>
-                <div class="inline-actions" style="justify-content:flex-start;">
-                  <button type="button" class="ghost small" id="open-side-address-picker">Pick site address on
-                    map</button>
+              <div class="two-col">
+                <div data-rental-info-field="siteName">
+                  <label>Site name
+                    <input id="site-name" type="text" />
+                  </label>
+                </div>
+                <div data-rental-info-field="siteAddress">
+                  <label>Site address
+                    <input id="site-address" type="text" />
+                  </label>
+                  <div class="inline-actions" style="justify-content:flex-start;">
+                    <button type="button" class="ghost small" id="open-side-address-picker">Pick site address on
+                      map</button>
+                  </div>
                 </div>
               </div>
               <div class="stack rental-info-notes">

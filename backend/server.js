@@ -1054,6 +1054,7 @@ app.get(
             pickupRegion: order.pickup_region || null,
             pickupCountry: order.pickup_country || null,
             dropoffAddress: order.dropoff_address || null,
+            siteName: order.site_name || null,
             siteAddress: order.site_address || null,
             siteAddressLat: order.site_address_lat || null,
             siteAddressLng: order.site_address_lng || null,
@@ -1521,6 +1522,7 @@ const ALLOWED_ORDER_FIELDS = new Set([
   "customerPo",
   "fulfillmentMethod",
   "dropoffAddress",
+  "siteName",
   "siteAddress",
   "siteAddressLat",
   "siteAddressLng",
@@ -1793,6 +1795,7 @@ function sanitizeOrderPayload(input, allowedFields) {
     out.fulfillmentMethod = method === "dropoff" ? "dropoff" : "pickup";
   }
   if (allowedFields.includes("dropoffAddress")) out.dropoffAddress = read("dropoffAddress") || null;
+  if (allowedFields.includes("siteName")) out.siteName = read("siteName") || null;
   if (allowedFields.includes("siteAddress")) out.siteAddress = read("siteAddress") || null;
   if (allowedFields.includes("siteAddressLat")) {
     const lat = Number(src.siteAddressLat);
@@ -7116,6 +7119,7 @@ app.post(
       generalNotes,
       pickupLocationId,
       dropoffAddress,
+      siteName,
       siteAddress,
       siteAddressLat,
       siteAddressLng,
@@ -7156,6 +7160,7 @@ app.post(
         generalNotes,
         pickupLocationId,
         dropoffAddress,
+        siteName,
         siteAddress,
         siteAddressLat,
         siteAddressLng,
@@ -7229,6 +7234,7 @@ app.put(
       generalNotes,
       pickupLocationId,
       dropoffAddress,
+      siteName,
       siteAddress,
       siteAddressLat,
       siteAddressLng,
@@ -7270,6 +7276,7 @@ app.put(
         generalNotes,
         pickupLocationId,
         dropoffAddress,
+        siteName,
         siteAddress,
         siteAddressLat,
         siteAddressLng,

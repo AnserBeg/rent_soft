@@ -864,6 +864,7 @@ async function ensureTables() {
         general_notes TEXT,
         pickup_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
         dropoff_address TEXT,
+        site_name TEXT,
         site_address TEXT,
         site_address_lat DOUBLE PRECISION,
         site_address_lng DOUBLE PRECISION,
@@ -897,6 +898,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS general_notes TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS pickup_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS dropoff_address TEXT;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_name TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_address TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_address_lat DOUBLE PRECISION;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_address_lng DOUBLE PRECISION;`);
@@ -1100,7 +1102,7 @@ async function ensureTables() {
         auto_apply_customer_credit BOOLEAN NOT NULL DEFAULT TRUE,
         auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE,
         required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
-        rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
+        rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
         customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
         customer_terms_template TEXT,
         customer_esign_required BOOLEAN NOT NULL DEFAULT TRUE,
@@ -1138,7 +1140,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(
-      `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb;`
+      `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb;`
     );
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_terms_template TEXT;`);
@@ -5276,6 +5278,7 @@ function normalizeCustomerDocumentCategories(value) {
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
+  siteName: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -5721,6 +5724,7 @@ async function listRentalOrders(companyId, { statuses = null, quoteOnly = false 
            ro.ro_number,
            ro.external_contract_number,
            ro.customer_po,
+           ro.site_name,
            ro.site_address,
            ro.critical_areas,
            ro.coverage_hours,
@@ -5824,6 +5828,7 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
            ro.ro_number,
            ro.external_contract_number,
            ro.customer_po,
+           ro.site_name,
            ro.site_address,
            ro.critical_areas,
            ro.coverage_hours,
@@ -6203,6 +6208,7 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            ro.ro_number,
            ro.external_contract_number,
            ro.customer_po,
+           ro.site_name,
            c.company_name AS customer_name,
            ro.pickup_location_id,
            pl.name AS pickup_location_name,
@@ -6230,6 +6236,7 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            ro.ro_number,
            ro.external_contract_number,
            ro.customer_po,
+           ro.site_name,
            c.company_name AS customer_name,
            ro.pickup_location_id,
            pl.name AS pickup_location_name,
@@ -8873,6 +8880,7 @@ async function createRentalOrder({
   generalNotes,
   pickupLocationId,
   dropoffAddress,
+  siteName,
   siteAddress,
   siteAddressLat,
   siteAddressLng,
@@ -8937,10 +8945,10 @@ async function createRentalOrder({
       `
       INSERT INTO rental_orders
         (company_id, quote_number, ro_number, external_contract_number, legacy_data, customer_id, customer_po, salesperson_id, fulfillment_method, status,
-         terms, general_notes, pickup_location_id, dropoff_address, site_address, site_address_lat, site_address_lng, site_address_query,
+         terms, general_notes, pickup_location_id, dropoff_address, site_name, site_address, site_address_lat, site_address_lng, site_address_query,
          logistics_instructions, special_instructions, critical_areas,
          notification_circumstances, coverage_hours, emergency_contacts, site_contacts, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb,$23::jsonb,$24::jsonb,$25::jsonb,COALESCE($26::timestamptz, NOW()),COALESCE($26::timestamptz, NOW()))
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25::jsonb,$26::jsonb,COALESCE($27::timestamptz, NOW()),COALESCE($27::timestamptz, NOW()))
       RETURNING id, quote_number, ro_number
       `,
       [
@@ -8958,6 +8966,7 @@ async function createRentalOrder({
         generalNotes || null,
         pickupLocationId || null,
         fulfillmentMethod === "dropoff" ? (dropoffAddress || null) : null,
+        siteName || null,
         siteAddress || null,
         Number.isFinite(Number(siteAddressLat)) ? Number(siteAddressLat) : null,
         Number.isFinite(Number(siteAddressLng)) ? Number(siteAddressLng) : null,
@@ -10528,6 +10537,7 @@ async function updateRentalOrder({
   generalNotes,
   pickupLocationId,
   dropoffAddress,
+  siteName,
   siteAddress,
   siteAddressLat,
   siteAddressLng,
@@ -10619,19 +10629,20 @@ async function updateRentalOrder({
              general_notes = $9,
              pickup_location_id = $10,
              dropoff_address = $11,
-             site_address = $12,
-             site_address_lat = $13,
-             site_address_lng = $14,
-             site_address_query = $15,
-             logistics_instructions = $16,
-             special_instructions = $17,
-             critical_areas = $18,
-             notification_circumstances = $19::jsonb,
-             coverage_hours = $20::jsonb,
-             emergency_contacts = $21::jsonb,
-             site_contacts = $22::jsonb,
+             site_name = $12,
+             site_address = $13,
+             site_address_lat = $14,
+             site_address_lng = $15,
+             site_address_query = $16,
+             logistics_instructions = $17,
+             special_instructions = $18,
+             critical_areas = $19,
+             notification_circumstances = $20::jsonb,
+             coverage_hours = $21::jsonb,
+             emergency_contacts = $22::jsonb,
+             site_contacts = $23::jsonb,
              updated_at = NOW()
-       WHERE id = $23 AND company_id = $24
+       WHERE id = $24 AND company_id = $25
        RETURNING id, quote_number, ro_number
       `,
       [
@@ -10646,6 +10657,7 @@ async function updateRentalOrder({
         generalNotes || null,
         pickupLocationId || null,
         fulfillmentMethod === "dropoff" ? (dropoffAddress || null) : null,
+        siteName || null,
         siteAddress || null,
         Number.isFinite(Number(siteAddressLat)) ? Number(siteAddressLat) : null,
         Number.isFinite(Number(siteAddressLng)) ? Number(siteAddressLng) : null,
@@ -13016,6 +13028,7 @@ async function createStorefrontReservation({
   customerNotes,
   deliveryMethod,
   deliveryAddress,
+  siteName,
   siteAddress,
   deliveryInstructions,
   criticalAreas,
@@ -13080,6 +13093,7 @@ async function createStorefrontReservation({
 
   const rentalInfoFields = normalizeRentalInfoFields(settings.rental_info_fields);
   const useRentalInfoField = (key) => rentalInfoFields?.[key]?.enabled !== false;
+  const siteNameValue = useRentalInfoField("siteName") ? String(siteName || "").trim() || null : null;
   const siteAddressValue = useRentalInfoField("siteAddress") ? String(siteAddress || "").trim() || null : null;
   const criticalAreasValue = useRentalInfoField("criticalAreas") ? String(criticalAreas || "").trim() || null : null;
   const notificationCircumstancesValue = useRentalInfoField("notificationCircumstances")
@@ -13111,6 +13125,9 @@ async function createStorefrontReservation({
 
   if (rentalInfoFields?.siteAddress?.enabled && rentalInfoFields?.siteAddress?.required && !siteAddressValue) {
     missingRentalInfo.push("Site address");
+  }
+  if (rentalInfoFields?.siteName?.enabled && rentalInfoFields?.siteName?.required && !siteNameValue) {
+    missingRentalInfo.push("Site name");
   }
   if (rentalInfoFields?.criticalAreas?.enabled && rentalInfoFields?.criticalAreas?.required && !criticalAreasValue) {
     missingRentalInfo.push("Critical areas on site");
@@ -13218,6 +13235,7 @@ async function createStorefrontReservation({
     coverageHours: coverageHoursValue,
     emergencyContacts: emergencyContactList,
     siteContacts: siteContactList,
+    siteName: siteNameValue,
     siteAddress: siteAddressValue,
     pickupLocationId: fulfillmentMethod === "pickup" ? lid : null,
     dropoffAddress,
