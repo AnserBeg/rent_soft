@@ -3858,7 +3858,18 @@ a.ghost {
 }
 
 #rental-orders-table .table-row {
-  grid-template-columns: 1fr 1fr 1.6fr 1.1fr 1.1fr 1.1fr 1.1fr 0.8fr 0.8fr auto;
+  grid-template-columns: 1fr 1fr 1.6fr 1.8fr 1.1fr 1.1fr 1.1fr 0.9fr 0.8fr auto;
+}
+
+#rental-orders-table .table-row span.model-names {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.2;
+}
+
+#rental-orders-table .table-row span.model-names div {
+  white-space: normal;
 }
 
 #rental-quotes-table .table-row {

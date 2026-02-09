@@ -5760,6 +5760,12 @@ async function listRentalOrders(companyId, { statuses = null, quoteOnly = false 
               FROM rental_order_line_inventory liv
               JOIN rental_order_line_items li ON li.id = liv.line_item_id
              WHERE li.rental_order_id = ro.id) AS equipment_count,
+           (SELECT COALESCE(jsonb_agg(DISTINCT e.model_name ORDER BY e.model_name), '[]'::jsonb)
+              FROM rental_order_line_inventory liv
+              JOIN rental_order_line_items li ON li.id = liv.line_item_id
+              JOIN equipment e ON e.id = liv.equipment_id
+             WHERE li.rental_order_id = ro.id
+               AND e.model_name IS NOT NULL) AS equipment_models,
            (SELECT COALESCE(SUM(amount), 0) FROM rental_order_fees f WHERE f.rental_order_id = ro.id) AS fee_total,
            (SELECT COALESCE(SUM(li.line_amount), 0) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) AS line_subtotal,
            (
@@ -5864,6 +5870,12 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
               FROM rental_order_line_inventory liv
               JOIN rental_order_line_items li ON li.id = liv.line_item_id
              WHERE li.rental_order_id = ro.id) AS equipment_count,
+           (SELECT COALESCE(jsonb_agg(DISTINCT e.model_name ORDER BY e.model_name), '[]'::jsonb)
+              FROM rental_order_line_inventory liv
+              JOIN rental_order_line_items li ON li.id = liv.line_item_id
+              JOIN equipment e ON e.id = liv.equipment_id
+             WHERE li.rental_order_id = ro.id
+               AND e.model_name IS NOT NULL) AS equipment_models,
            (SELECT COALESCE(SUM(amount), 0) FROM rental_order_fees f WHERE f.rental_order_id = ro.id) AS fee_total,
            (SELECT COALESCE(SUM(li.line_amount), 0) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) AS line_subtotal,
            (

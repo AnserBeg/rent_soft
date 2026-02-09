@@ -339,6 +339,49 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function ensureMonthlyChargesLink() {
+    const navLinks = sidebar.querySelector(".nav-links");
+    if (!navLinks) return;
+
+    const targetHref = "customer-monthly-charges.html";
+    if (navLinks.querySelector(`a.nav-link[href="${targetHref}"]`)) return;
+
+    const groups = Array.from(navLinks.querySelectorAll(".nav-group"));
+    const operationsGroup = groups.find((group) => {
+      const titleEl = group.querySelector(".nav-group-title, .nav-group-toggle");
+      return String(titleEl?.textContent || "").trim().toLowerCase() === "operations";
+    });
+
+    const link = document.createElement("a");
+    link.className = "nav-link";
+    link.href = targetHref;
+    link.textContent = "Monthly Charges";
+
+    if (!operationsGroup) {
+      const group = document.createElement("div");
+      group.className = "nav-group";
+      group.innerHTML = `<div class="nav-group-title">Operations</div>`;
+      group.appendChild(link);
+      navLinks.appendChild(group);
+      return;
+    }
+
+    const financeLink = operationsGroup.querySelector('a.nav-link[href="invoices.html"]');
+    if (financeLink?.parentElement === operationsGroup) {
+      financeLink.insertAdjacentElement("afterend", link);
+      return;
+    }
+
+    const opsLinks = operationsGroup.querySelector(".nav-group-links") || operationsGroup;
+    const rentalOrdersLink = opsLinks.querySelector('a.nav-link[href="rental-orders.html"]');
+    if (rentalOrdersLink) {
+      rentalOrdersLink.insertAdjacentElement("afterend", link);
+      return;
+    }
+
+    opsLinks.appendChild(link);
+  }
+
   function setActiveLink() {
     const current = getCurrentPage();
     const links = Array.from(sidebar.querySelectorAll("a.nav-link[href]"));
@@ -396,6 +439,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (href.includes("rental-orders")) return "clipboard";
     if (href.includes("work-orders")) return "file-text";
     if (href.includes("rental-quotes")) return "file-text";
+    if (href.includes("monthly-charges")) return "credit-card";
     if (href.includes("equipment")) return "boxes";
     if (href.includes("parts")) return "boxes";
     if (href.includes("types")) return "truck";
@@ -621,6 +665,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   if (role !== "dispatch") ensurePurchaseNavGroup();
+  if (role !== "dispatch") ensureMonthlyChargesLink();
   setActiveLink();
   if (role !== "dispatch") mountNavGroupToggles();
   mountNavIcons();

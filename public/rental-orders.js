@@ -35,7 +35,7 @@ let searchTerm = "";
 let pendingOrderUpdates = new Set();
 
 const LIST_STATE_KEY = "rentsoft.rental-orders.listState";
-const ALLOWED_SORT_FIELDS = new Set(["doc", "status", "customer", "po", "sales", "start_at", "end_at", "total", "created_at"]);
+const ALLOWED_SORT_FIELDS = new Set(["doc", "status", "customer", "models", "sales", "start_at", "end_at", "total", "created_at"]);
 
 function loadListState() {
   const raw = localStorage.getItem(LIST_STATE_KEY);
@@ -122,9 +122,19 @@ function docNumberFor(row) {
   return roNumber && quoteNumber ? `${roNumber} / ${quoteNumber}` : roNumber || quoteNumber || `#${row.id}`;
 }
 
-function poOrLegacyFor(row) {
-  const legacy = row.external_contract_number || row.externalContractNumber || null;
-  return row.customer_po || row.customerPo || legacy || "--";
+function modelNameLinesFor(row) {
+  const raw = row?.equipment_models ?? row?.equipmentModels ?? [];
+  const list = Array.isArray(raw) ? raw.filter(Boolean) : [];
+  if (!list.length && typeof raw === "string") {
+    const text = raw.trim();
+    return text ? [text] : [];
+  }
+  return list;
+}
+
+function modelNamesFor(row) {
+  const lines = modelNameLinesFor(row);
+  return lines.length ? lines.join(", ") : "--";
 }
 
 function statusLabel(status, isOverdue) {
@@ -182,7 +192,11 @@ function applyFilters() {
         docNumberFor(r),
         r.status,
         r.customer_name,
-        poOrLegacyFor(r),
+        r?.customer_po,
+        r?.customerPo,
+        r?.external_contract_number,
+        r?.externalContractNumber,
+        modelNamesFor(r),
         r.salesperson_name,
         r.start_at,
         r.end_at,
@@ -206,8 +220,8 @@ function applyFilters() {
     switch (sortField) {
       case "doc":
         return norm(docNumberFor(row));
-      case "po":
-        return norm(poOrLegacyFor(row));
+      case "models":
+        return norm(modelNamesFor(row));
       case "customer":
         return norm(row.customer_name);
       case "sales":
@@ -244,7 +258,7 @@ function renderOrders(rows) {
       <span class="sort ${sortField === "doc" ? "active" : ""}" data-sort="doc">Doc # ${indicator("doc")}</span>
       <span class="sort ${sortField === "status" ? "active" : ""}" data-sort="status">Status ${indicator("status")}</span>
       <span class="sort ${sortField === "customer" ? "active" : ""}" data-sort="customer">Customer ${indicator("customer")}</span>
-      <span class="sort ${sortField === "po" ? "active" : ""}" data-sort="po">PO / Legacy # ${indicator("po")}</span>
+      <span class="sort ${sortField === "models" ? "active" : ""}" data-sort="models">Model names ${indicator("models")}</span>
       <span class="sort ${sortField === "sales" ? "active" : ""}" data-sort="sales">Sales ${indicator("sales")}</span>
       <span class="sort ${sortField === "start_at" ? "active" : ""}" data-sort="start_at">Start ${indicator("start_at")}</span>
       <span class="sort ${sortField === "end_at" ? "active" : ""}" data-sort="end_at">End ${indicator("end_at")}</span>
@@ -266,14 +280,17 @@ function renderOrders(rows) {
     div.className = "table-row";
     div.dataset.id = row.id;
     const docNumber = docNumberFor(row);
-    const poOrLegacy = poOrLegacyFor(row);
+    const modelLines = modelNameLinesFor(row);
+    const modelNames = modelLines.length
+      ? modelLines.map((name) => `<div>${name}</div>`).join("")
+      : "--";
     const amountInfo = displayAmountFor(row);
     const amountTitle = amountInfo.kind === "monthly" ? "Monthly recurring" : "Total (monthly recurring not available)";
     div.innerHTML = `
       <span>${docNumber}</span>
       <span>${statusLabel(row.status, row.is_overdue)}</span>
       <span>${row.customer_name || "--"}</span>
-      <span>${poOrLegacy}</span>
+      <span class="model-names">${modelNames}</span>
       <span>${row.salesperson_name || "--"}</span>
       <span>${fmtDateTime(row.start_at)}</span>
       <span>${fmtDateTime(row.end_at)}</span>
@@ -346,7 +363,7 @@ ordersTable.addEventListener("click", (e) => {
     if (sortField === sort) sortDir = sortDir === "asc" ? "desc" : "asc";
     else {
       sortField = sort;
-      sortDir = sort === "doc" || sort === "customer" || sort === "po" || sort === "sales" || sort === "status" ? "asc" : "desc";
+      sortDir = sort === "doc" || sort === "customer" || sort === "models" || sort === "sales" || sort === "status" ? "asc" : "desc";
     }
     renderOrders(applyFilters());
     persistListState();
