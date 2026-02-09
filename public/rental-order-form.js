@@ -33,6 +33,11 @@ const cancelRequestRejectBtn = document.getElementById("cancel-request-reject");
 const confirmRequestRejectBtn = document.getElementById("confirm-request-reject");
 const requestRejectNoteInput = document.getElementById("request-reject-note");
 const requestRejectHint = document.getElementById("request-reject-hint");
+const unsavedChangesModal = document.getElementById("unsaved-changes-modal");
+const unsavedSaveLeaveBtn = document.getElementById("unsaved-save-leave");
+const unsavedLeaveBtn = document.getElementById("unsaved-leave");
+const unsavedStayBtn = document.getElementById("unsaved-stay");
+const unsavedChangesHint = document.getElementById("unsaved-changes-hint");
 const closeOpenBtn = document.getElementById("close-open");
 const deleteOrderBtn = document.getElementById("delete-order");
 const statusPill = document.getElementById("status-pill");
@@ -85,6 +90,7 @@ const termsInput = document.getElementById("terms");
 const specialInstructions = document.getElementById("special-instructions");
 const siteNameInput = document.getElementById("site-name");
 const siteAddressInput = document.getElementById("site-address");
+const siteAccessInfoInput = document.getElementById("site-access-info");
 const criticalAreasInput = document.getElementById("critical-areas");
 const generalNotesInput = document.getElementById("general-notes");
 const generalNotesEditor = document.getElementById("general-notes-editor");
@@ -99,6 +105,7 @@ const notificationOtherInput = document.getElementById("notification-circumstanc
 const rentalInfoFieldContainers = {
   siteName: document.querySelector('[data-rental-info-field="siteName"]'),
   siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
+  siteAccessInfo: document.querySelector('[data-rental-info-field="siteAccessInfo"]'),
   criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
   generalNotes: document.querySelector('[data-rental-info-field="generalNotes"]'),
   emergencyContacts: document.querySelector('[data-rental-info-field="emergencyContacts"]'),
@@ -116,6 +123,10 @@ const sideAddressPickerMapEl = document.getElementById("side-address-picker-map"
 const sideAddressPickerMeta = document.getElementById("side-address-picker-meta");
 const sideAddressPickerSuggestions = document.getElementById("side-address-picker-suggestions");
 const sideAddressPickerMapStyle = document.getElementById("side-address-picker-map-style");
+const sideAddressUnitSelect = document.getElementById("side-address-unit-select");
+const saveSideAddressUnitPinBtn = document.getElementById("save-side-address-unit-pin");
+const clearSideAddressUnitBtn = document.getElementById("clear-side-address-unit");
+const sideAddressUnitMeta = document.getElementById("side-address-unit-meta");
 const coverageDayKeys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const coverageDayLabels = {
   mon: "Mon",
@@ -287,6 +298,7 @@ function buildTypeOptions(selectedTypeId) {
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
   siteName: { enabled: true, required: false },
+  siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -527,12 +539,46 @@ function updateInputFromPicker(instance) {
   if (!instance.selectedDate) return;
   const dateValue = toISODate(instance.selectedDate);
   const timeValue = `${pad2(instance.selectedHour)}:${pad2(instance.selectedMinute)}`;
-  const nextValue = `${dateValue}T${timeValue}`;
+  let nextValue = `${dateValue}T${timeValue}`;
+  const minValue = input.min || "";
+  const maxValue = input.max || "";
+  if (minValue || maxValue) {
+    const clampedValue = clampDatetimeLocalValue(nextValue, minValue, maxValue);
+    if (clampedValue && clampedValue !== nextValue) {
+      const [datePart, timePart] = clampedValue.split("T");
+      const parsedDate = parseDateParts(datePart);
+      const parsedTime = parseTimeParts(timePart);
+      if (parsedDate) {
+        instance.selectedDate = new Date(parsedDate.year, parsedDate.month - 1, parsedDate.day);
+      }
+      if (parsedTime) {
+        instance.selectedHour = parsedTime.hours;
+        instance.selectedMinute = parsedTime.minutes;
+      }
+      nextValue = clampedValue;
+    }
+  }
   if (input.value !== nextValue) {
     input.value = nextValue;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
+}
+
+function clampDatetimeLocalValue(value, minValue, maxValue) {
+  if (!value) return value;
+  const valueMs = Date.parse(value);
+  if (!Number.isFinite(valueMs)) return value;
+  let clamped = value;
+  if (minValue) {
+    const minMs = Date.parse(minValue);
+    if (Number.isFinite(minMs) && valueMs < minMs) clamped = minValue;
+  }
+  if (maxValue) {
+    const maxMs = Date.parse(maxValue);
+    if (Number.isFinite(maxMs) && valueMs > maxMs) clamped = maxValue;
+  }
+  return clamped;
 }
 
 function buildColumnOption(label, isSelected, onClick) {
@@ -889,6 +935,9 @@ function handleTimePickerResize() {
 
 function openTimePicker(input) {
   if (!input || input.disabled) return;
+  if (input === lineItemActualPickupInput || input === lineItemActualReturnInput) {
+    applyMaxNowToInput(input);
+  }
   if (activeTimePicker?.input === input) return;
   closeActiveTimePicker();
   const instance = timePickerInstances.get(input) || createTimePickerInstance(input);
@@ -1029,6 +1078,10 @@ let sideAddressPicker = {
   },
   geocodeSeq: 0,
   selected: null, // { lat, lng, provider, query }
+  unitSelected: null, // { unitId, lat, lng, provider, query }
+  unitMarkers: new Map(),
+  unitMarkerData: new Map(),
+  unitLabels: new Map(),
 };
 let sideAddressInputBound = false;
 
@@ -1052,6 +1105,7 @@ let draft = {
   specialInstructions: "",
   siteName: "",
   siteAddress: "",
+  siteAccessInfo: "",
   siteAddressLat: null,
   siteAddressLng: null,
   siteAddressQuery: "",
@@ -1088,6 +1142,7 @@ function resetDraftForNew() {
     specialInstructions: "",
     siteName: "",
     siteAddress: "",
+    siteAccessInfo: "",
     siteAddressLat: null,
     siteAddressLng: null,
     siteAddressQuery: "",
@@ -1517,6 +1572,7 @@ function closeSideAddressPickerModal() {
     sideAddressPicker.leaflet.searchAbort?.abort?.();
   } catch { }
   sideAddressPicker.selected = null;
+  clearSideAddressUnitSelection();
 }
 
 function setSideAddressSelected(lat, lng, { provider, query } = {}) {
@@ -1531,6 +1587,300 @@ function setSideAddressSelected(lat, lng, { provider, query } = {}) {
   }
   if (sideAddressPickerInput && query) {
     sideAddressPickerInput.value = String(query);
+  }
+}
+
+function getSelectedSideAddressUnitId() {
+  if (!sideAddressUnitSelect) return null;
+  const raw = String(sideAddressUnitSelect.value || "").trim();
+  const id = Number(raw);
+  return Number.isFinite(id) ? id : null;
+}
+
+function buildSideAddressUnitOptions() {
+  const ids = uniqueEquipmentIdsFromLineItems(draft.lineItems || []);
+  const equipmentById = new Map((equipmentCache || []).map((e) => [String(e.id), e]));
+  const options = [];
+  ids.forEach((id) => {
+    const eq = equipmentById.get(String(id));
+    const label = eq ? unitOptionLabel(eq) : `Unit #${id}`;
+    options.push({ id, label });
+  });
+  options.sort((a, b) => a.label.localeCompare(b.label));
+  return options;
+}
+
+function updateSideAddressUnitPinActions() {
+  if (!saveSideAddressUnitPinBtn) return;
+  const unitId = getSelectedSideAddressUnitId();
+  const hasSelection =
+    unitId &&
+    sideAddressPicker.unitSelected &&
+    String(sideAddressPicker.unitSelected.unitId) === String(unitId) &&
+    Number.isFinite(sideAddressPicker.unitSelected.lat) &&
+    Number.isFinite(sideAddressPicker.unitSelected.lng);
+  saveSideAddressUnitPinBtn.disabled = !hasSelection;
+}
+
+function updateSideAddressUnitMeta(message = "") {
+  if (!sideAddressUnitMeta) return;
+  if (message) {
+    sideAddressUnitMeta.textContent = message;
+    return;
+  }
+  const unitId = getSelectedSideAddressUnitId();
+  if (!unitId) {
+    sideAddressUnitMeta.textContent = "Select a unit, then click the map to drop a pin for its current location.";
+    return;
+  }
+  const label = sideAddressPicker.unitLabels?.get?.(String(unitId)) || `Unit #${unitId}`;
+  sideAddressUnitMeta.textContent = `Selected: ${label}. Click the map to drop a pin.`;
+}
+
+function syncSideAddressUnitSelect({ preserveSelection = true } = {}) {
+  if (!sideAddressUnitSelect) return;
+  const prev = preserveSelection ? sideAddressUnitSelect.value : "";
+  sideAddressUnitSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Select unit...";
+  sideAddressUnitSelect.appendChild(placeholder);
+
+  const options = buildSideAddressUnitOptions();
+  const allowedIds = new Set(options.map((opt) => String(opt.id)));
+  const nextMarkerData = new Map();
+  sideAddressPicker.unitMarkerData.forEach((value, key) => {
+    if (allowedIds.has(String(key))) nextMarkerData.set(String(key), value);
+  });
+  sideAddressPicker.unitMarkerData = nextMarkerData;
+  sideAddressPicker.unitLabels = new Map();
+  options.forEach((opt) => {
+    const option = document.createElement("option");
+    option.value = String(opt.id);
+    option.textContent = opt.label;
+    sideAddressUnitSelect.appendChild(option);
+    sideAddressPicker.unitLabels.set(String(opt.id), opt.label);
+  });
+
+  sideAddressUnitSelect.disabled = options.length === 0;
+  if (options.length === 0) {
+    if (sideAddressUnitMeta) sideAddressUnitMeta.textContent = "No units selected for this order.";
+    updateSideAddressUnitPinActions();
+    return;
+  }
+  sideAddressUnitSelect.value = options.some((opt) => String(opt.id) === String(prev)) ? prev : "";
+  updateSideAddressUnitMeta();
+  updateSideAddressUnitPinActions();
+}
+
+function clearSideAddressUnitSelection() {
+  sideAddressPicker.unitSelected = null;
+  if (sideAddressUnitSelect) sideAddressUnitSelect.value = "";
+  updateSideAddressUnitMeta();
+  updateSideAddressUnitPinActions();
+}
+
+function ensureSideAddressUnitMarkerMap() {
+  if (!sideAddressPicker.unitMarkers) sideAddressPicker.unitMarkers = new Map();
+  return sideAddressPicker.unitMarkers;
+}
+
+function setSideAddressUnitMarkerGoogle(unitId, lat, lng, label) {
+  const map = sideAddressPicker.google.map;
+  if (!map || !window.google?.maps) return;
+  const markers = ensureSideAddressUnitMarkerMap();
+  let marker = markers.get(String(unitId));
+  if (!marker) {
+    marker = new window.google.maps.Marker({
+      position: { lat, lng },
+      map,
+      title: label || "",
+      icon: {
+        path: window.google.maps.SymbolPath.CIRCLE,
+        scale: 7,
+        fillColor: "#0ea5e9",
+        fillOpacity: 1,
+        strokeColor: "#0f172a",
+        strokeWeight: 1,
+      },
+    });
+    markers.set(String(unitId), marker);
+  } else {
+    marker.setPosition({ lat, lng });
+    if (label) marker.setTitle(label);
+  }
+}
+
+function setSideAddressUnitMarkerLeaflet(unitId, lat, lng, label) {
+  const map = sideAddressPicker.leaflet.map;
+  if (!map || !window.L) return;
+  const markers = ensureSideAddressUnitMarkerMap();
+  let marker = markers.get(String(unitId));
+  if (!marker) {
+    marker = window.L.circleMarker([lat, lng], {
+      radius: 6,
+      color: "#0f172a",
+      weight: 1,
+      fillColor: "#0ea5e9",
+      fillOpacity: 0.9,
+    }).addTo(map);
+    if (label) marker.bindTooltip(label, { direction: "top" });
+    markers.set(String(unitId), marker);
+  } else {
+    marker.setLatLng([lat, lng]);
+  }
+}
+
+function setSideAddressUnitMarker(unitId, lat, lng, label) {
+  if (sideAddressPicker.mode === "google") {
+    setSideAddressUnitMarkerGoogle(unitId, lat, lng, label);
+  } else {
+    setSideAddressUnitMarkerLeaflet(unitId, lat, lng, label);
+  }
+}
+
+function hydrateSideAddressUnitMarkerData() {
+  const options = buildSideAddressUnitOptions();
+  if (!options.length) return;
+  const equipmentById = new Map((equipmentCache || []).map((e) => [String(e.id), e]));
+  options.forEach((opt) => {
+    if (sideAddressPicker.unitMarkerData.has(String(opt.id))) return;
+    const eq = equipmentById.get(String(opt.id));
+    const lat = toFiniteCoordinate(eq?.current_location_latitude);
+    const lng = toFiniteCoordinate(eq?.current_location_longitude);
+    if (lat === null || lng === null) return;
+    sideAddressPicker.unitMarkerData.set(String(opt.id), { lat, lng, label: opt.label });
+  });
+}
+
+function renderSideAddressUnitMarkersFromData() {
+  const data = sideAddressPicker.unitMarkerData;
+  if (!data || !data.size) return;
+  data.forEach((entry, unitId) => {
+    if (!Number.isFinite(entry?.lat) || !Number.isFinite(entry?.lng)) return;
+    setSideAddressUnitMarker(unitId, entry.lat, entry.lng, entry.label || "");
+  });
+}
+
+function setSideAddressUnitPinSelected(unitId, lat, lng, { provider, query } = {}) {
+  sideAddressPicker.unitSelected = {
+    unitId: Number(unitId),
+    lat: Number(lat),
+    lng: Number(lng),
+    provider: provider || "manual",
+    query: query || null,
+  };
+  const label = sideAddressPicker.unitLabels?.get?.(String(unitId)) || `Unit #${unitId}`;
+  setSideAddressUnitMarker(unitId, Number(lat), Number(lng), label);
+  updateSideAddressUnitMeta(`Pending pin for ${label}: ${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}.`);
+  updateSideAddressUnitPinActions();
+}
+
+function handleSideAddressMapClick(lat, lng, { provider } = {}) {
+  const unitId = getSelectedSideAddressUnitId();
+  if (unitId) {
+    setSideAddressUnitPinSelected(unitId, lat, lng, { provider: provider || "manual_pin" });
+    return true;
+  }
+  setSideAddressSelected(lat, lng, { provider: provider || "manual_pin" });
+  return false;
+}
+
+async function createLocationForSideAddressUnitPin({ name, latitude, longitude, provider, query }) {
+  const res = await fetch("/api/locations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyId: activeCompanyId,
+      name,
+      streetAddress: null,
+      city: null,
+      region: null,
+      country: null,
+      latitude,
+      longitude,
+      geocodeProvider: provider || "manual",
+      geocodeQuery: query || null,
+      isBaseLocation: false,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to save location.");
+  return data;
+}
+
+async function setSideAddressUnitCurrentLocation({ unitId, locationId }) {
+  const res = await fetch("/api/equipment/current-location", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyId: activeCompanyId,
+      equipmentIds: [Number(unitId)],
+      currentLocationId: Number(locationId),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to update current location.");
+  return data;
+}
+
+function buildSideAddressUnitPinLocationName({ unitId, label }) {
+  const orderLabel = draft?.roNumber || draft?.quoteNumber || (editingOrderId ? `Order ${editingOrderId}` : "Order");
+  const stamp = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const safeLabel = String(label || `Unit ${unitId}`).trim();
+  return `${orderLabel} - ${safeLabel} - ${stamp}`;
+}
+
+async function saveSideAddressUnitPinForSelectedUnit() {
+  const unitId = getSelectedSideAddressUnitId();
+  if (!activeCompanyId) {
+    updateSideAddressUnitMeta("Select or create a company first.");
+    return;
+  }
+  if (!unitId) {
+    updateSideAddressUnitMeta("Select a unit before saving a pin.");
+    return;
+  }
+  const sel = sideAddressPicker.unitSelected;
+  if (!sel || String(sel.unitId) !== String(unitId)) {
+    updateSideAddressUnitMeta("Click the map to drop a pin for the selected unit.");
+    return;
+  }
+  if (!Number.isFinite(sel.lat) || !Number.isFinite(sel.lng)) {
+    updateSideAddressUnitMeta("Pick a point on the map first.");
+    return;
+  }
+  if (saveSideAddressUnitPinBtn) saveSideAddressUnitPinBtn.disabled = true;
+  try {
+    if (!equipmentCache?.length) await loadEquipment().catch(() => { });
+    const eq = (equipmentCache || []).find((row) => String(row.id) === String(unitId)) || null;
+    const label = sideAddressPicker.unitLabels?.get?.(String(unitId)) || (eq ? unitOptionLabel(eq) : `Unit #${unitId}`);
+    const name = buildSideAddressUnitPinLocationName({ unitId, label });
+    const location = await createLocationForSideAddressUnitPin({
+      name,
+      latitude: sel.lat,
+      longitude: sel.lng,
+      provider: sel.provider,
+      query: sel.query,
+    });
+    await setSideAddressUnitCurrentLocation({ unitId, locationId: location.id });
+    sideAddressPicker.unitMarkerData.set(String(unitId), {
+      lat: sel.lat,
+      lng: sel.lng,
+      label,
+    });
+    if (eq) {
+      eq.current_location_id = Number(location.id);
+      eq.current_location = location.name || eq.current_location || null;
+      eq.current_location_latitude = sel.lat;
+      eq.current_location_longitude = sel.lng;
+    }
+    sideAddressPicker.unitSelected = null;
+    updateSideAddressUnitMeta(`Saved pin for ${label}.`);
+  } catch (err) {
+    updateSideAddressUnitMeta(err?.message || String(err));
+  } finally {
+    updateSideAddressUnitPinActions();
   }
 }
 
@@ -1876,6 +2226,7 @@ function resetSideAddressPickerMapContainer() {
   sideAddressPicker.google.map = null;
   sideAddressPicker.google.marker = null;
   sideAddressPicker.google.autocomplete = null;
+  sideAddressPicker.unitMarkers = new Map();
 
   if (sideAddressPickerMapEl._leaflet_id) {
     delete sideAddressPickerMapEl._leaflet_id;
@@ -1891,6 +2242,8 @@ function initLeafletSideAddressPicker(center) {
       const lat = e?.latlng?.lat;
       const lng = e?.latlng?.lng;
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const usedForUnit = handleSideAddressMapClick(lat, lng, { provider: "manual_pin" });
+      if (usedForUnit) return;
       if (!sideAddressPicker.leaflet.marker) {
         sideAddressPicker.leaflet.marker = window.L.marker([lat, lng], { draggable: true }).addTo(map);
         sideAddressPicker.leaflet.marker.on("dragend", () => {
@@ -1990,6 +2343,8 @@ function initGoogleSideAddressPicker(center) {
       const lat = e?.latLng?.lat?.();
       const lng = e?.latLng?.lng?.();
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const usedForUnit = handleSideAddressMapClick(lat, lng, { provider: "manual_pin" });
+      if (usedForUnit) return;
       if (!sideAddressPicker.google.marker) {
         sideAddressPicker.google.marker = new window.google.maps.Marker({ position: { lat, lng }, map, draggable: true });
         sideAddressPicker.google.marker.addListener("dragend", (evt) => {
@@ -2119,6 +2474,14 @@ async function openSideAddressPicker() {
   if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = "Loading map...";
   hideSideAddressSuggestions();
   bindSideAddressSearchMirror();
+  if (!equipmentCache?.length) {
+    try {
+      await loadEquipment();
+    } catch (err) {
+      if (sideAddressUnitMeta) sideAddressUnitMeta.textContent = err?.message || String(err);
+    }
+  }
+  syncSideAddressUnitSelect();
 
   if (sideAddressPickerInput && !String(sideAddressPickerInput.value || "").trim()) {
     const existing = String(siteAddressInput?.value || draft.siteAddress || "").trim();
@@ -2156,6 +2519,9 @@ async function openSideAddressPicker() {
       const msg = hasSvc ? "Search (Google Places) or click to drop a pin." : "Click to drop a pin (Places library missing).";
       sideAddressPickerMeta.textContent = msg;
     }
+    hydrateSideAddressUnitMarkerData();
+    renderSideAddressUnitMarkersFromData();
+    updateSideAddressUnitPinActions();
     if (!applySideAddressPickerDraftSelection()) {
       await applySideAddressPickerTextSelection();
     }
@@ -2483,11 +2849,11 @@ function findBundle(bundleId) {
 }
 
 function defaultRateBasisForBundle(bundle) {
-  if (!bundle) return "daily";
-  if (bundle.dailyRate !== null && bundle.dailyRate !== undefined) return "daily";
-  if (bundle.weeklyRate !== null && bundle.weeklyRate !== undefined) return "weekly";
+  if (!bundle) return "monthly";
   if (bundle.monthlyRate !== null && bundle.monthlyRate !== undefined) return "monthly";
-  return "daily";
+  if (bundle.weeklyRate !== null && bundle.weeklyRate !== undefined) return "weekly";
+  if (bundle.dailyRate !== null && bundle.dailyRate !== undefined) return "daily";
+  return "monthly";
 }
 
 function suggestedBundleRateAmount({ bundleId, basis }) {
@@ -2502,11 +2868,11 @@ function suggestedBundleRateAmount({ bundleId, basis }) {
 
 function defaultRateBasisForType(typeId) {
   const type = typesCache.find((t) => String(t.id) === String(typeId));
-  if (!type) return "daily";
-  if (type.daily_rate !== null && type.daily_rate !== undefined) return "daily";
-  if (type.weekly_rate !== null && type.weekly_rate !== undefined) return "weekly";
+  if (!type) return "monthly";
   if (type.monthly_rate !== null && type.monthly_rate !== undefined) return "monthly";
-  return "daily";
+  if (type.weekly_rate !== null && type.weekly_rate !== undefined) return "weekly";
+  if (type.daily_rate !== null && type.daily_rate !== undefined) return "daily";
+  return "monthly";
 }
 
 async function loadCustomerPricing(customerId) {
@@ -2858,6 +3224,21 @@ function localNowValue() {
   return d.toISOString().slice(0, 16);
 }
 
+function localNowValueForStep(stepMinutes = TIME_STEP_MINUTES) {
+  const step = Math.max(1, Math.round(stepMinutes));
+  const d = new Date();
+  const flooredMinutes = Math.floor(d.getMinutes() / step) * step;
+  d.setMinutes(flooredMinutes, 0, 0);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
+function applyMaxNowToInput(input) {
+  if (!input) return;
+  const stepMinutes = resolveMinuteStep(input);
+  input.max = localNowValueForStep(stepMinutes);
+}
+
 function addHoursToLocalValue(localValue, hours) {
   const iso = fromLocalInputValue(localValue);
   if (!iso) return "";
@@ -3058,6 +3439,110 @@ function scheduleDraftSave() {
   }, 250);
 }
 
+let lastSavedSnapshot = "";
+let pendingNavigation = null;
+let suppressBeforeUnload = false;
+
+function buildDraftSnapshot() {
+  const lockUnits = isUnitSelectionLocked(draft.status);
+  const snapshot = {
+    customerId: draft.customerId || null,
+    customerPo: draft.customerPo || "",
+    salespersonId: draft.salespersonId || null,
+    pickupLocationId: draft.pickupLocationId || null,
+    fulfillmentMethod: draft.fulfillmentMethod || "pickup",
+    dropoffAddress: draft.fulfillmentMethod === "dropoff" ? (draft.dropoffAddress || "") : "",
+    logisticsInstructions: draft.logisticsInstructions || "",
+    terms: draft.terms || "",
+    specialInstructions: draft.specialInstructions || "",
+    siteName: draft.siteName || "",
+    siteAddress: draft.siteAddress || "",
+    siteAccessInfo: draft.siteAccessInfo || "",
+    siteAddressLat: toFiniteCoordinate(draft.siteAddressLat),
+    siteAddressLng: toFiniteCoordinate(draft.siteAddressLng),
+    siteAddressQuery: draft.siteAddressQuery || "",
+    criticalAreas: draft.criticalAreas || "",
+    generalNotes: draft.generalNotes || "",
+    coverageHours: collectCoverageHoursFromInputs(),
+    emergencyContacts: collectContacts(emergencyContactsList),
+    siteContacts: collectContacts(siteContactsList),
+    notificationCircumstances: collectNotificationCircumstances(),
+    status: normalizeOrderStatus(draft.status || "quote"),
+    pickupInvoiceMode: draft.pickupInvoiceMode === "bulk" ? "bulk" : null,
+    pickupInvoiceAt: draft.pickupInvoiceAt || null,
+    lineItems: (draft.lineItems || []).map((li) => ({
+      typeId: li.typeId || null,
+      bundleId: li.bundleId || null,
+      startAt: li.startLocal ? fromLocalInputValue(li.startLocal) : null,
+      endAt: li.endLocal ? fromLocalInputValue(li.endLocal) : null,
+      fulfilledAt: li.pickedUpAt || null,
+      returnedAt: li.returnedAt || null,
+      rateBasis: normalizeRateBasis(li.rateBasis),
+      rateAmount: numberOrNull(li.rateAmount),
+      inventoryIds: lockUnits ? [] : (li.inventoryIds || []),
+      unitDescription: isRerentLineItem(li) ? (String(li.unitDescription || "").trim() || null) : null,
+      beforeNotes: li.beforeNotes || "",
+      afterNotes: li.afterNotes || "",
+      beforeImages: li.beforeImages || [],
+      afterImages: li.afterImages || [],
+      aiDamageReport: li.aiDamageReport || "",
+      pausePeriods: Array.isArray(li.pausePeriods) ? li.pausePeriods : [],
+    })),
+    fees: (draft.fees || []).map((f) => ({
+      id: f.id || null,
+      name: f.name || "",
+      amount: moneyNumber(f.amount),
+      feeDate: normalizeDateOnlyValue(f.feeDate) || null,
+    })),
+  };
+  try {
+    return JSON.stringify(snapshot);
+  } catch (_) {
+    return "";
+  }
+}
+
+function markDraftSavedSnapshot() {
+  lastSavedSnapshot = buildDraftSnapshot();
+}
+
+function hasUnsavedChanges() {
+  if (!lastSavedSnapshot) return false;
+  return buildDraftSnapshot() !== lastSavedSnapshot;
+}
+
+function setUnsavedChangesHint(message = "") {
+  if (!unsavedChangesHint) return;
+  const msg = String(message || "").trim();
+  unsavedChangesHint.textContent = msg;
+  unsavedChangesHint.style.display = msg ? "block" : "none";
+}
+
+function openUnsavedChangesModal() {
+  setUnsavedChangesHint("");
+  unsavedChangesModal?.classList.add("show");
+}
+
+function closeUnsavedChangesModal() {
+  unsavedChangesModal?.classList.remove("show");
+  setUnsavedChangesHint("");
+}
+
+function requestNavigation(next) {
+  if (!hasUnsavedChanges()) {
+    next();
+    return;
+  }
+  pendingNavigation = next;
+  openUnsavedChangesModal();
+}
+
+function continuePendingNavigation() {
+  const next = pendingNavigation;
+  pendingNavigation = null;
+  if (typeof next === "function") next();
+}
+
 function updateModeLabels() {
   const normalized = normalizeOrderStatus(draft.status);
   const primary = !isQuoteStatus(normalized) ? (draft.roNumber || null) : (draft.quoteNumber || null);
@@ -3236,7 +3721,7 @@ function ensureAtLeastOneLineItem() {
         bundleAvailable: null,
         startLocal: "",
         endLocal: "",
-        rateBasis: "daily",
+        rateBasis: "monthly",
         rateAmount: null,
         rateManual: false,
         inventoryIds: [],
@@ -3961,7 +4446,9 @@ function renderCustomerDetails() {
     url.searchParams.set("returnTo", "rental-order-form.html");
     url.searchParams.set("returnSelect", "customer");
     if (editingOrderId) url.searchParams.set("returnOrderId", String(editingOrderId));
-    window.location.href = url.pathname + url.search;
+    requestNavigation(() => {
+      window.location.href = url.pathname + url.search;
+    });
   });
 }
 
@@ -4290,14 +4777,14 @@ async function applyUnitSelection(li, { unitId, bundleId } = {}) {
     li.bundleAvailable = null;
     li.rateManual = false;
     const bundle = findBundle(nextBundleId);
-    li.rateBasis = defaultRateBasisForBundle(bundle);
+    if (!li.rateBasis) li.rateBasis = defaultRateBasisForBundle(bundle);
     li.rateAmount = suggestedBundleRateAmount({ bundleId: nextBundleId, basis: li.rateBasis });
   } else {
     li.bundleId = null;
     li.bundleItems = [];
     li.bundleAvailable = null;
     if (li.typeId && !li.rateManual) {
-      li.rateBasis = defaultRateBasisForType(li.typeId);
+      if (!li.rateBasis) li.rateBasis = defaultRateBasisForType(li.typeId);
       li.rateAmount = suggestedRateAmount({ customerId: draft.customerId, typeId: li.typeId, basis: li.rateBasis });
     }
   }
@@ -4944,6 +5431,8 @@ function renderLineItemActualModal() {
   resetLineItemPauseEditor({ keepInputs: true });
   applyOrderedPickup(li);
   const hasUnit = lineItemHasUnit(li);
+  applyMaxNowToInput(lineItemActualPickupInput);
+  applyMaxNowToInput(lineItemActualReturnInput);
 
   if (lineItemActualPickupInput) {
     lineItemActualPickupInput.value = toLocalInputValue(li.pickedUpAt);
@@ -4985,6 +5474,21 @@ function collectActualModalTargets() {
     targetPickup: fromLocalInputValue(pickupValue),
     targetReturn: fromLocalInputValue(returnValue),
   };
+}
+
+function validateActualTargetsNotFuture({ targetPickup, targetReturn }) {
+  const nowMs = Date.now();
+  if (targetPickup) {
+    const pickupMs = Date.parse(targetPickup);
+    if (!Number.isFinite(pickupMs)) return "Invalid pick up/delivery time.";
+    if (pickupMs > nowMs) return "Pick up/delivery time cannot be in the future.";
+  }
+  if (targetReturn) {
+    const returnMs = Date.parse(targetReturn);
+    if (!Number.isFinite(returnMs)) return "Invalid return time.";
+    if (returnMs > nowMs) return "Return time cannot be in the future.";
+  }
+  return null;
 }
 
 function uniqueEquipmentIdsFromLineItems(items) {
@@ -5595,6 +6099,7 @@ function loadDraftFromStorage() {
         siteContacts: Array.isArray(stored.siteContacts) ? stored.siteContacts : [],
         siteName: typeof stored.siteName === "string" ? stored.siteName : "",
         siteAddress: typeof stored.siteAddress === "string" ? stored.siteAddress : "",
+        siteAccessInfo: typeof stored.siteAccessInfo === "string" ? stored.siteAccessInfo : "",
         siteAddressLat: toFiniteCoordinate(stored.siteAddressLat),
         siteAddressLng: toFiniteCoordinate(stored.siteAddressLng),
         siteAddressQuery: typeof stored.siteAddressQuery === "string" ? stored.siteAddressQuery : "",
@@ -5620,6 +6125,7 @@ function initFormFieldsFromDraft() {
   specialInstructions.value = draft.specialInstructions || "";
   if (siteNameInput) siteNameInput.value = draft.siteName || "";
   if (siteAddressInput) siteAddressInput.value = draft.siteAddress || "";
+  if (siteAccessInfoInput) siteAccessInfoInput.value = draft.siteAccessInfo || "";
   if (criticalAreasInput) criticalAreasInput.value = draft.criticalAreas || "";
   setGeneralNotesHtml(draft.generalNotes || "");
   setCoverageInputs(draft.coverageHours || []);
@@ -5647,6 +6153,7 @@ function syncRentalInfoDraft() {
   draft.specialInstructions = specialInstructions?.value || "";
   draft.siteName = siteNameInput?.value || "";
   draft.siteAddress = siteAddressInput?.value || "";
+  draft.siteAccessInfo = siteAccessInfoInput?.value || "";
   if (!String(draft.siteAddress || "").trim() || draft.siteAddress !== draft.siteAddressQuery) {
     draft.siteAddressLat = null;
     draft.siteAddressLng = null;
@@ -5686,6 +6193,7 @@ async function loadOrder() {
   draft.specialInstructions = o.special_instructions || "";
   draft.siteName = o.site_name || o.siteName || "";
   draft.siteAddress = o.site_address || o.siteAddress || "";
+  draft.siteAccessInfo = o.site_access_info || o.siteAccessInfo || "";
   draft.siteAddressLat = toFiniteCoordinate(o.site_address_lat ?? o.siteAddressLat);
   draft.siteAddressLng = toFiniteCoordinate(o.site_address_lng ?? o.siteAddressLng);
   draft.siteAddressQuery = typeof (o.site_address_query ?? o.siteAddressQuery) === "string"
@@ -5721,7 +6229,7 @@ async function loadOrder() {
       endLocal: toLocalInputValue(li.endAt),
       pickedUpAt: li.fulfilledAt || null,
       returnedAt: li.returnedAt || null,
-      rateBasis: normalizeRateBasis(li.rateBasis) || "daily",
+      rateBasis: normalizeRateBasis(li.rateBasis) || "monthly",
       rateAmount: li.rateAmount === null || li.rateAmount === undefined ? null : Number(li.rateAmount),
       billableUnits: li.billableUnits === null || li.billableUnits === undefined ? null : Number(li.billableUnits),
       lineAmount: li.lineAmount === null || li.lineAmount === undefined ? null : Number(li.lineAmount),
@@ -5762,6 +6270,7 @@ async function loadOrder() {
   }
   renderLineItems();
   await loadQboDocuments();
+  markDraftSavedSnapshot();
 }
 
 function openSalesModal() {
@@ -5798,7 +6307,9 @@ customerSelect.addEventListener("change", (e) => {
     url.searchParams.set("returnTo", "rental-order-form.html");
     url.searchParams.set("returnSelect", "customer");
     if (editingOrderId) url.searchParams.set("returnOrderId", String(editingOrderId));
-    window.location.href = url.pathname + url.search;
+    requestNavigation(() => {
+      window.location.href = url.pathname + url.search;
+    });
     return;
   }
   draft.customerId = e.target.value ? Number(e.target.value) : null;
@@ -6089,6 +6600,47 @@ requestRejectModal?.addEventListener("click", (e) => {
   if (e.target === requestRejectModal) closeRequestRejectModal();
 });
 
+unsavedStayBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  pendingNavigation = null;
+  closeUnsavedChangesModal();
+});
+
+unsavedLeaveBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  closeUnsavedChangesModal();
+  suppressBeforeUnload = true;
+  continuePendingNavigation();
+});
+
+unsavedSaveLeaveBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!unsavedSaveLeaveBtn) return;
+  unsavedSaveLeaveBtn.disabled = true;
+  if (unsavedLeaveBtn) unsavedLeaveBtn.disabled = true;
+  if (unsavedStayBtn) unsavedStayBtn.disabled = true;
+  setUnsavedChangesHint("Saving...");
+  const result = await saveOrderDraft({ skipPickupInvoice: !!editingOrderId });
+  if (result?.ok) {
+    markDraftSavedSnapshot();
+    closeUnsavedChangesModal();
+    suppressBeforeUnload = true;
+    continuePendingNavigation();
+  } else {
+    setUnsavedChangesHint(result?.error || "Unable to save rental order.");
+    unsavedSaveLeaveBtn.disabled = false;
+    if (unsavedLeaveBtn) unsavedLeaveBtn.disabled = false;
+    if (unsavedStayBtn) unsavedStayBtn.disabled = false;
+  }
+});
+
+unsavedChangesModal?.addEventListener("click", (e) => {
+  if (e.target === unsavedChangesModal) {
+    pendingNavigation = null;
+    closeUnsavedChangesModal();
+  }
+});
+
 confirmRequestRejectBtn?.addEventListener("click", async (e) => {
   e.preventDefault();
   if (!confirmRequestRejectBtn) return;
@@ -6147,11 +6699,13 @@ deleteOrderBtn?.addEventListener("click", async (e) => {
       body: JSON.stringify({ companyId: activeCompanyId }),
     });
     if (res.status === 204) {
+      suppressBeforeUnload = true;
       window.location.href = "rental-orders.html";
       return;
     }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to delete rental order.");
+    suppressBeforeUnload = true;
     window.location.href = "rental-orders.html";
   } catch (err) {
     setCompanyMeta(err?.message ? String(err.message) : String(err));
@@ -6167,6 +6721,7 @@ const rentalInfoInputs = [
   specialInstructions,
   siteNameInput,
   siteAddressInput,
+  siteAccessInfoInput,
   criticalAreasInput,
 ].filter(Boolean);
 const minuteStepInputs = [
@@ -6397,7 +6952,7 @@ addLineItemBtn.addEventListener("click", (e) => {
     bundleAvailable: null,
     startLocal,
     endLocal: addHoursToLocalValue(startLocal, 24),
-    rateBasis: "daily",
+    rateBasis: "monthly",
     rateAmount: null,
     rateManual: false,
     inventoryIds: [],
@@ -6502,7 +7057,9 @@ lineItemsEl.addEventListener("change", async (e) => {
     li.bundleId = null;
     li.bundleItems = [];
     li.bundleAvailable = null;
-    li.rateBasis = li.typeId ? defaultRateBasisForType(li.typeId) : "daily";
+    if (!li.rateBasis) {
+      li.rateBasis = li.typeId ? defaultRateBasisForType(li.typeId) : "monthly";
+    }
     li.rateManual = false;
     li.rateAmount = li.typeId ? suggestedRateAmount({ customerId: draft.customerId, typeId: li.typeId, basis: li.rateBasis }) : null;
     await refreshAvailabilityForAllLineItems({ onError: (err) => setCompanyMeta(err.message) });
@@ -6521,7 +7078,7 @@ lineItemsEl.addEventListener("change", async (e) => {
   }
 
   if (e.target.matches("[data-rate-basis]")) {
-    li.rateBasis = normalizeRateBasis(e.target.value) || "daily";
+    li.rateBasis = normalizeRateBasis(e.target.value) || "monthly";
     if (!li.rateManual || li.rateAmount === null || li.rateAmount === undefined) {
       li.rateManual = false;
       if (li.bundleId) {
@@ -6692,6 +7249,7 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     specialInstructions: draft.specialInstructions || null,
     siteName: draft.siteName || null,
     siteAddress: draft.siteAddress || null,
+    siteAccessInfo: draft.siteAccessInfo || null,
     siteAddressLat: toFiniteCoordinate(draft.siteAddressLat),
     siteAddressLng: toFiniteCoordinate(draft.siteAddressLng),
     siteAddressQuery: draft.siteAddressQuery || null,
@@ -6819,7 +7377,9 @@ openHistoryBtn?.addEventListener("click", (e) => {
   }
   const fromParam = params.get("from");
   const from = fromParam ? `&from=${encodeURIComponent(fromParam)}` : "";
-  window.location.href = `rental-order-history.html?id=${encodeURIComponent(String(editingOrderId))}${from}`;
+  requestNavigation(() => {
+    window.location.href = `rental-order-history.html?id=${encodeURIComponent(String(editingOrderId))}${from}`;
+  });
 });
 
 openMonthlyChargesBtn?.addEventListener("click", (e) => {
@@ -6834,7 +7394,9 @@ openMonthlyChargesBtn?.addEventListener("click", (e) => {
   }
   const fromParam = params.get("from");
   const from = fromParam ? `&from=${encodeURIComponent(fromParam)}` : "";
-  window.location.href = `rental-order-monthly.html?id=${encodeURIComponent(String(editingOrderId))}${from}`;
+  requestNavigation(() => {
+    window.location.href = `rental-order-monthly.html?id=${encodeURIComponent(String(editingOrderId))}${from}`;
+  });
 });
 
 openCustomerUpdatesBtn?.addEventListener("click", (e) => {
@@ -6850,7 +7412,9 @@ openCustomerUpdatesBtn?.addEventListener("click", (e) => {
   const qs = new URLSearchParams();
   qs.set("rentalOrderId", String(editingOrderId));
   qs.set("status", "all");
-  window.location.href = `customer-updates.html?${qs.toString()}`;
+  requestNavigation(() => {
+    window.location.href = `customer-updates.html?${qs.toString()}`;
+  });
 });
 
 let extrasDrawerOpen = false;
@@ -7247,6 +7811,11 @@ lineItemActualSaveBtn?.addEventListener("click", async (e) => {
     return;
   }
   const { targetPickup, targetReturn } = collectActualModalTargets();
+  const futureError = validateActualTargetsNotFuture({ targetPickup, targetReturn });
+  if (futureError) {
+    if (lineItemActualHint) lineItemActualHint.textContent = futureError;
+    return;
+  }
   const pickupChanged = targetPickup !== (li.pickedUpAt || null);
   const returnChanged = targetReturn !== (li.returnedAt || null);
   const pauseChanged = pausePeriodsSignature(li) !== editingLineItemActualPauseSignature;
@@ -7335,6 +7904,11 @@ lineItemActualSaveAllBtn?.addEventListener("click", async (e) => {
     ? pausePeriodsSignature(editingLineItem) !== editingLineItemActualPauseSignature
     : false;
   const { targetPickup, targetReturn } = collectActualModalTargets();
+  const futureError = validateActualTargetsNotFuture({ targetPickup, targetReturn });
+  if (futureError) {
+    if (lineItemActualHint) lineItemActualHint.textContent = futureError;
+    return;
+  }
   const returnAddedAny =
     !!targetReturn && (draft.lineItems || []).some((li) => lineItemHasUnit(li) && !li.returnedAt);
   let returnLocationChoice = "none";
@@ -7684,6 +8258,32 @@ openSideAddressPickerBtn?.addEventListener("click", (e) => {
   });
 });
 
+sideAddressUnitSelect?.addEventListener("change", () => {
+  sideAddressPicker.unitSelected = null;
+  updateSideAddressUnitMeta();
+  updateSideAddressUnitPinActions();
+  const unitId = getSelectedSideAddressUnitId();
+  if (!unitId) return;
+  const entry = sideAddressPicker.unitMarkerData.get(String(unitId));
+  if (!entry || !Number.isFinite(entry.lat) || !Number.isFinite(entry.lng)) return;
+  if (sideAddressPicker.mode === "google" && sideAddressPicker.google.map) {
+    sideAddressPicker.google.map.setCenter({ lat: entry.lat, lng: entry.lng });
+    sideAddressPicker.google.map.setZoom(17);
+  } else if (sideAddressPicker.leaflet.map) {
+    sideAddressPicker.leaflet.map.setView([entry.lat, entry.lng], 17);
+  }
+});
+
+clearSideAddressUnitBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  clearSideAddressUnitSelection();
+});
+
+saveSideAddressUnitPinBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  saveSideAddressUnitPinForSelectedUnit();
+});
+
 closeSideAddressPickerBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   closeSideAddressPickerModal();
@@ -7766,6 +8366,7 @@ function init() {
     if (!startBlank) ensureAtLeastOneFeeRow();
     initFormFieldsFromDraft();
     updatePdfButtonState();
+    markDraftSavedSnapshot();
 
     hydrateLookups()
       .then(async () => {
@@ -7859,6 +8460,35 @@ createOrderLinkBtn?.addEventListener("click", async () => {
   } finally {
     createOrderLinkBtn.disabled = false;
   }
+});
+
+window.addEventListener("beforeunload", (e) => {
+  if (suppressBeforeUnload) return;
+  if (!hasUnsavedChanges()) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
+
+document.addEventListener("click", (e) => {
+  const link = e.target.closest?.("a[href]");
+  if (!link) return;
+  if (link.target === "_blank" || link.hasAttribute("download")) return;
+  const href = link.getAttribute("href");
+  if (!href || href.startsWith("#")) return;
+  const dest = new URL(href, window.location.href);
+  if (dest.origin !== window.location.origin) return;
+  if (
+    dest.pathname === window.location.pathname &&
+    dest.search === window.location.search &&
+    dest.hash
+  ) {
+    return;
+  }
+  if (!hasUnsavedChanges()) return;
+  e.preventDefault();
+  requestNavigation(() => {
+    window.location.href = dest.pathname + dest.search + dest.hash;
+  });
 });
 
 init();

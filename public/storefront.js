@@ -184,8 +184,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const reserveGeneralNotesStatus = $("reserve-general-notes-status");
   const reserveGeneralNotesPreviews = $("reserve-general-notes-previews");
   const reserveSiteAddress = $("reserve-site-address");
+  const reserveSiteAccessInfo = $("reserve-site-access-info");
     const rentalInfoFieldContainers = {
       siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
+      siteAccessInfo: document.querySelector('[data-rental-info-field="siteAccessInfo"]'),
       criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
       generalNotes: document.querySelector('[data-rental-info-field="generalNotes"]'),
       emergencyContacts: document.querySelector('[data-rental-info-field="emergencyContacts"]'),
@@ -221,6 +223,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const DEFAULT_RENTAL_INFO_FIELDS = {
     siteAddress: { enabled: true, required: false },
+    siteAccessInfo: { enabled: true, required: false },
     criticalAreas: { enabled: true, required: true },
     generalNotes: { enabled: true, required: true },
     emergencyContacts: { enabled: true, required: true },
@@ -269,6 +272,10 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     if (reserveSiteAddress) {
       reserveSiteAddress.required = activeRentalInfoConfig?.siteAddress?.enabled && activeRentalInfoConfig?.siteAddress?.required;
+    }
+    if (reserveSiteAccessInfo) {
+      reserveSiteAccessInfo.required =
+        activeRentalInfoConfig?.siteAccessInfo?.enabled && activeRentalInfoConfig?.siteAccessInfo?.required;
     }
     if (reserveCriticalAreas) {
       reserveCriticalAreas.required =
@@ -638,6 +645,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function resetRentalInfoFields() {
     if (reserveSiteAddress) reserveSiteAddress.value = "";
+    if (reserveSiteAccessInfo) reserveSiteAccessInfo.value = "";
     if (reserveCriticalAreas) reserveCriticalAreas.value = "";
     if (reserveGeneralNotes) reserveGeneralNotes.value = "";
     setContactRows(reserveEmergencyContactsList, []);
@@ -1136,17 +1144,21 @@ document.addEventListener("DOMContentLoaded", () => {
     e.preventDefault();
     if (!activeListing) return;
 
-    const siteAddress = normalizeContactValue(reserveSiteAddress?.value);
     const rentalInfoConfig = normalizeRentalInfoFields(activeRentalInfoConfig);
     const isFieldEnabled = (key) => rentalInfoConfig?.[key]?.enabled !== false;
     const isFieldRequired = (key) => rentalInfoConfig?.[key]?.enabled !== false && rentalInfoConfig?.[key]?.required === true;
 
     const siteAddress = normalizeContactValue(reserveSiteAddress?.value);
+    const siteAccessInfo = normalizeContactValue(reserveSiteAccessInfo?.value);
     const criticalAreas = normalizeContactValue(reserveCriticalAreas?.value);
     const generalNotes = normalizeContactValue(reserveGeneralNotes?.value);
 
     if (isFieldRequired("siteAddress") && !siteAddress) {
       setMeta(reserveMeta, "Site address is required.");
+      return;
+    }
+    if (isFieldRequired("siteAccessInfo") && !siteAccessInfo) {
+      setMeta(reserveMeta, "Site access information / pin is required.");
       return;
     }
     if (isFieldRequired("criticalAreas") && !criticalAreas) {
@@ -1195,6 +1207,7 @@ document.addEventListener("DOMContentLoaded", () => {
     payload.endAt = fromDatetimeLocalValue(payload.endAt);
     payload.quantity = 1;
     if (isFieldEnabled("siteAddress") && siteAddress) payload.siteAddress = siteAddress;
+    if (isFieldEnabled("siteAccessInfo") && siteAccessInfo) payload.siteAccessInfo = siteAccessInfo;
     if (isFieldEnabled("criticalAreas") && criticalAreas) payload.criticalAreas = criticalAreas;
     if (isFieldEnabled("generalNotes") && generalNotes) payload.generalNotes = generalNotes;
     if (isFieldEnabled("generalNotes") && reserveGeneralNotesImages.length) {

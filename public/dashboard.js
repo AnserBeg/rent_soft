@@ -64,6 +64,9 @@ const shortfallDonutGrid = document.getElementById("shortfall-donut-grid");
 const shortfallTrendWrap = document.getElementById("shortfall-trend-wrap");
 const shortfallTrendHint = document.getElementById("shortfall-trend-hint");
 const shortfallDetailCanvas = document.getElementById("shortfall-detail-chart");
+const shortfallMapFallback = document.getElementById("shortfall-map-fallback");
+const shortfallMapModeSelect = document.getElementById("shortfall-map-mode");
+const shortfallMapStyleSelect = document.getElementById("shortfall-map-style");
 const shortfallMeta = document.getElementById("shortfall-meta");
 const shortfallDetails = document.getElementById("shortfall-details");
 const shortfallDetailsMeta = document.getElementById("shortfall-details-meta");
@@ -82,10 +85,28 @@ let shortfallHoverKey = "";
 let shortfallDetailsCache = new Map();
 let shortfallLoadSeq = 0;
 let shortfallTypeMeta = new Map();
+let shortfallExcludedTypeIds = new Set();
 let shortfallEquipmentCache = [];
 let shortfallEquipmentLoaded = false;
 let shortfallEquipmentPromise = null;
 let shortfallDemandLoadSeq = 0;
+let shortfallMap = null;
+let shortfallMapLoadError = null;
+let shortfallMapMarkers = [];
+let shortfallMapInfoWindow = null;
+let shortfallMapMode = "units";
+let shortfallMapStyle = "street";
+let shortfallLocationsCache = [];
+let shortfallLocationsCompanyId = null;
+
+const SHORTFALL_EXCLUDED_TYPE_NAMES = new Set(["rerent", "re-rent", "re rent"]);
+
+function isShortfallExcludedTypeName(name) {
+  if (!name) return false;
+  const normalized = String(name).trim().toLowerCase();
+  if (SHORTFALL_EXCLUDED_TYPE_NAMES.has(normalized)) return true;
+  return normalized.replace(/[\s-]+/g, "") === "rerent";
+}
 
 const tooltip = document.getElementById("timeline-tooltip");
 let timelineMenuEl = null;
@@ -154,6 +175,320 @@ const BENCH_SORT_STORAGE_KEY = "rentsoft.workbench.timelineSortNearest";
 let benchActiveView = null; // "timeline" | "stages" | null
 let benchOrdersCache = [];
 let benchOrdersCacheKey = "";
+
+function isGoogleMapsReady() {
+  return typeof window.google?.maps?.Map === "function";
+}
+
+function waitForGoogleMapsReady({ timeoutMs = 4000, intervalMs = 50 } = {}) {
+  if (isGoogleMapsReady()) return Promise.resolve(true);
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const tick = () => {
+      if (isGoogleMapsReady()) return resolve(true);
+      if (Date.now() - start >= timeoutMs) return reject(new Error("Google Maps not ready."));
+      setTimeout(tick, intervalMs);
+    };
+    tick();
+  });
+}
+
+function loadGoogleMaps(apiKey) {
+  if (!apiKey) return Promise.resolve(false);
+  if (isGoogleMapsReady()) return Promise.resolve(true);
+  if (window.__rentsoftGoogleMapsLoading) return window.__rentsoftGoogleMapsLoading;
+
+  window.__rentsoftGoogleMapsLoading = new Promise((resolve, reject) => {
+    const id = "rentsoft-google-maps";
+    const existing = document.getElementById(id);
+    if (existing) {
+      waitForGoogleMapsReady().then(() => resolve(true)).catch(reject);
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = id;
+    s.async = true;
+    s.defer = true;
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places&loading=async`;
+    s.onload = () => {
+      waitForGoogleMapsReady().then(() => resolve(true)).catch(reject);
+    };
+    s.onerror = () => reject(new Error("Failed to load Google Maps script (network/CSP)."));
+    document.head.appendChild(s);
+  });
+  return window.__rentsoftGoogleMapsLoading;
+}
+
+async function getPublicConfig() {
+  const res = await fetch("/api/public-config");
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load config");
+  return data || {};
+}
+
+function escapeHtml(s) {
+  return String(s || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function toCoord(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function mulberry32(seed) {
+  let t = seed >>> 0;
+  return function () {
+    t += 0x6D2B79F5;
+    let x = Math.imul(t ^ (t >>> 15), 1 | t);
+    x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function jitterLatLng(lat, lng, seed) {
+  const rand = mulberry32(seed);
+  const rMeters = 10;
+  const a = rand() * Math.PI * 2;
+  const r = Math.sqrt(rand()) * rMeters;
+  const dLat = (r * Math.cos(a)) / 111111;
+  const dLng = (r * Math.sin(a)) / (111111 * Math.cos((lat * Math.PI) / 180));
+  return [lat + dLat, lng + dLng];
+}
+
+function normalizeMapStyle(value) {
+  return value === "satellite" ? "satellite" : "street";
+}
+
+function applyShortfallMapStyle(nextStyle) {
+  shortfallMapStyle = normalizeMapStyle(nextStyle ?? shortfallMapStyle);
+  if (shortfallMapStyleSelect && shortfallMapStyleSelect.value !== shortfallMapStyle) {
+    shortfallMapStyleSelect.value = shortfallMapStyle;
+  }
+  if (!shortfallMap || !isGoogleMapsReady()) return;
+  shortfallMap.setMapTypeId(shortfallMapStyle === "satellite" ? "satellite" : "roadmap");
+}
+
+function formatAddress(loc) {
+  const parts = [loc.street_address, loc.city, loc.region, loc.country].filter(Boolean);
+  return parts.join(", ");
+}
+
+async function loadShortfallLocationsForMap() {
+  if (!activeCompanyId) return;
+  if (shortfallLocationsCompanyId === activeCompanyId && shortfallLocationsCache.length) return;
+  const res = await fetch(`/api/locations?companyId=${activeCompanyId}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to fetch locations");
+  shortfallLocationsCache = data.locations || [];
+  shortfallLocationsCompanyId = activeCompanyId;
+}
+
+function clearShortfallMapMarkers() {
+  shortfallMapMarkers.forEach((m) => m.setMap(null));
+  shortfallMapMarkers = [];
+}
+
+function renderShortfallUnitsMap(rows) {
+  if (!shortfallMap || !isGoogleMapsReady()) return;
+
+  const coordSource = (eq) => {
+    const cLat = toCoord(eq?.current_location_latitude);
+    const cLng = toCoord(eq?.current_location_longitude);
+    if (cLat !== null && cLng !== null) return { lat: cLat, lng: cLng, source: "current" };
+    const bLat = toCoord(eq?.location_latitude);
+    const bLng = toCoord(eq?.location_longitude);
+    if (bLat !== null && bLng !== null) return { lat: bLat, lng: bLng, source: "base" };
+    return null;
+  };
+
+  const mapped = rows.filter((eq) => Boolean(coordSource(eq)));
+  const bounds = new window.google.maps.LatLngBounds();
+  let hasBounds = false;
+
+  const statusColors = {
+    notRented: { stroke: "#6b7280", fill: "rgba(107, 114, 128, 0.30)" },
+    rented: { stroke: "#16a34a", fill: "rgba(22, 163, 74, 0.30)" },
+    overdue: { stroke: "#ef4444", fill: "rgba(239, 68, 68, 0.30)" },
+  };
+
+  mapped.forEach((eq) => {
+    const src = coordSource(eq);
+    if (!src) return;
+    const [jLat, jLng] = jitterLatLng(src.lat, src.lng, Number(eq.id) || 1);
+    bounds.extend({ lat: jLat, lng: jLng });
+    hasBounds = true;
+
+    const title = escapeHtml(`${eq.type || eq.type_name || "Unit"} - ${eq.model_name || "--"}`);
+    const serial = escapeHtml(eq.serial_number || "--");
+    const baseLocation = escapeHtml(eq.location || eq.location_name || "--");
+    const currentLocation = escapeHtml(eq.current_location || "--");
+    const status = escapeHtml(eq.availability_status || "Unknown");
+    const href = `equipment.html?equipmentId=${encodeURIComponent(eq.id)}`;
+    const locLine = src.source === "current" ? `Current: ${currentLocation}` : `Base: ${baseLocation}`;
+
+    const isOverdue = eq?.is_overdue === true;
+    const availability = String(eq.availability_status || "");
+    const isRented = availability.toLowerCase().includes("rent") || availability.toLowerCase().includes("out");
+    const palette = isOverdue ? statusColors.overdue : (isRented ? statusColors.rented : statusColors.notRented);
+    const marker = new window.google.maps.Marker({
+      position: { lat: jLat, lng: jLng },
+      map: shortfallMap,
+      icon: {
+        path: window.google.maps.SymbolPath.CIRCLE,
+        scale: 8,
+        fillColor: palette.fill,
+        fillOpacity: 1,
+        strokeColor: palette.stroke,
+        strokeWeight: 2,
+      },
+    });
+    marker.addListener("click", () => {
+      if (!shortfallMapInfoWindow) return;
+      shortfallMapInfoWindow.setContent(
+        `<div style="display:grid; gap:6px;">
+          <div style="font-weight:800;">${title}</div>
+          <div class="hint">Serial: ${serial}</div>
+          <div class="hint">${locLine}</div>
+          ${src.source === "current" ? `<div class="hint">Base: ${baseLocation}</div>` : `<div class="hint">Current: ${currentLocation}</div>`}
+          <div class="hint">Status: ${isOverdue ? "Overdue" : status}</div>
+          <div><a href="${href}">Open in Stock</a></div>
+        </div>`
+      );
+      shortfallMapInfoWindow.open({ anchor: marker, map: shortfallMap });
+    });
+    shortfallMapMarkers.push(marker);
+  });
+
+  if (hasBounds) {
+    shortfallMap.fitBounds(bounds, { padding: 120, maxZoom: 16 });
+    setTimeout(() => {
+      const z = shortfallMap.getZoom();
+      if (Number.isFinite(z)) shortfallMap.setZoom(Math.max(z - 2, 2));
+    }, 0);
+  } else {
+    shortfallMap.setCenter({ lat: 20, lng: 0 });
+    shortfallMap.setZoom(2);
+  }
+}
+
+function renderShortfallLocationsMap(rows) {
+  if (!shortfallMap || !isGoogleMapsReady()) return;
+  const hasCoord = (loc) => toCoord(loc?.latitude) !== null && toCoord(loc?.longitude) !== null;
+  const mapped = rows.filter(hasCoord);
+  const bounds = new window.google.maps.LatLngBounds();
+  let hasBounds = false;
+
+  mapped.forEach((loc) => {
+    const lat = toCoord(loc?.latitude);
+    const lng = toCoord(loc?.longitude);
+    if (lat === null || lng === null) return;
+    bounds.extend({ lat, lng });
+    hasBounds = true;
+    const name = escapeHtml(loc.name || `#${loc.id}`);
+    const address = escapeHtml(formatAddress(loc) || "--");
+    const href = `location.html?id=${encodeURIComponent(loc.id)}`;
+    const marker = new window.google.maps.Marker({ position: { lat, lng }, map: shortfallMap });
+    marker.addListener("click", () => {
+      if (!shortfallMapInfoWindow) return;
+      shortfallMapInfoWindow.setContent(
+        `<div style="display:grid; gap:6px;">
+          <div style="font-weight:800;">${name}</div>
+          <div class="hint">${address}</div>
+          <div><a href="${href}">Open</a></div>
+        </div>`
+      );
+      shortfallMapInfoWindow.open({ anchor: marker, map: shortfallMap });
+    });
+    shortfallMapMarkers.push(marker);
+  });
+
+  if (hasBounds) {
+    shortfallMap.fitBounds(bounds, { padding: 120, maxZoom: 14 });
+    setTimeout(() => {
+      const z = shortfallMap.getZoom();
+      if (Number.isFinite(z)) shortfallMap.setZoom(Math.max(z - 2, 2));
+    }, 0);
+  } else {
+    shortfallMap.setCenter({ lat: 20, lng: 0 });
+    shortfallMap.setZoom(2);
+  }
+}
+
+async function refreshShortfallMap() {
+  if (!shortfallMap || !isGoogleMapsReady()) return;
+  clearShortfallMapMarkers();
+  if (shortfallMapMode === "locations") {
+    await loadShortfallLocationsForMap();
+    renderShortfallLocationsMap(shortfallLocationsCache);
+  } else {
+    const equipment = await loadShortfallEquipmentCache().catch(() => []);
+    renderShortfallUnitsMap(Array.isArray(equipment) ? equipment : []);
+  }
+  setTimeout(() => window.google?.maps?.event?.trigger?.(shortfallMap, "resize"), 50);
+}
+
+async function ensureShortfallMapFallback() {
+  if (!shortfallMapFallback) return false;
+  if (shortfallMap) return true;
+  if (shortfallMapLoadError) return false;
+
+  try {
+    const config = await getPublicConfig();
+    const apiKey = String(config?.googleMapsApiKey || config?.google_maps_api_key || "");
+    if (!apiKey) throw new Error("Google Maps API key is required.");
+    await loadGoogleMaps(apiKey);
+    if (!isGoogleMapsReady()) throw new Error("Google Maps not ready.");
+
+    shortfallMap = new window.google.maps.Map(shortfallMapFallback, {
+      center: { lat: 20, lng: 0 },
+      zoom: 2,
+      mapTypeId: shortfallMapStyle === "satellite" ? "satellite" : "roadmap",
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: false,
+    });
+    shortfallMapInfoWindow = new window.google.maps.InfoWindow();
+    applyShortfallMapStyle(shortfallMapStyle);
+    refreshShortfallMap().catch(() => null);
+    setTimeout(() => window.google?.maps?.event?.trigger?.(shortfallMap, "resize"), 50);
+    return true;
+  } catch (err) {
+    shortfallMapLoadError = err;
+    return false;
+  }
+}
+
+function showShortfallMapFallback(message) {
+  if (shortfallDetailCanvas) shortfallDetailCanvas.hidden = true;
+  if (shortfallMapFallback) shortfallMapFallback.hidden = false;
+  shortfallTrendWrap?.classList.remove("is-hidden");
+  shortfallTrendWrap?.classList.add("is-map-fallback");
+  if (message && shortfallTrendHint) shortfallTrendHint.textContent = message;
+
+  ensureShortfallMapFallback().then((ok) => {
+    if (!ok && shortfallTrendHint) {
+      const fallbackMsg = shortfallMapLoadError?.message ? `Map unavailable: ${shortfallMapLoadError.message}` : "Map unavailable.";
+      shortfallTrendHint.textContent = fallbackMsg;
+      shortfallTrendWrap?.classList.remove("is-map-fallback");
+      return;
+    }
+    refreshShortfallMap().catch(() => null);
+  });
+}
+
+function hideShortfallMapFallback() {
+  if (shortfallMapFallback) shortfallMapFallback.hidden = true;
+  if (shortfallDetailCanvas) shortfallDetailCanvas.hidden = false;
+  shortfallTrendWrap?.classList.remove("is-map-fallback");
+  if (!shortfallSelectedTypeId) shortfallTrendWrap?.classList.add("is-hidden");
+}
 
 function hasTimelineUI() {
   return Boolean(timelineDaysEl && timelineLeftEl && timelineRowsEl && scrollHead && scrollBody);
@@ -1503,7 +1838,12 @@ async function ensureShortfallLookups() {
       const current = shortfallType.value;
       shortfallType.innerHTML = `<option value="">All</option>`;
       shortfallTypeMeta = new Map();
+      shortfallExcludedTypeIds = new Set();
       (typeData.types || []).forEach((t) => {
+        if (isShortfallExcludedTypeName(t.name)) {
+          shortfallExcludedTypeIds.add(String(t.id));
+          return;
+        }
         const opt = document.createElement("option");
         opt.value = String(t.id);
         opt.textContent = t.name;
@@ -1552,6 +1892,7 @@ async function loadShortfallEquipmentCache() {
 function shortfallEquipmentMatchesFilters(eq) {
   const eqTypeId = eq.type_id ?? eq.typeId ?? null;
   if (!eqTypeId) return false;
+  if (shortfallExcludedTypeIds.has(String(eqTypeId))) return false;
 
   if (shortfallType?.value && String(eqTypeId) !== String(shortfallType.value)) return false;
 
@@ -1608,11 +1949,21 @@ function shortfallSelectedTypeName() {
 
 function updateShortfallTrendVisibility() {
   const hasSelection = Boolean(shortfallSelectedTypeId);
-  shortfallTrendWrap?.classList.toggle("is-hidden", !hasSelection);
+  const showingMapFallback = Boolean(shortfallMapFallback && !shortfallMapFallback.hidden);
+  shortfallTrendWrap?.classList.toggle("is-hidden", !hasSelection && !showingMapFallback);
+  if (!hasSelection && !showingMapFallback) hideShortfallMapFallback();
   if (shortfallTrendHint) {
-    shortfallTrendHint.textContent = hasSelection
-      ? `Showing trend for ${shortfallSelectedTypeName()}.`
-      : "Select a type to view the trend.";
+    if (!hasSelection) {
+      shortfallTrendHint.textContent = showingMapFallback
+        ? "Availability trend unavailable. Showing map instead."
+        : "Select a type to view the trend.";
+      return;
+    }
+    if (shortfallMapFallback && !shortfallMapFallback.hidden) {
+      shortfallTrendHint.textContent = "Availability trend unavailable. Showing map instead.";
+      return;
+    }
+    shortfallTrendHint.textContent = `Showing trend for ${shortfallSelectedTypeName()}.`;
   }
 }
 
@@ -1754,7 +2105,15 @@ function renderShortfallSummaryChart() {
 }
 
 function renderShortfallDetailChart() {
-  if (!shortfallDetailCanvas || typeof Chart === "undefined") return;
+  if (!shortfallDetailCanvas) return;
+  if (typeof Chart === "undefined") {
+    showShortfallMapFallback("Availability trend unavailable. Showing map instead.");
+    renderShortfallDetailsEmpty("Select a type to view shortfall details.");
+    updateShortfallTrendVisibility();
+    return;
+  }
+
+  hideShortfallMapFallback();
   if (shortfallDetailChart) shortfallDetailChart.destroy();
   shortfallSeriesMeta = [];
 
@@ -1762,6 +2121,7 @@ function renderShortfallDetailChart() {
     const ctx = shortfallDetailCanvas.getContext("2d");
     ctx?.clearRect(0, 0, shortfallDetailCanvas.width, shortfallDetailCanvas.height);
     renderShortfallDetailsEmpty("Select a type to view shortfall details.");
+    showShortfallMapFallback("Availability trend unavailable. Showing map instead.");
     updateShortfallTrendVisibility();
     return;
   }
@@ -1830,35 +2190,46 @@ function renderShortfallDetailChart() {
     shortfallSeriesMeta.push({ seriesIndex: idx, kind: "potential" });
   });
 
-  shortfallDetailChart = new Chart(shortfallDetailCanvas.getContext("2d"), {
-    type: "line",
-    data: { labels, datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: "nearest", intersect: false },
-      onHover: (_, active) => handleShortfallHover(active),
-      plugins: {
-        legend: { position: "bottom", labels: { boxWidth: 10, usePointStyle: true, pointStyle: "line" } },
-        tooltip: {
-          mode: "index",
-          intersect: false,
-          callbacks: {
-            label: (ctx) => `${ctx.dataset.label}: ${fmtCount(ctx.raw)}`,
+  const ctx = shortfallDetailCanvas.getContext("2d");
+  if (!ctx) {
+    showShortfallMapFallback("Availability trend unavailable. Showing map instead.");
+    return;
+  }
+
+  try {
+    shortfallDetailChart = new Chart(ctx, {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "nearest", intersect: false },
+        onHover: (_, active) => handleShortfallHover(active),
+        plugins: {
+          legend: { position: "bottom", labels: { boxWidth: 10, usePointStyle: true, pointStyle: "line" } },
+          tooltip: {
+            mode: "index",
+            intersect: false,
+            callbacks: {
+              label: (ctx) => `${ctx.dataset.label}: ${fmtCount(ctx.raw)}`,
+            },
           },
         },
-      },
-      scales: {
-        y: {
-          ticks: { precision: 0 },
-          grid: {
-            color: (ctx) => (ctx.tick?.value === 0 ? "rgba(148, 163, 184, 0.8)" : "rgba(226, 232, 240, 0.8)"),
+        scales: {
+          y: {
+            ticks: { precision: 0 },
+            grid: {
+              color: (ctx) => (ctx.tick?.value === 0 ? "rgba(148, 163, 184, 0.8)" : "rgba(226, 232, 240, 0.8)"),
+            },
           },
+          x: { ticks: { maxRotation: 0 }, grid: { display: false }, title: { display: true, text: "Date" } },
         },
-        x: { ticks: { maxRotation: 0 }, grid: { display: false }, title: { display: true, text: "Date" } },
       },
-    },
-  });
+    });
+  } catch (err) {
+    showShortfallMapFallback("Availability trend unavailable. Showing map instead.");
+    return;
+  }
 
   renderShortfallDetailsEmpty();
 }
@@ -2021,7 +2392,9 @@ async function loadShortfallSeries() {
 
 async function loadShortfallDashboard() {
   if (!hasShortfallUI() || !activeCompanyId) return;
-  if (typeof Chart === "undefined") return;
+  if (typeof Chart === "undefined") {
+    showShortfallMapFallback("Availability trend unavailable. Showing map instead.");
+  }
 
   const seq = (shortfallLoadSeq += 1);
   setShortfallMeta("Loading availability...");
@@ -2044,11 +2417,17 @@ async function loadShortfallDashboard() {
     if (seq !== shortfallLoadSeq) return;
     if (!res.ok) throw new Error(data.error || "Unable to load availability");
 
-    const rows = Array.isArray(data.rows) ? data.rows : [];
-    shortfallSummaryRows = rows
-      .map((r) => ({
-        typeId: r.typeId ?? r.type_id ?? null,
-        typeName: r.typeName || r.type_name || "--",
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      const filteredRows = rows.filter((row) => {
+        const typeId = row.typeId ?? row.type_id ?? null;
+        const typeName = row.typeName ?? row.type_name ?? "";
+        if (typeId !== null && shortfallExcludedTypeIds.has(String(typeId))) return false;
+        return !isShortfallExcludedTypeName(typeName);
+      });
+      shortfallSummaryRows = filteredRows
+        .map((r) => ({
+          typeId: r.typeId ?? r.type_id ?? null,
+          typeName: r.typeName || r.type_name || "--",
         categoryName: r.categoryName || r.category_name || null,
         totalUnits: Number(r.totalUnits ?? r.total_units ?? 0),
         minCommitted: Number(r.minCommitted ?? r.min_committed ?? 0),
@@ -2112,6 +2491,19 @@ function initShortfallUI() {
   if (!hasShortfallUI()) return;
   renderShortfallDetailsEmpty();
   syncShortfallSplitToggle();
+
+  if (shortfallMapStyleSelect) {
+    applyShortfallMapStyle(shortfallMapStyleSelect.value);
+    shortfallMapStyleSelect.addEventListener("change", () => applyShortfallMapStyle(shortfallMapStyleSelect.value));
+  }
+  if (shortfallMapModeSelect) {
+    shortfallMapMode = shortfallMapModeSelect.value === "locations" ? "locations" : "units";
+    shortfallMapModeSelect.value = shortfallMapMode;
+    shortfallMapModeSelect.addEventListener("change", () => {
+      shortfallMapMode = shortfallMapModeSelect.value === "locations" ? "locations" : "units";
+      refreshShortfallMap().catch(() => null);
+    });
+  }
 
   shortfallDaysSelect?.addEventListener("change", () => loadShortfallDashboard().catch(() => null));
   shortfallLocation?.addEventListener("change", () => loadShortfallDashboard().catch(() => null));

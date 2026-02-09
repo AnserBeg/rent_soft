@@ -106,6 +106,7 @@ const storefrontRequirementOptions = [
 const rentalInfoFieldOptions = [
   { key: "siteAddress", label: "Site address" },
   { key: "siteName", label: "Site name" },
+  { key: "siteAccessInfo", label: "Site access information / pin" },
   { key: "criticalAreas", label: "Critical areas on site" },
   { key: "generalNotes", label: "General notes" },
   { key: "emergencyContacts", label: "Emergency contacts" },
@@ -117,6 +118,7 @@ const rentalInfoFieldOptions = [
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
   siteName: { enabled: true, required: false },
+  siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },

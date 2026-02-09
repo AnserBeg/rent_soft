@@ -866,6 +866,7 @@ async function ensureTables() {
         dropoff_address TEXT,
         site_name TEXT,
         site_address TEXT,
+        site_access_info TEXT,
         site_address_lat DOUBLE PRECISION,
         site_address_lng DOUBLE PRECISION,
         site_address_query TEXT,
@@ -900,6 +901,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS dropoff_address TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_name TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_address TEXT;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_access_info TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_address_lat DOUBLE PRECISION;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_address_lng DOUBLE PRECISION;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_address_query TEXT;`);
@@ -1102,7 +1104,7 @@ async function ensureTables() {
         auto_apply_customer_credit BOOLEAN NOT NULL DEFAULT TRUE,
         auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE,
         required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
-        rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
+        rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"siteAccessInfo":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
         customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
         customer_terms_template TEXT,
         customer_esign_required BOOLEAN NOT NULL DEFAULT TRUE,
@@ -1140,7 +1142,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(
-      `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb;`
+      `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"siteAccessInfo":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb;`
     );
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_terms_template TEXT;`);
@@ -5279,6 +5281,7 @@ function normalizeCustomerDocumentCategories(value) {
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
   siteName: { enabled: true, required: false },
+  siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -6447,6 +6450,11 @@ async function setLineItemPickedUp({
   const nextPickedUp = !!pickedUp;
   if (!Number.isFinite(cid) || !Number.isFinite(liid)) throw new Error("companyId and lineItemId are required.");
   const providedPickedUpAt = typeof pickedUpAt === "string" && pickedUpAt.trim() ? pickedUpAt : null;
+  if (providedPickedUpAt) {
+    const pickedMs = Date.parse(providedPickedUpAt);
+    if (!Number.isFinite(pickedMs)) return { ok: false, error: "Invalid actual pickup time." };
+    if (pickedMs > Date.now()) return { ok: false, error: "Actual pickup time cannot be in the future." };
+  }
 
   const client = await pool.connect();
   let orderId = null;
@@ -6669,6 +6677,11 @@ async function setLineItemReturned({
   const nextReturned = !!returned;
   if (!Number.isFinite(cid) || !Number.isFinite(liid)) throw new Error("companyId and lineItemId are required.");
   const providedReturnedAt = typeof returnedAt === "string" && returnedAt.trim() ? returnedAt : null;
+  if (providedReturnedAt) {
+    const returnedMs = Date.parse(providedReturnedAt);
+    if (!Number.isFinite(returnedMs)) return { ok: false, error: "Invalid actual return time." };
+    if (returnedMs > Date.now()) return { ok: false, error: "Actual return time cannot be in the future." };
+  }
 
   const client = await pool.connect();
   let orderId = null;
@@ -6960,19 +6973,21 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     ? { id: Number(defaultLocationRes.rows[0].id), name: defaultLocationRes.rows[0].name }
     : null;
   const defaultLocationId = Number.isFinite(defaultLocation?.id) ? defaultLocation.id : null;
+  const defaultLocationName = defaultLocation?.name || "No location";
 
   const equipmentRes = await pool.query(
     `
     SELECT e.id,
-           COALESCE(e.current_location_id, e.location_id, $3) AS location_id,
-           l.name AS location_name
+           COALESCE(l.id, $3) AS location_id,
+           COALESCE(l.name, $4) AS location_name
       FROM equipment e
- LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id, $3)
+ LEFT JOIN locations l ON l.id = e.location_id
+                        AND l.is_base_location = TRUE
      WHERE e.company_id = $1
        AND e.type_id = $2
        AND (e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')
     `,
-    [companyId, typeId, defaultLocationId]
+    [companyId, typeId, defaultLocationId, defaultLocationName]
   );
   const units = equipmentRes.rows.map((r) => ({
     id: Number(r.id),
@@ -6984,8 +6999,8 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     `
     WITH assigned AS (
       SELECT li.id,
-             COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id, $5) AS location_id,
-             COALESCE(l.name, 'No location') AS location_name,
+             COALESCE(base_loc.id, pickup_loc.id, $5) AS location_id,
+             COALESCE(base_loc.name, pickup_loc.name, $6) AS location_name,
              COALESCE(li.fulfilled_at, li.start_at) AS start_at,
              COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
              COUNT(*)::int AS qty
@@ -6993,7 +7008,10 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
         JOIN rental_orders ro ON ro.id = li.rental_order_id
         JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
         JOIN equipment e ON e.id = liv.equipment_id
-   LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id, $5)
+   LEFT JOIN locations base_loc ON base_loc.id = e.location_id
+                               AND base_loc.is_base_location = TRUE
+   LEFT JOIN locations pickup_loc ON pickup_loc.id = ro.pickup_location_id
+                                 AND pickup_loc.is_base_location = TRUE
        WHERE ro.company_id = $1
          AND li.type_id = $2
          AND ro.status IN ('quote','requested','reservation','ordered')
@@ -7002,8 +7020,10 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
            AND COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) > $3::timestamptz
          )
        GROUP BY li.id,
-                COALESCE(e.current_location_id, e.location_id, ro.pickup_location_id, $5),
-                l.name,
+                base_loc.id,
+                base_loc.name,
+                pickup_loc.id,
+                pickup_loc.name,
                 li.fulfilled_at,
                 li.start_at,
                 li.returned_at,
@@ -7011,14 +7031,15 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     ),
     unassigned AS (
       SELECT li.id,
-             COALESCE(ro.pickup_location_id, $5) AS location_id,
-             COALESCE(l.name, 'No location') AS location_name,
+             COALESCE(pickup_loc.id, $5) AS location_id,
+             COALESCE(pickup_loc.name, $6) AS location_name,
              COALESCE(li.fulfilled_at, li.start_at) AS start_at,
              COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at,
              1::int AS qty
         FROM rental_order_line_items li
         JOIN rental_orders ro ON ro.id = li.rental_order_id
-   LEFT JOIN locations l ON l.id = COALESCE(ro.pickup_location_id, $5)
+   LEFT JOIN locations pickup_loc ON pickup_loc.id = ro.pickup_location_id
+                                 AND pickup_loc.is_base_location = TRUE
        WHERE ro.company_id = $1
          AND li.type_id = $2
          AND ro.status IN ('quote','requested','reservation','ordered')
@@ -7032,7 +7053,7 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
     UNION ALL
     SELECT * FROM unassigned
     `,
-    [companyId, typeId, start.toISOString(), end.toISOString(), defaultLocationId]
+    [companyId, typeId, start.toISOString(), end.toISOString(), defaultLocationId, defaultLocationName]
   );
 
   const byLocation = new Map();
@@ -7078,20 +7099,23 @@ async function getTypeAvailabilitySeries({ companyId, typeId, from, days = 30 })
   const incomingRes = await pool.query(
     `
     SELECT po.expected_possession_date,
-           COALESCE(po.location_id, $4) AS location_id,
-           COALESCE(l.name, 'No location') AS location_name,
+           COALESCE(base_loc.id, $4) AS location_id,
+           COALESCE(base_loc.name, $5) AS location_name,
            COUNT(*)::int AS qty
       FROM purchase_orders po
- LEFT JOIN locations l ON l.id = COALESCE(po.location_id, $4)
+ LEFT JOIN locations base_loc ON base_loc.id = po.location_id
+                             AND base_loc.is_base_location = TRUE
      WHERE po.company_id = $1
        AND po.type_id = $2
        AND po.status <> 'closed'
        AND po.equipment_id IS NULL
        AND po.expected_possession_date IS NOT NULL
        AND po.expected_possession_date <= $3::date
-     GROUP BY po.expected_possession_date, COALESCE(po.location_id, $4), l.name
+     GROUP BY po.expected_possession_date,
+              COALESCE(base_loc.id, $4),
+              COALESCE(base_loc.name, $5)
     `,
-    [companyId, typeId, end.toISOString().slice(0, 10), defaultLocationId]
+    [companyId, typeId, end.toISOString().slice(0, 10), defaultLocationId, defaultLocationName]
   );
 
   incomingRes.rows.forEach((row) => {
@@ -8882,6 +8906,7 @@ async function createRentalOrder({
   dropoffAddress,
   siteName,
   siteAddress,
+  siteAccessInfo,
   siteAddressLat,
   siteAddressLng,
   siteAddressQuery,
@@ -8945,10 +8970,10 @@ async function createRentalOrder({
       `
       INSERT INTO rental_orders
         (company_id, quote_number, ro_number, external_contract_number, legacy_data, customer_id, customer_po, salesperson_id, fulfillment_method, status,
-         terms, general_notes, pickup_location_id, dropoff_address, site_name, site_address, site_address_lat, site_address_lng, site_address_query,
+         terms, general_notes, pickup_location_id, dropoff_address, site_name, site_address, site_access_info, site_address_lat, site_address_lng, site_address_query,
          logistics_instructions, special_instructions, critical_areas,
          notification_circumstances, coverage_hours, emergency_contacts, site_contacts, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25::jsonb,$26::jsonb,COALESCE($27::timestamptz, NOW()),COALESCE($27::timestamptz, NOW()))
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24::jsonb,$25::jsonb,$26::jsonb,$27::jsonb,COALESCE($28::timestamptz, NOW()),COALESCE($28::timestamptz, NOW()))
       RETURNING id, quote_number, ro_number
       `,
       [
@@ -8968,6 +8993,7 @@ async function createRentalOrder({
         fulfillmentMethod === "dropoff" ? (dropoffAddress || null) : null,
         siteName || null,
         siteAddress || null,
+        siteAccessInfo || null,
         Number.isFinite(Number(siteAddressLat)) ? Number(siteAddressLat) : null,
         Number.isFinite(Number(siteAddressLng)) ? Number(siteAddressLng) : null,
         siteAddressQuery || null,
@@ -10539,6 +10565,7 @@ async function updateRentalOrder({
   dropoffAddress,
   siteName,
   siteAddress,
+  siteAccessInfo,
   siteAddressLat,
   siteAddressLng,
   siteAddressQuery,
@@ -10631,18 +10658,19 @@ async function updateRentalOrder({
              dropoff_address = $11,
              site_name = $12,
              site_address = $13,
-             site_address_lat = $14,
-             site_address_lng = $15,
-             site_address_query = $16,
-             logistics_instructions = $17,
-             special_instructions = $18,
-             critical_areas = $19,
-             notification_circumstances = $20::jsonb,
-             coverage_hours = $21::jsonb,
-             emergency_contacts = $22::jsonb,
-             site_contacts = $23::jsonb,
+             site_access_info = $14,
+             site_address_lat = $15,
+             site_address_lng = $16,
+             site_address_query = $17,
+             logistics_instructions = $18,
+             special_instructions = $19,
+             critical_areas = $20,
+             notification_circumstances = $21::jsonb,
+             coverage_hours = $22::jsonb,
+             emergency_contacts = $23::jsonb,
+             site_contacts = $24::jsonb,
              updated_at = NOW()
-       WHERE id = $24 AND company_id = $25
+       WHERE id = $25 AND company_id = $26
        RETURNING id, quote_number, ro_number
       `,
       [
@@ -10659,6 +10687,7 @@ async function updateRentalOrder({
         fulfillmentMethod === "dropoff" ? (dropoffAddress || null) : null,
         siteName || null,
         siteAddress || null,
+        siteAccessInfo || null,
         Number.isFinite(Number(siteAddressLat)) ? Number(siteAddressLat) : null,
         Number.isFinite(Number(siteAddressLng)) ? Number(siteAddressLng) : null,
         siteAddressQuery || null,
@@ -13030,6 +13059,7 @@ async function createStorefrontReservation({
   deliveryAddress,
   siteName,
   siteAddress,
+  siteAccessInfo,
   deliveryInstructions,
   criticalAreas,
   notificationCircumstances,
@@ -13095,6 +13125,7 @@ async function createStorefrontReservation({
   const useRentalInfoField = (key) => rentalInfoFields?.[key]?.enabled !== false;
   const siteNameValue = useRentalInfoField("siteName") ? String(siteName || "").trim() || null : null;
   const siteAddressValue = useRentalInfoField("siteAddress") ? String(siteAddress || "").trim() || null : null;
+  const siteAccessInfoValue = useRentalInfoField("siteAccessInfo") ? String(siteAccessInfo || "").trim() || null : null;
   const criticalAreasValue = useRentalInfoField("criticalAreas") ? String(criticalAreas || "").trim() || null : null;
   const notificationCircumstancesValue = useRentalInfoField("notificationCircumstances")
     ? normalizeNotificationCircumstances(notificationCircumstances)
@@ -13128,6 +13159,9 @@ async function createStorefrontReservation({
   }
   if (rentalInfoFields?.siteName?.enabled && rentalInfoFields?.siteName?.required && !siteNameValue) {
     missingRentalInfo.push("Site name");
+  }
+  if (rentalInfoFields?.siteAccessInfo?.enabled && rentalInfoFields?.siteAccessInfo?.required && !siteAccessInfoValue) {
+    missingRentalInfo.push("Site access information / pin");
   }
   if (rentalInfoFields?.criticalAreas?.enabled && rentalInfoFields?.criticalAreas?.required && !criticalAreasValue) {
     missingRentalInfo.push("Critical areas on site");
@@ -13237,6 +13271,7 @@ async function createStorefrontReservation({
     siteContacts: siteContactList,
     siteName: siteNameValue,
     siteAddress: siteAddressValue,
+    siteAccessInfo: siteAccessInfoValue,
     pickupLocationId: fulfillmentMethod === "pickup" ? lid : null,
     dropoffAddress,
     logisticsInstructions,

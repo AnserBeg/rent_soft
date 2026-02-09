@@ -25,6 +25,8 @@ const pricingTable = document.getElementById("pricing-table");
 const pricingSearchInput = document.getElementById("pricing-search");
 const contactsList = document.getElementById("contacts-list");
 const addContactRowBtn = document.getElementById("add-contact-row");
+const accountingContactsList = document.getElementById("accounting-contacts-list");
+const addAccountingContactRowBtn = document.getElementById("add-accounting-contact-row");
 const salesModal = document.getElementById("sales-modal");
 const closeSalesModalBtn = document.getElementById("close-sales-modal");
 const salesForm = document.getElementById("sales-form");
@@ -599,6 +601,8 @@ async function loadCustomer() {
       });
     }
     setContactRows(contactsList, contactRows);
+    const accountingRows = parseContacts(customer.accounting_contacts);
+    setContactRows(accountingContactsList, accountingRows);
     customerForm.streetAddress.value = customer.street_address || "";
     customerForm.city.value = customer.city || "";
     customerForm.region.value = customer.region || "";
@@ -646,8 +650,10 @@ customerForm.addEventListener("submit", async (e) => {
   }
   const payload = Object.fromEntries(new FormData(customerForm).entries());
   const contacts = collectContacts(contactsList);
+  const accountingContacts = collectContacts(accountingContactsList);
   const primaryContact = contacts[0] || {};
   payload.contacts = contacts;
+  payload.accountingContacts = accountingContacts;
   payload.contactName = primaryContact.name || null;
   payload.email = primaryContact.email || null;
   payload.phone = primaryContact.phone || null;
@@ -820,6 +826,20 @@ contactsList?.addEventListener("click", (e) => {
   const row = btn.closest(".contact-row");
   if (row) row.remove();
   updateContactRemoveButtons(contactsList);
+});
+
+addAccountingContactRowBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  addContactRow(accountingContactsList, {}, { focus: true });
+});
+
+accountingContactsList?.addEventListener("click", (e) => {
+  const btn = e.target.closest?.(".contact-remove");
+  if (!btn) return;
+  e.preventDefault();
+  const row = btn.closest(".contact-row");
+  if (row) row.remove();
+  updateContactRemoveButtons(accountingContactsList);
 });
 
 
@@ -998,6 +1018,7 @@ if (activeCompanyId) {
   loadSales();
   loadTypes();
   setContactRows(contactsList, []);
+  setContactRows(accountingContactsList, []);
   setBranchMode(false);
   ensureCustomersCache().catch((err) => {
     companyMeta.textContent = err.message;

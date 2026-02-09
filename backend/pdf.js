@@ -45,6 +45,7 @@ function stripHtml(value) {
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
+  siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -601,6 +602,10 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
   if (showRentalInfo("siteAddress")) {
     const val = safeText(order?.site_address || order?.siteAddress);
     if (val) rentalInfoLines.push({ label: "Site Address", value: val });
+  }
+  if (showRentalInfo("siteAccessInfo")) {
+    const val = safeText(order?.site_access_info || order?.siteAccessInfo);
+    if (val) rentalInfoLines.push({ label: "Site Access Information / Pin", value: val });
   }
   if (showRentalInfo("criticalAreas")) {
     const val = safeText(order?.critical_areas || order?.criticalAreas);

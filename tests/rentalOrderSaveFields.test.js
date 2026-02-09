@@ -122,6 +122,7 @@ function shouldRunDbTest() {
         dropoffAddress: "123 Dropoff St, Portland, OR",
         siteName: "Riverfront Yard",
         siteAddress: "987 Site Ave, Portland, OR",
+        siteAccessInfo: "Gate code 1234",
         siteAddressLat: "45.523064",
         siteAddressLng: "-122.676483",
         siteAddressQuery: "987 Site Ave",
@@ -163,6 +164,7 @@ function shouldRunDbTest() {
       assert.equal(order1.pickup_location_id, Number(setup.defaultLocation.id));
       assert.equal(order1.site_name, "Riverfront Yard");
       assert.equal(order1.site_address, "987 Site Ave, Portland, OR");
+      assert.equal(order1.site_access_info, "Gate code 1234");
       assert.equal(Number(order1.site_address_lat), 45.523064);
       assert.equal(Number(order1.site_address_lng), -122.676483);
       assert.equal(order1.site_address_query, "987 Site Ave");
@@ -207,6 +209,7 @@ function shouldRunDbTest() {
         dropoffAddress: "Should be cleared",
         siteName: "Riverfront Yard - West",
         siteAddress: "987 Site Ave, Portland, OR",
+        siteAccessInfo: "Use pin 5678",
         siteAddressLat: 45.523064,
         siteAddressLng: -122.676483,
         siteAddressQuery: "987 Site Ave",
@@ -240,6 +243,7 @@ function shouldRunDbTest() {
       assert.equal(order2.terms, "Net 15");
       assert.equal(order2.general_notes, "General notes test 2");
       assert.equal(order2.site_name, "Riverfront Yard - West");
+      assert.equal(order2.site_access_info, "Use pin 5678");
       assert.equal(order2.logistics_instructions, "Gate code is 5678");
       assert.equal(order2.special_instructions, "Do not block driveway");
       assert.equal(order2.critical_areas, "Stage near loading dock");

@@ -1,6 +1,8 @@
 (() => {
   const SESSION_KEY = "rentSoft.session";
   const COMPANY_KEY = "rentSoft.companyId";
+  const CUSTOMER_TOKEN_KEY = "rentSoft.customerAccountToken";
+  const CUSTOMER_KEY = "rentSoft.customerAccount";
 
   function normalizeCompanyId(value) {
     const n = Number(value);
@@ -35,6 +37,15 @@
     localStorage.removeItem(SESSION_KEY);
   }
 
+  function getCustomerToken() {
+    return localStorage.getItem(CUSTOMER_TOKEN_KEY);
+  }
+
+  function clearCustomerSession() {
+    localStorage.removeItem(CUSTOMER_TOKEN_KEY);
+    localStorage.removeItem(CUSTOMER_KEY);
+  }
+
   function setCompanyId(companyId) {
     const normalized = normalizeCompanyId(companyId);
     if (!normalized) return;
@@ -49,9 +60,14 @@
   }
 
   function logout({ redirectTo = "index.html" } = {}) {
+    const customerToken = getCustomerToken();
     fetch("/api/logout", { method: "POST" }).catch(() => {});
+    if (customerToken) {
+      fetch("/api/customers/logout", { method: "POST", headers: { Authorization: `Bearer ${customerToken}` } }).catch(() => {});
+    }
     clearSession();
     localStorage.removeItem(COMPANY_KEY);
+    clearCustomerSession();
     window.location.href = redirectTo;
   }
 
@@ -172,7 +188,8 @@
         (method === "POST" || method === "PUT" || method === "PATCH") &&
         url.includes("/api/") &&
         !url.includes("/api/uploads") &&
-        !url.includes("/api/logout")
+        !url.includes("/api/logout") &&
+        !url.includes("/api/customers/logout")
       ) {
         showSaveBanner();
       }
@@ -219,21 +236,75 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
 
+  function mountDispatchTopbar() {
+    const topbar = document.querySelector(".topbar");
+    if (!topbar) return;
+
+    const inner = topbar.querySelector(".topbar-inner") || topbar;
+    const brand = topbar.querySelector(".topbar-brand");
+    if (brand) brand.remove();
+
+    let actions = topbar.querySelector(".topbar-actions");
+    if (!actions) {
+      actions = document.createElement("div");
+      actions.className = "topbar-actions";
+      inner.appendChild(actions);
+    }
+
+    actions.textContent = "";
+
+    const logoutBtn = document.createElement("button");
+    logoutBtn.type = "button";
+    logoutBtn.id = "logout-button";
+    logoutBtn.className = "ghost danger";
+    logoutBtn.textContent = "Log out";
+    actions.appendChild(logoutBtn);
+
+    inner.style.justifyContent = "flex-end";
+    window.RentSoft?.mountLogoutButton?.({ buttonId: "logout-button", redirectTo: "index.html" });
+  }
+
   const sidebar = document.querySelector(".sidebar");
   const shell = document.querySelector(".app-shell");
   if (!sidebar || !shell) return;
 
   if (role === "dispatch") {
-    const links = Array.from(sidebar.querySelectorAll("a.nav-link[href]"));
-    links.forEach((link) => {
-      const href = (link.getAttribute("href") || "").split("#")[0];
-      if (!dispatchAllowedPages.has(href)) link.remove();
-    });
+    mountDispatchTopbar();
+    const navLinks = sidebar.querySelector(".nav-links");
+    if (navLinks) {
+      const allLinks = Array.from(navLinks.querySelectorAll("a.nav-link[href]"));
+      const allowedLinks = allLinks.filter((link) => {
+        const href = (link.getAttribute("href") || "").split("#")[0];
+        return dispatchAllowedPages.has(href);
+      });
 
-    const groups = Array.from(sidebar.querySelectorAll(".nav-group"));
-    groups.forEach((group) => {
-      if (!group.querySelector("a.nav-link")) group.remove();
-    });
+      const preferredOrder = ["dispatch.html", "work-orders.html"];
+      const linkByHref = new Map();
+      allowedLinks.forEach((link) => {
+        const href = (link.getAttribute("href") || "").split("#")[0];
+        linkByHref.set(href, link);
+      });
+
+      navLinks.textContent = "";
+
+      const group = document.createElement("div");
+      group.className = "nav-group";
+      const used = new Set();
+      preferredOrder.forEach((href) => {
+        const link = linkByHref.get(href);
+        if (link) {
+          group.appendChild(link);
+          used.add(href);
+        }
+      });
+
+      allowedLinks.forEach((link) => {
+        const href = (link.getAttribute("href") || "").split("#")[0];
+        if (!used.has(href)) group.appendChild(link);
+      });
+
+      navLinks.appendChild(group);
+    }
   }
 
   const SIDEBAR_COLLAPSE_KEY = "rentSoft.sidebarCollapsed";
@@ -551,7 +622,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (role !== "dispatch") ensurePurchaseNavGroup();
   setActiveLink();
-  mountNavGroupToggles();
+  if (role !== "dispatch") mountNavGroupToggles();
   mountNavIcons();
   mountSidebarCollapse();
   mountNavScrollPersistence();

@@ -233,7 +233,7 @@
           <section class="card wide shortfall-card" id="availability-shortfall-card">
             <div class="card-header">
               <div>
-                <h2>Availability Shortfalls</h2>
+                <h2>Availability & Utilization</h2>
                 <p class="hint">Committed availability vs. potential availability from quotes and requests.</p>
               </div>
               <div class="inline-actions header-actions shortfall-controls">
@@ -280,9 +280,29 @@
                         <div class="chart-title">Availability trend</div>
                         <p class="hint" id="shortfall-trend-hint">Select a type to view the trend.</p>
                       </div>
+                      <div class="chart-actions nowrap shortfall-map-actions">
+                        <div class="map-legend shortfall-map-legend" aria-label="Map legend">
+                          <span class="legend-item"><span class="legend-swatch rented"></span>Rented out</span>
+                          <span class="legend-item"><span class="legend-swatch overdue"></span>Overdue</span>
+                          <span class="legend-item"><span class="legend-swatch not-rented"></span>Not rented</span>
+                        </div>
+                        <label>Map view
+                          <select id="shortfall-map-style">
+                            <option value="street">Street</option>
+                            <option value="satellite">Satellite</option>
+                          </select>
+                        </label>
+                        <label>Show
+                          <select id="shortfall-map-mode">
+                            <option value="units" selected>Units</option>
+                            <option value="locations">Locations</option>
+                          </select>
+                        </label>
+                      </div>
                     </div>
                     <div class="chart-canvas">
                       <canvas id="shortfall-detail-chart"></canvas>
+                      <div class="map-picker shortfall-map-fallback" id="shortfall-map-fallback" hidden></div>
                     </div>
                   </div>
                 </div>

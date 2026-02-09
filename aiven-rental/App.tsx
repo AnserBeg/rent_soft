@@ -9,7 +9,7 @@ import { Scene3D } from './components/Scene3D';
 import { DetailModal } from './components/DetailModal';
 import { AnimatePresence, motion } from 'framer-motion';
 import { listStorefrontListings, StorefrontListing } from './services/storefront';
-import { getSession, logout, setSession as persistSession, RentSoftSession } from './services/session';
+import { getSession, setSession as persistSession, RentSoftSession } from './services/session';
 
 function viewFromHash(hash: string): ViewState | null {
   const cleaned = String(hash || '').replace(/^#\/?/, '').trim().toLowerCase();
@@ -205,7 +205,6 @@ function App() {
   }, []);
 
   const onLogout = useCallback(() => {
-    logout();
     setSession(null);
     setView('home');
   }, []);
@@ -235,6 +234,7 @@ function App() {
         setView={setView}
         currentView={view}
         isLoggedIn={isLoggedIn}
+        userRole={session?.user?.role || null}
         userLabel={session?.user?.name || session?.user?.email || null}
         onLogout={onLogout}
       />

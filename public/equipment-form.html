@@ -117,10 +117,12 @@
                 </label>
               </div>
               <label>Current location
-                <select name="currentLocationId" id="current-location-select">
+                <select id="current-location-mode-select">
                   <option value="">Same as base location</option>
-                  <option value="__new__">+ Add new location...</option>
+                  <option value="__new__">Choose on map...</option>
                 </select>
+                <input type="hidden" name="currentLocationId" id="current-location-id" />
+                <div class="readonly-field is-empty" id="current-location-display">Same as base location</div>
               </label>
               <div class="inline-actions" style="justify-content:flex-start;">
                 <button type="button" class="ghost small" id="open-current-location-picker">Pick current location on map</button>

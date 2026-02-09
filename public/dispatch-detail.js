@@ -12,6 +12,7 @@ const initialCompanyId =
   (lastSelection?.companyId ? String(lastSelection.companyId) : null) ||
   window.RentSoft?.getCompanyId?.();
 const initialEquipmentId = params.get("equipmentId") || (lastSelection?.equipmentId ? String(lastSelection.equipmentId) : null);
+const initialLineItemId = params.get("lineItemId") || (lastSelection?.lineItemId ? String(lastSelection.lineItemId) : null);
 const initialOrderId = params.get("orderId") || (lastSelection?.orderId ? String(lastSelection.orderId) : null);
 
 const companyMeta = document.getElementById("company-meta");
@@ -45,12 +46,17 @@ const siteAddressPickerMapEl = document.getElementById("site-address-picker-map"
 const siteAddressPickerMeta = document.getElementById("site-address-picker-meta");
 const siteAddressPickerSuggestions = document.getElementById("site-address-picker-suggestions");
 const siteAddressPickerMapStyle = document.getElementById("site-address-picker-map-style");
+const siteAddressUnitSelect = document.getElementById("site-address-unit-select");
+const saveSiteAddressUnitPinBtn = document.getElementById("save-site-address-unit-pin");
+const clearSiteAddressUnitBtn = document.getElementById("clear-site-address-unit");
+const siteAddressUnitMeta = document.getElementById("site-address-unit-meta");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let selectedUnit = null;
 let orderCache = new Map();
 let currentOrderDetail = null;
 let equipmentId = initialEquipmentId;
+let lineItemId = initialLineItemId;
 let orderId = initialOrderId;
 let siteAddressPicker = {
   mode: "google",
@@ -73,6 +79,10 @@ let siteAddressPicker = {
     searchBound: false,
   },
   selected: null, // { lat, lng, provider, query }
+  unitSelected: null, // { unitId, lat, lng, provider, query }
+  unitMarkers: new Map(),
+  unitMarkerData: new Map(),
+  unitLabels: new Map(),
 };
 let siteAddressInputBound = false;
 let rentalInfoFields = null;
@@ -84,6 +94,8 @@ let guardNotesEditing = null;
 let guardNotesEditingToken = 0;
 const guardNotesSelection = { lastRange: null };
 let guardNotesInsertMode = null;
+let equipmentCache = [];
+let equipmentCacheCompanyId = null;
 
 function fmtDate(value, withTime = false) {
   if (!value) return "--";
@@ -230,6 +242,7 @@ function formatCoverageHours(coverage) {
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
   siteName: { enabled: true, required: false },
+  siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -661,6 +674,7 @@ function closeSiteAddressPickerModal() {
     siteAddressPicker.leaflet.searchAbort?.abort?.();
   } catch { }
   siteAddressPicker.selected = null;
+  clearUnitPinSelection();
 }
 
 function setSiteAddressSelected(lat, lng, { provider, query } = {}) {
@@ -675,6 +689,346 @@ function setSiteAddressSelected(lat, lng, { provider, query } = {}) {
   }
   if (siteAddressPickerInput && query) {
     siteAddressPickerInput.value = String(query);
+  }
+}
+
+function toCoord(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getSelectedUnitId() {
+  if (!siteAddressUnitSelect) return null;
+  const raw = String(siteAddressUnitSelect.value || "").trim();
+  const id = Number(raw);
+  return Number.isFinite(id) ? id : null;
+}
+
+function unitLabelForEquipment(eq, fallbackType = "Unit") {
+  if (!eq) return fallbackType;
+  const type = eq.type_name || eq.type || fallbackType;
+  const model = eq.model_name || eq.modelName || "";
+  const serial = eq.serial_number || eq.serialNumber || "";
+  const parts = [type, model, serial].filter(Boolean);
+  return parts.length ? parts.join(" - ") : fallbackType;
+}
+
+function getOrderUnitMeta(detail) {
+  const lineItems = Array.isArray(detail?.lineItems) ? detail.lineItems : [];
+  const meta = new Map();
+  lineItems.forEach((li) => {
+    const typeName = li?.typeName || li?.type_name || "Unit";
+    const details = Array.isArray(li?.inventoryDetails) ? li.inventoryDetails : [];
+    details.forEach((inv) => {
+      if (!inv?.id) return;
+      meta.set(String(inv.id), { inv, typeName });
+    });
+    const ids = Array.isArray(li?.inventoryIds) ? li.inventoryIds : [];
+    ids.forEach((id) => {
+      if (id === null || id === undefined) return;
+      const key = String(id);
+      if (!meta.has(key)) meta.set(key, { inv: null, typeName });
+    });
+  });
+  return meta;
+}
+
+function buildUnitOptions(detail) {
+  const meta = getOrderUnitMeta(detail);
+  const options = [];
+  const equipmentById = new Map((equipmentCache || []).map((e) => [String(e.id), e]));
+  meta.forEach((info, id) => {
+    const eq = equipmentById.get(id) || info.inv || { id };
+    const label = unitLabelForEquipment(eq, info.typeName);
+    options.push({ id, label });
+  });
+  options.sort((a, b) => a.label.localeCompare(b.label));
+  return options;
+}
+
+async function ensureEquipmentCache() {
+  if (!activeCompanyId) return;
+  if (equipmentCacheCompanyId === activeCompanyId && equipmentCache.length) return;
+  const res = await fetch(`/api/equipment?companyId=${activeCompanyId}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to fetch equipment.");
+  equipmentCache = data.equipment || [];
+  equipmentCacheCompanyId = activeCompanyId;
+}
+
+function syncSiteAddressUnitSelect({ preserveSelection = true } = {}) {
+  if (!siteAddressUnitSelect) return;
+  const prev = preserveSelection ? siteAddressUnitSelect.value : "";
+  siteAddressUnitSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Select unit...";
+  siteAddressUnitSelect.appendChild(placeholder);
+
+  if (!currentOrderDetail || !Array.isArray(currentOrderDetail.lineItems)) {
+    siteAddressUnitSelect.disabled = true;
+    if (siteAddressUnitMeta) siteAddressUnitMeta.textContent = "No units found for this order.";
+    return;
+  }
+
+  const options = buildUnitOptions(currentOrderDetail);
+  siteAddressPicker.unitLabels = new Map();
+  options.forEach((opt) => {
+    const option = document.createElement("option");
+    option.value = String(opt.id);
+    option.textContent = opt.label;
+    siteAddressUnitSelect.appendChild(option);
+    siteAddressPicker.unitLabels.set(String(opt.id), opt.label);
+  });
+
+  siteAddressUnitSelect.disabled = options.length === 0;
+  if (options.length === 0) {
+    if (siteAddressUnitMeta) siteAddressUnitMeta.textContent = "No units found for this order.";
+    updateUnitPinActions();
+  } else {
+    siteAddressUnitSelect.value = options.some((opt) => String(opt.id) === String(prev)) ? prev : "";
+    updateUnitPinMeta();
+    updateUnitPinActions();
+  }
+}
+
+function updateUnitPinActions() {
+  if (!saveSiteAddressUnitPinBtn) return;
+  const unitId = getSelectedUnitId();
+  const hasSelection =
+    unitId &&
+    siteAddressPicker.unitSelected &&
+    String(siteAddressPicker.unitSelected.unitId) === String(unitId) &&
+    Number.isFinite(siteAddressPicker.unitSelected.lat) &&
+    Number.isFinite(siteAddressPicker.unitSelected.lng);
+  saveSiteAddressUnitPinBtn.disabled = !hasSelection;
+}
+
+function updateUnitPinMeta(message = "") {
+  if (!siteAddressUnitMeta) return;
+  if (message) {
+    siteAddressUnitMeta.textContent = message;
+    return;
+  }
+  const unitId = getSelectedUnitId();
+  if (!unitId) {
+    siteAddressUnitMeta.textContent = "Select a unit, then click the map to drop a pin for its current location.";
+    return;
+  }
+  const label = siteAddressPicker.unitLabels?.get?.(String(unitId)) || `Unit #${unitId}`;
+  siteAddressUnitMeta.textContent = `Selected: ${label}. Click the map to drop a pin.`;
+}
+
+function clearUnitPinSelection() {
+  siteAddressPicker.unitSelected = null;
+  if (siteAddressUnitSelect) siteAddressUnitSelect.value = "";
+  updateUnitPinMeta();
+  updateUnitPinActions();
+}
+
+function ensureUnitMarkerMap() {
+  if (!siteAddressPicker.unitMarkers) siteAddressPicker.unitMarkers = new Map();
+  return siteAddressPicker.unitMarkers;
+}
+
+function setUnitMarkerGoogle(unitId, lat, lng, label) {
+  const map = siteAddressPicker.google.map;
+  if (!map || !window.google?.maps) return;
+  const markers = ensureUnitMarkerMap();
+  let marker = markers.get(String(unitId));
+  if (!marker) {
+    marker = new window.google.maps.Marker({
+      position: { lat, lng },
+      map,
+      title: label || "",
+      icon: {
+        path: window.google.maps.SymbolPath.CIRCLE,
+        scale: 7,
+        fillColor: "#0ea5e9",
+        fillOpacity: 1,
+        strokeColor: "#0f172a",
+        strokeWeight: 1,
+      },
+    });
+    markers.set(String(unitId), marker);
+  } else {
+    marker.setPosition({ lat, lng });
+    if (label) marker.setTitle(label);
+  }
+}
+
+function setUnitMarkerLeaflet(unitId, lat, lng, label) {
+  const map = siteAddressPicker.leaflet.map;
+  if (!map || !window.L) return;
+  const markers = ensureUnitMarkerMap();
+  let marker = markers.get(String(unitId));
+  if (!marker) {
+    marker = window.L.circleMarker([lat, lng], {
+      radius: 6,
+      color: "#0f172a",
+      weight: 1,
+      fillColor: "#0ea5e9",
+      fillOpacity: 0.9,
+    }).addTo(map);
+    if (label) marker.bindTooltip(label, { direction: "top" });
+    markers.set(String(unitId), marker);
+  } else {
+    marker.setLatLng([lat, lng]);
+  }
+}
+
+function setUnitMarker(unitId, lat, lng, label) {
+  if (siteAddressPicker.mode === "google") {
+    setUnitMarkerGoogle(unitId, lat, lng, label);
+  } else {
+    setUnitMarkerLeaflet(unitId, lat, lng, label);
+  }
+}
+
+function renderUnitMarkersFromData() {
+  const data = siteAddressPicker.unitMarkerData;
+  if (!data || !data.size) return;
+  data.forEach((entry, unitId) => {
+    if (!Number.isFinite(entry?.lat) || !Number.isFinite(entry?.lng)) return;
+    setUnitMarker(unitId, entry.lat, entry.lng, entry.label || "");
+  });
+}
+
+function hydrateUnitMarkerDataFromEquipment() {
+  if (!currentOrderDetail) return;
+  const equipmentById = new Map((equipmentCache || []).map((e) => [String(e.id), e]));
+  const meta = getOrderUnitMeta(currentOrderDetail);
+  meta.forEach((info, id) => {
+    if (siteAddressPicker.unitMarkerData.has(id)) return;
+    const eq = equipmentById.get(id);
+    const lat = toCoord(eq?.current_location_latitude);
+    const lng = toCoord(eq?.current_location_longitude);
+    if (lat === null || lng === null) return;
+    const label = unitLabelForEquipment(eq || info.inv, info.typeName);
+    siteAddressPicker.unitMarkerData.set(id, { lat, lng, label });
+  });
+}
+
+function setUnitPinSelected(unitId, lat, lng, { provider, query } = {}) {
+  siteAddressPicker.unitSelected = {
+    unitId: Number(unitId),
+    lat: Number(lat),
+    lng: Number(lng),
+    provider: provider || "manual",
+    query: query || null,
+  };
+  const label = siteAddressPicker.unitLabels?.get?.(String(unitId)) || `Unit #${unitId}`;
+  setUnitMarker(unitId, Number(lat), Number(lng), label);
+  updateUnitPinMeta(`Pending pin for ${label}: ${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}.`);
+  updateUnitPinActions();
+}
+
+function handleSiteAddressMapClick(lat, lng, { provider } = {}) {
+  const unitId = getSelectedUnitId();
+  if (unitId) {
+    setUnitPinSelected(unitId, lat, lng, { provider: provider || "manual_pin" });
+    return true;
+  }
+  setSiteAddressSelected(lat, lng, { provider: provider || "manual_pin" });
+  return false;
+}
+
+async function createLocationForUnitPin({ name, latitude, longitude, provider, query }) {
+  const res = await fetch("/api/locations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyId: activeCompanyId,
+      name,
+      streetAddress: null,
+      city: null,
+      region: null,
+      country: null,
+      latitude,
+      longitude,
+      geocodeProvider: provider || "manual",
+      geocodeQuery: query || null,
+      isBaseLocation: false,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to save location.");
+  return data;
+}
+
+async function setUnitCurrentLocation({ unitId, locationId }) {
+  const res = await fetch("/api/equipment/current-location", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyId: activeCompanyId,
+      equipmentIds: [Number(unitId)],
+      currentLocationId: Number(locationId),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to update current location.");
+  return data;
+}
+
+function buildUnitPinLocationName({ unitId, label }) {
+  const order = currentOrderDetail?.order || {};
+  const orderLabel = order.ro_number || order.roNumber || order.quote_number || order.quoteNumber || order.id || "Order";
+  const stamp = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const safeLabel = String(label || `Unit ${unitId}`).trim();
+  return `${orderLabel} - ${safeLabel} - ${stamp}`;
+}
+
+async function saveUnitPinForSelectedUnit() {
+  const unitId = getSelectedUnitId();
+  if (!activeCompanyId) {
+    updateUnitPinMeta("Select or create a company first.");
+    return;
+  }
+  if (!unitId) {
+    updateUnitPinMeta("Select a unit before saving a pin.");
+    return;
+  }
+  const sel = siteAddressPicker.unitSelected;
+  if (!sel || String(sel.unitId) !== String(unitId)) {
+    updateUnitPinMeta("Click the map to drop a pin for the selected unit.");
+    return;
+  }
+  if (!Number.isFinite(sel.lat) || !Number.isFinite(sel.lng)) {
+    updateUnitPinMeta("Pick a point on the map first.");
+    return;
+  }
+  if (saveSiteAddressUnitPinBtn) saveSiteAddressUnitPinBtn.disabled = true;
+  try {
+    await ensureEquipmentCache();
+    const eq = (equipmentCache || []).find((row) => String(row.id) === String(unitId)) || null;
+    const label = siteAddressPicker.unitLabels?.get?.(String(unitId)) || unitLabelForEquipment(eq, `Unit ${unitId}`);
+    const name = buildUnitPinLocationName({ unitId, label });
+    const location = await createLocationForUnitPin({
+      name,
+      latitude: sel.lat,
+      longitude: sel.lng,
+      provider: sel.provider,
+      query: sel.query,
+    });
+    await setUnitCurrentLocation({ unitId, locationId: location.id });
+    siteAddressPicker.unitMarkerData.set(String(unitId), {
+      lat: sel.lat,
+      lng: sel.lng,
+      label,
+    });
+    if (eq) {
+      eq.current_location_id = Number(location.id);
+      eq.current_location = location.name || eq.current_location || null;
+      eq.current_location_latitude = sel.lat;
+      eq.current_location_longitude = sel.lng;
+    }
+    siteAddressPicker.unitSelected = null;
+    updateUnitPinMeta(`Saved pin for ${label}.`);
+  } catch (err) {
+    updateUnitPinMeta(err?.message || String(err));
+  } finally {
+    updateUnitPinActions();
   }
 }
 
@@ -866,6 +1220,7 @@ function resetSiteAddressPickerMapContainer() {
   siteAddressPicker.google.map = null;
   siteAddressPicker.google.marker = null;
   siteAddressPicker.google.autocomplete = null;
+  siteAddressPicker.unitMarkers = new Map();
 
   if (siteAddressPickerMapEl._leaflet_id) {
     delete siteAddressPickerMapEl._leaflet_id;
@@ -881,6 +1236,8 @@ function initLeafletSiteAddressPicker(center) {
       const lat = e?.latlng?.lat;
       const lng = e?.latlng?.lng;
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const usedForUnit = handleSiteAddressMapClick(lat, lng, { provider: "manual_pin" });
+      if (usedForUnit) return;
       if (!siteAddressPicker.leaflet.marker) {
         siteAddressPicker.leaflet.marker = window.L.marker([lat, lng], { draggable: true }).addTo(map);
         siteAddressPicker.leaflet.marker.on("dragend", () => {
@@ -980,6 +1337,8 @@ function initGoogleSiteAddressPicker(center) {
       const lat = e?.latLng?.lat?.();
       const lng = e?.latLng?.lng?.();
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const usedForUnit = handleSiteAddressMapClick(lat, lng, { provider: "manual_pin" });
+      if (usedForUnit) return;
       if (!siteAddressPicker.google.marker) {
         siteAddressPicker.google.marker = new window.google.maps.Marker({ position: { lat, lng }, map, draggable: true });
         siteAddressPicker.google.marker.addListener("dragend", (evt) => {
@@ -1109,6 +1468,12 @@ async function openSiteAddressPicker() {
   if (siteAddressPickerMeta) siteAddressPickerMeta.textContent = "Loading map...";
   hideSiteAddressSuggestions();
   bindSiteAddressSearchMirror();
+  try {
+    await ensureEquipmentCache();
+  } catch (err) {
+    if (siteAddressUnitMeta) siteAddressUnitMeta.textContent = err?.message || String(err);
+  }
+  syncSiteAddressUnitSelect();
 
   if (siteAddressPickerInput && currentOrderDetail?.order) {
     const existing = currentOrderDetail.order.site_address || currentOrderDetail.order.siteAddress || "";
@@ -1146,6 +1511,9 @@ async function openSiteAddressPicker() {
       const msg = hasSvc ? "Search (Google Places) or click to drop a pin." : "Click to drop a pin (Places library missing).";
       siteAddressPickerMeta.textContent = msg;
     }
+    hydrateUnitMarkerDataFromEquipment();
+    renderUnitMarkersFromData();
+    updateUnitPinActions();
   } catch (err) {
     resetSiteAddressPickerMapContainer();
     if (siteAddressPickerMeta) {
@@ -1241,6 +1609,7 @@ function renderOrderDetail(row, detail) {
   const coverageHours = order.coverage_hours || order.coverageHours || [];
   const siteName = order.site_name || order.siteName || "--";
   const siteAddress = order.site_address || order.siteAddress || "--";
+  const siteAccessInfo = order.site_access_info || order.siteAccessInfo || "--";
   const criticalAreas = order.critical_areas || order.criticalAreas || "--";
   const generalNotes = order.general_notes || order.generalNotes || "";
   const generalNotesImages = generalNotesImagesFromDetail(detail);
@@ -1264,6 +1633,9 @@ function renderOrderDetail(row, detail) {
   }
   if (isRentalInfoEnabled("siteAddress")) {
     lineDetailItems.push(detailItem("Site address", siteAddress || "--"));
+  }
+  if (isRentalInfoEnabled("siteAccessInfo")) {
+    lineDetailItems.push(detailItem("Site access information / pin", siteAccessInfo || "--"));
   }
   if (isRentalInfoEnabled("criticalAreas")) {
     lineDetailItems.push(detailItem("Critical areas on site", criticalAreas || "--"));
@@ -1849,15 +2221,46 @@ async function buildFallbackRowFromOrder() {
 
   const order = detail.order || {};
   const lineItems = Array.isArray(detail.lineItems) ? detail.lineItems : [];
-  let equipmentIdValue = equipmentId || null;
+  const normalizedLineItemId = lineItemId ? String(lineItemId) : null;
+  const normalizedEquipmentId = equipmentId ? String(equipmentId) : null;
+  let targetLineItem =
+    (normalizedLineItemId
+      ? lineItems.find((li) => String(li.id) === normalizedLineItemId)
+      : null) || null;
 
-  if (!equipmentIdValue) {
-    const withInventory = lineItems.find((li) => Array.isArray(li.inventoryIds) && li.inventoryIds.length);
-    if (withInventory) equipmentIdValue = withInventory.inventoryIds[0];
+  if (!targetLineItem && normalizedEquipmentId) {
+    targetLineItem =
+      lineItems.find(
+        (li) =>
+          Array.isArray(li.inventoryIds) &&
+          li.inventoryIds.some((id) => String(id) === normalizedEquipmentId)
+      ) || null;
+  }
+
+  if (!targetLineItem) {
+    targetLineItem = lineItems[0] || null;
+  }
+
+  let equipmentIdValue = normalizedEquipmentId || null;
+  if (!equipmentIdValue && targetLineItem && Array.isArray(targetLineItem.inventoryIds) && targetLineItem.inventoryIds.length) {
+    equipmentIdValue = targetLineItem.inventoryIds[0];
   }
 
   let equipment = null;
-  if (equipmentIdValue) {
+  if (equipmentIdValue && targetLineItem) {
+    const inventoryDetails = Array.isArray(targetLineItem.inventoryDetails) ? targetLineItem.inventoryDetails : [];
+    const match = inventoryDetails.find((inv) => String(inv.id) === String(equipmentIdValue));
+    if (match) {
+      equipment = {
+        id: match.id,
+        serial_number: match.serial_number || "",
+        model_name: match.model_name || "",
+        type_name: targetLineItem.typeName || targetLineItem.type_name || "Equipment",
+      };
+    }
+  }
+
+  if (!equipment && equipmentIdValue) {
     try {
       const res = await fetch(`/api/equipment?companyId=${activeCompanyId}`);
       const data = await res.json().catch(() => ({}));
@@ -1867,32 +2270,34 @@ async function buildFallbackRowFromOrder() {
     } catch { }
   }
 
-  const firstLine = lineItems[0] || {};
+  const lineForAssignment = targetLineItem || {};
   const assignment = {
     equipment_id: equipmentIdValue || null,
+    line_item_id: lineForAssignment.id || null,
     order_id: order.id || orderId,
     ro_number: order.ro_number || order.roNumber || null,
     quote_number: order.quote_number || order.quoteNumber || null,
     external_contract_number: order.external_contract_number || order.externalContractNumber || null,
     customer_name: normalizeOrderCustomerName(order),
     site_name: order.site_name || order.siteName || null,
-    start_at: firstLine.startAt || firstLine.start_at || null,
-    end_at: firstLine.endAt || firstLine.end_at || null,
+    start_at: lineForAssignment.startAt || lineForAssignment.start_at || null,
+    end_at: lineForAssignment.endAt || lineForAssignment.end_at || null,
     pickup_location_name: order.pickup_location_name || order.pickupLocationName || "--",
   };
 
+  const fallbackType = lineForAssignment.typeName || lineForAssignment.type_name || "Equipment";
   const fallbackEquipment =
     equipment ||
     (equipmentIdValue
-      ? { id: equipmentIdValue, type_name: "Equipment", model_name: "", serial_number: "" }
-      : { id: "--", type_name: "Equipment", model_name: "", serial_number: "" });
+      ? { id: equipmentIdValue, type_name: fallbackType, model_name: "", serial_number: "" }
+      : { id: "--", type_name: fallbackType, model_name: "", serial_number: "" });
 
   return { row: { equipment: fallbackEquipment, assignment }, detail };
 }
 
 async function loadTimelineUnit() {
   if (!activeCompanyId) return null;
-  if (!equipmentId && !orderId) return null;
+  if (!equipmentId && !lineItemId && !orderId) return null;
 
   const now = new Date();
   const from = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
@@ -1907,8 +2312,9 @@ async function loadTimelineUnit() {
   const equipmentById = new Map((data.equipment || []).map((e) => [String(e.id), e]));
   const assignments = Array.isArray(data.assignments) ? data.assignments : [];
   const assignment = assignments.find((a) => {
-    if (equipmentId && String(a.equipment_id) === String(equipmentId)) return true;
-    if (orderId && String(a.order_id) === String(orderId)) return true;
+    if (equipmentId) return String(a.equipment_id) === String(equipmentId);
+    if (lineItemId) return String(a.line_item_id) === String(lineItemId);
+    if (orderId) return String(a.order_id) === String(orderId);
     return false;
   });
 
@@ -1925,7 +2331,7 @@ async function loadDetail() {
     updateDetailEmpty(true);
     return;
   }
-  if (!equipmentId && !orderId) {
+  if (!equipmentId && !lineItemId && !orderId) {
     if (detailSummary) detailSummary.textContent = "Select a unit from the dispatch table.";
     updateDetailEmpty(true);
     return;
@@ -1966,6 +2372,7 @@ async function loadDetail() {
 
     selectedUnit = row;
     equipmentId = row.assignment?.equipment_id || equipmentId;
+    lineItemId = row.assignment?.line_item_id || lineItemId;
     orderId = row.assignment?.order_id || orderId;
     if (openSiteAddressPickerBtn) openSiteAddressPickerBtn.disabled = !orderId;
     if (siteAddressStatus) siteAddressStatus.textContent = "";
@@ -2344,6 +2751,32 @@ openSiteAddressPickerBtn?.addEventListener("click", (e) => {
   openSiteAddressPicker().catch((err) => {
     if (siteAddressPickerMeta) siteAddressPickerMeta.textContent = err?.message || String(err);
   });
+});
+
+siteAddressUnitSelect?.addEventListener("change", () => {
+  siteAddressPicker.unitSelected = null;
+  updateUnitPinMeta();
+  updateUnitPinActions();
+  const unitId = getSelectedUnitId();
+  if (!unitId) return;
+  const entry = siteAddressPicker.unitMarkerData.get(String(unitId));
+  if (!entry || !Number.isFinite(entry.lat) || !Number.isFinite(entry.lng)) return;
+  if (siteAddressPicker.mode === "google" && siteAddressPicker.google.map) {
+    siteAddressPicker.google.map.setCenter({ lat: entry.lat, lng: entry.lng });
+    siteAddressPicker.google.map.setZoom(17);
+  } else if (siteAddressPicker.leaflet.map) {
+    siteAddressPicker.leaflet.map.setView([entry.lat, entry.lng], 17);
+  }
+});
+
+clearSiteAddressUnitBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  clearUnitPinSelection();
+});
+
+saveSiteAddressUnitPinBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  saveUnitPinForSelectedUnit();
 });
 
 closeSiteAddressPickerBtn?.addEventListener("click", (e) => {

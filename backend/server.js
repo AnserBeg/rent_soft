@@ -385,8 +385,11 @@ app.use(
     const role = session?.user?.role ? String(session.user.role).trim().toLowerCase() : "";
     if (role !== "dispatch") return next();
 
-    const normalizedPath = req.path || "/";
-    if (DISPATCH_ALLOWED_PAGES.has(normalizedPath)) return next();
+      const normalizedPath = req.path || "/";
+      if (normalizedPath === "/" || normalizedPath === "/index.html") {
+        return res.redirect(302, "/dispatch.html");
+      }
+      if (DISPATCH_ALLOWED_PAGES.has(normalizedPath)) return next();
 
     return res.status(403).send("Insufficient permissions.");
   })
@@ -1004,6 +1007,35 @@ app.get(
         lineAmount: hasPricing && lineAmount !== null ? Number(lineAmount) : null,
       };
     });
+    const equipmentIds = collectEquipmentIdsFromLineItems(lineItems);
+    const unitSnapshots = await listCustomerLinkUnitSnapshots({ companyId: link.company_id, equipmentIds });
+    const orderUnits = unitSnapshots.map((row) => {
+      const modelName = row.model_name || "";
+      const serialNumber = row.serial_number || "";
+      let label = "";
+      if (modelName && serialNumber) {
+        label = `${modelName} (${serialNumber})`;
+      } else if (modelName || serialNumber) {
+        label = modelName || serialNumber;
+      } else {
+        label = `Unit #${row.id}`;
+      }
+      return {
+        id: Number(row.id),
+        modelName,
+        serialNumber,
+        label,
+        currentLocation: row.current_location || null,
+        currentLocationLat:
+          row.current_location_latitude === null || row.current_location_latitude === undefined
+            ? null
+            : Number(row.current_location_latitude),
+        currentLocationLng:
+          row.current_location_longitude === null || row.current_location_longitude === undefined
+            ? null
+            : Number(row.current_location_longitude),
+      };
+    });
 
     res.json({
       link: {
@@ -1039,6 +1071,7 @@ app.get(
             email: customer.email || null,
             phone: customer.phone || null,
             contacts: Array.isArray(customer.contacts) ? customer.contacts : [],
+            accountingContacts: Array.isArray(customer.accounting_contacts) ? customer.accounting_contacts : [],
           }
         : null,
       order: order
@@ -1056,6 +1089,7 @@ app.get(
             dropoffAddress: order.dropoff_address || null,
             siteName: order.site_name || null,
             siteAddress: order.site_address || null,
+            siteAccessInfo: order.site_access_info || null,
             siteAddressLat: order.site_address_lat || null,
             siteAddressLng: order.site_address_lng || null,
             siteAddressQuery: order.site_address_query || null,
@@ -1069,10 +1103,108 @@ app.get(
             generalNotes: order.general_notes || null,
           }
         : null,
+      orderUnits,
       lineItems: preparedLineItems,
       types: sanitizedTypes,
       rentalInfoFields: settings?.rental_info_fields || null,
       proofAvailable: !!(latestProof?.proof_pdf_path),
+    });
+  })
+);
+
+app.post(
+  "/api/public/customer-links/:token/unit-pins",
+  customerLinkLimiter,
+  asyncHandler(async (req, res) => {
+    const resolved = await resolveCustomerShareLink(req.params?.token);
+    if (resolved.error) return res.status(404).json({ error: resolved.error });
+    const link = resolved.link;
+
+    if (link.single_use && link.used_at) {
+      return res.status(409).json({ error: "This share link has already been used." });
+    }
+    if (!link.rental_order_id) {
+      return res.status(400).json({ error: "This link is not tied to a rental order." });
+    }
+
+    const equipmentId = Number(req.body?.equipmentId ?? req.body?.equipment_id);
+    const latitude = Number(req.body?.latitude ?? req.body?.lat);
+    const longitude = Number(req.body?.longitude ?? req.body?.lng);
+    if (!Number.isFinite(equipmentId)) return res.status(400).json({ error: "equipmentId is required." });
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return res.status(400).json({ error: "latitude and longitude are required." });
+    }
+    if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+      return res.status(400).json({ error: "Invalid latitude/longitude." });
+    }
+
+    const orderDetail = await getRentalOrder({ companyId: link.company_id, id: link.rental_order_id });
+    if (!orderDetail?.order) return res.status(404).json({ error: "Rental order not found." });
+    const allowedIds = new Set(collectEquipmentIdsFromLineItems(orderDetail.lineItems));
+    if (!allowedIds.has(Number(equipmentId))) {
+      return res.status(403).json({ error: "Unit is not assigned to this order." });
+    }
+
+    const rawLabel = String(req.body?.label || "").trim();
+    const safeLabel = rawLabel || `Unit ${equipmentId}`;
+    const orderLabel = orderDetail.order?.ro_number
+      ? `Order ${orderDetail.order.ro_number}`
+      : `Order ${orderDetail.order.id || link.rental_order_id}`;
+    const stamp = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const locationName = `${orderLabel} - ${safeLabel} - ${stamp}`;
+
+    const location = await createLocation({
+      companyId: link.company_id,
+      name: locationName,
+      streetAddress: null,
+      city: null,
+      region: null,
+      country: null,
+      isBaseLocation: false,
+    });
+    if (!location?.id) return res.status(400).json({ error: "Unable to create location." });
+
+    const provider = String(req.body?.provider || "manual").trim() || "manual";
+    const query = req.body?.query ? String(req.body.query).trim() : null;
+    const saved = await setLocationGeocode({
+      companyId: link.company_id,
+      id: Number(location.id),
+      latitude,
+      longitude,
+      provider,
+      query,
+    });
+
+    const beforeRows = await listEquipmentCurrentLocationIdsForIds({
+      companyId: link.company_id,
+      equipmentIds: [equipmentId],
+    });
+    const updated = await setEquipmentCurrentLocationForIds({
+      companyId: link.company_id,
+      equipmentIds: [equipmentId],
+      currentLocationId: Number(location.id),
+    });
+    const cleanupIds = new Set();
+    for (const row of beforeRows) {
+      const beforeId = row.current_location_id ?? null;
+      if (String(beforeId || "") === String(location.id || "")) continue;
+      await recordEquipmentCurrentLocationChange({
+        companyId: link.company_id,
+        equipmentId: Number(row.id),
+        fromLocationId: beforeId,
+        toLocationId: Number(location.id),
+      }).catch(() => null);
+      if (beforeId) cleanupIds.add(Number(beforeId));
+    }
+    for (const oldId of cleanupIds) {
+      await cleanupNonBaseLocationIfUnused({ companyId: link.company_id, locationId: oldId }).catch(() => null);
+    }
+
+    res.status(201).json({
+      ok: true,
+      updated,
+      equipmentId: Number(equipmentId),
+      location: saved || location,
     });
   })
 );
@@ -1244,6 +1376,7 @@ app.post(
         email: customerPayload.email || null,
         phone: customerPayload.phone || null,
         contacts: customerPayload.contacts || null,
+        accountingContacts: customerPayload.accountingContacts || null,
         isPending: true,
       });
     }
@@ -1512,6 +1645,7 @@ const ALLOWED_CUSTOMER_FIELDS = new Set([
   "email",
   "phone",
   "contacts",
+  "accountingContacts",
   "streetAddress",
   "city",
   "region",
@@ -1524,6 +1658,7 @@ const ALLOWED_ORDER_FIELDS = new Set([
   "dropoffAddress",
   "siteName",
   "siteAddress",
+  "siteAccessInfo",
   "siteAddressLat",
   "siteAddressLng",
   "siteAddressQuery",
@@ -1678,6 +1813,7 @@ async function writeCustomerChangeRequestPdf({ filePath, company, link, payload,
         doc.text(`Customer PO: ${order.customerPo || "--"}`);
         doc.text(`Fulfillment: ${order.fulfillmentMethod || "--"}`);
         doc.text(`Site address: ${order.siteAddress || "--"}`);
+        doc.text(`Site access information / pin: ${order.siteAccessInfo || "--"}`);
         doc.text(`Dropoff address: ${order.dropoffAddress || "--"}`);
         doc.text(`General notes: ${stripHtml(order.generalNotes || "--")}`);
         const generalNotesImages = Array.isArray(order.generalNotesImages) ? order.generalNotesImages : [];
@@ -1777,6 +1913,19 @@ function sanitizeCustomerPayload(input, allowedFields) {
       .filter(Boolean);
     if (normalized.length) out.contacts = normalized;
   }
+  if (allowedFields.includes("accountingContacts")) {
+    const normalized = parseJsonArray(src.accountingContacts)
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const name = String(entry.name || entry.contactName || entry.contact_name || "").trim();
+        const email = String(entry.email || "").trim();
+        const phone = String(entry.phone || "").trim();
+        if (!name && !email && !phone) return null;
+        return { name, email, phone };
+      })
+      .filter(Boolean);
+    if (normalized.length) out.accountingContacts = normalized;
+  }
   if (allowedFields.includes("streetAddress")) out.streetAddress = read("streetAddress") || null;
   if (allowedFields.includes("city")) out.city = read("city") || null;
   if (allowedFields.includes("region")) out.region = read("region") || null;
@@ -1797,6 +1946,7 @@ function sanitizeOrderPayload(input, allowedFields) {
   if (allowedFields.includes("dropoffAddress")) out.dropoffAddress = read("dropoffAddress") || null;
   if (allowedFields.includes("siteName")) out.siteName = read("siteName") || null;
   if (allowedFields.includes("siteAddress")) out.siteAddress = read("siteAddress") || null;
+  if (allowedFields.includes("siteAccessInfo")) out.siteAccessInfo = read("siteAccessInfo") || null;
   if (allowedFields.includes("siteAddressLat")) {
     const lat = Number(src.siteAddressLat);
     if (Number.isFinite(lat)) out.siteAddressLat = lat;
@@ -2037,6 +2187,185 @@ async function ensureDropoffLocation({ companyId, dropoffAddress }) {
     return updated || created;
   }
   return created;
+}
+
+function normalizeSiteAddressValue(siteAddress, siteAddressQuery) {
+  return normalizeWhitespace(siteAddressQuery || siteAddress || "");
+}
+
+function siteAddressLocationName(orderId) {
+  const id = Number(orderId);
+  return Number.isFinite(id) ? `Order ${id} - Site` : "Order Site";
+}
+
+async function ensureSiteAddressLocation({
+  companyId,
+  orderId,
+  siteAddress,
+  siteAddressLat,
+  siteAddressLng,
+  siteAddressQuery,
+}) {
+  const addr = normalizeSiteAddressValue(siteAddress, siteAddressQuery);
+  const lat = Number(siteAddressLat);
+  const lng = Number(siteAddressLng);
+  const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
+  if (!addr && !hasCoords) return null;
+
+  const name = siteAddressLocationName(orderId);
+  const created = await createLocation({
+    companyId,
+    name,
+    streetAddress: addr || null,
+    city: null,
+    region: null,
+    country: null,
+    isBaseLocation: false,
+  });
+  if (!created?.id) return null;
+
+  let saved = created;
+  if (hasCoords) {
+    const updated = await setLocationGeocode({
+      companyId,
+      id: Number(created.id),
+      latitude: lat,
+      longitude: lng,
+      provider: "site_address",
+      query: addr || null,
+    });
+    if (updated) saved = updated;
+  } else if (addr) {
+    const geo = await geocodeWithNominatim(addr);
+    if (geo?.latitude && geo?.longitude) {
+      const updated = await setLocationGeocode({
+        companyId,
+        id: Number(created.id),
+        latitude: geo.latitude,
+        longitude: geo.longitude,
+        provider: geo.provider,
+        query: geo.query,
+      });
+      if (updated) saved = updated;
+    }
+  }
+
+  return saved;
+}
+
+function collectEquipmentIdsFromLineItems(lineItems) {
+  const ids = new Set();
+  (Array.isArray(lineItems) ? lineItems : []).forEach((li) => {
+    const list = Array.isArray(li?.inventoryIds)
+      ? li.inventoryIds
+      : Array.isArray(li?.inventory_ids)
+        ? li.inventory_ids
+        : [];
+    list.forEach((id) => {
+      const num = Number(id);
+      if (Number.isFinite(num)) ids.add(num);
+    });
+  });
+  return Array.from(ids);
+}
+
+async function listCustomerLinkUnitSnapshots({ companyId, equipmentIds }) {
+  const cid = Number(companyId);
+  const ids = Array.isArray(equipmentIds)
+    ? equipmentIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+    : [];
+  if (!Number.isFinite(cid) || !ids.length) return [];
+  const res = await pool.query(
+    `
+    SELECT e.id,
+           e.model_name,
+           e.serial_number,
+           cl.name AS current_location,
+           cl.latitude AS current_location_latitude,
+           cl.longitude AS current_location_longitude
+      FROM equipment e
+ LEFT JOIN locations cl ON cl.id = e.current_location_id
+     WHERE e.company_id = $1
+       AND e.id = ANY($2::int[])
+     ORDER BY e.id
+    `,
+    [cid, ids]
+  );
+  return res.rows || [];
+}
+
+async function updateEquipmentCurrentLocationFromSiteAddress({
+  companyId,
+  orderId,
+  lineItems,
+  siteAddress,
+  siteAddressLat,
+  siteAddressLng,
+  siteAddressQuery,
+}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid)) return { ok: true, updated: 0 };
+
+  let items = Array.isArray(lineItems) ? lineItems : [];
+  let addr = siteAddress || null;
+  let lat = siteAddressLat;
+  let lng = siteAddressLng;
+  let query = siteAddressQuery || null;
+  if (orderId) {
+    const detail = await getRentalOrder({ companyId: cid, id: Number(orderId) }).catch(() => null);
+    if (detail?.order) {
+      addr = detail.order.site_address || detail.order.siteAddress || addr;
+      lat = detail.order.site_address_lat ?? detail.order.siteAddressLat ?? lat;
+      lng = detail.order.site_address_lng ?? detail.order.siteAddressLng ?? lng;
+      query = detail.order.site_address_query ?? detail.order.siteAddressQuery ?? query;
+    }
+    if (!items.length && Array.isArray(detail?.lineItems)) items = detail.lineItems;
+  }
+
+  const equipmentIds = collectEquipmentIdsFromLineItems(items);
+  if (!equipmentIds.length) return { ok: true, updated: 0 };
+
+  const loc = await ensureSiteAddressLocation({
+    companyId: cid,
+    orderId,
+    siteAddress: addr,
+    siteAddressLat: lat,
+    siteAddressLng: lng,
+    siteAddressQuery: query,
+  });
+  if (!loc?.id) return { ok: true, updated: 0 };
+
+  const beforeRows = await listEquipmentLocationIdsForIds({ companyId: cid, equipmentIds });
+  const targetIds = beforeRows
+    .filter((row) => row.current_location_id === null || String(row.current_location_id || "") === String(row.location_id || ""))
+    .map((row) => Number(row.id));
+  if (!targetIds.length) return { ok: true, updated: 0, locationId: Number(loc.id) };
+
+  const updated = await setEquipmentCurrentLocationForIds({
+    companyId: cid,
+    equipmentIds: targetIds,
+    currentLocationId: Number(loc.id),
+  });
+
+  const targetSet = new Set(targetIds.map((id) => String(id)));
+  const cleanupIds = new Set();
+  for (const row of beforeRows) {
+    if (!targetSet.has(String(row.id))) continue;
+    const beforeId = row.current_location_id ?? null;
+    if (String(beforeId || "") === String(loc.id || "")) continue;
+    await recordEquipmentCurrentLocationChange({
+      companyId: cid,
+      equipmentId: Number(row.id),
+      fromLocationId: beforeId,
+      toLocationId: Number(loc.id),
+    }).catch(() => null);
+    if (beforeId) cleanupIds.add(Number(beforeId));
+  }
+  for (const oldId of cleanupIds) {
+    await cleanupNonBaseLocationIfUnused({ companyId: cid, locationId: oldId }).catch(() => null);
+  }
+
+  return { ok: true, updated, locationId: Number(loc.id) };
 }
 
 function parseDelimitedRows(text, delimiter) {
@@ -3441,6 +3770,7 @@ app.post(
         deliveryMethod,
         deliveryAddress,
         siteAddress,
+        siteAccessInfo,
         deliveryInstructions,
         criticalAreas,
         notificationCircumstances,
@@ -3474,6 +3804,7 @@ app.post(
           deliveryMethod,
           deliveryAddress,
           siteAddress,
+          siteAccessInfo,
           deliveryInstructions,
           criticalAreas,
           notificationCircumstances,
@@ -5217,6 +5548,7 @@ app.post(
         email: customerUpdate.email || null,
         phone: customerUpdate.phone || null,
         contacts: customerUpdate.contacts || null,
+        accountingContacts: customerUpdate.accountingContacts || null,
       });
       customerId = createdCustomer?.id || null;
     } else if (customerId && Object.keys(customerUpdate).length) {
@@ -5233,6 +5565,7 @@ app.post(
           email: existing?.email || null,
           phone: existing?.phone || null,
           contacts: Array.isArray(existing?.contacts) ? existing.contacts : [],
+          accountingContacts: Array.isArray(existing?.accounting_contacts) ? existing.accounting_contacts : [],
         },
         customerUpdate
       );
@@ -5249,6 +5582,7 @@ app.post(
         email: merged.email,
         phone: merged.phone,
         contacts: merged.contacts,
+        accountingContacts: merged.accountingContacts,
       });
     }
 
@@ -5271,7 +5605,9 @@ app.post(
             customerPo: existing.customer_po || null,
             fulfillmentMethod: existing.fulfillment_method || "pickup",
             dropoffAddress: existing.dropoff_address || null,
+            siteName: existing.site_name || null,
             siteAddress: existing.site_address || null,
+            siteAccessInfo: existing.site_access_info || null,
             siteAddressLat: existing.site_address_lat || null,
             siteAddressLng: existing.site_address_lng || null,
             siteAddressQuery: existing.site_address_query || null,
@@ -5304,7 +5640,9 @@ app.post(
           customerPo: mergedOrder.customerPo,
           fulfillmentMethod: mergedOrder.fulfillmentMethod,
           dropoffAddress: mergedOrder.dropoffAddress,
+          siteName: mergedOrder.siteName,
           siteAddress: mergedOrder.siteAddress,
+          siteAccessInfo: mergedOrder.siteAccessInfo,
           siteAddressLat: mergedOrder.siteAddressLat,
           siteAddressLng: mergedOrder.siteAddressLng,
           siteAddressQuery: mergedOrder.siteAddressQuery,
@@ -5321,6 +5659,18 @@ app.post(
           actorName: req.auth?.user?.name || null,
           actorEmail: req.auth?.user?.email || null,
         });
+        try {
+          await updateEquipmentCurrentLocationFromSiteAddress({
+            companyId,
+            orderId,
+            siteAddress: mergedOrder.siteAddress,
+            siteAddressLat: mergedOrder.siteAddressLat,
+            siteAddressLng: mergedOrder.siteAddressLng,
+            siteAddressQuery: mergedOrder.siteAddressQuery,
+          });
+        } catch (err) {
+          console.warn("Site-address current-location update failed:", err?.message || err);
+        }
         if (normalizedGeneralNotesImages.length) {
           const actorName = req.auth?.user?.name ? String(req.auth.user.name) : null;
           const actorEmail = req.auth?.user?.email ? String(req.auth.user.email) : null;
@@ -5345,7 +5695,9 @@ app.post(
           customerPo: orderUpdate.customerPo || null,
           fulfillmentMethod: orderUpdate.fulfillmentMethod || "pickup",
           dropoffAddress: orderUpdate.dropoffAddress || null,
+          siteName: orderUpdate.siteName || null,
           siteAddress: orderUpdate.siteAddress || null,
+          siteAccessInfo: orderUpdate.siteAccessInfo || null,
           siteAddressLat: orderUpdate.siteAddressLat || null,
           siteAddressLng: orderUpdate.siteAddressLng || null,
           siteAddressQuery: orderUpdate.siteAddressQuery || null,
@@ -5368,6 +5720,20 @@ app.post(
           actorEmail: req.auth?.user?.email || null,
         });
         orderId = createdOrder?.id || null;
+        if (orderId) {
+          try {
+            await updateEquipmentCurrentLocationFromSiteAddress({
+              companyId,
+              orderId,
+              siteAddress: orderUpdate.siteAddress,
+              siteAddressLat: orderUpdate.siteAddressLat,
+              siteAddressLng: orderUpdate.siteAddressLng,
+              siteAddressQuery: orderUpdate.siteAddressQuery,
+            });
+          } catch (err) {
+            console.warn("Site-address current-location update failed:", err?.message || err);
+          }
+        }
         if (orderId && normalizedGeneralNotesImages.length) {
           const actorName = req.auth?.user?.name ? String(req.auth.user.name) : null;
           const actorEmail = req.auth?.user?.email ? String(req.auth.user.email) : null;
@@ -7121,6 +7487,7 @@ app.post(
       dropoffAddress,
       siteName,
       siteAddress,
+      siteAccessInfo,
       siteAddressLat,
       siteAddressLng,
       siteAddressQuery,
@@ -7162,6 +7529,7 @@ app.post(
         dropoffAddress,
         siteName,
         siteAddress,
+        siteAccessInfo,
         siteAddressLat,
         siteAddressLng,
         siteAddressQuery,
@@ -7182,16 +7550,18 @@ app.post(
       throw err;
     }
       try {
-        await updateEquipmentCurrentLocationFromDropoff({
+        await updateEquipmentCurrentLocationFromSiteAddress({
           companyId: Number(companyId),
-          status: created?.status || status,
-          fulfillmentMethod,
-          dropoffAddress,
+          orderId: created?.id,
           lineItems,
+          siteAddress,
+          siteAddressLat,
+          siteAddressLng,
+          siteAddressQuery,
         });
-    } catch (err) {
-      console.warn("Dropoff current-location update failed:", err?.message || err);
-    }
+      } catch (err) {
+        console.warn("Site-address current-location update failed:", err?.message || err);
+      }
     let qbo = null;
     const suppressPickupInvoice = parseBoolean(skipPickupInvoice) === true;
     if (suppressPickupInvoice) {
@@ -7236,6 +7606,7 @@ app.put(
       dropoffAddress,
       siteName,
       siteAddress,
+      siteAccessInfo,
       siteAddressLat,
       siteAddressLng,
       siteAddressQuery,
@@ -7278,6 +7649,7 @@ app.put(
         dropoffAddress,
         siteName,
         siteAddress,
+        siteAccessInfo,
         siteAddressLat,
         siteAddressLng,
         siteAddressQuery,
@@ -7325,15 +7697,17 @@ app.put(
 
     (async () => {
       try {
-        await updateEquipmentCurrentLocationFromDropoff({
+        await updateEquipmentCurrentLocationFromSiteAddress({
           companyId: Number(companyId),
-          status: updated.status,
-          fulfillmentMethod,
-          dropoffAddress,
+          orderId: Number(id),
           lineItems,
+          siteAddress,
+          siteAddressLat,
+          siteAddressLng,
+          siteAddressQuery,
         });
       } catch (err) {
-        console.warn("Dropoff current-location update failed:", err?.message || err);
+        console.warn("Site-address current-location update failed:", err?.message || err);
       }
     })();
 
@@ -7394,6 +7768,18 @@ app.put(
       siteAddressQuery,
     });
     if (!updated) return res.status(404).json({ error: "Rental order not found" });
+    try {
+      await updateEquipmentCurrentLocationFromSiteAddress({
+        companyId: Number(companyId),
+        orderId: Number(id),
+        siteAddress,
+        siteAddressLat,
+        siteAddressLng,
+        siteAddressQuery,
+      });
+    } catch (err) {
+      console.warn("Site-address current-location update failed:", err?.message || err);
+    }
     res.json({ order: updated });
   })
 );
@@ -7431,15 +7817,17 @@ app.put(
         const order = detail?.order || null;
         const lineItems = Array.isArray(detail?.lineItems) ? detail.lineItems : [];
         if (!order) return;
-        await updateEquipmentCurrentLocationFromDropoff({
+        await updateEquipmentCurrentLocationFromSiteAddress({
           companyId: Number(companyId),
-          status: order.status,
-          fulfillmentMethod: order.fulfillment_method || order.fulfillmentMethod || null,
-          dropoffAddress: order.dropoff_address || order.dropoffAddress || null,
+          orderId: Number(id),
           lineItems,
+          siteAddress: order.site_address || order.siteAddress || null,
+          siteAddressLat: order.site_address_lat ?? order.siteAddressLat ?? null,
+          siteAddressLng: order.site_address_lng ?? order.siteAddressLng ?? null,
+          siteAddressQuery: order.site_address_query ?? order.siteAddressQuery ?? null,
         });
       } catch (err) {
-        console.warn("Dropoff current-location update failed:", err?.message || err);
+        console.warn("Site-address current-location update failed:", err?.message || err);
       }
     })();
 
@@ -7921,6 +8309,45 @@ app.delete(
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     await deleteEquipmentBundle({ id: Number(id), companyId: Number(companyId) });
     res.status(204).end();
+  })
+);
+
+app.post(
+  "/api/equipment/current-location",
+  asyncHandler(async (req, res) => {
+    const { companyId, equipmentIds, equipmentId, currentLocationId } = req.body || {};
+    const cid = Number(companyId);
+    if (!Number.isFinite(cid)) return res.status(400).json({ error: "companyId is required." });
+    const ids = Array.isArray(equipmentIds)
+      ? equipmentIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+      : Number.isFinite(Number(equipmentId))
+        ? [Number(equipmentId)]
+        : [];
+    const locId = Number(currentLocationId);
+    if (!Number.isFinite(locId)) return res.status(400).json({ error: "currentLocationId is required." });
+    if (!ids.length) return res.json({ ok: true, updated: 0 });
+
+    const beforeRows = await listEquipmentCurrentLocationIdsForIds({ companyId: cid, equipmentIds: ids });
+    const updated = await setEquipmentCurrentLocationForIds({ companyId: cid, equipmentIds: ids, currentLocationId: locId });
+    const cleanupIds = new Set();
+
+    for (const row of beforeRows) {
+      const beforeId = row.current_location_id ?? null;
+      if (String(beforeId || "") === String(locId || "")) continue;
+      await recordEquipmentCurrentLocationChange({
+        companyId: cid,
+        equipmentId: Number(row.id),
+        fromLocationId: beforeId,
+        toLocationId: locId,
+      }).catch(() => null);
+      if (beforeId) cleanupIds.add(Number(beforeId));
+    }
+
+    for (const oldId of cleanupIds) {
+      await cleanupNonBaseLocationIfUnused({ companyId: cid, locationId: oldId }).catch(() => null);
+    }
+
+    res.json({ ok: true, updated, locationId: locId });
   })
 );
 

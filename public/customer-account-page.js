@@ -324,6 +324,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   logoutBtn?.addEventListener("click", () => {
     fetch("/api/customers/logout", { method: "POST", headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
+    fetch("/api/logout", { method: "POST" }).catch(() => {});
+    localStorage.removeItem("rentSoft.session");
+    localStorage.removeItem("rentSoft.companyId");
     window.CustomerAccount?.clearSession?.();
     window.location.href = returnTo || "index.html";
   });

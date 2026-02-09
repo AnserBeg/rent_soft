@@ -161,6 +161,9 @@ function renderTable(rows) {
     div.className = "table-row";
     div.dataset.id = row.assignment.equipment_id;
     div.dataset.orderId = row.assignment.order_id;
+    if (row.assignment?.line_item_id) {
+      div.dataset.lineItemId = row.assignment.line_item_id;
+    }
     const type = equipmentType(row.equipment);
     const model = equipmentModelDisplay(row.equipment);
     div.innerHTML = `
@@ -241,6 +244,7 @@ dispatchTable?.addEventListener("click", (e) => {
     const payload = {
       companyId: activeCompanyId || null,
       equipmentId: row.assignment?.equipment_id || null,
+      lineItemId: row.assignment?.line_item_id || null,
       orderId: row.assignment?.order_id || null,
     };
     localStorage.setItem("rentSoft.dispatch.lastSelection", JSON.stringify(payload));
@@ -248,6 +252,7 @@ dispatchTable?.addEventListener("click", (e) => {
   const nextParams = new URLSearchParams();
   if (activeCompanyId) nextParams.set("companyId", String(activeCompanyId));
   if (row.assignment?.equipment_id) nextParams.set("equipmentId", String(row.assignment.equipment_id));
+  if (row.assignment?.line_item_id) nextParams.set("lineItemId", String(row.assignment.line_item_id));
   if (row.assignment?.order_id) nextParams.set("orderId", String(row.assignment.order_id));
   const query = nextParams.toString();
   window.location.href = query ? `dispatch-detail.html?${query}` : "dispatch-detail.html";

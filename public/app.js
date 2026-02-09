@@ -2,7 +2,9 @@ const companyMeta = document.getElementById("company-meta");
 const equipmentForm = document.getElementById("equipment-form");
 const typeSelect = document.getElementById("type-select");
 const locationSelect = document.getElementById("location-select");
-const currentLocationSelect = document.getElementById("current-location-select");
+const currentLocationModeSelect = document.getElementById("current-location-mode-select");
+const currentLocationIdInput = document.getElementById("current-location-id");
+const currentLocationDisplay = document.getElementById("current-location-display");
 const openCurrentLocationPickerBtn = document.getElementById("open-current-location-picker");
 const clearCurrentLocationBtn = document.getElementById("clear-current-location");
 const locationCount = document.getElementById("location-count");
@@ -110,6 +112,7 @@ let equipmentExtrasActiveTab = "location-history";
 let bundlesCache = [];
 let editingBundleId = null;
 let bundleSeedEquipmentId = null;
+let locationsCache = [];
 
 let currentLocationPicker = {
   mode: "google",
@@ -132,6 +135,8 @@ let currentLocationPicker = {
     searchBound: false,
   },
   selected: null, // { lat, lng, provider, query }
+  existingLocationId: null,
+  existingLocationName: null,
 };
 
 const EQUIPMENT_AI_PRESETS = {
@@ -161,6 +166,12 @@ function safeJsonParse(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function toFiniteCoordinate(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
 }
 
 function loadEquipmentListState() {
@@ -308,6 +319,56 @@ function applyPendingSelectValue(selectEl) {
   delete selectEl.dataset.pendingValue;
 }
 
+function isSelectElement(el) {
+  return !!el && el.tagName === "SELECT";
+}
+
+function getLocationDetailById(locationId) {
+  const id = Number(locationId);
+  if (!Number.isFinite(id)) return null;
+  return (locationsCache || []).find((row) => Number(row?.id) === id) || null;
+}
+
+function formatLocationAddress(loc) {
+  if (!loc) return "";
+  const street = loc.street_address ?? loc.streetAddress;
+  const city = loc.city;
+  const region = loc.region ?? loc.state ?? loc.province;
+  const country = loc.country;
+  const parts = [street, city, region, country].filter((part) => part && String(part).trim());
+  if (parts.length) return parts.map((part) => String(part).trim()).join(", ");
+  const query = loc.query ?? loc.map_query ?? loc.mapQuery ?? loc.geocode_query ?? loc.geocodeQuery;
+  if (query) return String(query).trim();
+  return String(loc.name || "").trim();
+}
+
+function updateCurrentLocationDisplay({ currentLocationId, baseLocationId } = {}) {
+  if (!currentLocationDisplay) return;
+  const currentId =
+    currentLocationId !== undefined && currentLocationId !== null
+      ? String(currentLocationId || "")
+      : currentLocationIdInput?.value || "";
+  const baseId =
+    baseLocationId !== undefined && baseLocationId !== null ? String(baseLocationId || "") : locationSelect?.value || "";
+  let text = "Same as base location";
+  if (currentId) {
+    const loc = getLocationDetailById(currentId);
+    text = formatLocationAddress(loc) || "Current location";
+  } else if (baseId) {
+    text = "Same as base location";
+  }
+  currentLocationDisplay.textContent = text;
+  currentLocationDisplay.classList.toggle("is-empty", !currentId);
+}
+
+function setCurrentLocationValue(value) {
+  if (!currentLocationIdInput) return;
+  const normalized = value === null || value === undefined ? "" : String(value);
+  currentLocationIdInput.value = normalized;
+  if (currentLocationModeSelect) currentLocationModeSelect.value = normalized ? "__new__" : "";
+  updateCurrentLocationDisplay();
+}
+
 function getOutOfServiceMap(companyId) {
   if (!companyId) return new Map();
   const raw = localStorage.getItem(`rentSoft.workOrders.${companyId}`);
@@ -349,8 +410,10 @@ function setCompany(id, detail) {
     loadBundles();
   } else {
     locationSelect.innerHTML = `<option value="">Select a location</option><option value="__new__">+ Add new location...</option>`;
-    if (currentLocationSelect) {
-      currentLocationSelect.innerHTML = `<option value="">Same as base location</option><option value="__new__">+ Add new location...</option>`;
+    if (currentLocationModeSelect) currentLocationModeSelect.value = "";
+    if (currentLocationIdInput) {
+      currentLocationIdInput.value = "";
+      updateCurrentLocationDisplay();
     }
     typeSelect.innerHTML = `<option value="">Select a type</option><option value="__new_type__">+ Add new type...</option>`;
     if (locationCount) locationCount.textContent = "0 locations";
@@ -567,6 +630,7 @@ async function loadLocations() {
     const data = await res.json();
 
     const locations = (data.locations || []).slice();
+    locationsCache = locations;
     const baseLocations = locations.filter((l) => l?.is_base_location === true);
     locationSelect.innerHTML = `<option value="">Select a location</option>`;
     baseLocations.forEach((loc) => {
@@ -580,22 +644,12 @@ async function loadLocations() {
     addOption.textContent = "+ Add new location...";
     locationSelect.appendChild(addOption);
 
-    if (currentLocationSelect) {
-      currentLocationSelect.innerHTML = `<option value="">Same as base location</option>`;
-      locations.forEach((loc) => {
-        const option = document.createElement("option");
-        option.value = loc.id;
-        option.textContent = loc.name;
-        currentLocationSelect.appendChild(option);
-      });
-      const addCurrent = document.createElement("option");
-      addCurrent.value = "__new__";
-      addCurrent.textContent = "+ Add new location...";
-      currentLocationSelect.appendChild(addCurrent);
-      applyPendingSelectValue(currentLocationSelect);
+    if (currentLocationModeSelect && !currentLocationModeSelect.value) {
+      currentLocationModeSelect.value = "";
     }
 
     applyPendingSelectValue(locationSelect);
+    updateCurrentLocationDisplay();
 
     if (locationCount) locationCount.textContent = `${baseLocations.length} locations`;
   } catch (err) {
@@ -795,7 +849,10 @@ function ensureUniqueLocationName(baseName) {
     }
   };
   addOptions(locationSelect);
-  addOptions(currentLocationSelect);
+  (locationsCache || []).forEach((loc) => {
+    const label = String(loc?.name || "").trim();
+    if (label) existing.add(label);
+  });
   if (!existing.has(raw)) return raw;
   for (let i = 2; i <= 50; i += 1) {
     const next = `${raw} (${i})`;
@@ -1026,15 +1083,19 @@ function closeCurrentLocationPickerModal() {
     currentLocationPicker.leaflet.searchAbort?.abort?.();
   } catch { }
   currentLocationPicker.selected = null;
+  currentLocationPicker.existingLocationId = null;
+  currentLocationPicker.existingLocationName = null;
 }
 
-function setPickerSelected(lat, lng, { provider, query } = {}) {
+function setPickerSelected(lat, lng, { provider, query, existingLocationId, existingLocationName } = {}) {
   currentLocationPicker.selected = {
     lat: Number(lat),
     lng: Number(lng),
     provider: provider || "manual",
     query: query || null,
   };
+  currentLocationPicker.existingLocationId = existingLocationId ?? null;
+  currentLocationPicker.existingLocationName = existingLocationName ?? null;
   if (currentLocationPickerMeta) {
     currentLocationPickerMeta.textContent = `Selected: ${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`;
   }
@@ -1460,6 +1521,96 @@ function initGooglePicker(center) {
   currentLocationPicker.google.map.setZoom(16);
 }
 
+function setPickerMarker(lat, lng) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+  if (currentLocationPicker.mode === "google") {
+    const map = currentLocationPicker.google.map;
+    if (!map || !window.google?.maps) return;
+    if (!currentLocationPicker.google.marker) {
+      currentLocationPicker.google.marker = new window.google.maps.Marker({
+        position: { lat, lng },
+        map,
+        draggable: true,
+      });
+      currentLocationPicker.google.marker.addListener("dragend", (evt) => {
+        const nextLat = evt?.latLng?.lat?.();
+        const nextLng = evt?.latLng?.lng?.();
+        if (!Number.isFinite(nextLat) || !Number.isFinite(nextLng)) return;
+        setPickerSelected(nextLat, nextLng, { provider: "manual_pin" });
+      });
+    } else {
+      currentLocationPicker.google.marker.setPosition({ lat, lng });
+    }
+    return;
+  }
+  const map = currentLocationPicker.leaflet.map;
+  if (!map || !window.L) return;
+  if (!currentLocationPicker.leaflet.marker) {
+    currentLocationPicker.leaflet.marker = window.L.marker([lat, lng], { draggable: true }).addTo(map);
+    currentLocationPicker.leaflet.marker.on("dragend", () => {
+      const ll = currentLocationPicker.leaflet.marker?.getLatLng?.();
+      if (!ll) return;
+      setPickerSelected(ll.lat, ll.lng, { provider: "manual_pin" });
+    });
+  } else {
+    currentLocationPicker.leaflet.marker.setLatLng([lat, lng]);
+  }
+}
+
+function findLocationById(locationId) {
+  const id = Number(locationId);
+  if (!Number.isFinite(id)) return null;
+  const loc = (locationsCache || []).find((row) => Number(row?.id) === id);
+  if (!loc) return null;
+  const lat = toFiniteCoordinate(loc.latitude);
+  const lng = toFiniteCoordinate(loc.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { id, name: loc.name || "", lat, lng };
+}
+
+function getPickerPrefillLocation() {
+  const selectedCurrent = findLocationById(currentLocationIdInput?.value);
+  if (selectedCurrent) return { ...selectedCurrent, source: "current" };
+
+  const eq = editingEquipmentId
+    ? (equipmentCache || []).find((row) => String(row.id) === String(editingEquipmentId))
+    : null;
+  if (eq) {
+    const cLat = toFiniteCoordinate(eq.current_location_latitude);
+    const cLng = toFiniteCoordinate(eq.current_location_longitude);
+    if (Number.isFinite(cLat) && Number.isFinite(cLng)) {
+      const id = Number(eq.current_location_id);
+      return {
+        id: Number.isFinite(id) ? id : null,
+        name: eq.current_location || "",
+        lat: cLat,
+        lng: cLng,
+        source: "current",
+      };
+    }
+  }
+
+  const selectedBase = findLocationById(locationSelect?.value);
+  if (selectedBase) return { ...selectedBase, source: "base" };
+
+  if (eq) {
+    const bLat = toFiniteCoordinate(eq.location_latitude);
+    const bLng = toFiniteCoordinate(eq.location_longitude);
+    if (Number.isFinite(bLat) && Number.isFinite(bLng)) {
+      const id = Number(eq.location_id);
+      return {
+        id: Number.isFinite(id) ? id : null,
+        name: eq.location || "",
+        lat: bLat,
+        lng: bLng,
+        source: "base",
+      };
+    }
+  }
+
+  return null;
+}
+
 async function openCurrentLocationPicker() {
   if (!activeCompanyId) {
     companyMeta.textContent = "Select or create a company first.";
@@ -1469,11 +1620,15 @@ async function openCurrentLocationPicker() {
   if (currentLocationPickerMeta) currentLocationPickerMeta.textContent = "Loading map...";
   hidePickerSuggestions();
 
+  const prefill = getPickerPrefillLocation();
   let center = { lat: 20, lng: 0 };
-  try {
-    center = await getUserGeolocation();
-  } catch {
-    // ignore
+  if (prefill) center = { lat: prefill.lat, lng: prefill.lng };
+  else {
+    try {
+      center = await getUserGeolocation();
+    } catch {
+      // ignore
+    }
   }
 
   const config = await getPublicConfig().catch(() => ({}));
@@ -1499,6 +1654,15 @@ async function openCurrentLocationPicker() {
       const hasSvc = !!places?.AutocompleteService;
       const msg = hasSvc ? "Search (Google Places) or click to drop a pin." : "Click to drop a pin (Places library missing).";
       currentLocationPickerMeta.textContent = msg;
+    }
+    if (prefill) {
+      const keepExisting = prefill.source === "current" && Number.isFinite(prefill.id);
+      setPickerSelected(prefill.lat, prefill.lng, {
+        provider: "existing_location",
+        existingLocationId: keepExisting ? prefill.id : null,
+        existingLocationName: keepExisting ? prefill.name : null,
+      });
+      setPickerMarker(prefill.lat, prefill.lng);
     }
   } catch (err) {
     resetPickerMapContainer();
@@ -1870,15 +2034,17 @@ locationSelect.addEventListener("change", (e) => {
     e.target.value = "";
     openModal();
   }
+  updateCurrentLocationDisplay();
 });
 
-currentLocationSelect?.addEventListener("change", (e) => {
+currentLocationModeSelect?.addEventListener("change", (e) => {
   if (e.target.value === "__new__") {
-    e.target.value = "";
     openCurrentLocationPicker().catch((err) => {
       companyMeta.textContent = err?.message || String(err);
     });
+    return;
   }
+  setCurrentLocationValue("");
 });
 
 openCurrentLocationPickerBtn?.addEventListener("click", (e) => {
@@ -1890,7 +2056,7 @@ openCurrentLocationPickerBtn?.addEventListener("click", (e) => {
 
 clearCurrentLocationBtn?.addEventListener("click", (e) => {
   e.preventDefault();
-  if (currentLocationSelect) currentLocationSelect.value = "";
+  setCurrentLocationValue("");
 });
 
 typeSelect.addEventListener("change", (e) => {
@@ -2305,10 +2471,7 @@ function startEditEquipment(item) {
   equipmentForm.manufacturer.value = item.manufacturer || "";
   setPendingSelectValue(locationSelect, item.location_id);
   locationSelect.value = item.location_id || "";
-  if (currentLocationSelect) {
-    setPendingSelectValue(currentLocationSelect, item.current_location_id);
-    currentLocationSelect.value = item.current_location_id || "";
-  }
+  if (currentLocationIdInput) setCurrentLocationValue(item.current_location_id || "");
   equipmentForm.purchasePrice.value = item.purchase_price || "";
 
   pendingEquipmentFiles = [];
@@ -2532,6 +2695,17 @@ saveCurrentLocationPickerBtn?.addEventListener("click", async (e) => {
     companyMeta.textContent = "Select or create a company first.";
     return;
   }
+  const existingId = currentLocationPicker.existingLocationId;
+  if (existingId && currentLocationIdInput) {
+    setCurrentLocationValue(existingId);
+    closeCurrentLocationPickerModal();
+    const label =
+      currentLocationPicker.existingLocationName ||
+      formatLocationAddress(getLocationDetailById(existingId)) ||
+      "selected location";
+    companyMeta.textContent = `Current location set to "${label}".`;
+    return;
+  }
   const sel = currentLocationPicker.selected;
   if (!sel || !Number.isFinite(sel.lat) || !Number.isFinite(sel.lng)) {
     if (currentLocationPickerMeta) currentLocationPickerMeta.textContent = "Pick a point on the map first.";
@@ -2552,7 +2726,7 @@ saveCurrentLocationPickerBtn?.addEventListener("click", async (e) => {
       query: sel.query,
     });
     await loadLocations();
-    if (currentLocationSelect && saved?.id) currentLocationSelect.value = String(saved.id);
+    if (currentLocationIdInput && saved?.id) setCurrentLocationValue(saved.id);
     closeCurrentLocationPickerModal();
     companyMeta.textContent = `Current location set to "${saved.name}".`;
   } catch (err) {

@@ -29,6 +29,8 @@ const linkUsedProof = document.getElementById("link-used-proof");
 const companyNameInput = document.getElementById("company-name");
 const contactsList = document.getElementById("contacts-list");
 const addContactRowBtn = document.getElementById("add-contact-row");
+const accountingContactsList = document.getElementById("accounting-contacts-list");
+const addAccountingContactRowBtn = document.getElementById("add-accounting-contact-row");
 const streetInput = document.getElementById("street-address");
 const cityInput = document.getElementById("city");
 const regionInput = document.getElementById("region");
@@ -41,6 +43,7 @@ const dropoffInput = document.getElementById("dropoff-address");
 const logisticsInstructionsInput = document.getElementById("logistics-instructions");
 const siteNameInput = document.getElementById("site-name");
 const siteAddressInput = document.getElementById("site-address");
+const siteAccessInfoInput = document.getElementById("site-access-info");
 const criticalAreasInput = document.getElementById("critical-areas");
 const generalNotesInput = document.getElementById("general-notes");
 const generalNotesEditor = document.getElementById("general-notes-editor");
@@ -70,6 +73,7 @@ const addCoverageSlotBtn = document.getElementById("add-coverage-slot");
 const rentalInfoFieldContainers = {
   siteName: document.querySelector('[data-rental-info-field="siteName"]'),
   siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
+  siteAccessInfo: document.querySelector('[data-rental-info-field="siteAccessInfo"]'),
   criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
   generalNotes: document.querySelector('[data-rental-info-field="generalNotes"]'),
   emergencyContacts: document.querySelector('[data-rental-info-field="emergencyContacts"]'),
@@ -77,6 +81,20 @@ const rentalInfoFieldContainers = {
   notificationCircumstances: document.querySelector('[data-rental-info-field="notificationCircumstances"]'),
   coverageHours: document.querySelector('[data-rental-info-field="coverageHours"]'),
 };
+const openSideAddressPickerBtn = document.getElementById("open-side-address-picker");
+const sideAddressPickerModal = document.getElementById("side-address-picker-modal");
+const closeSideAddressPickerBtn = document.getElementById("close-side-address-picker");
+const saveSideAddressPickerBtn = document.getElementById("save-side-address-picker");
+const sideAddressPickerSearch = document.getElementById("side-address-picker-search");
+const sideAddressPickerInput = document.getElementById("side-address-picker-input");
+const sideAddressPickerMapEl = document.getElementById("side-address-picker-map");
+const sideAddressPickerMeta = document.getElementById("side-address-picker-meta");
+const sideAddressPickerSuggestions = document.getElementById("side-address-picker-suggestions");
+const sideAddressPickerMapStyle = document.getElementById("side-address-picker-map-style");
+const sideAddressUnitSelect = document.getElementById("side-address-unit-select");
+const saveSideAddressUnitPinBtn = document.getElementById("save-side-address-unit-pin");
+const clearSideAddressUnitBtn = document.getElementById("clear-side-address-unit");
+const sideAddressUnitMeta = document.getElementById("side-address-unit-meta");
 
 const params = new URLSearchParams(window.location.search);
 const token = params.get("token");
@@ -95,10 +113,45 @@ let pickupAddress = "";
 let lastDropoffAddress = "";
 let originalDropoffAddress = "";
 let submissionComplete = false;
+let orderUnits = [];
+let siteAddressLat = null;
+let siteAddressLng = null;
+let siteAddressQuery = "";
+let siteAddressInputLock = false;
+
+let sideAddressPicker = {
+  selected: null,
+  mapStyle: "street",
+  mode: "google",
+  geocodeSeq: 0,
+  google: {
+    map: null,
+    marker: null,
+    autocompleteService: null,
+    placesService: null,
+    debounceTimer: null,
+    searchSeq: 0,
+    pickSeq: 0,
+  },
+  leaflet: {
+    map: null,
+    marker: null,
+    layers: null,
+    debounceTimer: null,
+    searchAbort: null,
+    searchSeq: 0,
+    searchBound: false,
+  },
+  unitSelected: null,
+  unitMarkerData: new Map(),
+  unitMarkers: new Map(),
+  unitLabels: new Map(),
+};
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
   siteName: { enabled: true, required: false },
+  siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -164,6 +217,667 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function toFiniteCoordinate(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function normalizeMapStyle(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return raw === "satellite" ? "satellite" : "street";
+}
+
+function parsePredictionText(prediction) {
+  const main = prediction?.structured_formatting?.main_text || prediction?.description || "";
+  const secondary = prediction?.structured_formatting?.secondary_text || "";
+  return { main: String(main || ""), secondary: String(secondary || "") };
+}
+
+function renderSideAddressSuggestions(predictions, onPick) {
+  if (!sideAddressPickerSuggestions) return;
+  sideAddressPickerSuggestions.replaceChildren();
+  if (!Array.isArray(predictions) || !predictions.length) {
+    sideAddressPickerSuggestions.hidden = true;
+    return;
+  }
+  predictions.forEach((prediction) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "rs-autocomplete-item";
+    const text = parsePredictionText(prediction);
+    btn.innerHTML = `
+      <span>${escapeHtml(text.main)}</span>
+      ${text.secondary ? `<span class="hint">${escapeHtml(text.secondary)}</span>` : ""}
+    `;
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      onPick?.(prediction);
+    });
+    sideAddressPickerSuggestions.appendChild(btn);
+  });
+  sideAddressPickerSuggestions.hidden = false;
+}
+
+function hideSideAddressSuggestions() {
+  if (!sideAddressPickerSuggestions) return;
+  sideAddressPickerSuggestions.hidden = true;
+  sideAddressPickerSuggestions.replaceChildren();
+}
+
+function applyGoogleSideAddressStyle(style) {
+  const map = sideAddressPicker.google.map;
+  if (!map) return;
+  const normalized = normalizeMapStyle(style ?? sideAddressPicker.mapStyle);
+  sideAddressPicker.mapStyle = normalized;
+  map.setMapTypeId(normalized === "satellite" ? "satellite" : "roadmap");
+}
+
+function setSideAddressPickerMapStyle(style) {
+  const normalized = normalizeMapStyle(style ?? sideAddressPicker.mapStyle);
+  sideAddressPicker.mapStyle = normalized;
+  if (sideAddressPickerMapStyle && sideAddressPickerMapStyle.value !== normalized) {
+    sideAddressPickerMapStyle.value = normalized;
+  }
+  applyGoogleSideAddressStyle(normalized);
+}
+
+async function getPublicConfig() {
+  const res = await fetch("/api/public-config");
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load config");
+  return data || {};
+}
+
+function openSideAddressPickerModal() {
+  sideAddressPickerModal?.classList.add("show");
+}
+
+function clearSideAddressUnitSelection() {
+  sideAddressPicker.unitSelected = null;
+  if (sideAddressUnitSelect) sideAddressUnitSelect.value = "";
+  updateSideAddressUnitMeta();
+  updateSideAddressUnitPinActions();
+}
+
+function closeSideAddressPickerModal() {
+  sideAddressPickerModal?.classList.remove("show");
+  if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = "";
+  if (sideAddressPickerSearch) sideAddressPickerSearch.value = "";
+  if (sideAddressPickerInput) sideAddressPickerInput.value = "";
+  hideSideAddressSuggestions();
+  if (sideAddressPicker.google.debounceTimer) {
+    clearTimeout(sideAddressPicker.google.debounceTimer);
+    sideAddressPicker.google.debounceTimer = null;
+  }
+  sideAddressPicker.google.searchSeq = (sideAddressPicker.google.searchSeq || 0) + 1;
+  sideAddressPicker.google.pickSeq = (sideAddressPicker.google.pickSeq || 0) + 1;
+  sideAddressPicker.geocodeSeq = (sideAddressPicker.geocodeSeq || 0) + 1;
+  sideAddressPicker.selected = null;
+  clearSideAddressUnitSelection();
+}
+
+function setSiteAddressInputValue(value) {
+  if (!siteAddressInput) return;
+  siteAddressInputLock = true;
+  siteAddressInput.value = value;
+  siteAddressInputLock = false;
+}
+
+function setSideAddressSelected(lat, lng, { provider, query } = {}) {
+  sideAddressPicker.selected = {
+    lat: Number(lat),
+    lng: Number(lng),
+    provider: provider || "manual",
+    query: query || null,
+  };
+  if (sideAddressPickerMeta) {
+    sideAddressPickerMeta.textContent = `Selected: ${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`;
+  }
+  if (sideAddressPickerInput && query) {
+    sideAddressPickerInput.value = String(query);
+  }
+}
+
+function getSelectedSideAddressUnitId() {
+  if (!sideAddressUnitSelect) return null;
+  const raw = String(sideAddressUnitSelect.value || "").trim();
+  const id = Number(raw);
+  return Number.isFinite(id) ? id : null;
+}
+
+function unitOptionLabel(unit) {
+  if (!unit) return "";
+  const model = String(unit.modelName || unit.model_name || "").trim();
+  const serial = String(unit.serialNumber || unit.serial_number || "").trim();
+  if (model && serial) return `${model} (${serial})`;
+  return model || serial || `Unit #${unit.id}`;
+}
+
+function buildSideAddressUnitOptions() {
+  const options = [];
+  (orderUnits || []).forEach((unit) => {
+    const id = Number(unit?.id);
+    if (!Number.isFinite(id)) return;
+    const label = unit.label || unitOptionLabel(unit) || `Unit #${id}`;
+    options.push({ id, label, unit });
+  });
+  options.sort((a, b) => a.label.localeCompare(b.label));
+  return options;
+}
+
+function updateSideAddressUnitPinActions() {
+  if (!saveSideAddressUnitPinBtn) return;
+  const unitId = getSelectedSideAddressUnitId();
+  const hasSelection =
+    unitId &&
+    sideAddressPicker.unitSelected &&
+    String(sideAddressPicker.unitSelected.unitId) === String(unitId) &&
+    Number.isFinite(sideAddressPicker.unitSelected.lat) &&
+    Number.isFinite(sideAddressPicker.unitSelected.lng);
+  saveSideAddressUnitPinBtn.disabled = !hasSelection;
+}
+
+function updateSideAddressUnitMeta(message = "") {
+  if (!sideAddressUnitMeta) return;
+  if (message) {
+    sideAddressUnitMeta.textContent = message;
+    return;
+  }
+  const unitId = getSelectedSideAddressUnitId();
+  if (!unitId) {
+    sideAddressUnitMeta.textContent = "Select a unit, then click the map to drop a pin for its current location.";
+    return;
+  }
+  const label = sideAddressPicker.unitLabels?.get?.(String(unitId)) || `Unit #${unitId}`;
+  sideAddressUnitMeta.textContent = `Selected: ${label}. Click the map to drop a pin.`;
+}
+
+function syncSideAddressUnitSelect({ preserveSelection = true } = {}) {
+  if (!sideAddressUnitSelect) return;
+  const prev = preserveSelection ? sideAddressUnitSelect.value : "";
+  sideAddressUnitSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Select unit...";
+  sideAddressUnitSelect.appendChild(placeholder);
+
+  const options = buildSideAddressUnitOptions();
+  const allowedIds = new Set(options.map((opt) => String(opt.id)));
+  const nextMarkerData = new Map();
+  sideAddressPicker.unitMarkerData.forEach((value, key) => {
+    if (allowedIds.has(String(key))) nextMarkerData.set(String(key), value);
+  });
+  sideAddressPicker.unitMarkerData = nextMarkerData;
+  sideAddressPicker.unitLabels = new Map();
+  options.forEach((opt) => {
+    const option = document.createElement("option");
+    option.value = String(opt.id);
+    option.textContent = opt.label;
+    sideAddressUnitSelect.appendChild(option);
+    sideAddressPicker.unitLabels.set(String(opt.id), opt.label);
+  });
+
+  sideAddressUnitSelect.disabled = options.length === 0;
+  if (options.length === 0) {
+    if (sideAddressUnitMeta) sideAddressUnitMeta.textContent = "No units assigned yet.";
+    updateSideAddressUnitPinActions();
+    return;
+  }
+  sideAddressUnitSelect.value = options.some((opt) => String(opt.id) === String(prev)) ? prev : "";
+  updateSideAddressUnitMeta();
+  updateSideAddressUnitPinActions();
+}
+
+function ensureSideAddressUnitMarkerMap() {
+  if (!sideAddressPicker.unitMarkers) sideAddressPicker.unitMarkers = new Map();
+  return sideAddressPicker.unitMarkers;
+}
+
+function setSideAddressUnitMarkerGoogle(unitId, lat, lng, label) {
+  const map = sideAddressPicker.google.map;
+  if (!map || !window.google?.maps) return;
+  const markers = ensureSideAddressUnitMarkerMap();
+  let marker = markers.get(String(unitId));
+  if (!marker) {
+    marker = new window.google.maps.Marker({
+      position: { lat, lng },
+      map,
+      title: label || "",
+      icon: {
+        path: window.google.maps.SymbolPath.CIRCLE,
+        scale: 7,
+        fillColor: "#0ea5e9",
+        fillOpacity: 1,
+        strokeColor: "#0f172a",
+        strokeWeight: 1,
+      },
+    });
+    markers.set(String(unitId), marker);
+  } else {
+    marker.setPosition({ lat, lng });
+    if (label) marker.setTitle(label);
+  }
+}
+
+function setSideAddressUnitMarker(unitId, lat, lng, label) {
+  setSideAddressUnitMarkerGoogle(unitId, lat, lng, label);
+}
+
+function hydrateSideAddressUnitMarkerData() {
+  const options = buildSideAddressUnitOptions();
+  if (!options.length) return;
+  options.forEach((opt) => {
+    if (sideAddressPicker.unitMarkerData.has(String(opt.id))) return;
+    const lat = toFiniteCoordinate(opt.unit?.currentLocationLat ?? opt.unit?.current_location_latitude);
+    const lng = toFiniteCoordinate(opt.unit?.currentLocationLng ?? opt.unit?.current_location_longitude);
+    if (lat === null || lng === null) return;
+    sideAddressPicker.unitMarkerData.set(String(opt.id), { lat, lng, label: opt.label });
+  });
+}
+
+function renderSideAddressUnitMarkersFromData() {
+  const data = sideAddressPicker.unitMarkerData;
+  if (!data || !data.size) return;
+  data.forEach((entry, unitId) => {
+    if (!Number.isFinite(entry?.lat) || !Number.isFinite(entry?.lng)) return;
+    setSideAddressUnitMarker(unitId, entry.lat, entry.lng, entry.label || "");
+  });
+}
+
+function setSideAddressUnitPinSelected(unitId, lat, lng, { provider, query } = {}) {
+  sideAddressPicker.unitSelected = {
+    unitId: Number(unitId),
+    lat: Number(lat),
+    lng: Number(lng),
+    provider: provider || "manual",
+    query: query || null,
+  };
+  const label = sideAddressPicker.unitLabels?.get?.(String(unitId)) || `Unit #${unitId}`;
+  setSideAddressUnitMarker(unitId, Number(lat), Number(lng), label);
+  updateSideAddressUnitMeta(`Pending pin for ${label}: ${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}.`);
+  updateSideAddressUnitPinActions();
+}
+
+function handleSideAddressMapClick(lat, lng, { provider } = {}) {
+  const unitId = getSelectedSideAddressUnitId();
+  if (unitId) {
+    setSideAddressUnitPinSelected(unitId, lat, lng, { provider: provider || "manual_pin" });
+    return true;
+  }
+  setSideAddressSelected(lat, lng, { provider: provider || "manual_pin" });
+  return false;
+}
+
+async function saveCustomerLinkUnitPin({ unitId, latitude, longitude, provider, query, label }) {
+  if (!token) throw new Error("Missing link token.");
+  const res = await fetch(`/api/public/customer-links/${encodeURIComponent(token)}/unit-pins`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      equipmentId: Number(unitId),
+      latitude,
+      longitude,
+      provider: provider || "manual",
+      query: query || null,
+      label: label || null,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to save unit pin.");
+  return data;
+}
+
+async function saveSideAddressUnitPinForSelectedUnit() {
+  const unitId = getSelectedSideAddressUnitId();
+  if (!unitId) {
+    updateSideAddressUnitMeta("Select a unit before saving a pin.");
+    return;
+  }
+  const sel = sideAddressPicker.unitSelected;
+  if (!sel || String(sel.unitId) !== String(unitId)) {
+    updateSideAddressUnitMeta("Click the map to drop a pin for the selected unit.");
+    return;
+  }
+  if (!Number.isFinite(sel.lat) || !Number.isFinite(sel.lng)) {
+    updateSideAddressUnitMeta("Pick a point on the map first.");
+    return;
+  }
+  if (saveSideAddressUnitPinBtn) saveSideAddressUnitPinBtn.disabled = true;
+  try {
+    const label = sideAddressPicker.unitLabels?.get?.(String(unitId)) || `Unit #${unitId}`;
+    await saveCustomerLinkUnitPin({
+      unitId,
+      latitude: sel.lat,
+      longitude: sel.lng,
+      provider: sel.provider,
+      query: sel.query,
+      label,
+    });
+    sideAddressPicker.unitMarkerData.set(String(unitId), {
+      lat: sel.lat,
+      lng: sel.lng,
+      label,
+    });
+    sideAddressPicker.unitSelected = null;
+    updateSideAddressUnitMeta(`Saved pin for ${label}.`);
+  } catch (err) {
+    updateSideAddressUnitMeta(err?.message || String(err));
+  } finally {
+    updateSideAddressUnitPinActions();
+  }
+}
+
+function getUserGeolocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error("Geolocation not available."));
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (err) => reject(err),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+    );
+  });
+}
+
+function isGoogleMapsReady() {
+  return typeof window.google?.maps?.Map === "function";
+}
+
+function waitForGoogleMapsReady({ timeoutMs = 4000, intervalMs = 50 } = {}) {
+  if (isGoogleMapsReady()) return Promise.resolve(true);
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const tick = () => {
+      if (isGoogleMapsReady()) return resolve(true);
+      if (Date.now() - start >= timeoutMs) return reject(new Error("Google Maps not ready."));
+      setTimeout(tick, intervalMs);
+    };
+    tick();
+  });
+}
+
+function loadGoogleMaps(apiKey) {
+  if (!apiKey) return Promise.resolve(false);
+  if (isGoogleMapsReady()) return Promise.resolve(true);
+  if (window.__rentsoftGoogleMapsLoading) return window.__rentsoftGoogleMapsLoading;
+
+  window.__rentsoftGoogleMapsLoading = new Promise((resolve, reject) => {
+    const id = "rentsoft-google-maps";
+    const existing = document.getElementById(id);
+    if (existing) {
+      waitForGoogleMapsReady().then(() => resolve(true)).catch(reject);
+      return;
+    }
+    const s = document.createElement("script");
+    s.id = id;
+    s.async = true;
+    s.defer = true;
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places&loading=async`;
+    s.onload = () => {
+      waitForGoogleMapsReady().then(() => resolve(true)).catch(reject);
+    };
+    s.onerror = () => reject(new Error("Failed to load Google Maps script (network/CSP)."));
+    document.head.appendChild(s);
+  });
+  return window.__rentsoftGoogleMapsLoading;
+}
+
+function resetSideAddressPickerMapContainer() {
+  if (!sideAddressPickerMapEl) return;
+  sideAddressPicker.google.map = null;
+  sideAddressPicker.google.marker = null;
+  sideAddressPicker.google.autocompleteService = null;
+  sideAddressPicker.google.placesService = null;
+  sideAddressPicker.unitMarkers = new Map();
+  sideAddressPickerMapEl.replaceChildren();
+}
+
+function applySideAddressPickerExistingSelection() {
+  const lat = toFiniteCoordinate(siteAddressLat);
+  const lng = toFiniteCoordinate(siteAddressLng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (!sideAddressPicker.google.map || !window.google?.maps) return false;
+  if (!sideAddressPicker.google.marker) {
+    sideAddressPicker.google.marker = new window.google.maps.Marker({
+      position: { lat, lng },
+      map: sideAddressPicker.google.map,
+      draggable: true,
+    });
+    sideAddressPicker.google.marker.addListener("dragend", (evt) => {
+      const dLat = evt?.latLng?.lat?.();
+      const dLng = evt?.latLng?.lng?.();
+      if (!Number.isFinite(dLat) || !Number.isFinite(dLng)) return;
+      setSideAddressSelected(dLat, dLng, { provider: "manual_pin" });
+    });
+  } else {
+    sideAddressPicker.google.marker.setPosition({ lat, lng });
+  }
+  sideAddressPicker.google.map.setCenter({ lat, lng });
+  sideAddressPicker.google.map.setZoom(17);
+  setSideAddressSelected(lat, lng, { provider: "draft", query: siteAddressQuery || null });
+  return true;
+}
+
+function initGoogleSideAddressPicker(center) {
+  if (!sideAddressPickerMapEl || !window.google?.maps) throw new Error("Google Maps not available.");
+  if (!sideAddressPicker.google.map) {
+    const mapStyle = normalizeMapStyle(sideAddressPicker.mapStyle);
+    const map = new window.google.maps.Map(sideAddressPickerMapEl, {
+      center,
+      zoom: 16,
+      mapTypeId: mapStyle === "satellite" ? "satellite" : "roadmap",
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: false,
+    });
+    map.addListener("click", (e) => {
+      const lat = e?.latLng?.lat?.();
+      const lng = e?.latLng?.lng?.();
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const usedForUnit = handleSideAddressMapClick(lat, lng, { provider: "manual_pin" });
+      if (usedForUnit) return;
+      if (!sideAddressPicker.google.marker) {
+        sideAddressPicker.google.marker = new window.google.maps.Marker({ position: { lat, lng }, map, draggable: true });
+        sideAddressPicker.google.marker.addListener("dragend", (evt) => {
+          const dLat = evt?.latLng?.lat?.();
+          const dLng = evt?.latLng?.lng?.();
+          if (!Number.isFinite(dLat) || !Number.isFinite(dLng)) return;
+          setSideAddressSelected(dLat, dLng, { provider: "manual_pin" });
+        });
+      } else {
+        sideAddressPicker.google.marker.setPosition({ lat, lng });
+      }
+      setSideAddressSelected(lat, lng, { provider: "manual_pin" });
+    });
+
+    if (!window.google.maps.places?.AutocompleteService || !window.google.maps.places?.PlacesService) {
+      if (sideAddressPickerMeta) {
+        sideAddressPickerMeta.textContent = "Click the map to drop a pin (Places library missing).";
+      }
+    } else {
+      sideAddressPicker.google.autocompleteService = new window.google.maps.places.AutocompleteService();
+      sideAddressPicker.google.placesService = new window.google.maps.places.PlacesService(map);
+      const requestPredictions = (input) =>
+        new Promise((resolve, reject) => {
+          sideAddressPicker.google.autocompleteService.getPlacePredictions(
+            { input: String(input || ""), locationBias: map.getBounds?.() || undefined },
+            (preds, status) => {
+              if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) return resolve([]);
+              if (status !== window.google.maps.places.PlacesServiceStatus.OK) {
+                return reject(new Error(`Places error: ${status}`));
+              }
+              resolve(preds || []);
+            }
+          );
+        });
+      const fetchPlaceDetails = (placeId, label) =>
+        new Promise((resolve, reject) => {
+          sideAddressPicker.google.placesService.getDetails(
+            { placeId, fields: ["geometry", "formatted_address", "name"] },
+            (place, status) => {
+              if (status !== window.google.maps.places.PlacesServiceStatus.OK || !place?.geometry?.location) {
+                return reject(new Error(`Places error: ${status}`));
+              }
+              const details = {
+                lat: place.geometry.location.lat(),
+                lng: place.geometry.location.lng(),
+                label: place.formatted_address || label || place.name || "Pinned location",
+              };
+              resolve(details);
+            }
+          );
+        });
+
+      sideAddressPickerSearch?.addEventListener("input", () => {
+        const q = String(sideAddressPickerSearch.value || "").trim();
+        if (!q) {
+          hideSideAddressSuggestions();
+          return;
+        }
+        if (sideAddressPicker.google.debounceTimer) clearTimeout(sideAddressPicker.google.debounceTimer);
+        const seq = (sideAddressPicker.google.searchSeq || 0) + 1;
+        sideAddressPicker.google.searchSeq = seq;
+        sideAddressPicker.google.debounceTimer = setTimeout(async () => {
+          try {
+            const preds = await requestPredictions(q);
+            if (seq !== sideAddressPicker.google.searchSeq) return;
+            if (String(sideAddressPickerSearch.value || "").trim() !== q) return;
+            renderSideAddressSuggestions(preds, async (p) => {
+              hideSideAddressSuggestions();
+              const placeId = p?.place_id;
+              if (!placeId) return;
+              const label = p?.description || "";
+              try {
+                const pickSeq = (sideAddressPicker.google.pickSeq || 0) + 1;
+                sideAddressPicker.google.pickSeq = pickSeq;
+                const details = await fetchPlaceDetails(placeId, label);
+                if (pickSeq !== sideAddressPicker.google.pickSeq) return;
+                if (sideAddressPickerInput) sideAddressPickerInput.value = details.label;
+                if (sideAddressPickerSearch) sideAddressPickerSearch.value = details.label;
+                if (!sideAddressPicker.google.marker) {
+                  sideAddressPicker.google.marker = new window.google.maps.Marker({
+                    position: { lat: details.lat, lng: details.lng },
+                    map,
+                    draggable: true,
+                  });
+                  sideAddressPicker.google.marker.addListener("dragend", (evt) => {
+                    const dLat = evt?.latLng?.lat?.();
+                    const dLng = evt?.latLng?.lng?.();
+                    if (!Number.isFinite(dLat) || !Number.isFinite(dLng)) return;
+                    setSideAddressSelected(dLat, dLng, { provider: "manual_pin" });
+                  });
+                } else {
+                  sideAddressPicker.google.marker.setPosition({ lat: details.lat, lng: details.lng });
+                }
+                map.setCenter({ lat: details.lat, lng: details.lng });
+                map.setZoom(17);
+                setSideAddressSelected(details.lat, details.lng, { provider: "google_places", query: details.label });
+              } catch (err) {
+                if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = err?.message || String(err);
+              }
+            });
+          } catch (err) {
+            hideSideAddressSuggestions();
+            if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = err?.message || String(err);
+          }
+        }, 250);
+      });
+
+      sideAddressPickerSearch?.addEventListener("blur", () => {
+        setTimeout(() => hideSideAddressSuggestions(), 150);
+      });
+    }
+
+    sideAddressPicker.google.map = map;
+  }
+
+  applyGoogleSideAddressStyle(sideAddressPicker.mapStyle);
+  sideAddressPicker.google.map.setCenter(center);
+  sideAddressPicker.google.map.setZoom(16);
+}
+
+async function openSideAddressPicker() {
+  if (!sideAddressPickerModal) return;
+  openSideAddressPickerModal();
+  if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = "Loading map...";
+  hideSideAddressSuggestions();
+  syncSideAddressUnitSelect();
+  if (sideAddressPickerInput && !String(sideAddressPickerInput.value || "").trim()) {
+    const existing = String(siteAddressInput?.value || "").trim();
+    if (existing) sideAddressPickerInput.value = existing;
+  }
+
+  let center = { lat: 20, lng: 0 };
+  try {
+    center = await getUserGeolocation();
+  } catch {
+    // ignore
+  }
+
+  const config = await getPublicConfig().catch(() => ({}));
+  const key = config?.googleMapsApiKey ? String(config.googleMapsApiKey) : "";
+  const hasGoogle = isGoogleMapsReady();
+  if (!key && !hasGoogle) {
+    resetSideAddressPickerMapContainer();
+    if (sideAddressPickerMeta) {
+      sideAddressPickerMeta.textContent =
+        "Google Maps API key is required. Set GOOGLE_MAPS_API_KEY and reload to use the map picker.";
+    }
+    return;
+  }
+
+  try {
+    if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = "Loading Google Maps...";
+    if (!hasGoogle) await loadGoogleMaps(key);
+    resetSideAddressPickerMapContainer();
+    sideAddressPicker.mode = "google";
+    initGoogleSideAddressPicker(center);
+    if (sideAddressPickerMeta) {
+      const places = window.google?.maps?.places;
+      const hasSvc = !!places?.AutocompleteService;
+      const msg = hasSvc ? "Search (Google Places) or click to drop a pin." : "Click to drop a pin (Places library missing).";
+      sideAddressPickerMeta.textContent = msg;
+    }
+    hydrateSideAddressUnitMarkerData();
+    renderSideAddressUnitMarkersFromData();
+    updateSideAddressUnitPinActions();
+    applySideAddressPickerExistingSelection();
+  } catch (err) {
+    resetSideAddressPickerMapContainer();
+    if (sideAddressPickerMeta) {
+      sideAddressPickerMeta.textContent =
+        `Google Maps failed to load: ${err?.message || String(err)}. ` +
+        "Check browser console for: InvalidKeyMapError / RefererNotAllowedMapError / ApiNotActivatedMapError / BillingNotEnabledMapError.";
+    }
+  }
+}
+
+function saveSideAddressFromPicker() {
+  const manual = String(sideAddressPickerInput?.value || "").trim();
+  const fallbackQuery = sideAddressPicker.selected?.query ? String(sideAddressPicker.selected.query) : "";
+  const fallbackCoords = sideAddressPicker.selected
+    ? `${Number(sideAddressPicker.selected.lat).toFixed(6)}, ${Number(sideAddressPicker.selected.lng).toFixed(6)}`
+    : "";
+  const nextValue = manual || fallbackQuery || fallbackCoords;
+  if (!nextValue) {
+    if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = "Enter a site address or pick a point on the map.";
+    return;
+  }
+  if (sideAddressPicker.selected) {
+    const lat = Number(sideAddressPicker.selected.lat);
+    const lng = Number(sideAddressPicker.selected.lng);
+    siteAddressLat = Number.isFinite(lat) ? lat : null;
+    siteAddressLng = Number.isFinite(lng) ? lng : null;
+    siteAddressQuery = sideAddressPicker.selected.query ? String(sideAddressPicker.selected.query) : nextValue;
+  } else {
+    siteAddressLat = null;
+    siteAddressLng = null;
+    siteAddressQuery = "";
+  }
+  setSiteAddressInputValue(nextValue);
+  closeSideAddressPickerModal();
 }
 
 function resolveMinuteStep(input, stepMinutes = null) {
@@ -1787,6 +2501,12 @@ async function loadLink() {
       });
     }
     setContactRows(contactsList, contactRows);
+    const accountingRows = Array.isArray(customer.accountingContacts)
+      ? customer.accountingContacts
+      : Array.isArray(customer.accounting_contacts)
+        ? customer.accounting_contacts
+        : [];
+    setContactRows(accountingContactsList, accountingRows);
     streetInput.value = customer.streetAddress || "";
     cityInput.value = customer.city || "";
     regionInput.value = customer.region || "";
@@ -1817,7 +2537,11 @@ async function loadLink() {
       }
       if (logisticsInstructionsInput) logisticsInstructionsInput.value = order?.logisticsInstructions || "";
       if (siteNameInput) siteNameInput.value = order?.siteName || "";
-      siteAddressInput.value = order?.siteAddress || "";
+      setSiteAddressInputValue(order?.siteAddress || "");
+      siteAddressLat = toFiniteCoordinate(order?.siteAddressLat);
+      siteAddressLng = toFiniteCoordinate(order?.siteAddressLng);
+      siteAddressQuery = order?.siteAddressQuery ? String(order.siteAddressQuery) : "";
+      if (siteAccessInfoInput) siteAccessInfoInput.value = order?.siteAccessInfo || "";
       if (criticalAreasInput) criticalAreasInput.value = order?.criticalAreas || "";
       setGeneralNotesHtml(order?.generalNotes || "");
       setContactRows(emergencyContactsList, order?.emergencyContacts || []);
@@ -1842,9 +2566,11 @@ async function loadLink() {
           lineAmount: li.lineAmount ?? null,
         }))
       : [];
+    orderUnits = Array.isArray(data.orderUnits) ? data.orderUnits : [];
     if (showOrder) {
       ensureLineItem();
       renderLineItems();
+      syncSideAddressUnitSelect({ preserveSelection: false });
     }
 
     const categories = Array.isArray(data.link?.documentCategories) ? data.link.documentCategories : [];
@@ -1983,6 +2709,20 @@ contactsList?.addEventListener("click", (e) => {
   updateContactRemoveButtons(contactsList);
 });
 
+addAccountingContactRowBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  addContactRow(accountingContactsList, {}, { focus: true });
+});
+
+accountingContactsList?.addEventListener("click", (e) => {
+  const btn = e.target.closest(".contact-remove");
+  if (!btn) return;
+  const row = btn.closest(".contact-row");
+  if (!row) return;
+  row.remove();
+  updateContactRemoveButtons(accountingContactsList);
+});
+
 addEmergencyContactRowBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   addContactRow(emergencyContactsList, {}, { focus: true });
@@ -2022,6 +2762,13 @@ fulfillmentSelect?.addEventListener("change", () => {
     dropoffInput.readOnly = false;
     dropoffInput.value = lastDropoffAddress || originalDropoffAddress || "";
   }
+});
+
+siteAddressInput?.addEventListener("input", () => {
+  if (siteAddressInputLock) return;
+  siteAddressLat = null;
+  siteAddressLng = null;
+  siteAddressQuery = "";
 });
 
 notificationOtherCheckbox?.addEventListener("change", () => {
@@ -2237,6 +2984,55 @@ addCoverageSlotBtn?.addEventListener("click", (e) => {
   addCoverageSlotRow({});
 });
 
+openSideAddressPickerBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  openSideAddressPicker();
+});
+
+closeSideAddressPickerBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  closeSideAddressPickerModal();
+});
+
+saveSideAddressPickerBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  saveSideAddressFromPicker();
+});
+
+sideAddressPickerModal?.addEventListener("click", (e) => {
+  if (e.target === sideAddressPickerModal) closeSideAddressPickerModal();
+});
+
+if (sideAddressPickerMapStyle) {
+  setSideAddressPickerMapStyle(sideAddressPickerMapStyle.value);
+  sideAddressPickerMapStyle.addEventListener("change", () => {
+    setSideAddressPickerMapStyle(sideAddressPickerMapStyle.value);
+  });
+}
+
+sideAddressUnitSelect?.addEventListener("change", () => {
+  updateSideAddressUnitMeta();
+  updateSideAddressUnitPinActions();
+  const unitId = getSelectedSideAddressUnitId();
+  if (!unitId) return;
+  const entry = sideAddressPicker.unitMarkerData.get(String(unitId));
+  if (!entry || !Number.isFinite(entry.lat) || !Number.isFinite(entry.lng)) return;
+  if (sideAddressPicker.google.map) {
+    sideAddressPicker.google.map.setCenter({ lat: entry.lat, lng: entry.lng });
+    sideAddressPicker.google.map.setZoom(17);
+  }
+});
+
+saveSideAddressUnitPinBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  saveSideAddressUnitPinForSelectedUnit();
+});
+
+clearSideAddressUnitBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  clearSideAddressUnitSelection();
+});
+
 form?.addEventListener("submit", async (evt) => {
   evt.preventDefault();
   if (!linkData || !token) return;
@@ -2260,6 +3056,7 @@ form?.addEventListener("submit", async (evt) => {
         ? dropoffInput.value.trim()
         : String(lastDropoffAddress || originalDropoffAddress || "").trim();
     const contacts = collectContacts(contactsList);
+    const accountingContacts = collectContacts(accountingContactsList);
     const primaryContact = contacts[0] || {};
     const payload = {
       customer: {
@@ -2268,6 +3065,7 @@ form?.addEventListener("submit", async (evt) => {
         email: String(primaryContact.email || "").trim(),
         phone: String(primaryContact.phone || "").trim(),
         contacts,
+        accountingContacts,
         streetAddress: streetInput.value.trim(),
         city: cityInput.value.trim(),
         region: regionInput.value.trim(),
@@ -2281,6 +3079,10 @@ form?.addEventListener("submit", async (evt) => {
         logisticsInstructions: logisticsInstructionsInput?.value.trim() || "",
         siteName: siteNameInput?.value.trim() || "",
         siteAddress: siteAddressInput.value.trim(),
+        ...(Number.isFinite(siteAddressLat) ? { siteAddressLat } : {}),
+        ...(Number.isFinite(siteAddressLng) ? { siteAddressLng } : {}),
+        ...(siteAddressQuery ? { siteAddressQuery } : {}),
+        siteAccessInfo: siteAccessInfoInput?.value.trim() || "",
         criticalAreas: criticalAreasInput?.value.trim() || "",
         generalNotes: getGeneralNotesHtml().trim(),
         notificationCircumstances: collectNotificationCircumstances(),

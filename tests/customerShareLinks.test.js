@@ -168,6 +168,7 @@ test("creates rental order share link with order fields and line items", async (
   assert.ok(payload.link.allowed_fields.includes("companyName"));
   assert.ok(payload.link.allowed_fields.includes("siteAddress"));
   assert.ok(payload.link.allowed_fields.includes("siteName"));
+  assert.ok(payload.link.allowed_fields.includes("siteAccessInfo"));
   assert.deepEqual(payload.link.allowed_document_categories, ["COI", "W9"]);
   assert.equal(payload.link.require_esignature, true);
   assert.ok(payload.token);
@@ -202,6 +203,7 @@ test("creates customer profile share link without order-only fields", async (t) 
   assert.ok(payload.link.allowed_fields.includes("companyName"));
   assert.ok(!payload.link.allowed_fields.includes("siteAddress"));
   assert.ok(!payload.link.allowed_fields.includes("siteName"));
+  assert.ok(!payload.link.allowed_fields.includes("siteAccessInfo"));
   assert.deepEqual(payload.link.allowed_document_categories, ["Insurance"]);
   assert.equal(payload.link.require_esignature, false);
 });

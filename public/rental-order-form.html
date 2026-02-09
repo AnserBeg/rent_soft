@@ -264,7 +264,7 @@
               </div>
             </div>
             <div class="stack">
-              <div class="two-col">
+              <div class="three-col">
                 <div data-rental-info-field="siteName">
                   <label>Site name
                     <input id="site-name" type="text" />
@@ -278,6 +278,11 @@
                     <button type="button" class="ghost small" id="open-side-address-picker">Pick site address on
                       map</button>
                   </div>
+                </div>
+                <div data-rental-info-field="siteAccessInfo">
+                  <label>Site access information / pin
+                    <input id="site-access-info" type="text" />
+                  </label>
                 </div>
               </div>
               <div class="stack rental-info-notes">
@@ -670,6 +675,23 @@
     </div>
   </div>
 
+  <div class="modal" id="unsaved-changes-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 style="margin:0;">Unsaved changes</h3>
+        <button class="ghost small" id="unsaved-stay" type="button">Stay</button>
+      </div>
+      <div class="stack">
+        <p class="hint" style="margin:0;">You have unsaved changes. Save before leaving?</p>
+        <div class="inline-actions" style="justify-content:flex-end; gap:8px;">
+          <button class="ghost" id="unsaved-leave" type="button">Leave without saving</button>
+          <button class="primary" id="unsaved-save-leave" type="button">Save and leave</button>
+        </div>
+        <p class="hint" id="unsaved-changes-hint" style="margin:0;"></p>
+      </div>
+    </div>
+  </div>
+
   <div class="modal" id="side-address-picker-modal">
     <div class="modal-content wide">
       <div class="modal-header">
@@ -692,6 +714,21 @@
             </select>
           </label>
         </div>
+        <div class="two-col">
+          <label>Unit pin
+            <select id="side-address-unit-select">
+              <option value="">Select unit...</option>
+            </select>
+          </label>
+          <div class="stack">
+            <label>Unit pin actions</label>
+            <div class="inline-actions" style="justify-content:flex-start; gap:8px;">
+              <button class="ghost small" id="clear-side-address-unit" type="button">Clear</button>
+              <button class="primary small" id="save-side-address-unit-pin" type="button">Set unit pin</button>
+            </div>
+          </div>
+        </div>
+        <p class="hint" id="side-address-unit-meta">Select a unit, then click the map to drop a pin for its current location.</p>
         <div id="side-address-picker-map" class="map-picker"></div>
         <p class="hint" id="side-address-picker-meta">Tip: click the map to drop a pin. We'll start centered on your
           current device location (if permitted).</p>

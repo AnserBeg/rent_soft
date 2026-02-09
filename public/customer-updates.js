@@ -64,6 +64,17 @@ function setBackToOrderTarget(orderId) {
   backToOrderBtn.style.display = "inline-flex";
 }
 
+function closeDetailCard() {
+  activeRequest = null;
+  if (detailBody) detailBody.innerHTML = "";
+  if (detailMeta) detailMeta.textContent = "";
+  if (detailHint) detailHint.textContent = "";
+  if (acceptBtn) acceptBtn.disabled = true;
+  if (rejectBtn) rejectBtn.disabled = true;
+  if (detailCard) detailCard.style.display = "none";
+  setBackToOrderTarget("");
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -597,6 +608,12 @@ function renderDetail(request, currentCustomer, currentOrder) {
     pushField("Postal code", currentCustomer?.postal_code, customer.postalCode);
     pushField("Country", currentCustomer?.country, customer.country);
     pushField("Contacts", formatContactHtml(currentCustomer?.contacts), formatContactHtml(customer.contacts), { html: true });
+    pushField(
+      "Accounting contacts",
+      formatContactHtml(currentCustomer?.accounting_contacts),
+      formatContactHtml(customer.accountingContacts),
+      { html: true }
+    );
   }
 
   if (Object.keys(order).length) {
@@ -607,6 +624,7 @@ function renderDetail(request, currentCustomer, currentOrder) {
     pushField("Fulfillment", currentOrder?.order?.fulfillment_method, order.fulfillmentMethod);
     pushField("Dropoff address", currentOrder?.order?.dropoff_address, order.dropoffAddress, { html: true });
     pushField("Site address", currentOrder?.order?.site_address, order.siteAddress);
+    pushField("Site access information / pin", currentOrder?.order?.site_access_info, order.siteAccessInfo);
     pushField("Logistics instructions", currentOrder?.order?.logistics_instructions, order.logisticsInstructions, { html: true });
     pushField("Special instructions", currentOrder?.order?.special_instructions, order.specialInstructions, { html: true });
     pushField("Critical areas", currentOrder?.order?.critical_areas, order.criticalAreas, { html: true });
@@ -759,6 +777,7 @@ acceptBtn?.addEventListener("click", async () => {
     });
     detailHint.textContent = "Accepted.";
     await loadRequests();
+    closeDetailCard();
   } catch (err) {
     detailHint.textContent = err?.message ? String(err.message) : "Unable to accept update.";
   }
