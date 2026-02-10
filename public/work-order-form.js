@@ -33,6 +33,7 @@ const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyI
 const workOrderId = params.get("id");
 const initialUnitId = params.get("unitId");
 const initialSummary = params.get("summary");
+const initialSource = params.get("source");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let partsCache = [];
@@ -40,6 +41,7 @@ let equipmentCache = [];
 let editingWorkOrder = null;
 let pendingUnitId = initialUnitId ? String(initialUnitId) : null;
 let pendingSummary = initialSummary ? String(initialSummary) : null;
+let pendingSource = initialSource ? String(initialSource) : null;
 
 function keyForWorkOrders(companyId) {
   return `rentSoft.workOrders.${companyId}`;
@@ -425,7 +427,12 @@ function autoResizeTextarea(textarea) {
 
 function applyPrefillToForm() {
   if (workOrderId) return;
-  if (workSummaryInput && pendingSummary && !String(workSummaryInput.value || "").trim()) {
+  if (
+    workSummaryInput
+    && pendingSummary
+    && pendingSource !== "dispatch"
+    && !String(workSummaryInput.value || "").trim()
+  ) {
     workSummaryInput.value = pendingSummary;
     autoResizeTextarea(workSummaryInput);
   }

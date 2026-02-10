@@ -3171,6 +3171,33 @@ function resolveLineItemAmounts({
   return null;
 }
 
+function resolveDisplayLineAmount({
+  startLocal,
+  endLocal,
+  rateBasis,
+  rateAmount,
+  qty,
+  fallbackLineAmount = null,
+  fallbackBillableUnits = null,
+}) {
+  const basis = normalizeRateBasis(rateBasis);
+  const amount = numberOrNull(rateAmount);
+  const quantity = qty === null || qty === undefined ? 0 : Number(qty);
+  if (basis === "monthly" && Number.isFinite(amount) && Number.isFinite(quantity) && quantity > 0) {
+    return amount * quantity;
+  }
+  const calc = resolveLineItemAmounts({
+    startLocal,
+    endLocal,
+    rateBasis,
+    rateAmount,
+    qty,
+    fallbackLineAmount,
+    fallbackBillableUnits,
+  });
+  return calc && Number.isFinite(calc.lineAmount) ? calc.lineAmount : null;
+}
+
 function lineItemQty(li) {
   if (isRerentLineItem(li)) return 1;
   if (isDemandOnlyStatus(draft.status)) return 1;
@@ -3431,12 +3458,7 @@ function draftKey() {
 let draftSaveTimer = null;
 function scheduleDraftSave() {
   if (!activeCompanyId || editingOrderId) return;
-  clearTimeout(draftSaveTimer);
-  draftSaveTimer = setTimeout(() => {
-    try {
-      localStorage.setItem(draftKey(), JSON.stringify(draft));
-    } catch (_) { }
-  }, 250);
+  // Draft persistence disabled: keep changes in memory only.
 }
 
 let lastSavedSnapshot = "";
@@ -5738,7 +5760,7 @@ function renderLineItems() {
           </div>
           <label>Line amount
             <input data-line-amount readonly value="${(() => {
-        const calc = resolveLineItemAmounts({
+        const displayAmount = resolveDisplayLineAmount({
           startLocal,
           endLocal,
           rateBasis: li.rateBasis,
@@ -5747,8 +5769,7 @@ function renderLineItems() {
           fallbackLineAmount: li.lineAmount,
           fallbackBillableUnits: li.billableUnits,
         });
-        if (!calc) return "";
-        return fmtMoneyNullable(calc.lineAmount);
+        return fmtMoneyNullable(displayAmount);
       })()
       }" />
           </label>
@@ -6084,31 +6105,8 @@ function applySuggestedRatesToLineItems() {
 
 function loadDraftFromStorage() {
   if (!activeCompanyId || editingOrderId) return;
-  orderPeriod = { startAt: null, endAt: null };
   try {
-    const raw = localStorage.getItem(draftKey());
-    if (!raw) return;
-    const stored = JSON.parse(raw);
-    if (stored && typeof stored === "object") {
-      draft = {
-        ...draft,
-        ...stored,
-        lineItems: Array.isArray(stored.lineItems) ? explodeLineItems(stored.lineItems) : [],
-        fees: Array.isArray(stored.fees) ? stored.fees : [],
-        emergencyContacts: Array.isArray(stored.emergencyContacts) ? stored.emergencyContacts : [],
-        siteContacts: Array.isArray(stored.siteContacts) ? stored.siteContacts : [],
-        siteName: typeof stored.siteName === "string" ? stored.siteName : "",
-        siteAddress: typeof stored.siteAddress === "string" ? stored.siteAddress : "",
-        siteAccessInfo: typeof stored.siteAccessInfo === "string" ? stored.siteAccessInfo : "",
-        siteAddressLat: toFiniteCoordinate(stored.siteAddressLat),
-        siteAddressLng: toFiniteCoordinate(stored.siteAddressLng),
-        siteAddressQuery: typeof stored.siteAddressQuery === "string" ? stored.siteAddressQuery : "",
-        criticalAreas: typeof stored.criticalAreas === "string" ? stored.criticalAreas : "",
-        generalNotes: typeof stored.generalNotes === "string" ? stored.generalNotes : "",
-        coverageHours: normalizeCoverageHours(stored.coverageHours),
-        notificationCircumstances: Array.isArray(stored.notificationCircumstances) ? stored.notificationCircumstances : [],
-      };
-    }
+    localStorage.removeItem(draftKey());
   } catch (_) { }
 }
 
@@ -7120,7 +7118,7 @@ lineItemsEl.addEventListener("input", (e) => {
   if (e.target.matches("[data-rate-amount]")) {
     li.rateAmount = numberOrNull(e.target.value);
     li.rateManual = true;
-    const calc = resolveLineItemAmounts({
+    const displayAmount = resolveDisplayLineAmount({
       startLocal: li.startLocal,
       endLocal: li.endLocal,
       rateBasis: li.rateBasis,
@@ -7130,7 +7128,7 @@ lineItemsEl.addEventListener("input", (e) => {
       fallbackBillableUnits: li.billableUnits,
     });
     const out = card.querySelector("[data-line-amount]");
-    if (out) out.value = calc ? fmtMoneyNullable(calc.lineAmount) : "";
+    if (out) out.value = fmtMoneyNullable(displayAmount);
     scheduleDraftSave();
   }
   scheduleDraftSave();
@@ -8350,13 +8348,11 @@ function init() {
 
     setCompanyMeta("");
 
-    if (!editingOrderId && startBlank) {
+    if (!editingOrderId) {
       try {
         localStorage.removeItem(draftKey());
       } catch (_) { }
       resetDraftForNew();
-    } else {
-      loadDraftFromStorage();
     }
 
     if (!editingOrderId && initialStatusParam) {

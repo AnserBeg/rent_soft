@@ -35,18 +35,42 @@ function stripHtml(value) {
     .replace(/<\/p>/gi, "\n")
     .replace(/<\/h[1-6]>/gi, "\n")
     .replace(/<\/li>/gi, "\n");
-  return withBreaks
+  const stripped = withBreaks
     .replace(/<[^>]*>/g, " ")
     .replace(/\s+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
+  return decodeHtmlEntities(stripped);
+}
+
+function decodeHtmlEntities(value) {
+  const text = String(value ?? "");
+  if (!text) return "";
+  return text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'")
+    .replace(/&#(\d+);/g, (_m, code) => {
+      const n = Number(code);
+      return Number.isFinite(n) ? String.fromCharCode(n) : "";
+    })
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, code) => {
+      const n = Number.parseInt(code, 16);
+      return Number.isFinite(n) ? String.fromCharCode(n) : "";
+    });
 }
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
+  siteName: { enabled: true, required: false },
   siteAddress: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  specialInstructions: { enabled: true, required: false },
+  notificationCircumstances: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
   siteContacts: { enabled: true, required: true },
@@ -198,6 +222,261 @@ function fmtMoney(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return "--";
   return n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+function normalizeRateBasis(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return null;
+  if (raw.startsWith("day")) return "daily";
+  if (raw.startsWith("week")) return "weekly";
+  if (raw.startsWith("month")) return "monthly";
+  return null;
+}
+
+function pdfNormalizeTimestamptz(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function pdfNormalizeBillingTimeZone(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "UTC";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: raw }).format(new Date());
+    return raw;
+  } catch {
+    return "UTC";
+  }
+}
+
+function pdfGetTimeZoneParts(date, timeZone) {
+  const tz = pdfNormalizeBillingTimeZone(timeZone);
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const parts = dtf.formatToParts(date).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+  };
+}
+
+function pdfGetTimeZoneOffsetMs(date, timeZone) {
+  const parts = pdfGetTimeZoneParts(date, timeZone);
+  if (!Number.isFinite(parts.year)) return 0;
+  const asUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  return asUtc - date.getTime();
+}
+
+function pdfZonedTimeToUtc({ year, month, day, hour = 0, minute = 0, second = 0 }, timeZone) {
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second, 0);
+  const offset = pdfGetTimeZoneOffsetMs(new Date(utcGuess), timeZone);
+  return new Date(utcGuess - offset).toISOString();
+}
+
+function pdfDaysInMonthUTC(year, monthIndex) {
+  return new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+}
+
+function pdfNormalizeMonthlyProrationMethod(value) {
+  const v = String(value || "").toLowerCase();
+  if (v === "days" || v === "hours") return v;
+  return "hours";
+}
+
+function pdfSplitIntoCalendarMonthsInTimeZone({ startAt, endAt, timeZone }) {
+  const startIso = pdfNormalizeTimestamptz(startAt);
+  const endIso = pdfNormalizeTimestamptz(endAt);
+  if (!startIso || !endIso) return [];
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) return [];
+
+  const tz = pdfNormalizeBillingTimeZone(timeZone);
+  const segments = [];
+  let cursorIso = start.toISOString();
+  let guard = 0;
+  while (Date.parse(cursorIso) < Date.parse(endIso) && guard < 1200) {
+    const cursorDate = new Date(cursorIso);
+    const parts = pdfGetTimeZoneParts(cursorDate, tz);
+    const nextMonth = parts.month === 12 ? 1 : parts.month + 1;
+    const nextYear = parts.month === 12 ? parts.year + 1 : parts.year;
+    const nextBoundary = pdfZonedTimeToUtc({ year: nextYear, month: nextMonth, day: 1 }, tz);
+    if (!nextBoundary) break;
+    const nextBoundaryMs = Date.parse(nextBoundary);
+    const endMs = Date.parse(endIso);
+    const segmentEnd = nextBoundaryMs < endMs ? nextBoundary : endIso;
+    if (Date.parse(segmentEnd) <= Date.parse(cursorIso)) break;
+    segments.push({
+      startAt: cursorIso,
+      endAt: segmentEnd,
+      daysInMonth: pdfDaysInMonthUTC(parts.year, parts.month - 1),
+    });
+    cursorIso = segmentEnd;
+    guard += 1;
+  }
+  return segments;
+}
+
+function pdfComputeMonthlyUnitsInTimeZone({ startAt, endAt, prorationMethod = null, timeZone = null } = {}) {
+  const segments = pdfSplitIntoCalendarMonthsInTimeZone({ startAt, endAt, timeZone });
+  if (!segments.length) return null;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const method = pdfNormalizeMonthlyProrationMethod(prorationMethod);
+  let units = 0;
+  for (const segment of segments) {
+    const segmentStart = Date.parse(segment.startAt);
+    const segmentEnd = Date.parse(segment.endAt);
+    if (!Number.isFinite(segmentStart) || !Number.isFinite(segmentEnd) || segmentEnd <= segmentStart) continue;
+    const activeMs = segmentEnd - segmentStart;
+    if (activeMs <= 0) continue;
+    if (method === "days") {
+      let days = activeMs / dayMs;
+      days = Math.ceil(days - 1e-9);
+      units += days / segment.daysInMonth;
+    } else {
+      units += activeMs / (segment.daysInMonth * dayMs);
+    }
+  }
+  if (!Number.isFinite(units) || units <= 0) return null;
+  return units;
+}
+
+function getContractDurationStats(lineItems, { monthlyProrationMethod = null, billingTimeZone = null } = {}) {
+  let earliest = null;
+  let latest = null;
+  (Array.isArray(lineItems) ? lineItems : []).forEach((li) => {
+    const startAt = li?.startAt || li?.start_at || null;
+    const endAt = li?.endAt || li?.end_at || null;
+    if (!startAt || !endAt) return;
+    const startMs = Date.parse(startAt);
+    const endMs = Date.parse(endAt);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return;
+    if (earliest === null || startMs < earliest) earliest = startMs;
+    if (latest === null || endMs > latest) latest = endMs;
+  });
+
+  if (earliest === null || latest === null) {
+    return { days: 0, months: 0, earliest: null, latest: null };
+  }
+
+  const dayMs = 24 * 60 * 60 * 1000;
+  const days = Math.round((latest - earliest) / dayMs);
+  if (!Number.isFinite(days) || days <= 0) {
+    return { days: 0, months: 0, earliest, latest };
+  }
+
+  const months = pdfComputeMonthlyUnitsInTimeZone({
+    startAt: new Date(earliest).toISOString(),
+    endAt: new Date(latest).toISOString(),
+    prorationMethod: monthlyProrationMethod,
+    timeZone: billingTimeZone,
+  });
+  return { days, months, earliest, latest };
+}
+
+function computeMonthlyRecurringForLine(
+  lineItem,
+  { monthlyProrationMethod = null, billingTimeZone = null, qty = 0 } = {}
+) {
+  if (!lineItem) return null;
+  const basis = normalizeRateBasis(lineItem?.rateBasis);
+  if (!basis) return null;
+  const startAt = lineItem?.startAt || lineItem?.start_at || null;
+  const endAt = lineItem?.endAt || lineItem?.end_at || null;
+  if (!startAt || !endAt) return null;
+  const startMs = Date.parse(startAt);
+  const endMs = Date.parse(endAt);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+  const lineAmount = Number(lineItem?.lineAmount);
+  if (!Number.isFinite(lineAmount)) return null;
+  const rateAmount = Number(lineItem?.rateAmount);
+  const billableUnits = Number(lineItem?.billableUnits);
+  const quantity = Number.isFinite(qty) && qty > 0 ? qty : 0;
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  if (basis === "daily" || basis === "weekly") {
+    const durationDays = Math.max(1, Math.ceil((endMs - startMs) / dayMs - 1e-9));
+    if (basis === "daily") {
+      let perDay = Number.isFinite(rateAmount) ? rateAmount : null;
+      if (!Number.isFinite(perDay) && Number.isFinite(billableUnits) && billableUnits > 0 && quantity > 0) {
+        perDay = lineAmount / (billableUnits * quantity);
+      }
+      if (!Number.isFinite(perDay) && quantity > 0) {
+        perDay = lineAmount / (durationDays * quantity);
+      }
+      if (!Number.isFinite(perDay)) return null;
+      const recurringDays = Math.min(30, durationDays);
+      return perDay * recurringDays * quantity;
+    }
+    let perWeek = Number.isFinite(rateAmount) ? rateAmount : null;
+    if (!Number.isFinite(perWeek) && Number.isFinite(billableUnits) && billableUnits > 0 && quantity > 0) {
+      perWeek = lineAmount / (billableUnits * quantity);
+    }
+    if (!Number.isFinite(perWeek) && quantity > 0) {
+      perWeek = lineAmount / ((durationDays / 7) * quantity);
+    }
+    if (!Number.isFinite(perWeek)) return null;
+    const recurringWeeks = Math.min(30, durationDays) / 7;
+    return perWeek * recurringWeeks * quantity;
+  }
+
+  if (basis === "monthly") {
+    if (Number.isFinite(rateAmount) && quantity > 0) return rateAmount * quantity;
+  }
+  const monthlyUnits = pdfComputeMonthlyUnitsInTimeZone({
+    startAt,
+    endAt,
+    prorationMethod: monthlyProrationMethod,
+    timeZone: billingTimeZone,
+  });
+  if (!Number.isFinite(monthlyUnits) || monthlyUnits <= 0) return null;
+  return lineAmount / monthlyUnits;
+}
+
+function lineItemQtyForPdf(lineItem, orderStatus) {
+  if (!lineItem) return 0;
+  if (lineItem.bundleId) return 1;
+  const invCount = Array.isArray(lineItem.inventoryIds) ? lineItem.inventoryIds.length : 0;
+  if (invCount > 0) return invCount;
+  const unitDescription = safeText(lineItem.unitDescription || lineItem.unit_description || "");
+  const isRerent = !!unitDescription && !lineItem.bundleId && invCount === 0;
+  if (isRerent) return 1;
+  return isDemandOnlyStatus(orderStatus) ? 1 : 0;
+}
+
+function computeMonthlyRecurringTotals(
+  lineItems,
+  { monthlyProrationMethod = null, billingTimeZone = null, orderStatus = null } = {}
+) {
+  let subtotal = 0;
+  (Array.isArray(lineItems) ? lineItems : []).forEach((li) => {
+    const qty = lineItemQtyForPdf(li, orderStatus);
+    const lineMonthly = computeMonthlyRecurringForLine(li, {
+      monthlyProrationMethod,
+      billingTimeZone,
+      qty,
+    });
+    if (Number.isFinite(lineMonthly)) subtotal += lineMonthly;
+  });
+  return subtotal;
 }
 
 function formatDateInTimeZone(value, timeZone) {
@@ -518,7 +797,19 @@ function createContractDoc({ title, docNo, docLabel = "Contract", status, logoPa
   return doc;
 }
 
-function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rentalInfoFields = null }) {
+function writeOrderPdf(
+  doc,
+  {
+    order,
+    lineItems,
+    fees,
+    notes,
+    attachments,
+    rentalInfoFields = null,
+    monthlyProrationMethod = null,
+    billingTimeZone = null,
+  }
+) {
   const isQ = isQuote(order?.status);
   const left = doc.page.margins.left;
   const right = doc.page.margins.right;
@@ -594,11 +885,15 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
 
   doc.y = startY + 100 + 20; // Move past boxes
 
-  // --- Rental Info ---
+  // --- Rental Info (collected for later rendering) ---
   const rentalInfoConfig = normalizeRentalInfoFields(rentalInfoFields);
   const showRentalInfo = (key) => rentalInfoConfig?.[key]?.enabled !== false;
   const rentalInfoLines = [];
 
+  if (showRentalInfo("siteName")) {
+    const val = safeText(order?.site_name || order?.siteName);
+    if (val) rentalInfoLines.push({ label: "Site Name", value: val });
+  }
   if (showRentalInfo("siteAddress")) {
     const val = safeText(order?.site_address || order?.siteAddress);
     if (val) rentalInfoLines.push({ label: "Site Address", value: val });
@@ -610,6 +905,14 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
   if (showRentalInfo("criticalAreas")) {
     const val = safeText(order?.critical_areas || order?.criticalAreas);
     if (val) rentalInfoLines.push({ label: "Critical Areas", value: val });
+  }
+  if (showRentalInfo("specialInstructions")) {
+    const val = safeText(stripHtml(order?.special_instructions || order?.specialInstructions));
+    if (val) rentalInfoLines.push({ label: "Special Instructions", value: val });
+  }
+  if (showRentalInfo("notificationCircumstances")) {
+    const val = safeText(stripHtml(order?.notification_circumstances || order?.notificationCircumstances));
+    if (val) rentalInfoLines.push({ label: "Notification Circumstances", value: val });
   }
   if (showRentalInfo("emergencyContacts")) {
     const val = formatContactLines(order?.emergency_contacts || order?.emergencyContacts, "");
@@ -626,21 +929,33 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
 
   const generalNotes = safeText(stripHtml(order?.general_notes || order?.generalNotes));
 
-  if (rentalInfoLines.length > 0 || generalNotes) {
-    drawSectionTitle(doc, "Rental Information");
+  // --- Pickup / Dropoff Section ---
+  const pickupLocationName = safeText(order?.pickup_location_name || order?.pickupLocationName);
+  const pickupAddressParts = [
+    safeText(order?.pickup_street_address || order?.pickupStreetAddress),
+    safeText(order?.pickup_city || order?.pickupCity),
+    safeText(order?.pickup_region || order?.pickupRegion),
+    safeText(order?.pickup_country || order?.pickupCountry),
+  ].filter(Boolean);
+  const pickupAddress = pickupAddressParts.join(", ");
+  const fulfillmentMethod = safeText(order?.fulfillment_method || order?.fulfillmentMethod || "pickup");
+  const dropoffAddress = safeText(order?.dropoff_address || order?.dropoffAddress);
+  const logisticsInstructions = safeText(stripHtml(order?.logistics_instructions || order?.logisticsInstructions));
 
-    const col1X = left;
-    const col2X = left + (contentWidth / 2) + 10;
+  const pickupInfoLines = [];
+  if (fulfillmentMethod) pickupInfoLines.push({ label: "Fulfillment Method", value: fulfillmentMethod });
+  if (pickupLocationName) pickupInfoLines.push({ label: "Pickup Location", value: pickupLocationName });
+  if (pickupAddress) pickupInfoLines.push({ label: "Pickup Address", value: pickupAddress });
+  if (dropoffAddress) pickupInfoLines.push({ label: "Dropoff Address", value: dropoffAddress });
+  if (logisticsInstructions) pickupInfoLines.push({ label: "Pickup/Dropoff Instructions", value: logisticsInstructions });
 
-    let currentY = doc.y;
-
-    rentalInfoLines.forEach((item, idx) => {
-      // Check for space
-      if (doc.y > doc.page.height - 100) {
+  if (pickupInfoLines.length > 0) {
+    drawSectionTitle(doc, "Pickup / Dropoff");
+    pickupInfoLines.forEach((item) => {
+      if (doc.y > doc.page.height - 90) {
         doc.addPage();
-        currentY = doc.page.margins.top;
+        doc.y = doc.page.margins.top;
       }
-
       doc.save();
       drawEyebrow(doc, item.label, left, doc.y);
       doc.y += 10;
@@ -648,15 +963,7 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
       doc.y += 10;
       doc.restore();
     });
-
-    if (generalNotes) {
-      doc.moveDown(0.8);
-      drawEyebrow(doc, "General Notes", left, doc.y);
-      doc.y += 10;
-      doc.font(FONTS.regular).fontSize(9).fillColor(COLORS.secondary).text(generalNotes, left, doc.y, { width: contentWidth });
-      doc.moveDown(1);
-    }
-    doc.moveDown(1);
+    doc.moveDown(0.5);
   }
 
   // --- Line Items Table ---
@@ -673,6 +980,33 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
   const xQty = xRate + colRateW;
   const xTotal = xQty + colQtyW; // End point
 
+  const durationStatsTotals = getContractDurationStats(lineItems, { monthlyProrationMethod, billingTimeZone });
+  const basisOrderTotals = ["daily", "weekly", "monthly"];
+  const basisActiveTotals = new Set();
+  (Array.isArray(lineItems) ? lineItems : []).forEach((li) => {
+    const basis = normalizeRateBasis(li?.rateBasis);
+    const amount = Number(li?.lineAmount);
+    if (!basis || !Number.isFinite(amount) || amount <= 0) return;
+    basisActiveTotals.add(basis);
+  });
+  const activeBases = basisOrderTotals.filter((basis) => basisActiveTotals.has(basis));
+
+  let showRecurring = true;
+  if (activeBases.length === 1) {
+    const basis = activeBases[0];
+    if (basis === "monthly") {
+      showRecurring = durationStatsTotals.months > 1;
+    } else if (basis === "weekly") {
+      showRecurring = durationStatsTotals.days > 7;
+    } else if (basis === "daily") {
+      showRecurring = durationStatsTotals.days > 1;
+    }
+  } else if (activeBases.length === 0) {
+    showRecurring = true;
+  }
+
+  const useMonthlyTotals = showRecurring;
+
   // Table Header
   const headerHeight = 24;
   drawBox(doc, { x: left, y: tableTop, w: contentWidth, h: headerHeight, fill: COLORS.accent, radius: 4 });
@@ -683,7 +1017,7 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
   doc.text("DESCRIPTION", xDesc, textOffsetY);
   doc.text("RATE", xRate, textOffsetY, { width: colRateW - 10, align: "right" });
   doc.text("QTY", xQty, textOffsetY, { width: colQtyW - 10, align: "right" });
-  doc.text("TOTAL", xQty + colQtyW, textOffsetY, { width: colTotalW - 20, align: "right" });
+  doc.text(useMonthlyTotals ? "MONTHLY" : "TOTAL", xQty + colQtyW, textOffsetY, { width: colTotalW - 20, align: "right" });
   doc.restore();
 
   doc.y = tableTop + headerHeight + 5;
@@ -715,14 +1049,28 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
 
     // Numbers
     const rate = li.rateAmount === null || li.rateAmount === undefined ? "--" : fmtMoney(li.rateAmount);
-    const isRerent = !!unitDescription && !li.bundleId && (!Array.isArray(li.inventoryIds) || li.inventoryIds.length === 0);
-    const qty = li.bundleId ? 1 : Array.isArray(li.inventoryIds) && li.inventoryIds.length ? li.inventoryIds.length : isRerent ? 1 : isDemandOnlyStatus(order?.status) ? 1 : 0;
+    const qty = lineItemQtyForPdf(li, order?.status);
 
     doc.font(FONTS.regular).fillColor(COLORS.secondary);
     doc.text(rate, xRate, txtY, { width: colRateW - 10, align: "right" });
     doc.text(String(qty), xQty, txtY, { width: colQtyW - 10, align: "right" });
 
-    const lineTotal = li.lineAmount === null || li.lineAmount === undefined ? "--" : fmtMoney(li.lineAmount);
+    let lineTotal = "--";
+    if (li.lineAmount !== null && li.lineAmount !== undefined) {
+      const baseTotal = Number(li.lineAmount);
+      if (Number.isFinite(baseTotal)) {
+        if (useMonthlyTotals) {
+          const monthlyAmount = computeMonthlyRecurringForLine(li, {
+            monthlyProrationMethod,
+            billingTimeZone,
+            qty,
+          });
+          lineTotal = Number.isFinite(monthlyAmount) ? fmtMoney(monthlyAmount) : fmtMoney(baseTotal);
+        } else {
+          lineTotal = fmtMoney(baseTotal);
+        }
+      }
+    }
     doc.font(FONTS.bold).fillColor(COLORS.primary).text(lineTotal, xQty + colQtyW, txtY, { width: colTotalW - 20, align: "right" });
 
     // Details line
@@ -777,6 +1125,36 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
   // Ideally totals are always kept together.
 
   const totals = computeTotals({ lineItems, fees });
+  const durationStats = getContractDurationStats(lineItems, { monthlyProrationMethod, billingTimeZone });
+  const basisActive = new Set();
+  (Array.isArray(lineItems) ? lineItems : []).forEach((li) => {
+    const basis = normalizeRateBasis(li?.rateBasis);
+    const amount = Number(li?.lineAmount);
+    if (!basis || !Number.isFinite(amount) || amount <= 0) return;
+    basisActive.add(basis);
+  });
+  const activeBasesTotals = basisOrderTotals.filter((basis) => basisActive.has(basis));
+  let showRecurringTotals = true;
+  if (activeBasesTotals.length === 1) {
+    const basis = activeBasesTotals[0];
+    if (basis === "monthly") {
+      showRecurringTotals = durationStats.months > 1;
+    } else if (basis === "weekly") {
+      showRecurringTotals = durationStats.days > 7;
+    } else if (basis === "daily") {
+      showRecurringTotals = durationStats.days > 1;
+    }
+  } else if (activeBasesTotals.length === 0) {
+    showRecurringTotals = true;
+  }
+  const monthlyRecurringSubtotal = computeMonthlyRecurringTotals(lineItems, {
+    monthlyProrationMethod,
+    billingTimeZone,
+    orderStatus: order?.status,
+  });
+  const recurringSubtotal = Number.isFinite(monthlyRecurringSubtotal) ? monthlyRecurringSubtotal : 0;
+  const recurringGst = recurringSubtotal * 0.05;
+  const recurringTotal = recurringSubtotal + recurringGst;
   const totalsW = contentWidth * 0.35;
   const totalsX = left + contentWidth - totalsW;
 
@@ -788,11 +1166,12 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
     doc.y = bottomY;
   }
 
+  const totalsBoxHeight = showRecurringTotals ? 120 : 150;
   drawBox(doc, {
     x: totalsX,
     y: doc.y,
     w: totalsW,
-    h: 150,
+    h: totalsBoxHeight,
     bg: COLORS.bgHeader,
     radius: 6,
     border: COLORS.border
@@ -813,23 +1192,74 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
     totalCurrentY += (isBig ? 24 : 18);
   };
 
-  drawTotalLine("Rental Total", fmtMoney(totals.rentalTotal));
-  drawTotalLine("Fees/Other", fmtMoney(totals.feeTotal));
-  drawTotalLine("Subtotal", fmtMoney(totals.subtotal));
-  drawTotalLine("GST (5%)", fmtMoney(totals.tax));
+  if (showRecurring) {
+    doc.save();
+    doc.font(FONTS.bold).fontSize(10).fillColor(COLORS.primary);
+    doc.text("Per month (recurring)", totalLabelX, totalCurrentY, { width: labelWidth });
+    totalCurrentY += 18;
+    doc.font(FONTS.bold).fontSize(14);
+    doc.text(`${fmtMoney(recurringTotal)} / month`, totalLabelX, totalCurrentY, {
+      width: totalsW - (innerTotalM * 2),
+      align: "right",
+    });
+    doc.restore();
+    totalCurrentY += 24;
+    drawTotalLine("Subtotal", fmtMoney(recurringSubtotal));
+    drawTotalLine("GST (5%)", fmtMoney(recurringGst));
+  } else {
+    drawTotalLine("Rental Total", fmtMoney(totals.rentalTotal));
+    drawTotalLine("Fees/Other", fmtMoney(totals.feeTotal));
+    drawTotalLine("Subtotal", fmtMoney(totals.subtotal));
+    drawTotalLine("GST (5%)", fmtMoney(totals.tax));
 
-  // Divider
-  doc.save()
-    .moveTo(totalsX + innerTotalM, totalCurrentY - 6)
-    .lineTo(totalsX + totalsW - innerTotalM, totalCurrentY - 6)
-    .strokeColor(COLORS.border).stroke()
-    .restore();
+    // Divider
+    doc.save()
+      .moveTo(totalsX + innerTotalM, totalCurrentY - 6)
+      .lineTo(totalsX + totalsW - innerTotalM, totalCurrentY - 6)
+      .strokeColor(COLORS.border).stroke()
+      .restore();
 
-  drawTotalLine("Grand Total", fmtMoney(totals.grandTotal), true);
-  drawTotalLine("Amount Due", fmtMoney(totals.amountDue), true, true);
+    drawTotalLine("Grand Total", fmtMoney(totals.grandTotal), true);
+    drawTotalLine("Amount Due", fmtMoney(totals.amountDue), true, true);
+  }
+
+  // --- Rental Information (Bottom) ---
+  doc.y = Math.max(doc.y, totalCurrentY) + 20; // Move past totals
+  if (rentalInfoLines.length > 0 || generalNotes) {
+    ensureSpace(doc, 80);
+    drawSectionTitle(doc, "Rental Information");
+
+    rentalInfoLines.forEach((item) => {
+      if (doc.y > doc.page.height - 100) {
+        doc.addPage();
+        doc.y = doc.page.margins.top;
+        drawSectionTitle(doc, "Rental Information");
+      }
+      doc.save();
+      drawEyebrow(doc, item.label, left, doc.y);
+      doc.y += 10;
+      doc.font(FONTS.regular).fontSize(9).fillColor(COLORS.secondary).text(item.value, left, doc.y, { width: contentWidth });
+      doc.y += 10;
+      doc.restore();
+    });
+
+    if (generalNotes) {
+      if (doc.y > doc.page.height - 100) {
+        doc.addPage();
+        doc.y = doc.page.margins.top;
+        drawSectionTitle(doc, "Rental Information");
+      }
+      doc.moveDown(0.8);
+      drawEyebrow(doc, "General Notes", left, doc.y);
+      doc.y += 10;
+      doc.font(FONTS.regular).fontSize(9).fillColor(COLORS.secondary).text(generalNotes, left, doc.y, { width: contentWidth });
+      doc.moveDown(1);
+    }
+    doc.moveDown(0.5);
+  }
 
   // --- Signature ---
-  doc.y = Math.max(doc.y, totalCurrentY) + 30; // Move past totals
+  doc.y += 20;
   ensureSpace(doc, 80);
 
   const signatureY = doc.y + 20;
@@ -860,7 +1290,18 @@ function writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rental
 
 function streamOrderPdf(
   res,
-  { order, lineItems, fees, notes, attachments, companyLogoPath = null, companyProfile = null, rentalInfoFields = null }
+  {
+    order,
+    lineItems,
+    fees,
+    notes,
+    attachments,
+    companyLogoPath = null,
+    companyProfile = null,
+    rentalInfoFields = null,
+    monthlyProrationMethod = null,
+    billingTimeZone = null,
+  }
 ) {
   const docNo = docNumberLabel(order);
   const isQ = isQuote(order?.status);
@@ -876,7 +1317,16 @@ function streamOrderPdf(
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="${sanitizeFileName(docNo)}.pdf"`);
   doc.pipe(res);
-  writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rentalInfoFields });
+  writeOrderPdf(doc, {
+    order,
+    lineItems,
+    fees,
+    notes,
+    attachments,
+    rentalInfoFields,
+    monthlyProrationMethod,
+    billingTimeZone,
+  });
 }
 
 async function buildOrderPdfBuffer({
@@ -888,6 +1338,8 @@ async function buildOrderPdfBuffer({
   companyLogoPath = null,
   companyProfile = null,
   rentalInfoFields = null,
+  monthlyProrationMethod = null,
+  billingTimeZone = null,
 }) {
   const docNo = docNumberLabel(order);
   const isQ = isQuote(order?.status);
@@ -911,7 +1363,16 @@ async function buildOrderPdfBuffer({
   });
 
   doc.pipe(stream);
-  writeOrderPdf(doc, { order, lineItems, fees, notes, attachments, rentalInfoFields });
+  writeOrderPdf(doc, {
+    order,
+    lineItems,
+    fees,
+    notes,
+    attachments,
+    rentalInfoFields,
+    monthlyProrationMethod,
+    billingTimeZone,
+  });
   await done;
 
   return {

@@ -3733,6 +3733,8 @@ app.get(
         companyLogoPath: logoPath,
         companyProfile,
         rentalInfoFields: settings?.rental_info_fields || null,
+        monthlyProrationMethod: settings?.monthly_proration_method || null,
+        billingTimeZone: settings?.billing_timezone || null,
       });
   })
 );
@@ -7467,6 +7469,8 @@ app.get(
         companyLogoPath: logoPath,
         companyProfile,
         rentalInfoFields: settings?.rental_info_fields || null,
+        monthlyProrationMethod: settings?.monthly_proration_method || null,
+        billingTimeZone: settings?.billing_timezone || null,
       });
   })
 );
