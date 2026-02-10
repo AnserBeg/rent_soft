@@ -4815,19 +4815,18 @@ async function applyUnitSelection(li, { unitId, bundleId } = {}) {
   scheduleDraftSave();
 }
 
-function workOrdersStorageKey(companyId) {
-  return `rentSoft.workOrders.${companyId}`;
-}
-
-function workOrdersSeqKey(companyId, year) {
-  return `rentSoft.workOrdersSeq.${companyId}.${year}`;
-}
-
-function loadWorkOrdersForCompany(companyId) {
+async function fetchWorkOrdersForCompany(companyId, params = {}) {
   if (!companyId) return [];
-  const raw = localStorage.getItem(workOrdersStorageKey(companyId));
-  const data = safeJsonParse(raw, []);
-  return Array.isArray(data) ? data : [];
+  const search = new URLSearchParams();
+  search.set("companyId", String(companyId));
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    search.set(key, String(value));
+  });
+  const res = await fetch(`/api/work-orders?${search.toString()}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load work orders.");
+  return Array.isArray(data.workOrders) ? data.workOrders : [];
 }
 
 function workOrderUnitIds(order) {
@@ -4839,9 +4838,12 @@ function workOrderUnitIds(order) {
   return [];
 }
 
-function findOpenWorkOrderForUnit(companyId, unitId) {
+async function findOpenWorkOrderForUnit(companyId, unitId) {
   if (!companyId || !unitId) return null;
-  const orders = loadWorkOrdersForCompany(companyId);
+  const orders = await fetchWorkOrdersForCompany(companyId, {
+    unitId,
+    serviceStatus: "out_of_service",
+  });
   return (
     orders.find((order) => {
       const unitIds = workOrderUnitIds(order);
@@ -4852,27 +4854,12 @@ function findOpenWorkOrderForUnit(companyId, unitId) {
   );
 }
 
-function saveWorkOrdersForCompany(companyId, orders) {
-  if (!companyId) return;
-  localStorage.setItem(workOrdersStorageKey(companyId), JSON.stringify(orders || []));
-}
-
-function nextWorkOrderNumber(companyId) {
-  const year = new Date().getFullYear();
-  if (!companyId) return `WO-${year}-${String(1).padStart(5, "0")}`;
-  const key = workOrdersSeqKey(companyId, year);
-  const current = Number(localStorage.getItem(key) || 0);
-  const next = Number.isFinite(current) ? current + 1 : 1;
-  localStorage.setItem(key, String(next));
-  return `WO-${year}-${String(next).padStart(5, "0")}`;
-}
-
 function conflictOrderLabel(conflict) {
   if (!conflict) return "another order";
   return conflict.roNumber || conflict.quoteNumber || (conflict.orderId ? `order #${conflict.orderId}` : "another order");
 }
 
-function resolvePickupUnavailableMessage({ data, lineItem, status }) {
+async function resolvePickupUnavailableMessage({ data, lineItem, status }) {
   const fallback = data?.error || "Unable to update pickup time.";
   const unavailable = status === 409 && String(fallback).toLowerCase().includes("no available units");
   if (!unavailable) return fallback;
@@ -4883,7 +4870,7 @@ function resolvePickupUnavailableMessage({ data, lineItem, status }) {
       : null;
   if (!selectedId) return fallback;
 
-  const openWorkOrder = findOpenWorkOrderForUnit(activeCompanyId, selectedId);
+  const openWorkOrder = await findOpenWorkOrderForUnit(activeCompanyId, selectedId).catch(() => null);
   if (openWorkOrder) {
     const number = openWorkOrder.number ? ` (${openWorkOrder.number})` : "";
     return `Unit has an open work order${number}.`;
@@ -4905,21 +4892,59 @@ function resolvePickupUnavailableMessage({ data, lineItem, status }) {
   return fallback;
 }
 
-function ensureReturnInspectionWorkOrders(li) {
+async function syncWorkOrderPauseForUnits(unitIds, record) {
+  if (!activeCompanyId) return;
+  const ids = Array.isArray(unitIds) ? unitIds.map((id) => String(id)).filter(Boolean) : [];
+  if (!ids.length) return;
+  const now = new Date().toISOString();
+  const payload = {
+    companyId: activeCompanyId,
+    workOrderNumber: record?.number || "",
+    serviceStatus: record?.serviceStatus || "in_service",
+    orderStatus: record?.orderStatus || "open",
+  };
+  if (record?.serviceStatus === "out_of_service") {
+    payload.startAt = record?.createdAt || record?.updatedAt || now;
+    if (record?.orderStatus === "closed") {
+      payload.endAt = record?.closedAt || record?.updatedAt || now;
+    }
+  } else {
+    payload.endAt = record?.closedAt || record?.updatedAt || now;
+  }
+
+  await Promise.all(
+    ids.map(async (unitId) => {
+      const res = await fetch(`/api/equipment/${encodeURIComponent(unitId)}/work-order-pause`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Unable to update rental pause period.");
+    })
+  );
+}
+
+async function ensureReturnInspectionWorkOrders(li) {
   if (!autoWorkOrderOnReturn || !activeCompanyId) return false;
   const ids = Array.isArray(li?.inventoryIds)
     ? li.inventoryIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
     : [];
   if (!ids.length) return false;
 
-  const orders = loadWorkOrdersForCompany(activeCompanyId);
+  let orders = [];
+  try {
+    orders = await fetchWorkOrdersForCompany(activeCompanyId, { returnInspection: true });
+  } catch {
+    return false;
+  }
   const now = new Date().toISOString();
   const date = now.slice(0, 10);
   const orderNumber = draft?.roNumber || draft?.quoteNumber || null;
   const unitDetails = selectedInventoryDetails(ids);
   let created = false;
 
-  ids.forEach((unitId, idx) => {
+  for (const [idx, unitId] of ids.entries()) {
     const existing = orders.find((order) => {
       if (order?.returnInspection !== true) return false;
       if (order?.orderStatus === "closed") return false;
@@ -4928,40 +4953,44 @@ function ensureReturnInspectionWorkOrders(li) {
       if (li?.lineItemId && String(order?.sourceLineItemId) !== String(li.lineItemId)) return false;
       return true;
     });
-    if (existing) return;
+    if (existing) continue;
     const unitInfo = unitDetails[idx] || { id: unitId };
     const label = unitLabel(unitInfo);
     const summary = orderNumber ? `Return inspection for ${orderNumber}` : "Return inspection";
-    orders.push({
-      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      number: nextWorkOrderNumber(activeCompanyId),
-      createdAt: now,
-      updatedAt: now,
-      date,
-      unitId: String(unitId),
-      unitLabel: label,
-      unitIds: [String(unitId)],
-      unitLabels: [label],
-      workSummary: summary,
-      orderStatus: "open",
-      serviceStatus: "out_of_service",
-      returnInspection: true,
-      source: "return_inspection",
-      sourceOrderId: editingOrderId ? String(editingOrderId) : null,
-      sourceOrderNumber: orderNumber,
-      sourceLineItemId: li?.lineItemId ? String(li.lineItemId) : null,
-      parts: [],
-      labor: [],
-      closedAt: null,
+    const res = await fetch("/api/work-orders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId: activeCompanyId,
+        date,
+        unitId: String(unitId),
+        unitIds: [String(unitId)],
+        unitLabel: label,
+        unitLabels: [label],
+        workSummary: summary,
+        orderStatus: "open",
+        serviceStatus: "out_of_service",
+        returnInspection: true,
+        source: "return_inspection",
+        sourceOrderId: editingOrderId ? String(editingOrderId) : null,
+        sourceOrderNumber: orderNumber,
+        sourceLineItemId: li?.lineItemId ? String(li.lineItemId) : null,
+        parts: [],
+        labor: [],
+      }),
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) continue;
+    const createdOrder = data.workOrder;
+    orders.push(createdOrder);
+    await syncWorkOrderPauseForUnits([unitId], createdOrder).catch(() => {});
     created = true;
-  });
+  }
 
-  if (created) saveWorkOrdersForCompany(activeCompanyId, orders);
   return created;
 }
 
-function removeReturnInspectionWorkOrders(li) {
+async function removeReturnInspectionWorkOrders(li) {
   if (!activeCompanyId) return false;
   const ids = Array.isArray(li?.inventoryIds)
     ? li.inventoryIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
@@ -4970,30 +4999,52 @@ function removeReturnInspectionWorkOrders(li) {
   const idSet = new Set(ids.map((id) => String(id)));
   const lineItemId = li?.lineItemId ? String(li.lineItemId) : null;
   const orderNumber = draft?.roNumber || draft?.quoteNumber || null;
-  const orders = loadWorkOrdersForCompany(activeCompanyId);
-  let removed = false;
-
-  const filtered = orders.filter((order) => {
-    if (order?.returnInspection !== true) return true;
-    if (order?.source !== "return_inspection") return true;
-    if (order?.orderStatus === "closed") return true;
-    const orderUnitIds = workOrderUnitIds(order);
-    if (!orderUnitIds.length) return true;
-    if (orderUnitIds.length > 1) return true;
-    if (!idSet.has(String(orderUnitIds[0]))) return true;
-    if (lineItemId) {
-      if (String(order?.sourceLineItemId || "") !== lineItemId) return true;
-    } else if (orderNumber) {
-      if (String(order?.sourceOrderNumber || "") !== String(orderNumber)) return true;
-    } else {
-      if (order?.sourceLineItemId || order?.sourceOrderId) return true;
-    }
-    removed = true;
+  let orders = [];
+  try {
+    orders = await fetchWorkOrdersForCompany(activeCompanyId, { returnInspection: true });
+  } catch {
     return false;
+  }
+
+  const toRemove = orders.filter((order) => {
+    if (order?.returnInspection !== true) return false;
+    if (order?.source !== "return_inspection") return false;
+    if (order?.orderStatus === "closed") return false;
+    const orderUnitIds = workOrderUnitIds(order);
+    if (!orderUnitIds.length) return false;
+    if (orderUnitIds.length > 1) return false;
+    if (!idSet.has(String(orderUnitIds[0]))) return false;
+    if (lineItemId) {
+      if (String(order?.sourceLineItemId || "") !== lineItemId) return false;
+    } else if (orderNumber) {
+      if (String(order?.sourceOrderNumber || "") !== String(orderNumber)) return false;
+    } else {
+      if (order?.sourceLineItemId || order?.sourceOrderId) return false;
+    }
+    return true;
   });
 
-  if (removed) saveWorkOrdersForCompany(activeCompanyId, filtered);
-  return removed;
+  if (!toRemove.length) return false;
+
+  const now = new Date().toISOString();
+  await Promise.all(
+    toRemove.map(async (order) => {
+      await syncWorkOrderPauseForUnits(workOrderUnitIds(order), {
+        ...order,
+        serviceStatus: "in_service",
+        orderStatus: "closed",
+        closedAt: now,
+        updatedAt: now,
+      }).catch(() => {});
+      await fetch(`/api/work-orders/${encodeURIComponent(order.id)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyId: activeCompanyId }),
+      }).catch(() => {});
+    })
+  );
+
+  return true;
 }
 
 function ensureSingleUnitSelection(li) {
@@ -5571,7 +5622,7 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn, ski
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const message = resolvePickupUnavailableMessage({ data, lineItem: li, status: res.status });
+      const message = await resolvePickupUnavailableMessage({ data, lineItem: li, status: res.status });
       window.RentSoft?.showErrorBanner?.(message);
       throw new Error(message);
     }
@@ -5615,9 +5666,9 @@ async function applyActualPeriodToLineItem(li, { targetPickup, targetReturn, ski
       setCompanyMeta("All items returned.");
     }
     if (targetReturn) {
-      ensureReturnInspectionWorkOrders(li);
+      await ensureReturnInspectionWorkOrders(li);
     } else {
-      removeReturnInspectionWorkOrders(li);
+      await removeReturnInspectionWorkOrders(li);
     }
   }
 

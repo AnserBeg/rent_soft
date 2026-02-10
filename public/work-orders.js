@@ -43,29 +43,14 @@ function persistListState() {
 }
 
 
-function keyForWorkOrders(companyId) {
-  return `rentSoft.workOrders.${companyId}`;
-}
-
-function safeJsonParse(value, fallback) {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function loadWorkOrdersFromStorage() {
+async function fetchWorkOrders() {
   if (!activeCompanyId) return [];
-  const raw = localStorage.getItem(keyForWorkOrders(activeCompanyId));
-  const data = safeJsonParse(raw, []);
-  return Array.isArray(data) ? data : [];
-}
-
-function saveWorkOrdersToStorage(orders) {
-  if (!activeCompanyId) return;
-  localStorage.setItem(keyForWorkOrders(activeCompanyId), JSON.stringify(orders || []));
+  const res = await fetch(`/api/work-orders?companyId=${encodeURIComponent(activeCompanyId)}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load work orders.");
+  const orders = Array.isArray(data.workOrders) ? data.workOrders : [];
+  workOrdersCache = orders;
+  return orders;
 }
 
 function normalizeUnitIds(order) {
@@ -216,22 +201,32 @@ function applyFilters() {
   return rows;
 }
 
-function loadWorkOrders() {
-  workOrdersCache = loadWorkOrdersFromStorage();
+async function loadWorkOrders() {
+  await fetchWorkOrders();
   renderWorkOrders(applyFilters());
 }
 
-function closeWorkOrder(id) {
-  const orders = loadWorkOrdersFromStorage();
-  const target = orders.find((order) => String(order.id) === String(id));
-  if (!target) return;
-  target.orderStatus = "closed";
-  target.updatedAt = new Date().toISOString();
-  if (!target.closedAt) target.closedAt = target.updatedAt;
-  saveWorkOrdersToStorage(orders);
-  workOrdersCache = orders;
+async function closeWorkOrder(id) {
+  const target = workOrdersCache.find((order) => String(order.id) === String(id));
+  if (!target || !activeCompanyId) return;
+  const res = await fetch(`/api/work-orders/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyId: activeCompanyId,
+      orderStatus: "closed",
+      closedAt: target.closedAt || new Date().toISOString(),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (companyMeta) companyMeta.textContent = data.error || "Unable to close work order.";
+    return;
+  }
+  const updated = data.workOrder || target;
+  workOrdersCache = workOrdersCache.map((order) => (String(order.id) === String(id) ? updated : order));
   renderWorkOrders(applyFilters());
-  syncWorkOrderPause(target).catch((err) => {
+  syncWorkOrderPause(updated).catch((err) => {
     if (companyMeta) companyMeta.textContent = err.message || "Unable to update rental pause period.";
   });
 }
@@ -290,7 +285,9 @@ if (activeCompanyId) {
     searchInput.value = searchTerm;
   }
 
-  loadWorkOrders();
+  loadWorkOrders().catch((err) => {
+    if (companyMeta) companyMeta.textContent = err?.message || "Unable to load work orders.";
+  });
 } else {
   companyMeta.textContent = "Log in to view work orders.";
 }

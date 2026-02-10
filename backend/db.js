@@ -697,6 +697,60 @@ async function ensureTables() {
     );
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS work_orders (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        work_order_number TEXT NOT NULL,
+        work_date DATE NOT NULL,
+        unit_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        unit_labels JSONB NOT NULL DEFAULT '[]'::jsonb,
+        unit_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
+        unit_label TEXT,
+        work_summary TEXT,
+        issues TEXT,
+        order_status TEXT NOT NULL DEFAULT 'open',
+        service_status TEXT NOT NULL DEFAULT 'in_service',
+        return_inspection BOOLEAN NOT NULL DEFAULT FALSE,
+        parts JSONB NOT NULL DEFAULT '[]'::jsonb,
+        labor JSONB NOT NULL DEFAULT '[]'::jsonb,
+        source TEXT,
+        source_order_id TEXT,
+        source_order_number TEXT,
+        source_line_item_id TEXT,
+        completed_at TIMESTAMPTZ,
+        closed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(company_id, work_order_number)
+      );
+    `);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS work_order_number TEXT NOT NULL DEFAULT '';`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS work_date DATE NOT NULL DEFAULT CURRENT_DATE;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS unit_ids JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS unit_labels JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS unit_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS unit_label TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS work_summary TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS issues TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS order_status TEXT NOT NULL DEFAULT 'open';`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS service_status TEXT NOT NULL DEFAULT 'in_service';`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS return_inspection BOOLEAN NOT NULL DEFAULT FALSE;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS parts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS labor JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS source TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS source_order_id TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS source_order_number TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS source_line_item_id TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+    await client.query(`CREATE INDEX IF NOT EXISTS work_orders_company_idx ON work_orders (company_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS work_orders_company_status_idx ON work_orders (company_id, order_status);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS work_orders_company_service_idx ON work_orders (company_id, service_status);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS work_orders_updated_idx ON work_orders (company_id, updated_at);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS work_orders_unit_ids_idx ON work_orders USING GIN (unit_ids);`);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS equipment_bundles (
         id SERIAL PRIMARY KEY,
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -3274,6 +3328,334 @@ async function deletePurchaseOrder({ id, companyId }) {
   await pool.query(`DELETE FROM purchase_orders WHERE id = $1 AND company_id = $2`, [id, companyId]);
 }
 
+function formatWorkOrderRow(row) {
+  if (!row) return null;
+  const unitIdsRaw = coerceJsonArray(row.unit_ids);
+  const unitLabelsRaw = coerceJsonArray(row.unit_labels);
+  const unitIds = normalizeWorkOrderUnitIds(
+    unitIdsRaw.map((id) => (id === null || id === undefined ? "" : String(id)))
+  );
+  const unitLabels = normalizeWorkOrderUnitLabels(
+    unitLabelsRaw.map((label) => (label === null || label === undefined ? "" : String(label)))
+  );
+  const parts = normalizeWorkOrderLines(coerceJsonArray(row.parts));
+  const labor = normalizeWorkOrderLines(coerceJsonArray(row.labor));
+  const workDate = row.work_date instanceof Date
+    ? row.work_date.toISOString().slice(0, 10)
+    : row.work_date
+      ? String(row.work_date).slice(0, 10)
+      : null;
+  const primaryUnitId = row.unit_id !== undefined && row.unit_id !== null
+    ? Number(row.unit_id)
+    : unitIds[0]
+      ? Number(unitIds[0])
+      : null;
+  const primaryUnitLabel = row.unit_label || unitLabels[0] || "";
+
+  return {
+    id: Number(row.id),
+    companyId: Number(row.company_id),
+    number: row.work_order_number || "",
+    date: workDate,
+    unitIds,
+    unitLabels,
+    unitId: Number.isFinite(primaryUnitId) ? primaryUnitId : null,
+    unitLabel: primaryUnitLabel,
+    workSummary: row.work_summary || "",
+    issues: row.issues || "",
+    orderStatus: row.order_status || "open",
+    serviceStatus: row.service_status || "in_service",
+    returnInspection: row.return_inspection === true,
+    parts,
+    labor,
+    source: row.source || null,
+    sourceOrderId: row.source_order_id || null,
+    sourceOrderNumber: row.source_order_number || null,
+    sourceLineItemId: row.source_line_item_id || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+    completedAt: row.completed_at || null,
+    closedAt: row.closed_at || null,
+  };
+}
+
+async function listWorkOrders({
+  companyId,
+  unitId,
+  orderStatus,
+  serviceStatus,
+  returnInspection,
+  search,
+  limit = 250,
+  offset = 0,
+} = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const filters = ["company_id = $1"];
+  const params = [cid];
+  let idx = 2;
+
+  if (unitId !== undefined && unitId !== null && String(unitId || "").trim()) {
+    filters.push(`unit_ids ? $${idx}`);
+    params.push(String(unitId));
+    idx += 1;
+  }
+  if (orderStatus) {
+    filters.push(`order_status = $${idx}`);
+    params.push(normalizeWorkOrderStatus(orderStatus));
+    idx += 1;
+  }
+  if (serviceStatus) {
+    filters.push(`service_status = $${idx}`);
+    params.push(normalizeWorkOrderServiceStatus(serviceStatus));
+    idx += 1;
+  }
+  if (returnInspection === true || returnInspection === false) {
+    filters.push(`return_inspection = $${idx}`);
+    params.push(returnInspection === true);
+    idx += 1;
+  }
+  if (search) {
+    filters.push(`(work_order_number ILIKE $${idx} OR work_summary ILIKE $${idx} OR issues ILIKE $${idx})`);
+    params.push(`%${String(search).trim()}%`);
+    idx += 1;
+  }
+
+  const lim = Math.min(Math.max(Number(limit) || 250, 1), 1000);
+  const off = Math.max(Number(offset) || 0, 0);
+  params.push(lim, off);
+
+  const res = await pool.query(
+    `
+    SELECT id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
+           work_summary, issues, order_status, service_status, return_inspection, parts, labor,
+           source, source_order_id, source_order_number, source_line_item_id,
+           created_at, updated_at, completed_at, closed_at
+      FROM work_orders
+     WHERE ${filters.join(" AND ")}
+     ORDER BY updated_at DESC, id DESC
+     LIMIT $${idx} OFFSET $${idx + 1}
+    `,
+    params
+  );
+  return (res.rows || []).map(formatWorkOrderRow);
+}
+
+async function getWorkOrder({ companyId, id }) {
+  const cid = Number(companyId);
+  const wid = Number(id);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(wid) || wid <= 0) throw new Error("id is required.");
+  const res = await pool.query(
+    `
+    SELECT id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
+           work_summary, issues, order_status, service_status, return_inspection, parts, labor,
+           source, source_order_id, source_order_number, source_line_item_id,
+           created_at, updated_at, completed_at, closed_at
+      FROM work_orders
+     WHERE company_id = $1 AND id = $2
+     LIMIT 1
+    `,
+    [cid, wid]
+  );
+  return formatWorkOrderRow(res.rows?.[0]);
+}
+
+async function createWorkOrder(payload = {}) {
+  const cid = Number(payload.companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+
+  const date = normalizeDateOnly(payload.date);
+  if (!date) throw new Error("date is required.");
+
+  let unitIds = normalizeWorkOrderUnitIds(payload.unitIds);
+  if (!unitIds.length && payload.unitId) unitIds = normalizeWorkOrderUnitIds([payload.unitId]);
+  if (!unitIds.length) throw new Error("unitIds are required.");
+
+  let unitLabels = normalizeWorkOrderUnitLabels(payload.unitLabels);
+  if (!unitLabels.length && payload.unitLabel) unitLabels = normalizeWorkOrderUnitLabels([payload.unitLabel]);
+
+  const unitId = toNullableInt(unitIds[0] || payload.unitId);
+  const unitLabel = unitLabels[0] || (payload.unitLabel ? String(payload.unitLabel).trim() : null);
+
+  const orderStatus = normalizeWorkOrderStatus(payload.orderStatus);
+  const serviceStatus = normalizeWorkOrderServiceStatus(payload.serviceStatus);
+  const returnInspection = payload.returnInspection === true;
+  const workSummary = payload.workSummary ? String(payload.workSummary).trim() : null;
+  const issues = payload.issues ? String(payload.issues).trim() : null;
+  const parts = normalizeWorkOrderLines(payload.parts);
+  const labor = normalizeWorkOrderLines(payload.labor);
+  const source = payload.source ? String(payload.source).trim() : null;
+  const sourceOrderId = payload.sourceOrderId ? String(payload.sourceOrderId).trim() : null;
+  const sourceOrderNumber = payload.sourceOrderNumber ? String(payload.sourceOrderNumber).trim() : null;
+  const sourceLineItemId = payload.sourceLineItemId ? String(payload.sourceLineItemId).trim() : null;
+
+  const nowIso = new Date().toISOString();
+  let completedAt = normalizeTimestamptz(payload.completedAt);
+  let closedAt = normalizeTimestamptz(payload.closedAt);
+  if (orderStatus === "completed" && !completedAt) completedAt = nowIso;
+  if (orderStatus === "closed" && !closedAt) closedAt = nowIso;
+  if (orderStatus === "open") {
+    completedAt = null;
+    closedAt = null;
+  }
+
+  const effectiveDate = new Date(date);
+  const providedNumber = payload.number || payload.workOrderNumber;
+  const workOrderNumber = providedNumber
+    ? String(providedNumber).trim()
+    : await nextDocumentNumber(pool, cid, "WO", effectiveDate, { yearDigits: 4, seqDigits: 5 });
+
+  const res = await pool.query(
+    `
+    INSERT INTO work_orders
+      (company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
+       work_summary, issues, order_status, service_status, return_inspection, parts, labor,
+       source, source_order_id, source_order_number, source_line_item_id, completed_at, closed_at, updated_at)
+    VALUES
+      ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW())
+    RETURNING id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
+              work_summary, issues, order_status, service_status, return_inspection, parts, labor,
+              source, source_order_id, source_order_number, source_line_item_id,
+              created_at, updated_at, completed_at, closed_at
+    `,
+    [
+      cid,
+      workOrderNumber,
+      date,
+      JSON.stringify(unitIds),
+      JSON.stringify(unitLabels),
+      unitId,
+      unitLabel,
+      workSummary,
+      issues,
+      orderStatus,
+      serviceStatus,
+      returnInspection,
+      JSON.stringify(parts),
+      JSON.stringify(labor),
+      source,
+      sourceOrderId,
+      sourceOrderNumber,
+      sourceLineItemId,
+      completedAt,
+      closedAt,
+    ]
+  );
+  return formatWorkOrderRow(res.rows?.[0]);
+}
+
+async function updateWorkOrder(payload = {}) {
+  const cid = Number(payload.companyId);
+  const wid = Number(payload.id);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(wid) || wid <= 0) throw new Error("id is required.");
+
+  const existing = await getWorkOrder({ companyId: cid, id: wid });
+  if (!existing) return null;
+
+  const merged = { ...existing, ...payload };
+  const date = normalizeDateOnly(merged.date);
+  if (!date) throw new Error("date is required.");
+
+  let unitIds = normalizeWorkOrderUnitIds(merged.unitIds);
+  if (!unitIds.length && merged.unitId) unitIds = normalizeWorkOrderUnitIds([merged.unitId]);
+  if (!unitIds.length) throw new Error("unitIds are required.");
+
+  let unitLabels = normalizeWorkOrderUnitLabels(merged.unitLabels);
+  if (!unitLabels.length && merged.unitLabel) unitLabels = normalizeWorkOrderUnitLabels([merged.unitLabel]);
+
+  const unitId = toNullableInt(unitIds[0] || merged.unitId);
+  const unitLabel = unitLabels[0] || (merged.unitLabel ? String(merged.unitLabel).trim() : null);
+
+  const orderStatus = normalizeWorkOrderStatus(merged.orderStatus);
+  const serviceStatus = normalizeWorkOrderServiceStatus(merged.serviceStatus);
+  const returnInspection = merged.returnInspection === true;
+  const workSummary = merged.workSummary ? String(merged.workSummary).trim() : null;
+  const issues = merged.issues ? String(merged.issues).trim() : null;
+  const parts = normalizeWorkOrderLines(merged.parts);
+  const labor = normalizeWorkOrderLines(merged.labor);
+  const source = merged.source ? String(merged.source).trim() : null;
+  const sourceOrderId = merged.sourceOrderId ? String(merged.sourceOrderId).trim() : null;
+  const sourceOrderNumber = merged.sourceOrderNumber ? String(merged.sourceOrderNumber).trim() : null;
+  const sourceLineItemId = merged.sourceLineItemId ? String(merged.sourceLineItemId).trim() : null;
+
+  const nowIso = new Date().toISOString();
+  let completedAt = normalizeTimestamptz(merged.completedAt);
+  let closedAt = normalizeTimestamptz(merged.closedAt);
+  if (orderStatus === "completed" && !completedAt) completedAt = nowIso;
+  if (orderStatus === "closed" && !closedAt) closedAt = nowIso;
+  if (orderStatus === "open") {
+    completedAt = null;
+    closedAt = null;
+  }
+
+  const workOrderNumber = merged.number ? String(merged.number).trim() : existing.number;
+
+  const res = await pool.query(
+    `
+    UPDATE work_orders
+       SET work_order_number = $1,
+           work_date = $2,
+           unit_ids = $3,
+           unit_labels = $4,
+           unit_id = $5,
+           unit_label = $6,
+           work_summary = $7,
+           issues = $8,
+           order_status = $9,
+           service_status = $10,
+           return_inspection = $11,
+           parts = $12,
+           labor = $13,
+           source = $14,
+           source_order_id = $15,
+           source_order_number = $16,
+           source_line_item_id = $17,
+           completed_at = $18,
+           closed_at = $19,
+           updated_at = NOW()
+     WHERE id = $20 AND company_id = $21
+     RETURNING id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
+               work_summary, issues, order_status, service_status, return_inspection, parts, labor,
+               source, source_order_id, source_order_number, source_line_item_id,
+               created_at, updated_at, completed_at, closed_at
+    `,
+    [
+      workOrderNumber,
+      date,
+      JSON.stringify(unitIds),
+      JSON.stringify(unitLabels),
+      unitId,
+      unitLabel,
+      workSummary,
+      issues,
+      orderStatus,
+      serviceStatus,
+      returnInspection,
+      JSON.stringify(parts),
+      JSON.stringify(labor),
+      source,
+      sourceOrderId,
+      sourceOrderNumber,
+      sourceLineItemId,
+      completedAt,
+      closedAt,
+      wid,
+      cid,
+    ]
+  );
+  return formatWorkOrderRow(res.rows?.[0]);
+}
+
+async function deleteWorkOrder({ companyId, id }) {
+  const cid = Number(companyId);
+  const wid = Number(id);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(wid) || wid <= 0) throw new Error("id is required.");
+  await pool.query(`DELETE FROM work_orders WHERE company_id = $1 AND id = $2`, [cid, wid]);
+}
+
 async function listCustomers(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
   const fromIso = from ? normalizeTimestamptz(from) : null;
   const toIso = to ? normalizeTimestamptz(to) : null;
@@ -4494,6 +4876,56 @@ function normalizeDateOnly(value) {
   if (!raw) return null;
   const isoMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
   return isoMatch ? isoMatch[1] : null;
+}
+
+function normalizeWorkOrderStatus(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "completed" || v === "closed") return v;
+  return "open";
+}
+
+function normalizeWorkOrderServiceStatus(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "out_of_service") return "out_of_service";
+  return "in_service";
+}
+
+function normalizeWorkOrderUnitIds(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const out = [];
+  value.forEach((id) => {
+    const str = String(id || "").trim();
+    if (!str || seen.has(str)) return;
+    seen.add(str);
+    out.push(str);
+  });
+  return out;
+}
+
+function normalizeWorkOrderUnitLabels(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((label) => String(label || "").trim()).filter((label) => label);
+}
+
+function normalizeWorkOrderLines(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function toNullableInt(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function coerceJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function normalizeBillingRoundingMode(value) {
@@ -6743,6 +7175,15 @@ async function setLineItemReturned({
     if (nextReturned && !existing.fulfilled_at) {
       await client.query("ROLLBACK");
       return { ok: false, error: "Pick up/deliver the item before marking it returned." };
+    }
+    if (nextReturned && existing.fulfilled_at) {
+      const fulfilledMs = Date.parse(existing.fulfilled_at);
+      const effectiveReturnedAt = providedReturnedAt || existing.returned_at || new Date().toISOString();
+      const returnedMs = Date.parse(effectiveReturnedAt);
+      if (Number.isFinite(fulfilledMs) && Number.isFinite(returnedMs) && returnedMs <= fulfilledMs) {
+        await client.query("ROLLBACK");
+        return { ok: false, error: "Return time must be after pickup time." };
+      }
     }
 
     const updateRes = nextReturned
@@ -9056,7 +9497,9 @@ async function createRentalOrder({
         const startMs = Date.parse(actualStart);
         const endMs = Date.parse(actualEnd);
         if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
-          throw new Error("Invalid actual pickup/return dates.");
+          const err = new Error("Actual return time must be after pickup time.");
+          err.code = "invalid_actual_dates";
+          throw err;
         }
         const conflicts = await findPickupConflicts({
           client,
@@ -10747,7 +11190,9 @@ async function updateRentalOrder({
         const startMs = Date.parse(actualStart);
         const endMs = Date.parse(actualEnd);
         if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
-          throw new Error("Invalid actual pickup/return dates.");
+          const err = new Error("Actual return time must be after pickup time.");
+          err.code = "invalid_actual_dates";
+          throw err;
         }
         const conflicts = await findPickupConflicts({
           client,
@@ -14119,6 +14564,11 @@ module.exports = {
   createPurchaseOrder,
   updatePurchaseOrder,
   deletePurchaseOrder,
+  listWorkOrders,
+  getWorkOrder,
+  createWorkOrder,
+  updateWorkOrder,
+  deleteWorkOrder,
   importInventoryFromText,
   importCustomerPricingFromInventoryText,
   importCustomersFromText,

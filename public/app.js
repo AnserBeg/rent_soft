@@ -80,6 +80,7 @@ const filterLocationId = pageParams.get("locationId");
 const initialEquipmentId = pageParams.get("equipmentId");
 
 let equipmentCache = [];
+let workOrdersCache = [];
 let editingEquipmentId = null;
 let sortField = "created_at";
 let sortDir = "desc";
@@ -206,13 +207,16 @@ function clearEquipmentHeaderStatus() {
 }
 
 function getWorkOrderNumberForEquipment(companyId, equipmentId) {
-  const cid = Number(companyId);
   const eid = Number(equipmentId);
-  if (!Number.isFinite(cid) || !Number.isFinite(eid)) return null;
-  const raw = localStorage.getItem(workOrdersStorageKey(cid));
-  const data = safeJsonParse(raw, []);
-  if (!Array.isArray(data)) return null;
-  const matches = data.filter((order) => Number(order?.unitId) === eid);
+  if (!Number.isFinite(eid)) return null;
+  const matches = (Array.isArray(workOrdersCache) ? workOrdersCache : []).filter((order) => {
+    const unitIds = Array.isArray(order?.unitIds)
+      ? order.unitIds.map((id) => String(id))
+      : order?.unitId
+        ? [String(order.unitId)]
+        : [];
+    return unitIds.includes(String(eid));
+  });
   if (!matches.length) return null;
   const open = matches.filter((order) => order?.orderStatus !== "closed");
   const list = open.length ? open : matches;
@@ -369,12 +373,9 @@ function setCurrentLocationValue(value) {
   updateCurrentLocationDisplay();
 }
 
-function getOutOfServiceMap(companyId) {
-  if (!companyId) return new Map();
-  const raw = localStorage.getItem(`rentSoft.workOrders.${companyId}`);
-  const orders = safeJsonParse(raw, []);
+function getOutOfServiceMap() {
+  const orders = Array.isArray(workOrdersCache) ? workOrdersCache : [];
   const map = new Map();
-  if (!Array.isArray(orders)) return map;
   orders.forEach((order) => {
     if (!order?.unitId) return;
     if (order.serviceStatus === "out_of_service" && order.orderStatus !== "closed") {
@@ -384,12 +385,9 @@ function getOutOfServiceMap(companyId) {
   return map;
 }
 
-function getReturnInspectionMap(companyId) {
-  if (!companyId) return new Map();
-  const raw = localStorage.getItem(`rentSoft.workOrders.${companyId}`);
-  const orders = safeJsonParse(raw, []);
+function getReturnInspectionMap() {
+  const orders = Array.isArray(workOrdersCache) ? workOrdersCache : [];
   const map = new Map();
-  if (!Array.isArray(orders)) return map;
   orders.forEach((order) => {
     if (!order?.unitId) return;
     if (order.returnInspection === true && order.orderStatus !== "closed") {
@@ -402,13 +400,16 @@ function getReturnInspectionMap(companyId) {
 function setCompany(id, detail) {
   activeCompanyId = id ? Number(id) : null;
   if (activeCompanyId) window.RentSoft?.setCompanyId?.(activeCompanyId);
+  workOrdersCache = [];
   companyMeta.textContent = detail || "";
   if (activeCompanyId) {
     loadLocations();
     loadEquipment();
+    loadWorkOrdersCache();
     loadTypes();
     loadBundles();
   } else {
+    workOrdersCache = [];
     locationSelect.innerHTML = `<option value="">Select a location</option><option value="__new__">+ Add new location...</option>`;
     if (currentLocationModeSelect) currentLocationModeSelect.value = "";
     if (currentLocationIdInput) {
@@ -453,8 +454,8 @@ function renderEquipment(rows) {
 
 function renderEquipmentTable(rows) {
   if (!equipmentTable) return;
-  const outOfServiceMap = getOutOfServiceMap(activeCompanyId);
-  const returnInspectionMap = getReturnInspectionMap(activeCompanyId);
+  const outOfServiceMap = getOutOfServiceMap();
+  const returnInspectionMap = getReturnInspectionMap();
   const indicator = (field) => {
     if (sortField !== field) return "";
     return sortDir === "asc" ? "^" : "v";
@@ -530,8 +531,8 @@ function renderEquipmentTable(rows) {
 function renderEquipmentCards(rows) {
   if (!equipmentCards) return;
   equipmentCards.replaceChildren();
-  const outOfServiceMap = getOutOfServiceMap(activeCompanyId);
-  const returnInspectionMap = getReturnInspectionMap(activeCompanyId);
+  const outOfServiceMap = getOutOfServiceMap();
+  const returnInspectionMap = getReturnInspectionMap();
 
   rows.forEach((row) => {
     const card = document.createElement("div");
@@ -696,6 +697,21 @@ async function loadEquipment() {
     }
   } catch (err) {
     companyMeta.textContent = err.message;
+  }
+}
+
+async function loadWorkOrdersCache() {
+  if (!activeCompanyId) return;
+  try {
+    const res = await fetch(`/api/work-orders?companyId=${encodeURIComponent(activeCompanyId)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load work orders.");
+    workOrdersCache = Array.isArray(data.workOrders) ? data.workOrders : [];
+    if (equipmentCache.length) {
+      renderEquipment(applyFilters());
+    }
+  } catch (err) {
+    companyMeta.textContent = err.message || "Unable to load work orders.";
   }
 }
 
@@ -917,10 +933,6 @@ async function loadEquipmentLocationHistory(equipmentId) {
   equipmentHistoryLoadedForId = String(eid);
 }
 
-function workOrdersStorageKey(companyId) {
-  return `rentSoft.workOrders.${companyId}`;
-}
-
 function renderEquipmentWorkOrders(rows) {
   if (!equipmentWorkOrdersTable) return;
   const items = Array.isArray(rows) ? rows : [];
@@ -970,19 +982,23 @@ function renderEquipmentWorkOrders(rows) {
   if (equipmentWorkOrdersMeta) equipmentWorkOrdersMeta.textContent = `${items.length} work order${items.length === 1 ? "" : "s"}`;
 }
 
-function loadEquipmentWorkOrders(equipmentId) {
+async function loadEquipmentWorkOrders(equipmentId) {
   const cid = normalizeCompanyId();
   const eid = Number(equipmentId);
   if (!cid || !Number.isFinite(eid)) return;
   if (!equipmentWorkOrdersTable) return;
 
   if (equipmentWorkOrdersMeta) equipmentWorkOrdersMeta.textContent = "Loading...";
-  const raw = localStorage.getItem(workOrdersStorageKey(cid));
-  const data = safeJsonParse(raw, []);
-  const rows = Array.isArray(data)
-    ? data.filter((order) => Number(order?.unitId) === eid)
-    : [];
-
+  const res = await fetch(
+    `/api/work-orders?companyId=${encodeURIComponent(cid)}&unitId=${encodeURIComponent(eid)}`
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (equipmentWorkOrdersMeta) equipmentWorkOrdersMeta.textContent = data.error || "Unable to load work orders.";
+    renderEquipmentWorkOrders([]);
+    return;
+  }
+  const rows = Array.isArray(data.workOrders) ? data.workOrders : [];
   rows.sort((a, b) => {
     const aTime = Date.parse(a?.updatedAt || a?.closedAt || a?.date || "");
     const bTime = Date.parse(b?.updatedAt || b?.closedAt || b?.date || "");
@@ -1025,7 +1041,9 @@ function setEquipmentExtrasTab(tab) {
     return;
   }
   if (!equipmentWorkOrdersLoadedForId || equipmentWorkOrdersLoadedForId !== String(editingEquipmentId)) {
-    loadEquipmentWorkOrders(editingEquipmentId);
+    loadEquipmentWorkOrders(editingEquipmentId).catch((err) => {
+      if (equipmentWorkOrdersMeta) equipmentWorkOrdersMeta.textContent = err?.message || "Unable to load work orders.";
+    });
   }
 }
 

@@ -38,18 +38,11 @@ const initialSource = params.get("source");
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let partsCache = [];
 let equipmentCache = [];
+let workOrdersCache = [];
 let editingWorkOrder = null;
 let pendingUnitId = initialUnitId ? String(initialUnitId) : null;
 let pendingSummary = initialSummary ? String(initialSummary) : null;
 let pendingSource = initialSource ? String(initialSource) : null;
-
-function keyForWorkOrders(companyId) {
-  return `rentSoft.workOrders.${companyId}`;
-}
-
-function keyForWorkOrderSeq(companyId, year) {
-  return `rentSoft.workOrdersSeq.${companyId}.${year}`;
-}
 
 function keyForParts(companyId) {
   return `rentSoft.parts.${companyId}`;
@@ -99,16 +92,22 @@ function savePartsCatalog(parts) {
   localStorage.setItem(keyForParts(activeCompanyId), JSON.stringify(parts || []));
 }
 
-function loadWorkOrders() {
+async function fetchWorkOrders() {
   if (!activeCompanyId) return [];
-  const raw = localStorage.getItem(keyForWorkOrders(activeCompanyId));
-  const data = safeJsonParse(raw, []);
-  return Array.isArray(data) ? data : [];
+  const res = await fetch(`/api/work-orders?companyId=${encodeURIComponent(activeCompanyId)}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load work orders.");
+  const orders = Array.isArray(data.workOrders) ? data.workOrders : [];
+  workOrdersCache = orders;
+  return orders;
 }
 
-function saveWorkOrders(orders) {
-  if (!activeCompanyId) return;
-  localStorage.setItem(keyForWorkOrders(activeCompanyId), JSON.stringify(orders || []));
+async function fetchWorkOrderById(id) {
+  if (!activeCompanyId || !id) return null;
+  const res = await fetch(`/api/work-orders/${encodeURIComponent(id)}?companyId=${encodeURIComponent(activeCompanyId)}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load work order.");
+  return data.workOrder || null;
 }
 
 function normalizeUnitIds(order) {
@@ -331,7 +330,7 @@ function applyUnitSelectionToSelect(unitIds, unitLabels) {
 }
 
 function getOutOfServiceMap(excludeId = null) {
-  const orders = loadWorkOrders();
+  const orders = Array.isArray(workOrdersCache) ? workOrdersCache : [];
   const map = new Map();
   orders.forEach((order) => {
     const unitIds = normalizeUnitIds(order);
@@ -344,16 +343,6 @@ function getOutOfServiceMap(excludeId = null) {
     }
   });
   return map;
-}
-
-function nextWorkOrderNumber() {
-  const year = new Date().getFullYear();
-  if (!activeCompanyId) return `WO-${year}-${String(1).padStart(5, "0")}`;
-  const raw = localStorage.getItem(keyForWorkOrderSeq(activeCompanyId, year));
-  const current = Number(raw || 0);
-  const next = Number.isFinite(current) ? current + 1 : 1;
-  localStorage.setItem(keyForWorkOrderSeq(activeCompanyId, year), String(next));
-  return `WO-${year}-${String(next).padStart(5, "0")}`;
 }
 
 function updateTotals() {
@@ -774,51 +763,64 @@ async function saveWorkOrder() {
   const parts = collectParts();
   const labor = collectLabor();
 
-  const orders = loadWorkOrders();
   const now = new Date().toISOString();
-  let record = editingWorkOrder;
+  let completedAt = editingWorkOrder?.completedAt || null;
+  let closedAt = editingWorkOrder?.closedAt || null;
 
-  if (!record) {
-    record = {
-      id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      number: nextWorkOrderNumber(),
-      createdAt: now,
-    };
-    orders.push(record);
-  } else {
-    const existingIndex = orders.findIndex((order) => String(order?.id) === String(record?.id));
-    if (existingIndex >= 0) {
-      record = orders[existingIndex];
-    } else {
-      orders.push(record);
-    }
-  }
-
-  record.date = date;
-  record.unitIds = unitIds;
-  record.unitLabels = unitLabels;
-  record.unitId = unitIds[0] || null;
-  record.unitLabel = unitLabels[0] || "";
-  record.workSummary = workSummary;
-  record.issues = issues;
-  record.orderStatus = orderStatus;
-  record.serviceStatus = serviceStatus;
-  record.returnInspection = returnInspection;
-  record.parts = parts;
-  record.labor = labor;
-  record.updatedAt = now;
   if (orderStatus === "closed") {
-    if (!record.closedAt) record.closedAt = now;
+    if (!closedAt) closedAt = now;
   } else if (orderStatus === "completed") {
-    if (!record.completedAt) record.completedAt = now;
+    if (!completedAt) completedAt = now;
+    closedAt = null;
   } else {
-    record.closedAt = null;
-    record.completedAt = null;
+    completedAt = null;
+    closedAt = null;
   }
 
-  saveWorkOrders(orders);
-  syncPartsCatalogFromLines(parts);
+  const payload = {
+    companyId: activeCompanyId,
+    date,
+    unitIds,
+    unitLabels,
+    unitId: unitIds[0] || null,
+    unitLabel: unitLabels[0] || "",
+    workSummary,
+    issues,
+    orderStatus,
+    serviceStatus,
+    returnInspection,
+    parts,
+    labor,
+    source: editingWorkOrder?.source || pendingSource || null,
+    sourceOrderId: editingWorkOrder?.sourceOrderId || null,
+    sourceOrderNumber: editingWorkOrder?.sourceOrderNumber || null,
+    sourceLineItemId: editingWorkOrder?.sourceLineItemId || null,
+    completedAt,
+    closedAt,
+  };
+
+  const isEditing = !!editingWorkOrder?.id;
+  const res = await fetch(isEditing ? `/api/work-orders/${encodeURIComponent(editingWorkOrder.id)}` : "/api/work-orders", {
+    method: isEditing ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setSaveStatus(data.error || "Unable to save work order.");
+    return false;
+  }
+
+  const record = data.workOrder;
   editingWorkOrder = record;
+  const idx = workOrdersCache.findIndex((order) => String(order?.id) === String(record?.id));
+  if (idx >= 0) {
+    workOrdersCache[idx] = record;
+  } else {
+    workOrdersCache.push(record);
+  }
+
+  syncPartsCatalogFromLines(parts);
 
   if (workOrderNumber) {
     workOrderNumber.textContent = record.number;
@@ -843,9 +845,22 @@ saveBtn?.addEventListener("click", async () => {
 
 deleteBtn?.addEventListener("click", () => {
   if (!editingWorkOrder || !activeCompanyId) return;
-  const orders = loadWorkOrders().filter((order) => String(order.id) !== String(editingWorkOrder.id));
-  saveWorkOrders(orders);
-  window.location.href = "work-orders.html";
+  fetch(`/api/work-orders/${encodeURIComponent(editingWorkOrder.id)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId: activeCompanyId }),
+  })
+    .then((res) => {
+      if (!res.ok) return res.json().catch(() => ({})).then((data) => Promise.reject(new Error(data.error || "Unable to delete work order.")));
+      return null;
+    })
+    .then(() => {
+      workOrdersCache = workOrdersCache.filter((order) => String(order.id) !== String(editingWorkOrder.id));
+      window.location.href = "work-orders.html";
+    })
+    .catch((err) => {
+      setSaveStatus(err?.message || "Unable to delete work order.");
+    });
 });
 
 
@@ -970,10 +985,19 @@ if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
   companyMeta.textContent = "";
   initForm();
-  const orders = loadWorkOrders();
+  fetchWorkOrders()
+    .then(() => updateServiceHint())
+    .catch((err) => {
+      setSaveStatus(err?.message || "Unable to load work orders.");
+    });
   if (workOrderId) {
-    const existing = orders.find((order) => String(order.id) === String(workOrderId));
-    if (existing) applyWorkOrderToForm(existing);
+    fetchWorkOrderById(workOrderId)
+      .then((existing) => {
+        if (existing) applyWorkOrderToForm(existing);
+      })
+      .catch((err) => {
+        setSaveStatus(err?.message || "Unable to load work order.");
+      });
   }
   loadEquipment();
 } else {

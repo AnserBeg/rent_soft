@@ -156,6 +156,39 @@ CREATE INDEX IF NOT EXISTS purchase_orders_company_id_idx ON purchase_orders (co
 CREATE INDEX IF NOT EXISTS purchase_orders_company_status_idx ON purchase_orders (company_id, status);
 CREATE INDEX IF NOT EXISTS purchase_orders_company_expected_idx ON purchase_orders (company_id, expected_possession_date);
 
+CREATE TABLE IF NOT EXISTS work_orders (
+  id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  work_order_number TEXT NOT NULL,
+  work_date DATE NOT NULL,
+  unit_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  unit_labels JSONB NOT NULL DEFAULT '[]'::jsonb,
+  unit_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
+  unit_label TEXT,
+  work_summary TEXT,
+  issues TEXT,
+  order_status TEXT NOT NULL DEFAULT 'open',
+  service_status TEXT NOT NULL DEFAULT 'in_service',
+  return_inspection BOOLEAN NOT NULL DEFAULT FALSE,
+  parts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  labor JSONB NOT NULL DEFAULT '[]'::jsonb,
+  source TEXT,
+  source_order_id TEXT,
+  source_order_number TEXT,
+  source_line_item_id TEXT,
+  completed_at TIMESTAMPTZ,
+  closed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(company_id, work_order_number)
+);
+
+CREATE INDEX IF NOT EXISTS work_orders_company_idx ON work_orders (company_id);
+CREATE INDEX IF NOT EXISTS work_orders_company_status_idx ON work_orders (company_id, order_status);
+CREATE INDEX IF NOT EXISTS work_orders_company_service_idx ON work_orders (company_id, service_status);
+CREATE INDEX IF NOT EXISTS work_orders_updated_idx ON work_orders (company_id, updated_at);
+CREATE INDEX IF NOT EXISTS work_orders_unit_ids_idx ON work_orders USING GIN (unit_ids);
+
 -- Rental Orders (RO)
 CREATE TABLE IF NOT EXISTS rental_orders (
   id SERIAL PRIMARY KEY,

@@ -75,6 +75,11 @@ const {
   createPurchaseOrder,
   updatePurchaseOrder,
   deletePurchaseOrder,
+  listWorkOrders,
+  getWorkOrder,
+  createWorkOrder,
+  updateWorkOrder,
+  deleteWorkOrder,
   importCustomersFromText,
   importInventoryFromText,
   importCustomerPricingFromInventoryText,
@@ -245,6 +250,11 @@ const DISPATCH_ALLOWED_API = [
   { method: "GET", pattern: /^\/api\/rental-orders\/[^/]+$/ },
   { method: "PUT", pattern: /^\/api\/rental-orders\/[^/]+\/site-address$/ },
   { method: "GET", pattern: /^\/api\/equipment$/ },
+  { method: "GET", pattern: /^\/api\/work-orders$/ },
+  { method: "GET", pattern: /^\/api\/work-orders\/[^/]+$/ },
+  { method: "POST", pattern: /^\/api\/work-orders$/ },
+  { method: "PUT", pattern: /^\/api\/work-orders\/[^/]+$/ },
+  { method: "DELETE", pattern: /^\/api\/work-orders\/[^/]+$/ },
   { method: "POST", pattern: /^\/api\/equipment\/[^/]+\/work-order-pause$/ },
   { method: "POST", pattern: /^\/api\/uploads\/image$/ },
   { method: "DELETE", pattern: /^\/api\/uploads\/image$/ },
@@ -7551,6 +7561,9 @@ app.post(
       if (err?.code === "pickup_conflict") {
         return res.status(409).json({ error: err.message, conflicts: err.conflicts || [] });
       }
+      if (err?.code === "invalid_actual_dates") {
+        return res.status(400).json({ error: err.message || "Actual return time must be after pickup time." });
+      }
       throw err;
     }
       try {
@@ -7670,6 +7683,9 @@ app.put(
     } catch (err) {
       if (err?.code === "pickup_conflict") {
         return res.status(409).json({ error: err.message, conflicts: err.conflicts || [] });
+      }
+      if (err?.code === "invalid_actual_dates") {
+        return res.status(400).json({ error: err.message || "Actual return time must be after pickup time." });
       }
       throw err;
     }
@@ -8218,6 +8234,156 @@ app.delete(
     const { companyId } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     await deletePurchaseOrder({ id, companyId });
+    res.status(204).end();
+  })
+);
+
+app.get(
+  "/api/work-orders",
+  asyncHandler(async (req, res) => {
+    const { companyId, unitId, status, orderStatus, serviceStatus, returnInspection, search, limit, offset } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const parsedReturnInspection = parseBoolean(returnInspection);
+    const workOrders = await listWorkOrders({
+      companyId: Number(companyId),
+      unitId,
+      orderStatus: status || orderStatus,
+      serviceStatus,
+      returnInspection: parsedReturnInspection === null ? undefined : parsedReturnInspection,
+      search,
+      limit,
+      offset,
+    });
+    res.json({ workOrders });
+  })
+);
+
+app.get(
+  "/api/work-orders/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const workOrder = await getWorkOrder({ companyId: Number(companyId), id: Number(id) });
+    if (!workOrder) return res.status(404).json({ error: "Work order not found." });
+    res.json({ workOrder });
+  })
+);
+
+app.post(
+  "/api/work-orders",
+  asyncHandler(async (req, res) => {
+    const {
+      companyId,
+      date,
+      unitIds,
+      unitLabels,
+      unitId,
+      unitLabel,
+      workSummary,
+      issues,
+      orderStatus,
+      serviceStatus,
+      returnInspection,
+      parts,
+      labor,
+      source,
+      sourceOrderId,
+      sourceOrderNumber,
+      sourceLineItemId,
+      completedAt,
+      closedAt,
+    } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    if (!date) return res.status(400).json({ error: "date is required." });
+    const hasUnitIds = Array.isArray(unitIds) ? unitIds.length > 0 : !!unitId;
+    if (!hasUnitIds) return res.status(400).json({ error: "unitIds are required." });
+
+    const workOrder = await createWorkOrder({
+      companyId,
+      date,
+      unitIds,
+      unitLabels,
+      unitId,
+      unitLabel,
+      workSummary,
+      issues,
+      orderStatus,
+      serviceStatus,
+      returnInspection,
+      parts,
+      labor,
+      source,
+      sourceOrderId,
+      sourceOrderNumber,
+      sourceLineItemId,
+      completedAt,
+      closedAt,
+    });
+    res.status(201).json({ workOrder });
+  })
+);
+
+app.put(
+  "/api/work-orders/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const {
+      companyId,
+      date,
+      unitIds,
+      unitLabels,
+      unitId,
+      unitLabel,
+      workSummary,
+      issues,
+      orderStatus,
+      serviceStatus,
+      returnInspection,
+      parts,
+      labor,
+      source,
+      sourceOrderId,
+      sourceOrderNumber,
+      sourceLineItemId,
+      completedAt,
+      closedAt,
+    } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const updated = await updateWorkOrder({
+      id: Number(id),
+      companyId,
+      date,
+      unitIds,
+      unitLabels,
+      unitId,
+      unitLabel,
+      workSummary,
+      issues,
+      orderStatus,
+      serviceStatus,
+      returnInspection,
+      parts,
+      labor,
+      source,
+      sourceOrderId,
+      sourceOrderNumber,
+      sourceLineItemId,
+      completedAt,
+      closedAt,
+    });
+    if (!updated) return res.status(404).json({ error: "Work order not found." });
+    res.json({ workOrder: updated });
+  })
+);
+
+app.delete(
+  "/api/work-orders/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    await deleteWorkOrder({ companyId, id });
     res.status(204).end();
   })
 );
