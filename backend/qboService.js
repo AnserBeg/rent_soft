@@ -1476,6 +1476,7 @@ async function resolveSelectedAccountLabels({ companyId, selectedIds }) {
   return labels;
 }
 
+
 function extractQuickReportColumnIndex(report, matchFn) {
   const columns = Array.isArray(report?.Columns?.Column) ? report.Columns.Column : [];
   for (let i = 0; i < columns.length; i += 1) {
@@ -1697,26 +1698,26 @@ async function getIncomeTotals({ companyId, startDate, endDate, debug = false })
       endDate,
       debug,
     });
-    if (debug) {
-      return {
-        total: quick.total,
-        selectedAccounts: selected,
-        debug: {
-          pAndLError: pAndLError?.message ? String(pAndLError.message) : null,
-          quickReports: quick.debugReports,
-        },
-      };
+      if (debug) {
+        return {
+          total: quick.total,
+          selectedAccounts: selected,
+          debug: {
+            pAndLError: pAndLError?.message ? String(pAndLError.message) : null,
+            quickReports: quick.debugReports,
+          },
+        };
+      }
+      return { total: quick.total, selectedAccounts: selected };
     }
-    return { total: quick.total, selectedAccounts: selected };
-  }
 
   const rows = data?.Rows?.Row || [];
   const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
   const total = sumReportIncomeRows(rows, selected, selectedNames);
   const debugInfo = debug ? { pAndL: summarizeReport(data) } : null;
-  if (total !== 0) {
-    return debug ? { total, selectedAccounts: selected, debug: debugInfo } : { total, selectedAccounts: selected };
-  }
+    if (total !== 0) {
+      return debug ? { total, selectedAccounts: selected, debug: debugInfo } : { total, selectedAccounts: selected };
+    }
   const quick = await getIncomeTotalsFromQuickReports({
     companyId,
     selectedIds: selected,
@@ -1724,12 +1725,12 @@ async function getIncomeTotals({ companyId, startDate, endDate, debug = false })
     endDate,
     debug,
   });
-  if (debug) {
-    debugInfo.quickReports = quick.debugReports;
-    return { total: quick.total, selectedAccounts: selected, debug: debugInfo };
+    if (debug) {
+      debugInfo.quickReports = quick.debugReports;
+      return { total: quick.total, selectedAccounts: selected, debug: debugInfo };
+    }
+    return { total: quick.total, selectedAccounts: selected };
   }
-  return { total: quick.total, selectedAccounts: selected };
-}
 
 async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "month", debug = false }) {
   const settings = await getCompanySettings(companyId);
@@ -1771,18 +1772,18 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
       bucket: bucketKey,
       debug,
     });
-    if (debug) {
-      return {
-        rows: quick.rows,
-        selectedAccounts: selected,
-        debug: {
-          pAndLError: pAndLError?.message ? String(pAndLError.message) : null,
-          quickReports: quick.debugReports,
-        },
-      };
+      if (debug) {
+        return {
+          rows: quick.rows,
+          selectedAccounts: selected,
+          debug: {
+            pAndLError: pAndLError?.message ? String(pAndLError.message) : null,
+            quickReports: quick.debugReports,
+          },
+        };
+      }
+      return { rows: quick.rows, selectedAccounts: selected };
     }
-    return { rows: quick.rows, selectedAccounts: selected };
-  }
   const columnDefs = extractReportBucketColumns(data, bucketKey, start, end);
   if (!columnDefs.length) {
     const quick = await getIncomeTimeSeriesFromQuickReports({
@@ -1793,11 +1794,11 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
       bucket: bucketKey,
       debug,
     });
-    if (debug) {
-      return { rows: quick.rows, selectedAccounts: selected, debug: { quickReports: quick.debugReports } };
+      if (debug) {
+        return { rows: quick.rows, selectedAccounts: selected, debug: { quickReports: quick.debugReports } };
+      }
+      return { rows: quick.rows, selectedAccounts: selected };
     }
-    return { rows: quick.rows, selectedAccounts: selected };
-  }
 
   const selectedSet = new Set(selected.map((v) => String(v)));
   const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
@@ -1841,12 +1842,12 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
       });
     }
   }
-  if (rows.length) {
-    if (debug) {
-      return { rows, selectedAccounts: selected, debug: { pAndL: summarizeReport(data) } };
+    if (rows.length) {
+      if (debug) {
+        return { rows, selectedAccounts: selected, debug: { pAndL: summarizeReport(data) } };
+      }
+      return { rows, selectedAccounts: selected };
     }
-    return { rows, selectedAccounts: selected };
-  }
   const quick = await getIncomeTimeSeriesFromQuickReports({
     companyId,
     selectedIds: selected,
@@ -1855,11 +1856,11 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
     bucket: bucketKey,
     debug,
   });
-  if (debug) {
-    return { rows: quick.rows, selectedAccounts: selected, debug: { pAndL: summarizeReport(data), quickReports: quick.debugReports } };
+    if (debug) {
+      return { rows: quick.rows, selectedAccounts: selected, debug: { pAndL: summarizeReport(data), quickReports: quick.debugReports } };
+    }
+    return { rows: quick.rows, selectedAccounts: selected };
   }
-  return { rows: quick.rows, selectedAccounts: selected };
-}
 
 const PICKUP_BULK_SUFFIX = "PICKUP-ALL";
 
