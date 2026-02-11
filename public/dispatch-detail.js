@@ -70,6 +70,7 @@ let siteAddressPicker = {
     debounceTimer: null,
     searchSeq: 0,
     pickSeq: 0,
+    unitInfoWindow: null,
   },
   leaflet: {
     map: null,
@@ -149,7 +150,7 @@ function formatContactLines(label, contacts) {
     .join("<br />");
 }
 
-function formatCoverageHours(coverage) {
+function formatCoverageHours(coverage, timeZone = null) {
   if (!coverage) return "--";
   let raw = coverage;
   if (typeof raw === "string") {
@@ -236,7 +237,10 @@ function formatCoverageHours(coverage) {
     return `${startLabel} ${start} - ${endLabel} ${end}`;
   });
 
-  return lines.length ? lines.join("<br />") : "--";
+  if (!lines.length) return "--";
+  const summary = lines.join("<br />");
+  const tzLabel = String(timeZone || "").trim();
+  return tzLabel ? `${summary} <span class="hint">(${escapeHtml(tzLabel)})</span>` : summary;
 }
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
@@ -836,11 +840,19 @@ function setUnitMarkerGoogle(unitId, lat, lng, label) {
   if (!map || !window.google?.maps) return;
   const markers = ensureUnitMarkerMap();
   let marker = markers.get(String(unitId));
+  const safeLabel = String(label || `Unit #${unitId}`);
+  const ensureInfoWindow = () => {
+    if (!window.google?.maps) return null;
+    if (!siteAddressPicker.google.unitInfoWindow) {
+      siteAddressPicker.google.unitInfoWindow = new window.google.maps.InfoWindow();
+    }
+    return siteAddressPicker.google.unitInfoWindow;
+  };
   if (!marker) {
     marker = new window.google.maps.Marker({
       position: { lat, lng },
       map,
-      title: label || "",
+      title: safeLabel || "",
       icon: {
         path: window.google.maps.SymbolPath.CIRCLE,
         scale: 7,
@@ -850,11 +862,20 @@ function setUnitMarkerGoogle(unitId, lat, lng, label) {
         strokeWeight: 1,
       },
     });
+    marker.__rsClickBound = true;
+    marker.addListener("click", () => {
+      const infoWindow = ensureInfoWindow();
+      if (!infoWindow) return;
+      const content = `<div class="rs-unit-info">${escapeHtml(marker.__rsLabel || marker.getTitle() || `Unit #${unitId}`)}</div>`;
+      infoWindow.setContent(content);
+      infoWindow.open({ anchor: marker, map, shouldFocus: false });
+    });
     markers.set(String(unitId), marker);
   } else {
     marker.setPosition({ lat, lng });
-    if (label) marker.setTitle(label);
+    if (safeLabel) marker.setTitle(safeLabel);
   }
+  marker.__rsLabel = safeLabel;
 }
 
 function setUnitMarkerLeaflet(unitId, lat, lng, label) {
@@ -862,6 +883,7 @@ function setUnitMarkerLeaflet(unitId, lat, lng, label) {
   if (!map || !window.L) return;
   const markers = ensureUnitMarkerMap();
   let marker = markers.get(String(unitId));
+  const safeLabel = String(label || `Unit #${unitId}`);
   if (!marker) {
     marker = window.L.circleMarker([lat, lng], {
       radius: 6,
@@ -870,11 +892,23 @@ function setUnitMarkerLeaflet(unitId, lat, lng, label) {
       fillColor: "#0ea5e9",
       fillOpacity: 0.9,
     }).addTo(map);
-    if (label) marker.bindTooltip(label, { direction: "top" });
+    if (safeLabel) marker.bindTooltip(safeLabel, { direction: "top" });
+    if (safeLabel) marker.bindPopup(escapeHtml(safeLabel));
     markers.set(String(unitId), marker);
   } else {
     marker.setLatLng([lat, lng]);
+    if (safeLabel && marker.getTooltip && marker.getTooltip()) {
+      marker.getTooltip().setContent(safeLabel);
+    } else if (safeLabel) {
+      marker.bindTooltip(safeLabel, { direction: "top" });
+    }
+    if (safeLabel && marker.getPopup && marker.getPopup()) {
+      marker.getPopup().setContent(escapeHtml(safeLabel));
+    } else if (safeLabel) {
+      marker.bindPopup(escapeHtml(safeLabel));
+    }
   }
+  marker.__rsLabel = safeLabel;
 }
 
 function setUnitMarker(unitId, lat, lng, label) {
@@ -1220,12 +1254,63 @@ function resetSiteAddressPickerMapContainer() {
   siteAddressPicker.google.map = null;
   siteAddressPicker.google.marker = null;
   siteAddressPicker.google.autocomplete = null;
+  siteAddressPicker.google.unitInfoWindow = null;
   siteAddressPicker.unitMarkers = new Map();
 
   if (siteAddressPickerMapEl._leaflet_id) {
     delete siteAddressPickerMapEl._leaflet_id;
   }
   siteAddressPickerMapEl.replaceChildren();
+}
+
+function applySiteAddressPickerExistingSelection() {
+  const order = currentOrderDetail?.order || {};
+  const lat = toCoord(order.site_address_lat ?? order.siteAddressLat);
+  const lng = toCoord(order.site_address_lng ?? order.siteAddressLng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  const query =
+    order.site_address_query ??
+    order.siteAddressQuery ??
+    order.site_address ??
+    order.siteAddress ??
+    null;
+
+  if (siteAddressPicker.mode === "google") {
+    if (!siteAddressPicker.google.map || !window.google?.maps) return false;
+    if (!siteAddressPicker.google.marker) {
+      siteAddressPicker.google.marker = new window.google.maps.Marker({
+        position: { lat, lng },
+        map: siteAddressPicker.google.map,
+        draggable: true,
+      });
+      siteAddressPicker.google.marker.addListener("dragend", (evt) => {
+        const dLat = evt?.latLng?.lat?.();
+        const dLng = evt?.latLng?.lng?.();
+        if (!Number.isFinite(dLat) || !Number.isFinite(dLng)) return;
+        setSiteAddressSelected(dLat, dLng, { provider: "manual_pin" });
+      });
+    } else {
+      siteAddressPicker.google.marker.setPosition({ lat, lng });
+    }
+    siteAddressPicker.google.map.setCenter({ lat, lng });
+    siteAddressPicker.google.map.setZoom(17);
+  } else if (siteAddressPicker.leaflet.map && window.L) {
+    const map = siteAddressPicker.leaflet.map;
+    if (!siteAddressPicker.leaflet.marker) {
+      siteAddressPicker.leaflet.marker = window.L.marker([lat, lng], { draggable: true }).addTo(map);
+      siteAddressPicker.leaflet.marker.on("dragend", () => {
+        const ll = siteAddressPicker.leaflet.marker?.getLatLng?.();
+        if (!ll || !Number.isFinite(ll.lat) || !Number.isFinite(ll.lng)) return;
+        setSiteAddressSelected(ll.lat, ll.lng, { provider: "manual_pin" });
+      });
+    } else {
+      siteAddressPicker.leaflet.marker.setLatLng([lat, lng]);
+    }
+    map.setView([lat, lng], 17);
+  }
+
+  setSiteAddressSelected(lat, lng, { provider: "saved_pin", query });
+  return true;
 }
 
 function initLeafletSiteAddressPicker(center) {
@@ -1514,6 +1599,7 @@ async function openSiteAddressPicker() {
     hydrateUnitMarkerDataFromEquipment();
     renderUnitMarkersFromData();
     updateUnitPinActions();
+    applySiteAddressPickerExistingSelection();
   } catch (err) {
     resetSiteAddressPickerMapContainer();
     if (siteAddressPickerMeta) {
@@ -1607,6 +1693,7 @@ function renderOrderDetail(row, detail) {
   const siteContacts = parseContacts(order.site_contacts || order.siteContacts || []);
   const notificationCircumstances = order.notification_circumstances || order.notificationCircumstances || [];
   const coverageHours = order.coverage_hours || order.coverageHours || [];
+  const coverageTimeZone = order.coverage_timezone || order.coverageTimeZone || "";
   const siteName = order.site_name || order.siteName || "--";
   const siteAddress = order.site_address || order.siteAddress || "--";
   const siteAccessInfo = order.site_access_info || order.siteAccessInfo || "--";
@@ -1647,7 +1734,8 @@ function renderOrderDetail(row, detail) {
     lineDetailItems.push(detailItem("Notification circumstance", notifValue));
   }
   if (isRentalInfoEnabled("coverageHours")) {
-    lineDetailItems.push(detailItem("Hours of coverage", formatCoverageHours(coverageHours)));
+    lineDetailItems.push(detailItem("Hours of coverage", formatCoverageHours(coverageHours, coverageTimeZone)));
+    lineDetailItems.push(detailItem("Coverage time zone", escapeHtml(coverageTimeZone || "--")));
   }
   if (isRentalInfoEnabled("generalNotes")) {
     lineDetailItems.push(detailItem("General notes", generalNotesValue, "detail-item-wide"));
@@ -1959,23 +2047,80 @@ function guardNoteUploadPrefix() {
   return `/uploads/company-${activeCompanyId}/`;
 }
 
+function jpegFileName(name) {
+  const base = String(name || "image").replace(/\.[^/.]+$/, "");
+  return `${base || "image"}.jpg`;
+}
+
+async function decodeImageForCanvas(file) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      return await createImageBitmap(file);
+    } catch (_) {
+      // fall through
+    }
+  }
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Unable to read image."));
+    };
+    img.src = url;
+  });
+}
+
+async function convertPngToJpegFile(file, quality = 0.88) {
+  if (!file || String(file.type || "").toLowerCase() !== "image/png") return file;
+  let decoded;
+  try {
+    decoded = await decodeImageForCanvas(file);
+  } catch (_) {
+    return file;
+  }
+  const width = decoded?.width || decoded?.naturalWidth || 0;
+  const height = decoded?.height || decoded?.naturalHeight || 0;
+  if (!width || !height) return file;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || !canvas.toBlob) return file;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(decoded, 0, 0, width, height);
+  if (typeof decoded?.close === "function") decoded.close();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  if (!blob) return file;
+  return new File([blob], jpegFileName(file.name), {
+    type: "image/jpeg",
+    lastModified: file.lastModified || Date.now(),
+  });
+}
+
 async function uploadGuardNoteImage(file) {
   if (!activeCompanyId) throw new Error("No active company session.");
   if (!file || !String(file.type || "").startsWith("image/")) {
     throw new Error("Only image uploads are allowed.");
   }
+  const prepared = await convertPngToJpegFile(file);
   const body = new FormData();
   body.append("companyId", String(activeCompanyId));
-  body.append("image", file);
+  body.append("image", prepared);
   const res = await fetch("/api/uploads/image", { method: "POST", body });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to upload image.");
   if (!data.url) throw new Error("Upload did not return an image url.");
   return {
     id: makeGuardNoteId("img"),
-    name: file.name || "Photo",
-    type: file.type || "",
-    size: Number.isFinite(file.size) ? file.size : null,
+    name: prepared.name || "Photo",
+    type: prepared.type || "",
+    size: Number.isFinite(prepared.size) ? prepared.size : null,
     url: data.url,
   };
 }

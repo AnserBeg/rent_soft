@@ -768,6 +768,16 @@ textarea:focus {
   gap: 12px;
 }
 
+.coverage-timezone {
+  display: grid;
+  gap: 4px;
+  align-items: start;
+}
+
+.coverage-timezone select {
+  min-width: 200px;
+}
+
 .coverage-table {
   width: 100%;
   border-collapse: collapse;

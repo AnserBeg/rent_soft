@@ -1857,10 +1857,11 @@ function syncEquipmentAiTools() {
 }
 
 async function aiEditImageFromFile({ companyId, file, prompt }) {
+  const prepared = await convertPngToJpegFile(file);
   const body = new FormData();
   body.append("companyId", String(companyId));
   body.append("prompt", String(prompt));
-  body.append("image", file);
+  body.append("image", prepared);
   const res = await fetch("/api/ai/image-edit", { method: "POST", body });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to process image with AI");
@@ -1946,10 +1947,67 @@ async function applyAiToSelectedEquipmentImage() {
   }
 }
 
+function jpegFileName(name) {
+  const base = String(name || "image").replace(/\.[^/.]+$/, "");
+  return `${base || "image"}.jpg`;
+}
+
+async function decodeImageForCanvas(file) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      return await createImageBitmap(file);
+    } catch (_) {
+      // fall through
+    }
+  }
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Unable to read image."));
+    };
+    img.src = url;
+  });
+}
+
+async function convertPngToJpegFile(file, quality = 0.88) {
+  if (!file || String(file.type || "").toLowerCase() !== "image/png") return file;
+  let decoded;
+  try {
+    decoded = await decodeImageForCanvas(file);
+  } catch (_) {
+    return file;
+  }
+  const width = decoded?.width || decoded?.naturalWidth || 0;
+  const height = decoded?.height || decoded?.naturalHeight || 0;
+  if (!width || !height) return file;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || !canvas.toBlob) return file;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(decoded, 0, 0, width, height);
+  if (typeof decoded?.close === "function") decoded.close();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  if (!blob) return file;
+  return new File([blob], jpegFileName(file.name), {
+    type: "image/jpeg",
+    lastModified: file.lastModified || Date.now(),
+  });
+}
+
 async function uploadImage({ companyId, file }) {
+  const prepared = await convertPngToJpegFile(file);
   const body = new FormData();
   body.append("companyId", String(companyId));
-  body.append("image", file);
+  body.append("image", prepared);
   const res = await fetch("/api/uploads/image", { method: "POST", body });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to upload image");

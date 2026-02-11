@@ -1108,6 +1108,7 @@ app.get(
             criticalAreas: order.critical_areas || null,
             notificationCircumstances: order.notification_circumstances || [],
             coverageHours: order.coverage_hours || [],
+            coverageTimeZone: order.coverage_timezone || null,
             emergencyContacts: order.emergency_contacts || [],
             siteContacts: order.site_contacts || [],
             generalNotes: order.general_notes || null,
@@ -1677,6 +1678,7 @@ const ALLOWED_ORDER_FIELDS = new Set([
   "criticalAreas",
   "notificationCircumstances",
   "coverageHours",
+  "coverageTimeZone",
   "emergencyContacts",
   "siteContacts",
   "generalNotes",
@@ -1976,6 +1978,7 @@ function sanitizeOrderPayload(input, allowedFields) {
   }
   if (allowedFields.includes("notificationCircumstances")) out.notificationCircumstances = parseJsonArray(src.notificationCircumstances);
   if (allowedFields.includes("coverageHours")) out.coverageHours = parseJsonCoverage(src.coverageHours);
+  if (allowedFields.includes("coverageTimeZone")) out.coverageTimeZone = read("coverageTimeZone") || null;
   if (allowedFields.includes("emergencyContacts")) out.emergencyContacts = parseJsonArray(src.emergencyContacts);
   if (allowedFields.includes("siteContacts")) out.siteContacts = parseJsonArray(src.siteContacts);
   return out;
@@ -3791,6 +3794,7 @@ app.post(
         emergencyContacts,
         siteContacts,
         coverageHours,
+        coverageTimeZone,
       } = req.body || {};
 
     const authHeader = String(req.headers.authorization || "").trim();
@@ -3825,6 +3829,7 @@ app.post(
           emergencyContacts,
           siteContacts,
           coverageHours,
+          coverageTimeZone,
         });
         if (!result.ok) {
           if (result.error === "missing_rental_information") return res.status(400).json(result);
@@ -5628,6 +5633,7 @@ app.post(
             criticalAreas: existing.critical_areas || null,
             notificationCircumstances: existing.notification_circumstances || [],
             coverageHours: existing.coverage_hours || [],
+            coverageTimeZone: existing.coverage_timezone || null,
             emergencyContacts: existing.emergency_contacts || [],
             siteContacts: existing.site_contacts || [],
             generalNotes: existing.general_notes || null,
@@ -5663,6 +5669,7 @@ app.post(
           criticalAreas: mergedOrder.criticalAreas,
           notificationCircumstances: mergedOrder.notificationCircumstances,
           coverageHours: mergedOrder.coverageHours,
+          coverageTimeZone: mergedOrder.coverageTimeZone,
           emergencyContacts: mergedOrder.emergencyContacts,
           siteContacts: mergedOrder.siteContacts,
           generalNotes: mergedOrder.generalNotes,
@@ -5718,6 +5725,7 @@ app.post(
           criticalAreas: orderUpdate.criticalAreas || null,
           notificationCircumstances: orderUpdate.notificationCircumstances || [],
           coverageHours: orderUpdate.coverageHours || [],
+          coverageTimeZone: orderUpdate.coverageTimeZone || null,
           emergencyContacts: orderUpdate.emergencyContacts || [],
           siteContacts: orderUpdate.siteContacts || [],
           generalNotes: orderUpdate.generalNotes || null,
@@ -7510,6 +7518,7 @@ app.post(
       criticalAreas,
       notificationCircumstances,
       coverageHours,
+      coverageTimeZone,
       emergencyContacts,
       siteContacts,
       lineItems,
@@ -7552,6 +7561,7 @@ app.post(
         criticalAreas,
         notificationCircumstances,
         coverageHours,
+        coverageTimeZone,
         emergencyContacts,
         siteContacts,
         lineItems,
@@ -7632,6 +7642,7 @@ app.put(
       criticalAreas,
       notificationCircumstances,
       coverageHours,
+      coverageTimeZone,
       emergencyContacts,
       siteContacts,
       lineItems,
@@ -7675,6 +7686,7 @@ app.put(
         criticalAreas,
         notificationCircumstances,
         coverageHours,
+        coverageTimeZone,
         emergencyContacts,
         siteContacts,
         lineItems,

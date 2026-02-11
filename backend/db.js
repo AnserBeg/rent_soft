@@ -832,17 +832,29 @@ async function ensureTables() {
     );
 
     // Repair: if a pre-existing location had an address and was accidentally marked non-base, restore it.
-    // (Current-only locations created via picker typically have no address, and dropoff locations are prefixed.)
+    // (Current-only locations created via picker typically have no address, and dropoff/site locations are prefixed.)
     await client.query(`
       UPDATE locations
          SET is_base_location = TRUE
        WHERE is_base_location = FALSE
          AND name NOT ILIKE 'Dropoff - %'
+         AND name NOT ILIKE 'Order % - Site'
+         AND name <> 'Order Site'
          AND (
            street_address IS NOT NULL
            OR city IS NOT NULL
            OR region IS NOT NULL
            OR country IS NOT NULL
+         );
+    `);
+    // Keep rental order site-address locations non-base so they don't appear in base-yard pickers.
+    await client.query(`
+      UPDATE locations
+         SET is_base_location = FALSE
+       WHERE is_base_location = TRUE
+         AND (
+           name ILIKE 'Order % - Site'
+           OR name = 'Order Site'
          );
     `);
 
@@ -929,6 +941,7 @@ async function ensureTables() {
         critical_areas TEXT,
         notification_circumstances JSONB NOT NULL DEFAULT '[]'::jsonb,
         coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb,
+        coverage_timezone TEXT,
         emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
         site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
         monthly_recurring_subtotal NUMERIC(12, 2),
@@ -966,6 +979,7 @@ async function ensureTables() {
       `ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS notification_circumstances JSONB NOT NULL DEFAULT '[]'::jsonb;`
     );
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS coverage_timezone TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS monthly_recurring_subtotal NUMERIC(12, 2);`);
@@ -1367,6 +1381,14 @@ function normalizeBillingTimeZone(value) {
   } catch {
     return "UTC";
   }
+}
+
+function normalizeCoverageTimeZone(value, fallback = null) {
+  const raw = String(value || "").trim();
+  if (raw) return normalizeBillingTimeZone(raw);
+  const nextFallback = String(fallback || "").trim();
+  if (nextFallback) return normalizeBillingTimeZone(nextFallback);
+  return "UTC";
 }
 
 function getTimeZoneParts(date, timeZone) {
@@ -6163,6 +6185,7 @@ async function listRentalOrders(companyId, { statuses = null, quoteOnly = false 
            ro.site_address,
            ro.critical_areas,
            ro.coverage_hours,
+           ro.coverage_timezone,
            ro.monthly_recurring_subtotal,
            ro.monthly_recurring_total,
            ro.show_monthly_recurring,
@@ -6273,6 +6296,7 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
            ro.site_address,
            ro.critical_areas,
            ro.coverage_hours,
+           ro.coverage_timezone,
            ro.monthly_recurring_subtotal,
            ro.monthly_recurring_total,
            ro.show_monthly_recurring,
@@ -9368,6 +9392,7 @@ async function createRentalOrder({
   criticalAreas,
   notificationCircumstances,
   coverageHours,
+  coverageTimeZone,
   emergencyContacts,
   siteContacts,
   lineItems = [],
@@ -9384,6 +9409,7 @@ async function createRentalOrder({
     const siteContactList = normalizeOrderContacts(siteContacts);
     const notificationCircumstancesValue = normalizeNotificationCircumstances(notificationCircumstances);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
+    const coverageTimeZoneValue = normalizeCoverageTimeZone(coverageTimeZone, settings?.billing_timezone);
     const effectiveDate = createdAt ? new Date(createdAt) : new Date();
       const quoteNumber = isQuoteStatus(effectiveStatus) ? await nextDocumentNumber(client, companyId, "QO", effectiveDate) : null;
       const roNumber = !isQuoteStatus(effectiveStatus) ? await nextDocumentNumber(client, companyId, "RO", effectiveDate) : null;
@@ -9425,8 +9451,8 @@ async function createRentalOrder({
         (company_id, quote_number, ro_number, external_contract_number, legacy_data, customer_id, customer_po, salesperson_id, fulfillment_method, status,
          terms, general_notes, pickup_location_id, dropoff_address, site_name, site_address, site_access_info, site_address_lat, site_address_lng, site_address_query,
          logistics_instructions, special_instructions, critical_areas,
-         notification_circumstances, coverage_hours, emergency_contacts, site_contacts, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24::jsonb,$25::jsonb,$26::jsonb,$27::jsonb,COALESCE($28::timestamptz, NOW()),COALESCE($28::timestamptz, NOW()))
+         notification_circumstances, coverage_hours, coverage_timezone, emergency_contacts, site_contacts, created_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24::jsonb,$25::jsonb,$26,$27::jsonb,$28::jsonb,COALESCE($29::timestamptz, NOW()),COALESCE($29::timestamptz, NOW()))
       RETURNING id, quote_number, ro_number
       `,
       [
@@ -9455,6 +9481,7 @@ async function createRentalOrder({
         criticalAreas || null,
         JSON.stringify(notificationCircumstancesValue),
         JSON.stringify(coverageHoursValue),
+        coverageTimeZoneValue || null,
         JSON.stringify(emergencyContactList),
         JSON.stringify(siteContactList),
         createdIso,
@@ -11029,6 +11056,7 @@ async function updateRentalOrder({
   criticalAreas,
   notificationCircumstances,
   coverageHours,
+  coverageTimeZone,
   emergencyContacts,
   siteContacts,
   lineItems = [],
@@ -11077,7 +11105,7 @@ async function updateRentalOrder({
       return data;
     };
     const existingRes = await client.query(
-      `SELECT quote_number, ro_number, status, customer_id, pickup_location_id, salesperson_id, fulfillment_method
+      `SELECT quote_number, ro_number, status, customer_id, pickup_location_id, salesperson_id, fulfillment_method, coverage_timezone
          FROM rental_orders
         WHERE id = $1 AND company_id = $2
         FOR UPDATE`,
@@ -11097,6 +11125,10 @@ async function updateRentalOrder({
       if (!isQuoteStatus(effectiveStatus) && !roNumber) {
         roNumber = await nextDocumentNumber(client, companyId, "RO");
       }
+    const coverageTimeZoneValue = normalizeCoverageTimeZone(
+      coverageTimeZone,
+      existing.coverage_timezone || settings?.billing_timezone
+    );
     const headerRes = await client.query(
       `
       UPDATE rental_orders
@@ -11122,10 +11154,11 @@ async function updateRentalOrder({
              critical_areas = $20,
              notification_circumstances = $21::jsonb,
              coverage_hours = $22::jsonb,
-             emergency_contacts = $23::jsonb,
-             site_contacts = $24::jsonb,
+             coverage_timezone = $23,
+             emergency_contacts = $24::jsonb,
+             site_contacts = $25::jsonb,
              updated_at = NOW()
-       WHERE id = $25 AND company_id = $26
+       WHERE id = $26 AND company_id = $27
        RETURNING id, quote_number, ro_number
       `,
       [
@@ -11151,6 +11184,7 @@ async function updateRentalOrder({
         criticalAreas || null,
         JSON.stringify(notificationCircumstancesValue),
         JSON.stringify(coverageHoursValue),
+        coverageTimeZoneValue || null,
         JSON.stringify(emergencyContactList),
         JSON.stringify(siteContactList),
         id,
@@ -13525,6 +13559,7 @@ async function createStorefrontReservation({
   emergencyContacts,
   siteContacts,
   coverageHours,
+  coverageTimeZone,
 } = {}) {
   const cid = Number(companyId);
   const tid = Number(typeId);
@@ -13591,6 +13626,7 @@ async function createStorefrontReservation({
   const emergencyContactList = useRentalInfoField("emergencyContacts") ? normalizeOrderContacts(emergencyContacts) : [];
   const siteContactList = useRentalInfoField("siteContacts") ? normalizeOrderContacts(siteContacts) : [];
   const coverageHoursValue = useRentalInfoField("coverageHours") ? normalizeCoverageHours(coverageHours) : [];
+  const coverageTimeZoneValue = normalizeCoverageTimeZone(coverageTimeZone, settings?.billing_timezone);
 
   const missingRentalInfo = [];
   const contactIsValid = (list) =>
@@ -13724,6 +13760,7 @@ async function createStorefrontReservation({
     criticalAreas: criticalAreasValue,
     notificationCircumstances: notificationCircumstancesValue,
     coverageHours: coverageHoursValue,
+    coverageTimeZone: coverageTimeZoneValue,
     emergencyContacts: emergencyContactList,
     siteContacts: siteContactList,
     siteName: siteNameValue,

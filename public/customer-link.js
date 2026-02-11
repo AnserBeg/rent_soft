@@ -68,8 +68,111 @@ const coverageDayLabels = {
   sat: "Sat",
   sun: "Sun",
 };
+const FALLBACK_TIME_ZONES = [
+  "UTC",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "America/Anchorage",
+  "Pacific/Honolulu",
+  "Europe/London",
+  "Europe/Paris",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+];
+const coverageTimeZoneLabelCache = new Map();
+
+function normalizeCoverageTimeZone(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: raw }).format(new Date());
+    return raw;
+  } catch {
+    return "";
+  }
+}
+
+function browserTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+function supportedTimeZones() {
+  if (typeof Intl !== "undefined" && typeof Intl.supportedValuesOf === "function") {
+    try {
+      const zones = Intl.supportedValuesOf("timeZone");
+      if (Array.isArray(zones) && zones.length) return zones;
+    } catch {
+      // fall through
+    }
+  }
+  return FALLBACK_TIME_ZONES;
+}
+
+function timeZoneLabel(zone) {
+  if (coverageTimeZoneLabelCache.has(zone)) return coverageTimeZoneLabelCache.get(zone);
+  let label = zone;
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "short" });
+    const parts = fmt.formatToParts(new Date());
+    const tzName = parts.find((part) => part.type === "timeZoneName")?.value;
+    if (tzName) label = `${zone} (${tzName})`;
+  } catch {
+    // ignore
+  }
+  coverageTimeZoneLabelCache.set(zone, label);
+  return label;
+}
+
+function ensureCoverageTimeZoneOptions() {
+  if (!coverageTimeZoneSelect) return;
+  if (coverageTimeZoneSelect.dataset.ready === "true") return;
+  const zones = Array.from(new Set(supportedTimeZones().map((z) => String(z).trim()).filter(Boolean)));
+  if (!zones.includes("UTC")) zones.unshift("UTC");
+  coverageTimeZoneSelect.innerHTML = "";
+  zones.forEach((zone) => {
+    const option = document.createElement("option");
+    option.value = zone;
+    option.textContent = timeZoneLabel(zone);
+    coverageTimeZoneSelect.appendChild(option);
+  });
+  coverageTimeZoneSelect.dataset.ready = "true";
+}
+
+function resolveDefaultCoverageTimeZone() {
+  const local = normalizeCoverageTimeZone(browserTimeZone());
+  return local || "UTC";
+}
+
+function setCoverageTimeZoneInput(value) {
+  if (!coverageTimeZoneSelect) return;
+  ensureCoverageTimeZoneOptions();
+  const normalized = normalizeCoverageTimeZone(value) || resolveDefaultCoverageTimeZone();
+  if (
+    normalized &&
+    !Array.from(coverageTimeZoneSelect.options).some((opt) => String(opt.value) === normalized)
+  ) {
+    const option = document.createElement("option");
+    option.value = normalized;
+    option.textContent = timeZoneLabel(normalized);
+    coverageTimeZoneSelect.appendChild(option);
+  }
+  coverageTimeZoneSelect.value = normalized;
+}
+
+function getCoverageTimeZoneInputValue() {
+  if (!coverageTimeZoneSelect) return resolveDefaultCoverageTimeZone();
+  const raw = String(coverageTimeZoneSelect.value || "").trim();
+  return normalizeCoverageTimeZone(raw) || resolveDefaultCoverageTimeZone();
+}
 const coverageSlotsContainer = document.getElementById("coverage-slots");
 const addCoverageSlotBtn = document.getElementById("add-coverage-slot");
+const coverageTimeZoneSelect = document.getElementById("coverage-timezone");
 const rentalInfoFieldContainers = {
   siteName: document.querySelector('[data-rental-info-field="siteName"]'),
   siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
@@ -1757,6 +1860,48 @@ function getGeneralNotesHtml() {
   return cleaned;
 }
 
+function convertPngDataUrlToJpeg(dataUrl, quality = 0.88) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const width = img.naturalWidth || img.width || 0;
+      const height = img.naturalHeight || img.height || 0;
+      if (!width || !height) return resolve(dataUrl);
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return resolve(dataUrl);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+async function convertInlinePngsToJpegHtml(html, quality = 0.88) {
+  const raw = String(html || "");
+  if (!/data:image\/png/i.test(raw)) return raw;
+  const doc = new DOMParser().parseFromString(`<div>${raw}</div>`, "text/html");
+  const root = doc.body.firstElementChild;
+  if (!root) return raw;
+  const imgs = Array.from(root.querySelectorAll("img"));
+  let changed = false;
+  for (const img of imgs) {
+    const src = String(img.getAttribute("src") || "");
+    if (!/^data:image\/png/i.test(src)) continue;
+    const jpeg = await convertPngDataUrlToJpeg(src, quality);
+    if (jpeg && jpeg !== src) {
+      img.setAttribute("src", jpeg);
+      changed = true;
+    }
+  }
+  return changed ? root.innerHTML : raw;
+}
+
 function storeGeneralNotesSelection() {
   if (!generalNotesEditor) return;
   const sel = window.getSelection();
@@ -1804,14 +1949,71 @@ function makeImageId(prefix = "img") {
   return `${prefix}-${Date.now()}-${rand}`;
 }
 
+function jpegFileName(name) {
+  const base = String(name || "image").replace(/\.[^/.]+$/, "");
+  return `${base || "image"}.jpg`;
+}
+
+async function decodeImageForCanvas(file) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      return await createImageBitmap(file);
+    } catch (_) {
+      // fall through
+    }
+  }
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Unable to read image."));
+    };
+    img.src = url;
+  });
+}
+
+async function convertPngToJpegFile(file, quality = 0.88) {
+  if (!file || String(file.type || "").toLowerCase() !== "image/png") return file;
+  let decoded;
+  try {
+    decoded = await decodeImageForCanvas(file);
+  } catch (_) {
+    return file;
+  }
+  const width = decoded?.width || decoded?.naturalWidth || 0;
+  const height = decoded?.height || decoded?.naturalHeight || 0;
+  if (!width || !height) return file;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || !canvas.toBlob) return file;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(decoded, 0, 0, width, height);
+  if (typeof decoded?.close === "function") decoded.close();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  if (!blob) return file;
+  return new File([blob], jpegFileName(file.name), {
+    type: "image/jpeg",
+    lastModified: file.lastModified || Date.now(),
+  });
+}
+
 async function uploadImage({ companyId, file }) {
   if (!companyId) throw new Error("Company id is required.");
   if (!file || !String(file.type || "").startsWith("image/")) {
     throw new Error("Only image uploads are allowed.");
   }
+  const prepared = await convertPngToJpegFile(file);
   const body = new FormData();
   body.append("companyId", String(companyId));
-  body.append("image", file);
+  body.append("image", prepared);
   const res = await fetch("/api/uploads/image", { method: "POST", body });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to upload image.");
@@ -2548,6 +2750,7 @@ async function loadLink() {
       setContactRows(siteContactsList, order?.siteContacts || []);
       applyNotificationCircumstances(order?.notificationCircumstances || []);
       setCoverageInputs(normalizeCoverageHours(order?.coverageHours || []));
+      setCoverageTimeZoneInput(order?.coverageTimeZone || order?.coverage_timezone || null);
       applyRentalInfoConfig(data.rentalInfoFields || null);
     }
 
@@ -2865,13 +3068,14 @@ generalNotesImagesInput?.addEventListener("change", async (e) => {
 
   const results = await Promise.allSettled(
     files.map(async (file) => {
-      const url = await uploadImage({ companyId, file });
+      const prepared = await convertPngToJpegFile(file);
+      const url = await uploadImage({ companyId, file: prepared });
       return {
         id: makeImageId("general"),
         url,
-        fileName: file.name || "Photo",
-        mime: file.type || "",
-        sizeBytes: Number.isFinite(file.size) ? file.size : null,
+        fileName: prepared.name || "Photo",
+        mime: prepared.type || "",
+        sizeBytes: Number.isFinite(prepared.size) ? prepared.size : null,
       };
     })
   );
@@ -3058,6 +3262,9 @@ form?.addEventListener("submit", async (evt) => {
     const contacts = collectContacts(contactsList);
     const accountingContacts = collectContacts(accountingContactsList);
     const primaryContact = contacts[0] || {};
+    const originalNotes = getGeneralNotesHtml().trim();
+    const convertedNotes = await convertInlinePngsToJpegHtml(originalNotes);
+    if (convertedNotes !== originalNotes) setGeneralNotesHtml(convertedNotes);
     const payload = {
       customer: {
         companyName: companyNameInput.value.trim(),
@@ -3084,9 +3291,10 @@ form?.addEventListener("submit", async (evt) => {
         ...(siteAddressQuery ? { siteAddressQuery } : {}),
         siteAccessInfo: siteAccessInfoInput?.value.trim() || "",
         criticalAreas: criticalAreasInput?.value.trim() || "",
-        generalNotes: getGeneralNotesHtml().trim(),
+        generalNotes: convertedNotes.trim(),
         notificationCircumstances: collectNotificationCircumstances(),
         coverageHours: collectCoverageHoursFromInputs(),
+        coverageTimeZone: getCoverageTimeZoneInputValue(),
         emergencyContacts: collectContacts(emergencyContactsList),
         siteContacts: collectContacts(siteContactsList),
       } : {},

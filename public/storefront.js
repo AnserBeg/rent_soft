@@ -89,14 +89,71 @@ function makeImageId(prefix = "img") {
   return `${prefix}-${Date.now()}-${rand}`;
 }
 
+function jpegFileName(name) {
+  const base = String(name || "image").replace(/\.[^/.]+$/, "");
+  return `${base || "image"}.jpg`;
+}
+
+async function decodeImageForCanvas(file) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      return await createImageBitmap(file);
+    } catch (_) {
+      // fall through
+    }
+  }
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Unable to read image."));
+    };
+    img.src = url;
+  });
+}
+
+async function convertPngToJpegFile(file, quality = 0.88) {
+  if (!file || String(file.type || "").toLowerCase() !== "image/png") return file;
+  let decoded;
+  try {
+    decoded = await decodeImageForCanvas(file);
+  } catch (_) {
+    return file;
+  }
+  const width = decoded?.width || decoded?.naturalWidth || 0;
+  const height = decoded?.height || decoded?.naturalHeight || 0;
+  if (!width || !height) return file;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx || !canvas.toBlob) return file;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(decoded, 0, 0, width, height);
+  if (typeof decoded?.close === "function") decoded.close();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  if (!blob) return file;
+  return new File([blob], jpegFileName(file.name), {
+    type: "image/jpeg",
+    lastModified: file.lastModified || Date.now(),
+  });
+}
+
 async function uploadImage({ companyId, file }) {
   if (!companyId) throw new Error("companyId is required.");
   if (!file || !String(file.type || "").startsWith("image/")) {
     throw new Error("Only image uploads are allowed.");
   }
+  const prepared = await convertPngToJpegFile(file);
   const body = new FormData();
   body.append("companyId", String(companyId));
-  body.append("image", file);
+  body.append("image", prepared);
   const res = await fetch("/api/uploads/image", { method: "POST", body });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to upload image.");
@@ -185,6 +242,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const reserveGeneralNotesPreviews = $("reserve-general-notes-previews");
   const reserveSiteAddress = $("reserve-site-address");
   const reserveSiteAccessInfo = $("reserve-site-access-info");
+  const reserveCoverageTimeZone = $("reserve-coverage-timezone");
     const rentalInfoFieldContainers = {
       siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
       siteAccessInfo: document.querySelector('[data-rental-info-field="siteAccessInfo"]'),
@@ -210,8 +268,110 @@ document.addEventListener("DOMContentLoaded", () => {
     sat: "Saturday",
     sun: "Sunday",
   };
+  const FALLBACK_TIME_ZONES = [
+    "UTC",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "America/Anchorage",
+    "Pacific/Honolulu",
+    "Europe/London",
+    "Europe/Paris",
+    "Asia/Tokyo",
+    "Australia/Sydney",
+  ];
+  const coverageTimeZoneLabelCache = new Map();
   const coverageSlotsContainer = $("reserve-coverage-slots");
   const addCoverageSlotBtn = $("reserve-add-coverage-slot");
+
+  function normalizeCoverageTimeZone(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: raw }).format(new Date());
+      return raw;
+    } catch {
+      return "";
+    }
+  }
+
+  function browserTimeZone() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    } catch {
+      return "UTC";
+    }
+  }
+
+  function supportedTimeZones() {
+    if (typeof Intl !== "undefined" && typeof Intl.supportedValuesOf === "function") {
+      try {
+        const zones = Intl.supportedValuesOf("timeZone");
+        if (Array.isArray(zones) && zones.length) return zones;
+      } catch {
+        // fall through
+      }
+    }
+    return FALLBACK_TIME_ZONES;
+  }
+
+  function timeZoneLabel(zone) {
+    if (coverageTimeZoneLabelCache.has(zone)) return coverageTimeZoneLabelCache.get(zone);
+    let label = zone;
+    try {
+      const fmt = new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "short" });
+      const parts = fmt.formatToParts(new Date());
+      const tzName = parts.find((part) => part.type === "timeZoneName")?.value;
+      if (tzName) label = `${zone} (${tzName})`;
+    } catch {
+      // ignore
+    }
+    coverageTimeZoneLabelCache.set(zone, label);
+    return label;
+  }
+
+  function ensureCoverageTimeZoneOptions() {
+    if (!reserveCoverageTimeZone) return;
+    if (reserveCoverageTimeZone.dataset.ready === "true") return;
+    const zones = Array.from(new Set(supportedTimeZones().map((z) => String(z).trim()).filter(Boolean)));
+    if (!zones.includes("UTC")) zones.unshift("UTC");
+    reserveCoverageTimeZone.innerHTML = "";
+    zones.forEach((zone) => {
+      const option = document.createElement("option");
+      option.value = zone;
+      option.textContent = timeZoneLabel(zone);
+      reserveCoverageTimeZone.appendChild(option);
+    });
+    reserveCoverageTimeZone.dataset.ready = "true";
+  }
+
+  function resolveDefaultCoverageTimeZone() {
+    const local = normalizeCoverageTimeZone(browserTimeZone());
+    return local || "UTC";
+  }
+
+  function setCoverageTimeZoneInput(value) {
+    if (!reserveCoverageTimeZone) return;
+    ensureCoverageTimeZoneOptions();
+    const normalized = normalizeCoverageTimeZone(value) || resolveDefaultCoverageTimeZone();
+    if (
+      normalized &&
+      !Array.from(reserveCoverageTimeZone.options).some((opt) => String(opt.value) === normalized)
+    ) {
+      const option = document.createElement("option");
+      option.value = normalized;
+      option.textContent = timeZoneLabel(normalized);
+      reserveCoverageTimeZone.appendChild(option);
+    }
+    reserveCoverageTimeZone.value = normalized;
+  }
+
+  function getCoverageTimeZoneInputValue() {
+    if (!reserveCoverageTimeZone) return resolveDefaultCoverageTimeZone();
+    const raw = String(reserveCoverageTimeZone.value || "").trim();
+    return normalizeCoverageTimeZone(raw) || resolveDefaultCoverageTimeZone();
+  }
 
   let currentListings = [];
   let activeListing = null;
@@ -641,6 +801,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!coverageSlotsContainer) return;
     coverageSlotsContainer.innerHTML = "";
     addCoverageSlotRow({});
+    setCoverageTimeZoneInput(null);
   }
 
   function resetRentalInfoFields() {
@@ -1222,6 +1383,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isFieldEnabled("siteContacts") && siteCheck.contacts.length) payload.siteContacts = siteCheck.contacts;
     if (isFieldEnabled("coverageHours") && coverageCheck.coverageHours.length)
       payload.coverageHours = coverageCheck.coverageHours;
+    if (isFieldEnabled("coverageHours")) {
+      payload.coverageTimeZone = getCoverageTimeZoneInputValue();
+    } else {
+      delete payload.coverageTimeZone;
+    }
 
     setBusy(reserveSubmit, true, "Reserving...");
     setMeta(reserveMeta, "");

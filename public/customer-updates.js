@@ -351,10 +351,10 @@ function formatCoverageDay(value) {
   return escapeHtml(displayValue(value));
 }
 
-function formatCoverageHoursHtml(value) {
+function formatCoverageHoursHtml(value, timeZone = null) {
   const slots = normalizeCoverageSlots(value);
   if (!slots.length) return "";
-  return slots
+  const summary = slots
     .map((slot) => {
       const startDay = formatCoverageDay(slot.startDay);
       const endDay = formatCoverageDay(slot.endDay || slot.startDay);
@@ -363,6 +363,8 @@ function formatCoverageHoursHtml(value) {
       return `${startDay} ${startTime} -> ${endDay} ${endTime}`;
     })
     .join("<br />");
+  const tzLabel = String(timeZone || "").trim();
+  return tzLabel ? `${summary}<br /><span class="hint">(${escapeHtml(tzLabel)})</span>` : summary;
 }
 
 function formatLineItemHtml(item) {
@@ -636,8 +638,11 @@ function renderDetail(request, currentCustomer, currentOrder) {
     );
     pushField(
       "Coverage hours",
-      formatCoverageHoursHtml(currentOrder?.order?.coverage_hours),
-      formatCoverageHoursHtml(order.coverageHours),
+      formatCoverageHoursHtml(
+        currentOrder?.order?.coverage_hours,
+        currentOrder?.order?.coverage_timezone || currentOrder?.order?.coverageTimeZone || null
+      ),
+      formatCoverageHoursHtml(order.coverageHours, order.coverageTimeZone || null),
       { html: true }
     );
     pushField(

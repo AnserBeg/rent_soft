@@ -193,7 +193,7 @@ function normalizeCoverageHours(value) {
   return slots;
 }
 
-function formatCoverageHours(value) {
+function formatCoverageHours(value, timeZone = null) {
   const dayLabels = {
     mon: "Mon",
     tue: "Tue",
@@ -215,7 +215,8 @@ function formatCoverageHours(value) {
     }
     return `${startLabel} ${start}-${endLabel} ${end}`;
   });
-  return parts.join(", ");
+  const tzLabel = safeText(timeZone);
+  return tzLabel ? `${parts.join(", ")} (${tzLabel})` : parts.join(", ");
 }
 
 function fmtMoney(value) {
@@ -923,7 +924,10 @@ function writeOrderPdf(
     if (val !== "--") rentalInfoLines.push({ label: "Site Contacts", value: val });
   }
   if (showRentalInfo("coverageHours")) {
-    const val = formatCoverageHours(order?.coverage_hours || order?.coverageHours);
+    const val = formatCoverageHours(
+      order?.coverage_hours || order?.coverageHours,
+      order?.coverage_timezone || order?.coverageTimeZone || null
+    );
     if (val) rentalInfoLines.push({ label: "Coverage Hours", value: val });
   }
 
