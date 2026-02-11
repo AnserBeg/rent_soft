@@ -690,6 +690,14 @@ function drawEyebrow(doc, text, x, y, width) {
   doc.restore();
 }
 
+function measureTextHeight(doc, { text, font = FONTS.regular, size = 9, width }) {
+  doc.save();
+  doc.font(font).fontSize(size);
+  const height = doc.heightOfString(String(text || ""), { width });
+  doc.restore();
+  return height;
+}
+
 function ensureSpace(doc, neededHeight, { bottomMargin = 50 } = {}) {
   const bottom = doc.page.height - (doc.page.margins.bottom ?? bottomMargin);
   if (doc.y + neededHeight > bottom) {
@@ -821,10 +829,53 @@ function writeOrderPdf(
   const colGap = 20;
   const colWidth = (contentWidth - colGap) / 2;
   const startY = doc.y;
+  const innerMargin = 15;
+  const textWidth = colWidth - innerMargin * 2;
+  const minInfoBoxHeight = 100;
+
+  const customerName = safeText(order?.customer_name) || "--";
+  const customerContact = safeText(order?.customer_contact_name);
+  const customerAddress = customerAddressLines(order);
+  const customerContacts = customerContactLines(order);
+
+  const baseLineHeight = measureTextHeight(doc, { text: "Ag", font: FONTS.regular, size: 9, width: textWidth });
+  let customerContentHeight = 0;
+  customerContentHeight += 12; // Eyebrow + spacing
+  customerContentHeight += measureTextHeight(doc, { text: customerName, font: FONTS.bold, size: 11, width: textWidth });
+
+  if (customerContact && customerContact.toLowerCase() !== customerName.toLowerCase()) {
+    customerContentHeight += 2 + measureTextHeight(doc, { text: customerContact, font: FONTS.regular, size: 9, width: textWidth });
+  } else {
+    customerContentHeight += baseLineHeight * 0.2;
+  }
+
+  customerContentHeight += baseLineHeight * 0.3;
+  customerAddress.forEach((line) => {
+    customerContentHeight += measureTextHeight(doc, { text: line, font: FONTS.regular, size: 9, width: textWidth });
+  });
+
+  customerContentHeight += baseLineHeight * 0.3;
+  customerContacts.forEach((line) => {
+    customerContentHeight += measureTextHeight(doc, { text: line, font: FONTS.regular, size: 9, width: textWidth });
+  });
+
+  const leftBoxHeight = Math.max(minInfoBoxHeight, customerContentHeight + innerMargin * 2);
 
   // Left Column: Customer
-  drawBox(doc, { x: left, y: startY, w: colWidth, h: 100, fill: COLORS.bgHeader, radius: 6 });
-  const innerMargin = 15;
+  const rightColX = left + colWidth + colGap;
+
+  const { start, end } = computeOrderDateRange(lineItems);
+  const agent = safeText(order?.salesperson_name);
+  const startValueHeight = measureTextHeight(doc, { text: fmtDateTime(start), font: FONTS.bold, size: 10, width: textWidth });
+  const endValueHeight = measureTextHeight(doc, { text: fmtDateTime(end), font: FONTS.bold, size: 10, width: textWidth });
+  const agentWidth = Math.max(40, textWidth - 120);
+  const agentBlockHeight = agent ? 12 + measureTextHeight(doc, { text: agent, font: FONTS.regular, size: 10, width: agentWidth }) : 0;
+  const rightFirstBlockHeight = Math.max(35, 12 + startValueHeight, agentBlockHeight);
+  const rightContentHeight = rightFirstBlockHeight + 12 + endValueHeight;
+  const rightBoxHeight = Math.max(minInfoBoxHeight, rightContentHeight + innerMargin * 2);
+  const infoBoxHeight = Math.max(leftBoxHeight, rightBoxHeight);
+
+  drawBox(doc, { x: left, y: startY, w: colWidth, h: infoBoxHeight, fill: COLORS.bgHeader, radius: 6 });
 
   doc.save();
   const leftTextX = left + innerMargin;
@@ -833,58 +884,48 @@ function writeOrderPdf(
   drawEyebrow(doc, "Customer", leftTextX, leftTextY);
   doc.y = leftTextY + 12;
 
-  const customerName = safeText(order?.customer_name) || "--";
-  const customerContact = safeText(order?.customer_contact_name);
-
-  doc.font(FONTS.bold).fontSize(11).fillColor(COLORS.primary).text(customerName, leftTextX, doc.y);
+  doc.font(FONTS.bold).fontSize(11).fillColor(COLORS.primary).text(customerName, leftTextX, doc.y, { width: textWidth });
 
   doc.font(FONTS.regular).fontSize(9).fillColor(COLORS.secondary);
   if (customerContact && customerContact.toLowerCase() !== customerName.toLowerCase()) {
-    doc.text(customerContact, leftTextX, doc.y + 2);
+    doc.text(customerContact, leftTextX, doc.y + 2, { width: textWidth });
   } else {
     doc.moveDown(0.2);
   }
 
   doc.moveDown(0.3);
-  customerAddressLines(order).forEach(line => doc.text(line, leftTextX));
+  customerAddress.forEach(line => doc.text(line, leftTextX, doc.y, { width: textWidth }));
 
   doc.moveDown(0.3);
-  customerContactLines(order).forEach(line => doc.text(line, leftTextX));
+  customerContacts.forEach(line => doc.text(line, leftTextX, doc.y, { width: textWidth }));
   doc.restore();
 
   // Right Column: Key Details
-  const rightColX = left + colWidth + colGap;
-  drawBox(doc, { x: rightColX, y: startY, w: colWidth, h: 100, border: COLORS.border, radius: 6 }); // Hollow box with border
+  drawBox(doc, { x: rightColX, y: startY, w: colWidth, h: infoBoxHeight, border: COLORS.border, radius: 6 }); // Hollow box with border
 
   doc.save();
   const rightTextX = rightColX + innerMargin;
   let rightTextY = startY + innerMargin;
 
-  const { start, end } = computeOrderDateRange(lineItems);
-  const agent = safeText(order?.salesperson_name);
-
-  // Grid for details
-  const labelW = 70;
-
   // Start
   drawEyebrow(doc, "Start", rightTextX, rightTextY);
-  doc.font(FONTS.bold).fontSize(10).fillColor(COLORS.primary).text(fmtDateTime(start), rightTextX, rightTextY + 12);
+  doc.font(FONTS.bold).fontSize(10).fillColor(COLORS.primary).text(fmtDateTime(start), rightTextX, rightTextY + 12, { width: textWidth });
 
   // End (same line roughly? No, better distinct lines for readability)
   rightTextY += 35;
   drawEyebrow(doc, "End", rightTextX, rightTextY);
-  doc.font(FONTS.bold).fontSize(10).fillColor(COLORS.primary).text(fmtDateTime(end), rightTextX, rightTextY + 12);
+  doc.font(FONTS.bold).fontSize(10).fillColor(COLORS.primary).text(fmtDateTime(end), rightTextX, rightTextY + 12, { width: textWidth });
 
   // Agent (Absolute positioned to right side of box)
   if (agent) {
     const agentX = rightTextX + 120;
     const agentY = startY + innerMargin;
     drawEyebrow(doc, "Rental Agent", agentX, agentY);
-    doc.font(FONTS.regular).fontSize(10).fillColor(COLORS.secondary).text(agent, agentX, agentY + 12);
+    doc.font(FONTS.regular).fontSize(10).fillColor(COLORS.secondary).text(agent, agentX, agentY + 12, { width: agentWidth });
   }
   doc.restore();
 
-  doc.y = startY + 100 + 20; // Move past boxes
+  doc.y = startY + infoBoxHeight + 20; // Move past boxes
 
   // --- Rental Info (collected for later rendering) ---
   const rentalInfoConfig = normalizeRentalInfoFields(rentalInfoFields);
@@ -1161,6 +1202,8 @@ function writeOrderPdf(
   const recurringTotal = recurringSubtotal + recurringGst;
   const totalsW = contentWidth * 0.35;
   const totalsX = left + contentWidth - totalsW;
+  const innerTotalM = 12;
+  const totalInnerWidth = totalsW - innerTotalM * 2;
 
   // Check if we need a new page for totals box
   if (bottomY + 160 > doc.page.height - 50) {
@@ -1170,7 +1213,24 @@ function writeOrderPdf(
     doc.y = bottomY;
   }
 
-  const totalsBoxHeight = showRecurringTotals ? 120 : 150;
+  const measureRecurringTotalsHeight = () => {
+    const labelHeight = measureTextHeight(doc, { text: "Per month (recurring)", font: FONTS.bold, size: 10, width: totalInnerWidth });
+    const amountHeight = measureTextHeight(doc, { text: `${fmtMoney(recurringTotal)} / month`, font: FONTS.bold, size: 14, width: totalInnerWidth });
+    const lineHeight = measureTextHeight(doc, { text: "Subtotal", font: FONTS.regular, size: 9, width: totalInnerWidth });
+    return innerTotalM * 2 + labelHeight + 4 + amountHeight + 8 + (lineHeight + 6) * 2;
+  };
+
+  const measureStandardTotalsHeight = () => {
+    const lineHeight = measureTextHeight(doc, { text: "Subtotal", font: FONTS.regular, size: 9, width: totalInnerWidth });
+    const boldHeight = measureTextHeight(doc, { text: "Grand Total", font: FONTS.bold, size: 9, width: totalInnerWidth });
+    const bigHeight = measureTextHeight(doc, { text: "Amount Due", font: FONTS.bold, size: 12, width: totalInnerWidth });
+    return innerTotalM * 2 + (lineHeight + 6) * 4 + 6 + (boldHeight + 6) + (bigHeight + 10);
+  };
+
+  const totalsBoxHeight = Math.max(
+    showRecurringTotals ? measureRecurringTotalsHeight() : measureStandardTotalsHeight(),
+    120
+  );
   drawBox(doc, {
     x: totalsX,
     y: doc.y,
@@ -1181,33 +1241,37 @@ function writeOrderPdf(
     border: COLORS.border
   });
 
-  const innerTotalM = 12;
   let totalCurrentY = doc.y + innerTotalM;
-  const totalValX = totalsX + totalsW - innerTotalM;
   const totalLabelX = totalsX + innerTotalM;
   const labelWidth = totalsW - (innerTotalM * 2) - 60; // Leave space for value
 
   const drawTotalLine = (label, value, isBold = false, isBig = false) => {
     doc.save();
     doc.font(isBold ? FONTS.bold : FONTS.regular).fontSize(isBig ? 12 : 9).fillColor(COLORS.primary);
+    const labelHeight = doc.heightOfString(label, { width: labelWidth });
+    const valueHeight = doc.heightOfString(value, { width: totalInnerWidth, align: "right" });
+    const rowHeight = Math.max(labelHeight, valueHeight);
     doc.text(label, totalLabelX, totalCurrentY, { width: labelWidth });
-    doc.text(value, totalLabelX, totalCurrentY, { width: totalsW - (innerTotalM * 2), align: "right" });
+    doc.text(value, totalLabelX, totalCurrentY, { width: totalInnerWidth, align: "right" });
     doc.restore();
-    totalCurrentY += (isBig ? 24 : 18);
+    totalCurrentY += rowHeight + (isBig ? 10 : 6);
   };
 
-  if (showRecurring) {
+  if (showRecurringTotals) {
     doc.save();
     doc.font(FONTS.bold).fontSize(10).fillColor(COLORS.primary);
-    doc.text("Per month (recurring)", totalLabelX, totalCurrentY, { width: labelWidth });
-    totalCurrentY += 18;
+    const recurringLabelHeight = doc.heightOfString("Per month (recurring)", { width: totalInnerWidth });
+    doc.text("Per month (recurring)", totalLabelX, totalCurrentY, { width: totalInnerWidth });
+    totalCurrentY += recurringLabelHeight + 4;
     doc.font(FONTS.bold).fontSize(14);
-    doc.text(`${fmtMoney(recurringTotal)} / month`, totalLabelX, totalCurrentY, {
-      width: totalsW - (innerTotalM * 2),
+    const recurringValue = `${fmtMoney(recurringTotal)} / month`;
+    const recurringValueHeight = doc.heightOfString(recurringValue, { width: totalInnerWidth, align: "right" });
+    doc.text(recurringValue, totalLabelX, totalCurrentY, {
+      width: totalInnerWidth,
       align: "right",
     });
     doc.restore();
-    totalCurrentY += 24;
+    totalCurrentY += recurringValueHeight + 8;
     drawTotalLine("Subtotal", fmtMoney(recurringSubtotal));
     drawTotalLine("GST (5%)", fmtMoney(recurringGst));
   } else {
