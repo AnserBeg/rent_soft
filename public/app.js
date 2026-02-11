@@ -855,6 +855,45 @@ async function createLocationFromPicker({ name, latitude, longitude, provider, q
   return data;
 }
 
+async function setEquipmentCurrentLocation({ equipmentId, locationId }) {
+  const companyId = normalizeCompanyId();
+  const eqId = Number(equipmentId);
+  const locId = Number(locationId);
+  if (!companyId) throw new Error("Select a company first.");
+  if (!Number.isFinite(eqId) || !Number.isFinite(locId)) throw new Error("Invalid equipment or location.");
+  const res = await fetch("/api/equipment/current-location", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyId,
+      equipmentIds: [eqId],
+      currentLocationId: locId,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to update current location.");
+  return data;
+}
+
+function syncEquipmentCurrentLocationCache({ equipmentId, locationId, label, lat, lng }) {
+  const eq = (equipmentCache || []).find((row) => String(row.id) === String(equipmentId));
+  if (!eq) return;
+  const locId = Number(locationId);
+  if (!Number.isFinite(locId)) return;
+  eq.current_location_id = locId;
+  if (label) eq.current_location = label;
+  if (Number.isFinite(lat)) eq.current_location_latitude = lat;
+  if (Number.isFinite(lng)) eq.current_location_longitude = lng;
+}
+
+async function persistCurrentLocationForEditingEquipment({ locationId, label, lat, lng }) {
+  if (!editingEquipmentId) return;
+  const equipmentId = Number(editingEquipmentId);
+  if (!Number.isFinite(equipmentId)) return;
+  await setEquipmentCurrentLocation({ equipmentId, locationId });
+  syncEquipmentCurrentLocationCache({ equipmentId, locationId, label, lat, lng });
+}
+
 function ensureUniqueLocationName(baseName) {
   const raw = String(baseName || "").trim() || "Pinned location";
   const existing = new Set();
@@ -2772,24 +2811,32 @@ saveCurrentLocationPickerBtn?.addEventListener("click", async (e) => {
     return;
   }
   const existingId = currentLocationPicker.existingLocationId;
-  if (existingId && currentLocationIdInput) {
-    setCurrentLocationValue(existingId);
-    closeCurrentLocationPickerModal();
-    const label =
-      currentLocationPicker.existingLocationName ||
-      formatLocationAddress(getLocationDetailById(existingId)) ||
-      "selected location";
-    companyMeta.textContent = `Current location set to "${label}".`;
-    return;
-  }
-  const sel = currentLocationPicker.selected;
-  if (!sel || !Number.isFinite(sel.lat) || !Number.isFinite(sel.lng)) {
-    if (currentLocationPickerMeta) currentLocationPickerMeta.textContent = "Pick a point on the map first.";
-    return;
-  }
-
-  saveCurrentLocationPickerBtn.disabled = true;
   try {
+    saveCurrentLocationPickerBtn.disabled = true;
+
+    if (existingId && currentLocationIdInput) {
+      const detail = getLocationDetailById(existingId);
+      const label =
+        currentLocationPicker.existingLocationName ||
+        formatLocationAddress(detail) ||
+        "selected location";
+      const lat = toFiniteCoordinate(detail?.latitude);
+      const lng = toFiniteCoordinate(detail?.longitude);
+      if (editingEquipmentId) {
+        await persistCurrentLocationForEditingEquipment({ locationId: existingId, label, lat, lng });
+      }
+      setCurrentLocationValue(existingId);
+      closeCurrentLocationPickerModal();
+      companyMeta.textContent = `Current location set to "${label}".`;
+      return;
+    }
+
+    const sel = currentLocationPicker.selected;
+    if (!sel || !Number.isFinite(sel.lat) || !Number.isFinite(sel.lng)) {
+      if (currentLocationPickerMeta) currentLocationPickerMeta.textContent = "Pick a point on the map first.";
+      return;
+    }
+
     const baseName =
       String(currentLocationPickerName?.value || "").trim() ||
       (sel.query ? String(sel.query) : "Pinned location");
@@ -2802,9 +2849,17 @@ saveCurrentLocationPickerBtn?.addEventListener("click", async (e) => {
       query: sel.query,
     });
     await loadLocations();
+    if (saved?.id && editingEquipmentId) {
+      await persistCurrentLocationForEditingEquipment({
+        locationId: saved.id,
+        label: saved.name || name,
+        lat: sel.lat,
+        lng: sel.lng,
+      });
+    }
     if (currentLocationIdInput && saved?.id) setCurrentLocationValue(saved.id);
     closeCurrentLocationPickerModal();
-    companyMeta.textContent = `Current location set to "${saved.name}".`;
+    companyMeta.textContent = `Current location set to "${saved.name || name}".`;
   } catch (err) {
     if (currentLocationPickerMeta) currentLocationPickerMeta.textContent = err?.message || String(err);
   } finally {
