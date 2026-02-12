@@ -140,7 +140,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               ) : (
                 <button 
                   onClick={() => setView('login')}
-                  className="w-7 h-7 rounded-full bg-slate-100 border border-slate-300 flex items-center justify-center text-slate-400 hover:bg-brand-accent hover:text-white hover:border-brand-accent transition-colors"
+                  className="w-7 h-7 rounded-full bg-slate-100 border border-slate-300 flex items-center justify-center text-slate-400 hover:bg-brand-accent hover:text-white hover:border-brand-accent transition-colors md:hidden"
                   title="Log in"
                 >
                   <LogIn size={14} />
@@ -148,18 +148,15 @@ export const Navbar: React.FC<NavbarProps> = ({
               )}
             </>
           )}
-          <button
-            onClick={handleLogout}
-            disabled={!hasAnyLogin}
-            className={`w-8 h-8 rounded-full border flex items-center justify-center transition-colors ${
-              hasAnyLogin
-                ? 'bg-slate-100 border-slate-300 text-slate-500 hover:bg-slate-900 hover:text-white hover:border-slate-900'
-                : 'bg-slate-50 border-slate-200 text-slate-300 cursor-not-allowed'
-            }`}
-            title="Log out"
-          >
-            <LogOut size={14} />
-          </button>
+          {hasAnyLogin && (
+            <button
+              onClick={handleLogout}
+              className="w-8 h-8 rounded-full border flex items-center justify-center transition-colors bg-slate-100 border-slate-300 text-slate-500 hover:bg-slate-900 hover:text-white hover:border-slate-900"
+              title="Log out"
+            >
+              <LogOut size={14} />
+            </button>
+          )}
         </div>
       </div>
     </motion.nav>
