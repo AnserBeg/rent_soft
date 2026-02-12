@@ -318,6 +318,7 @@ async function ensureTables() {
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         contact_email TEXT NOT NULL,
+        website TEXT,
         phone TEXT,
         street_address TEXT,
         city TEXT,
@@ -361,6 +362,7 @@ async function ensureTables() {
         revoked_at TIMESTAMPTZ
       );
     `);
+    await client.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT;`);
     await client.query(
       `ALTER TABLE company_user_sessions ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ DEFAULT NOW();`
     );
@@ -424,6 +426,7 @@ async function ensureTables() {
         category_id INTEGER REFERENCES equipment_categories(id) ON DELETE SET NULL,
         image_url TEXT,
         image_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
+        documents JSONB NOT NULL DEFAULT '[]'::jsonb,
         description TEXT,
         terms TEXT,
         daily_rate NUMERIC(12, 2),
@@ -435,7 +438,8 @@ async function ensureTables() {
       );
     `);
     await client.query(`ALTER TABLE equipment_types ADD COLUMN IF NOT EXISTS image_urls JSONB NOT NULL DEFAULT '[]'::jsonb;`);
-    await client.query(`ALTER TABLE equipment_types ADD COLUMN IF NOT EXISTS image_url TEXT;`);
+      await client.query(`ALTER TABLE equipment_types ADD COLUMN IF NOT EXISTS image_url TEXT;`);
+      await client.query(`ALTER TABLE equipment_types ADD COLUMN IF NOT EXISTS documents JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE equipment_types ADD COLUMN IF NOT EXISTS daily_rate NUMERIC(12, 2);`);
     await client.query(`ALTER TABLE equipment_types ADD COLUMN IF NOT EXISTS weekly_rate NUMERIC(12, 2);`);
     await client.query(`ALTER TABLE equipment_types ADD COLUMN IF NOT EXISTS monthly_rate NUMERIC(12, 2);`);
@@ -1802,6 +1806,7 @@ async function authenticateUser({ email, password }) {
       u.password_hash,
       c.name AS company_name,
       c.contact_email,
+      c.website,
       c.phone,
       c.street_address,
       c.city,
@@ -1840,6 +1845,7 @@ async function authenticateUser({ email, password }) {
       id: row.company_id,
       name: row.company_name,
       email: row.contact_email,
+      website: row.website,
       phone: row.phone,
       streetAddress: row.street_address,
       city: row.city,
@@ -1902,6 +1908,7 @@ async function getCompanyUserByToken(token) {
       c.id AS company_id,
       c.name AS company_name,
       c.contact_email,
+      c.website,
       c.phone,
       c.street_address,
       c.city,
@@ -1933,6 +1940,7 @@ async function getCompanyUserByToken(token) {
       id: Number(row.company_id),
       name: row.company_name,
       email: row.contact_email,
+      website: row.website,
       phone: row.phone,
       streetAddress: row.street_address,
       city: row.city,
@@ -1957,7 +1965,7 @@ async function revokeCompanyUserSession(token) {
 async function getCompanyProfile(companyId) {
   const result = await pool.query(
     `
-    SELECT id, name, contact_email, phone, street_address, city, region, country, postal_code
+    SELECT id, name, contact_email, website, phone, street_address, city, region, country, postal_code
       FROM companies
      WHERE id = $1
      LIMIT 1
@@ -1970,6 +1978,7 @@ async function getCompanyProfile(companyId) {
     id: row.id,
     name: row.name,
     email: row.contact_email,
+    website: row.website,
     phone: row.phone,
     streetAddress: row.street_address,
     city: row.city,
@@ -1983,6 +1992,7 @@ async function updateCompanyProfile({
   companyId,
   name,
   email,
+  website,
   phone,
   streetAddress,
   city,
@@ -1995,20 +2005,22 @@ async function updateCompanyProfile({
     UPDATE companies
        SET name = $2,
            contact_email = $3,
-           phone = $4,
-           street_address = $5,
-           city = $6,
-           region = $7,
-           country = $8,
-           postal_code = $9,
+           website = $4,
+           phone = $5,
+           street_address = $6,
+           city = $7,
+           region = $8,
+           country = $9,
+           postal_code = $10,
            updated_at = NOW()
      WHERE id = $1
-     RETURNING id, name, contact_email, phone, street_address, city, region, country, postal_code
+     RETURNING id, name, contact_email, website, phone, street_address, city, region, country, postal_code
     `,
     [
       companyId,
       String(name || "").trim() || "Company",
       String(email || "").trim() || "unknown@example.com",
+      String(website || "").trim() || null,
       String(phone || "").trim() || null,
       String(streetAddress || "").trim() || null,
       String(city || "").trim() || null,
@@ -2023,6 +2035,7 @@ async function updateCompanyProfile({
     id: row.id,
     name: row.name,
     email: row.contact_email,
+    website: row.website,
     phone: row.phone,
     streetAddress: row.street_address,
     city: row.city,
@@ -2329,22 +2342,26 @@ async function listTypes(companyId, { from = null, to = null, dateField = "creat
     params.push(toIso);
     where.push(`et.${field} < $${params.length}::timestamptz`);
   }
-  const result = await pool.query(
-    `SELECT et.id, et.name, et.description, et.terms, et.category_id,
-            COALESCE(NULLIF(et.image_urls, '[]'::jsonb)->>0, et.image_url) AS image_url,
-            et.image_urls,
-            et.qbo_item_id,
-            et.daily_rate, et.weekly_rate, et.monthly_rate,
-            ec.name AS category,
-            et.created_at
-     FROM equipment_types et
-     LEFT JOIN equipment_categories ec ON et.category_id = ec.id
-     WHERE ${where.join(" AND ")}
-     ORDER BY et.name`,
-    params
-  );
-  return result.rows;
-}
+    const result = await pool.query(
+      `SELECT et.id, et.name, et.description, et.terms, et.category_id,
+              COALESCE(NULLIF(et.image_urls, '[]'::jsonb)->>0, et.image_url) AS image_url,
+              et.image_urls,
+              et.documents,
+              et.qbo_item_id,
+              et.daily_rate, et.weekly_rate, et.monthly_rate,
+              ec.name AS category,
+              et.created_at
+       FROM equipment_types et
+       LEFT JOIN equipment_categories ec ON et.category_id = ec.id
+       WHERE ${where.join(" AND ")}
+       ORDER BY et.name`,
+      params
+    );
+    return result.rows.map((row) => ({
+      ...row,
+      documents: normalizeTypeDocuments(row.documents),
+    }));
+  }
 
 async function listTypeStats(companyId) {
   const result = await pool.query(
@@ -2366,6 +2383,7 @@ async function createType({
   categoryId,
   imageUrl,
   imageUrls,
+  documents,
   description,
   terms,
   dailyRate,
@@ -2375,17 +2393,19 @@ async function createType({
 }) {
   const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean).map(String) : [];
   const primaryUrl = urls[0] || imageUrl || null;
+  const docs = normalizeTypeDocuments(documents);
   const result = await pool.query(
-    `INSERT INTO equipment_types (company_id, name, category_id, image_url, image_urls, description, terms, daily_rate, weekly_rate, monthly_rate, qbo_item_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `INSERT INTO equipment_types (company_id, name, category_id, image_url, image_urls, documents, description, terms, daily_rate, weekly_rate, monthly_rate, qbo_item_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      ON CONFLICT (company_id, name) DO NOTHING
-     RETURNING id, name, category_id, image_url, image_urls, description, terms, daily_rate, weekly_rate, monthly_rate, qbo_item_id`,
+     RETURNING id, name, category_id, image_url, image_urls, documents, description, terms, daily_rate, weekly_rate, monthly_rate, qbo_item_id`,
     [
       companyId,
       name,
       categoryId || null,
       primaryUrl,
       JSON.stringify(urls),
+      JSON.stringify(docs),
       description || null,
       terms || null,
       dailyRate || null,
@@ -2394,7 +2414,9 @@ async function createType({
       qboItemId ? String(qboItemId).trim() : null,
     ]
   );
-  return result.rows[0];
+  const row = result.rows[0];
+  if (row) row.documents = normalizeTypeDocuments(row.documents);
+  return row;
 }
 
 async function updateType({
@@ -2404,6 +2426,7 @@ async function updateType({
   categoryId,
   imageUrl,
   imageUrls,
+  documents,
   description,
   terms,
   dailyRate,
@@ -2413,17 +2436,19 @@ async function updateType({
 }) {
   const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean).map(String) : [];
   const primaryUrl = urls[0] || imageUrl || null;
+  const docs = normalizeTypeDocuments(documents);
   const result = await pool.query(
     `UPDATE equipment_types
-     SET name = $1, category_id = $2, image_url = $3, image_urls = $4, description = $5, terms = $6,
-         daily_rate = $7, weekly_rate = $8, monthly_rate = $9, qbo_item_id = $10
-     WHERE id = $11 AND company_id = $12
-     RETURNING id, name, category_id, image_url, image_urls, description, terms, daily_rate, weekly_rate, monthly_rate, qbo_item_id`,
+     SET name = $1, category_id = $2, image_url = $3, image_urls = $4, documents = $5, description = $6, terms = $7,
+         daily_rate = $8, weekly_rate = $9, monthly_rate = $10, qbo_item_id = $11
+     WHERE id = $12 AND company_id = $13
+     RETURNING id, name, category_id, image_url, image_urls, documents, description, terms, daily_rate, weekly_rate, monthly_rate, qbo_item_id`,
     [
       name,
       categoryId || null,
       primaryUrl,
       JSON.stringify(urls),
+      JSON.stringify(docs),
       description || null,
       terms || null,
       dailyRate || null,
@@ -2434,7 +2459,9 @@ async function updateType({
       companyId,
     ]
   );
-  return result.rows[0];
+  const row = result.rows[0];
+  if (row) row.documents = normalizeTypeDocuments(row.documents);
+  return row;
 }
 
 async function deleteType({ id, companyId }) {
@@ -11725,6 +11752,28 @@ function normalizeJsonArray(value) {
   return value && typeof value === "object" ? value : [];
 }
 
+function normalizeTypeDocuments(value) {
+  const list = normalizeJsonArray(value);
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((doc) => {
+      if (!doc) return null;
+      if (typeof doc === "string") return { url: doc };
+      if (typeof doc !== "object") return null;
+      const url = String(doc.url || "").trim();
+      if (!url) return null;
+      const sizeRaw = doc.sizeBytes ?? doc.size_bytes;
+      const sizeNum = Number(sizeRaw);
+      return {
+        url,
+        fileName: doc.fileName || doc.file_name || null,
+        mime: doc.mime || doc.mimetype || null,
+        sizeBytes: Number.isFinite(sizeNum) ? sizeNum : null,
+      };
+    })
+    .filter(Boolean);
+}
+
 function normalizeJsonObject(value) {
   if (value && typeof value === "object" && !Array.isArray(value)) return value;
   if (typeof value === "string") {
@@ -12512,11 +12561,13 @@ async function listStorefrontListings({
   const sql = `
     WITH listing AS (
       SELECT
-        et.id AS type_id,
-        et.name AS type_name,
-        et.image_url,
-        et.description,
-        et.terms,
+          et.id AS type_id,
+          et.name AS type_name,
+          COALESCE(NULLIF(et.image_urls, '[]'::jsonb)->>0, et.image_url) AS image_url,
+          et.image_urls,
+          et.documents,
+          et.description,
+          et.terms,
         et.daily_rate,
         et.weekly_rate,
         et.monthly_rate,
@@ -12525,6 +12576,7 @@ async function listStorefrontListings({
         c.name AS company_name,
         c.phone AS company_phone,
         c.contact_email AS company_email,
+        c.website AS company_website,
           cs.logo_url AS company_logo_url,
           cs.rental_info_fields AS rental_info_fields,
         c.street_address AS company_street_address,
@@ -12575,12 +12627,23 @@ async function listStorefrontListings({
   finalParams.push(safeLimit, safeOffset);
 
   const result = await pool.query(sql, finalParams);
-  return result.rows.map((row) => ({
-    typeId: Number(row.type_id),
-    typeName: row.type_name,
-    imageUrl: row.image_url || null,
-    description: row.description || null,
-    terms: row.terms || null,
+    return result.rows.map((row) => {
+      const imageUrls = Array.isArray(row.image_urls)
+        ? row.image_urls.filter(Boolean).map((url) => String(url))
+        : [];
+      const primaryImageUrl = row.image_url ? String(row.image_url) : null;
+      if (primaryImageUrl && !imageUrls.includes(primaryImageUrl)) {
+        imageUrls.unshift(primaryImageUrl);
+      }
+
+      return {
+      typeId: Number(row.type_id),
+      typeName: row.type_name,
+      imageUrl: imageUrls[0] || null,
+      imageUrls,
+      documents: normalizeTypeDocuments(row.documents),
+      description: row.description || null,
+      terms: row.terms || null,
     categoryName: row.category_name || null,
     dailyRate: row.daily_rate === null || row.daily_rate === undefined ? null : Number(row.daily_rate),
     weeklyRate: row.weekly_rate === null || row.weekly_rate === undefined ? null : Number(row.weekly_rate),
@@ -12590,6 +12653,7 @@ async function listStorefrontListings({
         name: row.company_name,
         email: row.company_email || null,
         phone: row.company_phone || null,
+        website: row.company_website || null,
         logoUrl: row.company_logo_url || null,
         rentalInfoFields: normalizeRentalInfoFields(row.rental_info_fields),
         streetAddress: row.company_street_address || null,
@@ -12604,7 +12668,8 @@ async function listStorefrontListings({
       availableUnits: Number(row.available_units || 0),
       locations: Array.isArray(row.locations) ? row.locations : [],
     },
-  }));
+  };
+  });
 }
 
 async function createStorefrontCustomer({

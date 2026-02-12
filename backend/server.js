@@ -211,6 +211,8 @@ const publicRoot = path.join(__dirname, "..", "public");
 const spaRoot = path.join(publicRoot, "spa");
 const defaultUploadRoot = path.join(publicRoot, "uploads");
 const uploadRoot = process.env.UPLOAD_ROOT ? path.resolve(process.env.UPLOAD_ROOT) : defaultUploadRoot;
+const IMAGE_URL_MODE = String(process.env.IMAGE_URL_MODE || process.env.IMAGE || "").trim().toLowerCase();
+const IMAGE_URL_BASE = String(process.env.IMAGE_URL_BASE || "").trim();
 
 const FORCE_HTTPS = parseBoolean(process.env.FORCE_HTTPS) === true;
 const TRUST_PROXY = parseBoolean(process.env.TRUST_PROXY) === true || FORCE_HTTPS === true;
@@ -266,6 +268,61 @@ const CONTENT_SECURITY_POLICY = buildCspHeaderValue(process.env.CONTENT_SECURITY
 const JSON_BODY_LIMIT = parseBodySize(process.env.JSON_BODY_LIMIT, "5mb");
 if (TRUST_PROXY) {
   app.set("trust proxy", 1);
+}
+
+function normalizeBaseUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  return raw.replace(/\/+$/, "");
+}
+
+function shouldPrefixImageUrls(req) {
+  if (!(IMAGE_URL_MODE === "local" || IMAGE_URL_MODE === "absolute" || !!IMAGE_URL_BASE)) return false;
+  const path = String(req?.path || "");
+  if (!path) return false;
+  return (
+    path.startsWith("/api/storefront") ||
+    path.startsWith("/api/public") ||
+    path.startsWith("/api/customers")
+  );
+}
+
+function resolveImageBaseUrl(req) {
+  const configured = normalizeBaseUrl(IMAGE_URL_BASE);
+  if (configured) return configured;
+  const host = req.get("host");
+  if (!host) return "";
+  const protocol = req.protocol || "http";
+  return `${protocol}://${host}`;
+}
+
+function withImageBaseUrl(req, url) {
+  const raw = String(url || "").trim();
+  if (!raw) return url;
+  if (/^(data:|blob:)/i.test(raw)) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (!raw.startsWith("/uploads/") && !raw.startsWith("uploads/")) return raw;
+  const base = resolveImageBaseUrl(req);
+  if (!base) return raw;
+  const pathPart = raw.startsWith("/") ? raw : `/${raw}`;
+  return `${base}${pathPart}`;
+}
+
+function isPlainObject(value) {
+  return Object.prototype.toString.call(value) === "[object Object]";
+}
+
+function prefixUploadUrls(req, value, seen = new WeakSet()) {
+  if (typeof value === "string") return withImageBaseUrl(req, value);
+  if (Array.isArray(value)) return value.map((item) => prefixUploadUrls(req, item, seen));
+  if (!value || typeof value !== "object" || !isPlainObject(value)) return value;
+  if (seen.has(value)) return value;
+  seen.add(value);
+  const next = {};
+  for (const [key, entry] of Object.entries(value)) {
+    next[key] = prefixUploadUrls(req, entry, seen);
+  }
+  return next;
 }
 
 function setNoCacheHeaders(res) {
@@ -366,6 +423,13 @@ app.use(
 );
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
+app.use((req, res, next) => {
+  if (!shouldPrefixImageUrls(req)) return next();
+  const originalJson = res.json.bind(res);
+  res.json = (payload) => originalJson(prefixUploadUrls(req, payload));
+  next();
+});
 
 app.use(
   asyncHandler(async (req, res, next) => {
@@ -4934,33 +4998,35 @@ app.get(
 
 app.post(
   "/api/equipment-types",
-  asyncHandler(async (req, res) => {
-    const {
-      companyId,
-      name,
-      categoryId,
-      imageUrl,
-      imageUrls,
-      description,
-      terms,
-      dailyRate,
-      weeklyRate,
-      monthlyRate,
-      qboItemId,
+    asyncHandler(async (req, res) => {
+      const {
+        companyId,
+        name,
+        categoryId,
+        imageUrl,
+        imageUrls,
+        documents,
+        description,
+        terms,
+        dailyRate,
+        weeklyRate,
+        monthlyRate,
+        qboItemId,
     } = req.body;
     if (!companyId || !name) return res.status(400).json({ error: "companyId and name are required." });
     const type = await createType({
       companyId,
-      name,
-      categoryId,
-      imageUrl,
-      imageUrls: parseStringArray(imageUrls),
-      description,
-      terms,
-      dailyRate,
-      weeklyRate,
-      monthlyRate,
-      qboItemId,
+        name,
+        categoryId,
+        imageUrl,
+        imageUrls: parseStringArray(imageUrls),
+        documents,
+        description,
+        terms,
+        dailyRate,
+        weeklyRate,
+        monthlyRate,
+        qboItemId,
     });
     if (!type) return res.status(200).json({ message: "Equipment type already exists." });
     res.status(201).json(type);
@@ -4969,35 +5035,37 @@ app.post(
 
 app.put(
   "/api/equipment-types/:id",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const {
-      companyId,
-      name,
-      categoryId,
-      imageUrl,
-      imageUrls,
-      description,
-      terms,
-      dailyRate,
-      weeklyRate,
-      monthlyRate,
-      qboItemId,
+    asyncHandler(async (req, res) => {
+      const { id } = req.params;
+      const {
+        companyId,
+        name,
+        categoryId,
+        imageUrl,
+        imageUrls,
+        documents,
+        description,
+        terms,
+        dailyRate,
+        weeklyRate,
+        monthlyRate,
+        qboItemId,
     } = req.body;
     if (!companyId || !name) return res.status(400).json({ error: "companyId and name are required." });
     const updated = await updateType({
       id,
       companyId,
-      name,
-      categoryId,
-      imageUrl,
-      imageUrls: parseStringArray(imageUrls),
-      description,
-      terms,
-      dailyRate,
-      weeklyRate,
-      monthlyRate,
-      qboItemId,
+        name,
+        categoryId,
+        imageUrl,
+        imageUrls: parseStringArray(imageUrls),
+        documents,
+        description,
+        terms,
+        dailyRate,
+        weeklyRate,
+        monthlyRate,
+        qboItemId,
     });
     if (!updated) return res.status(404).json({ error: "Type not found" });
     res.json(updated);
@@ -5929,13 +5997,14 @@ app.get(
 app.put(
   "/api/company-profile",
   asyncHandler(async (req, res) => {
-    const { companyId, name, email, phone, streetAddress, city, region, country, postalCode } = req.body || {};
+    const { companyId, name, email, website, phone, streetAddress, city, region, country, postalCode } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     if (!name || !email) return res.status(400).json({ error: "name and email are required." });
     const updated = await updateCompanyProfile({
       companyId: Number(companyId),
       name,
       email,
+      website,
       phone,
       streetAddress,
       city,

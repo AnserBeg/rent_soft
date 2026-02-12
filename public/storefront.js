@@ -186,8 +186,22 @@ function renderAvailability(listing) {
 }
 
 function listingCardHtml(listing) {
-  const image = listing?.imageUrl
-    ? `<img class="storefront-thumb" src="${escapeHtml(listing.imageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" />`
+  const imageUrls = Array.isArray(listing?.imageUrls) ? listing.imageUrls.filter(Boolean).map(String) : [];
+  const primaryImage = listing?.imageUrl ? String(listing.imageUrl) : null;
+  if (primaryImage && !imageUrls.includes(primaryImage)) {
+    imageUrls.unshift(primaryImage);
+  }
+  const image = imageUrls.length
+    ? `
+      <div class="storefront-thumb-carousel">
+        ${imageUrls
+          .map(
+            (url) =>
+              `<img class="storefront-thumb" src="${escapeHtml(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" />`
+          )
+          .join("")}
+      </div>
+    `
     : `<div class="storefront-thumb placeholder">No image</div>`;
 
   const typeName = escapeHtml(listing?.typeName || "Unnamed type");

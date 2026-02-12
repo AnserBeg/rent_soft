@@ -12,7 +12,15 @@ export interface Company {
   joinedDate?: string;
   email?: string;
   phone?: string;
+  website?: string;
   logoUrl?: string;
+}
+
+export interface EquipmentDocument {
+  url: string;
+  fileName?: string | null;
+  mime?: string | null;
+  sizeBytes?: number | null;
 }
 
 export interface Equipment {
@@ -20,9 +28,13 @@ export interface Equipment {
   name: string;
   category: string;
   pricePerDay: number;
+  dailyRate?: number | null;
+  weeklyRate?: number | null;
+  monthlyRate?: number | null;
   description: string;
   specs: Record<string, string>;
   images: string[];
+  documents?: EquipmentDocument[];
   ownerId: string;
   available: boolean;
   location: string;

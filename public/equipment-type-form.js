@@ -27,6 +27,9 @@ const typeImageModal = document.getElementById("type-image-modal");
 const openTypeImageModalBtn = document.getElementById("open-type-image-modal");
 const closeTypeImageModalBtn = document.getElementById("close-type-image-modal");
 
+const typeDocumentsInput = document.getElementById("type-documents-input");
+const typeDocumentsList = document.getElementById("type-documents-list");
+
 const categoryModal = document.getElementById("category-modal");
 const closeCategoryModalBtn = document.getElementById("close-category-modal");
 const categoryModalForm = document.getElementById("category-modal-form");
@@ -42,6 +45,7 @@ let editingTypeId = initialTypeId ? Number(initialTypeId) : null;
 let typesCache = [];
 let stockChart = null;
 let pendingTypeFiles = [];
+let pendingTypeDocuments = [];
 let selectedTypeImage = null;
 let typeAiBusy = false;
 let qboConnected = false;
@@ -195,6 +199,123 @@ function addDeleteTypeImageUrl(url) {
 function clearDeleteTypeImageUrls() {
   if (!typeForm) return;
   delete typeForm.dataset.deleteImageUrls;
+}
+
+function normalizeTypeDocument(doc) {
+  if (!doc) return null;
+  if (typeof doc === "string") return { url: doc };
+  if (typeof doc !== "object") return null;
+  const url = String(doc.url || "").trim();
+  if (!url) return null;
+  const sizeRaw = doc.sizeBytes ?? doc.size_bytes;
+  const sizeNum = Number(sizeRaw);
+  return {
+    url,
+    fileName: doc.fileName || doc.file_name || "",
+    mime: doc.mime || doc.mimetype || "",
+    sizeBytes: Number.isFinite(sizeNum) ? sizeNum : null,
+  };
+}
+
+function getTypeDocuments() {
+  const docs = safeParseJsonArray(typeForm?.documents?.value);
+  return docs.map(normalizeTypeDocument).filter(Boolean);
+}
+
+function setTypeDocuments(docs) {
+  if (!typeForm?.documents) return;
+  const normalized = (docs || []).map(normalizeTypeDocument).filter(Boolean);
+  typeForm.documents.value = JSON.stringify(normalized);
+}
+
+function getDeleteTypeDocumentUrls() {
+  return safeParseJsonArray(typeForm?.dataset?.deleteDocumentUrls).filter(Boolean).map(String);
+}
+
+function addDeleteTypeDocumentUrl(url) {
+  if (!url || !typeForm) return;
+  const existing = new Set(getDeleteTypeDocumentUrls());
+  existing.add(String(url));
+  typeForm.dataset.deleteDocumentUrls = JSON.stringify(Array.from(existing));
+}
+
+function clearDeleteTypeDocumentUrls() {
+  if (!typeForm) return;
+  delete typeForm.dataset.deleteDocumentUrls;
+}
+
+function formatFileSize(sizeBytes) {
+  const size = Number(sizeBytes);
+  if (!Number.isFinite(size) || size <= 0) return "";
+  if (size < 1024) return `${size} B`;
+  return `${Math.round(size / 1024)} KB`;
+}
+
+function renderTypeDocuments() {
+  if (!typeDocumentsList) return;
+  typeDocumentsList.replaceChildren();
+
+  const existingDocs = getTypeDocuments();
+  existingDocs.forEach((doc) => {
+    const row = document.createElement("div");
+    row.className = "attachment-row";
+
+    const link = document.createElement("a");
+    link.href = String(doc.url || "");
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = doc.fileName || doc.url.split("/").pop() || "Document";
+    row.appendChild(link);
+
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    const mimeText = doc.mime ? ` - ${doc.mime}` : "";
+    const sizeText = formatFileSize(doc.sizeBytes);
+    hint.textContent = `${mimeText}${sizeText ? ` - ${sizeText}` : ""}`.trim();
+    row.appendChild(hint);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "ghost small danger";
+    removeBtn.dataset.action = "remove-existing-document";
+    removeBtn.dataset.url = String(doc.url || "");
+    removeBtn.textContent = "Remove";
+    row.appendChild(removeBtn);
+
+    typeDocumentsList.appendChild(row);
+  });
+
+  pendingTypeDocuments.forEach((file, idx) => {
+    const row = document.createElement("div");
+    row.className = "attachment-row";
+
+    const name = document.createElement("span");
+    name.textContent = file?.name || "Pending document";
+    row.appendChild(name);
+
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    const sizeText = formatFileSize(file?.size);
+    hint.textContent = `Pending upload${sizeText ? ` - ${sizeText}` : ""}`;
+    row.appendChild(hint);
+
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "ghost small danger";
+    removeBtn.dataset.action = "remove-pending-document";
+    removeBtn.dataset.index = String(idx);
+    removeBtn.textContent = "Remove";
+    row.appendChild(removeBtn);
+
+    typeDocumentsList.appendChild(row);
+  });
+
+  if (!existingDocs.length && !pendingTypeDocuments.length) {
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "No documents added yet.";
+    typeDocumentsList.appendChild(empty);
+  }
 }
 
 function updateStockImage() {
@@ -495,6 +616,29 @@ async function deleteUploadedImage({ companyId, url }) {
   throw new Error(data.error || "Unable to delete image");
 }
 
+async function uploadFile({ companyId, file }) {
+  const body = new FormData();
+  body.append("companyId", String(companyId));
+  body.append("file", file);
+  const res = await fetch("/api/uploads/file", { method: "POST", body });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to upload file");
+  if (!data.url) throw new Error("Upload did not return a url");
+  return data;
+}
+
+async function deleteUploadedFile({ companyId, url }) {
+  if (!url) return;
+  const res = await fetch("/api/uploads/file", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId, url }),
+  });
+  if (res.ok) return;
+  const data = await res.json().catch(() => ({}));
+  throw new Error(data.error || "Unable to delete file");
+}
+
 async function loadCategories() {
   if (!activeCompanyId) return;
   try {
@@ -543,6 +687,11 @@ async function loadType() {
   clearDeleteTypeImageUrls();
   setTypeImageUrls(Array.isArray(item.image_urls) ? item.image_urls : (item.image_url ? [item.image_url] : []));
   renderTypeImages();
+  pendingTypeDocuments = [];
+  syncFileInputFiles(typeForm.documentFiles, []);
+  clearDeleteTypeDocumentUrls();
+  setTypeDocuments(item.documents || []);
+  renderTypeDocuments();
   typeForm.description.value = item.description || "";
   typeForm.terms.value = item.terms || "";
   categorySelect.value = item.category_id || "";
@@ -664,6 +813,14 @@ typeForm.imageFiles?.addEventListener("change", (e) => {
   renderTypeImages();
 });
 
+typeDocumentsInput?.addEventListener("change", (e) => {
+  const next = Array.from(e.target.files || []);
+  if (!next.length) return;
+  pendingTypeDocuments = pendingTypeDocuments.concat(next);
+  syncFileInputFiles(typeForm.documentFiles, pendingTypeDocuments);
+  renderTypeDocuments();
+});
+
 typeImagesRow?.addEventListener("click", (e) => {
   const btn = e.target.closest?.("button[data-action]");
   const action = btn?.dataset?.action;
@@ -705,6 +862,30 @@ typeImagesRow?.addEventListener("click", (e) => {
   }
 });
 
+typeDocumentsList?.addEventListener("click", (e) => {
+  const btn = e.target.closest?.("button[data-action]");
+  const action = btn?.dataset?.action;
+  if (!action) return;
+
+  if (action === "remove-existing-document") {
+    const url = btn.dataset.url;
+    if (!url) return;
+    const nextDocs = getTypeDocuments().filter((doc) => doc.url !== url);
+    setTypeDocuments(nextDocs);
+    addDeleteTypeDocumentUrl(url);
+    renderTypeDocuments();
+    return;
+  }
+
+  if (action === "remove-pending-document") {
+    const idx = Number(btn.dataset.index);
+    if (!Number.isFinite(idx) || idx < 0) return;
+    pendingTypeDocuments = pendingTypeDocuments.filter((_, i) => i !== idx);
+    syncFileInputFiles(typeForm.documentFiles, pendingTypeDocuments);
+    renderTypeDocuments();
+  }
+});
+
 clearTypeImagesBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   const existingUrls = getTypeImageUrls();
@@ -739,6 +920,7 @@ typeForm.addEventListener("submit", async (e) => {
   const payload = Object.fromEntries(new FormData(typeForm).entries());
   payload.companyId = activeCompanyId;
   delete payload.imageFiles;
+  delete payload.documentFiles;
 
   if (payload.imageUrl === "") payload.imageUrl = null;
   if (typeForm?.qboItemId) {
@@ -760,6 +942,8 @@ typeForm.addEventListener("submit", async (e) => {
   try {
     const existingUrls = getTypeImageUrls();
     const deleteAfterSave = new Set(getDeleteTypeImageUrls());
+    const existingDocs = getTypeDocuments();
+    const deleteDocsAfterSave = new Set(getDeleteTypeDocumentUrls());
 
     const uploadedUrls = [];
     for (const file of pendingTypeFiles) {
@@ -772,6 +956,16 @@ typeForm.addEventListener("submit", async (e) => {
     payload.imageUrls = finalUrls;
     payload.imageUrl = finalUrls[0] || null;
 
+    const uploadedDocs = [];
+    for (const file of pendingTypeDocuments) {
+      if (!file?.size) continue;
+      const uploaded = await uploadFile({ companyId: activeCompanyId, file });
+      uploadedDocs.push(uploaded);
+    }
+
+    const finalDocs = existingDocs.concat(uploadedDocs).map(normalizeTypeDocument).filter(Boolean);
+    payload.documents = finalDocs;
+
     const res = await fetch(isEdit ? `/api/equipment-types/${editingTypeId}` : "/api/equipment-types", {
       method: isEdit ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
@@ -780,6 +974,9 @@ typeForm.addEventListener("submit", async (e) => {
     if (!res.ok) {
       const data = await res.json();
       for (const url of uploadedUrls) await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
+      for (const doc of uploadedDocs) {
+        await deleteUploadedFile({ companyId: activeCompanyId, url: doc?.url }).catch(() => null);
+      }
       throw new Error(data.error || "Unable to save type");
     }
     const saved = await res.json().catch(() => null);
@@ -788,11 +985,19 @@ typeForm.addEventListener("submit", async (e) => {
     for (const url of deleteAfterSave) {
       await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
     }
+    for (const url of deleteDocsAfterSave) {
+      await deleteUploadedFile({ companyId: activeCompanyId, url }).catch(() => null);
+    }
     pendingTypeFiles = [];
     syncFileInputFiles(typeForm.imageFiles, []);
     clearDeleteTypeImageUrls();
     setTypeImageUrls(finalUrls);
     renderTypeImages();
+    pendingTypeDocuments = [];
+    syncFileInputFiles(typeForm.documentFiles, []);
+    clearDeleteTypeDocumentUrls();
+    setTypeDocuments(finalDocs);
+    renderTypeDocuments();
 
     if (!isEdit && saved?.id) {
       editingTypeId = saved.id;
@@ -812,6 +1017,7 @@ deleteTypeBtn.addEventListener("click", async (e) => {
   if (!editingTypeId || !activeCompanyId) return;
   try {
     const existingUrls = getTypeImageUrls();
+    const existingDocs = getTypeDocuments();
     const res = await fetch(`/api/equipment-types/${editingTypeId}`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -822,6 +1028,9 @@ deleteTypeBtn.addEventListener("click", async (e) => {
       throw new Error(data.error || "Unable to delete type");
     }
     for (const url of existingUrls) await deleteUploadedImage({ companyId: activeCompanyId, url }).catch(() => null);
+    for (const doc of existingDocs) {
+      await deleteUploadedFile({ companyId: activeCompanyId, url: doc?.url }).catch(() => null);
+    }
     companyMeta.textContent = "Type deleted.";
     setTimeout(() => {
       window.location.href = returnTo || "types.html";
@@ -868,6 +1077,8 @@ categoryModal.addEventListener("click", (e) => {
 
 // Init
 updateModeLabels();
+setTypeDocuments([]);
+renderTypeDocuments();
 if (activeCompanyId) {
   setCompany(activeCompanyId);
 } else {

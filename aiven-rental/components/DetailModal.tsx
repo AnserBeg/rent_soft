@@ -121,6 +121,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
   const [reservationRef, setReservationRef] = useState<string | null>(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [companyLogoFailed, setCompanyLogoFailed] = useState(false);
+  const [showFullDescription, setShowFullDescription] = useState(false);
   const [missingProfileFields, setMissingProfileFields] = useState<string[]>([]);
   const [isProfileSaving, setIsProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
@@ -261,6 +262,10 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
   useEffect(() => {
     setCompanyLogoFailed(false);
   }, [company?.id, company?.logoUrl]);
+
+  useEffect(() => {
+    setShowFullDescription(false);
+  }, [item.id]);
 
   const dateToIsoStart = (dateStr: string) => {
     const d = new Date(`${dateStr}T00:00:00`);
@@ -452,6 +457,22 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
   const isFormValid = Boolean(hasDates && hasFulfillment && hasRentalInfo);
   const companyIdNum = company ? Number(company.id) : null;
   const storefrontCustomer = getCustomerAccount();
+  const descriptionText = String(item.description || '');
+  const descriptionLimit = 260;
+  const descriptionTooLong = descriptionText.length > descriptionLimit;
+  const descriptionPreview =
+    descriptionTooLong && !showFullDescription
+      ? `${descriptionText.slice(0, descriptionLimit).trim()}...`
+      : descriptionText;
+  const documents = Array.isArray(item.documents)
+    ? item.documents.filter((doc) => doc && doc.url)
+    : [];
+
+  const formatDocSize = (sizeBytes?: number | null) => {
+    if (!sizeBytes || !Number.isFinite(sizeBytes)) return '';
+    if (sizeBytes < 1024) return `${sizeBytes} B`;
+    return `${Math.round(sizeBytes / 1024)} KB`;
+  };
 
   const scrollImage = (direction: 'next' | 'prev') => {
       const container = document.getElementById('modal-gallery-container');
@@ -616,10 +637,48 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
                        
                        <div className="mb-6">
                           <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Description</h4>
-                          <p className="text-slate-600 leading-relaxed text-sm">
-                            {item.description}
+                          <p className="text-slate-600 leading-relaxed text-sm whitespace-pre-wrap break-words">
+                            {descriptionPreview}
                           </p>
+                          {descriptionTooLong && (
+                            <button
+                              type="button"
+                              onClick={() => setShowFullDescription((prev) => !prev)}
+                              className="mt-2 text-xs font-semibold text-brand-secondary hover:underline"
+                            >
+                              {showFullDescription ? 'Show less' : 'See more'}
+                            </button>
+                          )}
                        </div>
+
+                       {documents.length > 0 && (
+                         <div className="mb-6">
+                           <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Documents</h4>
+                           <div className="space-y-2">
+                             {documents.map((doc, idx) => {
+                               const label = doc.fileName || `Document ${idx + 1}`;
+                               const sizeLabel = formatDocSize(doc.sizeBytes ?? null);
+                               const meta = [doc.mime || '', sizeLabel].filter(Boolean).join(' | ');
+                               return (
+                                 <div
+                                   key={`${doc.url}-${idx}`}
+                                   className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-slate-50 px-4 py-3 text-sm"
+                                 >
+                                   <a
+                                     href={doc.url}
+                                     target="_blank"
+                                     rel="noreferrer"
+                                     className="font-semibold text-slate-700 hover:text-brand-accent transition-colors"
+                                   >
+                                     {label}
+                                   </a>
+                                   {meta ? <span className="text-xs text-slate-400">{meta}</span> : null}
+                                 </div>
+                               );
+                             })}
+                           </div>
+                         </div>
+                       )}
 
                        <div className="mb-8">
                           <h4 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Specifications</h4>

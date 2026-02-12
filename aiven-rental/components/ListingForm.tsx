@@ -53,6 +53,9 @@ export const ListingForm: React.FC<ListingFormProps> = ({ onAddItem, onCancel })
       name,
       category: generatedData.category,
       pricePerDay: generatedData.price,
+      dailyRate: generatedData.price,
+      weeklyRate: null,
+      monthlyRate: null,
       description: generatedData.description,
       specs: generatedData.specs,
       images: [`https://picsum.photos/seed/${name}/600/400`], // Placeholder

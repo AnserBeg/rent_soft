@@ -22,6 +22,7 @@ const saveCompanyBtn = document.getElementById("save-company");
 const companyNameInput = document.getElementById("company-name");
 const companyEmailInput = document.getElementById("company-email");
 const companyPhoneInput = document.getElementById("company-phone");
+const companyWebsiteInput = document.getElementById("company-website");
 const companyStreetInput = document.getElementById("company-street");
 const companyCityInput = document.getElementById("company-city");
 const companyRegionInput = document.getElementById("company-region");
@@ -560,6 +561,7 @@ function companyProfilePayload() {
     name: String(companyNameInput?.value || "").trim(),
     email: String(companyEmailInput?.value || "").trim(),
     phone: String(companyPhoneInput?.value || "").trim(),
+    website: String(companyWebsiteInput?.value || "").trim(),
     streetAddress: String(companyStreetInput?.value || "").trim(),
     city: String(companyCityInput?.value || "").trim(),
     region: String(companyRegionInput?.value || "").trim(),
@@ -574,6 +576,7 @@ function setCompanyProfileFields(profile) {
   if (companyEmailInput) companyEmailInput.value = profile.email || "";
   if (emailTestToInput && !String(emailTestToInput.value || "").trim()) emailTestToInput.value = profile.email || "";
   if (companyPhoneInput) companyPhoneInput.value = profile.phone || "";
+  if (companyWebsiteInput) companyWebsiteInput.value = profile.website || "";
   if (companyStreetInput) companyStreetInput.value = profile.streetAddress || "";
   if (companyCityInput) companyCityInput.value = profile.city || "";
   if (companyRegionInput) companyRegionInput.value = profile.region || "";

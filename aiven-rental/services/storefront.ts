@@ -4,6 +4,13 @@ export type StorefrontListing = {
   typeId: number;
   typeName: string;
   imageUrl: string | null;
+  imageUrls?: string[] | null;
+  documents?: Array<{
+    url: string;
+    fileName?: string | null;
+    mime?: string | null;
+    sizeBytes?: number | null;
+  }> | null;
   description: string | null;
   terms: string | null;
   categoryName: string | null;
@@ -15,6 +22,7 @@ export type StorefrontListing = {
     name: string;
     email: string | null;
     phone: string | null;
+    website: string | null;
     logoUrl: string | null;
     streetAddress: string | null;
     city: string | null;

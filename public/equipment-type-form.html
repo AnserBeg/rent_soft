@@ -138,6 +138,12 @@
                 </label>
                 <label>Description <textarea name="description"></textarea></label>
                 <label>Terms <textarea name="terms"></textarea></label>
+                <label>Documents (PDF)
+                  <input name="documentFiles" id="type-documents-input" type="file" accept="application/pdf,.pdf" multiple />
+                </label>
+                <p class="hint">Upload spec sheets, manuals, or certifications (PDF only).</p>
+                <div class="stack" id="type-documents-list"></div>
+                <input name="documents" type="hidden" />
                 <div class="rate-grid">
                   <label>Daily rate <input name="dailyRate" type="number" min="0" step="0.01" /></label>
                   <label>Weekly rate <input name="weeklyRate" type="number" min="0" step="0.01" /></label>

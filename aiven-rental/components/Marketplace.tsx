@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Equipment, Company } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MapPin, DollarSign, Search, Calendar, User as UserIcon } from 'lucide-react';
+import { MapPin, Search, Calendar, User as UserIcon } from 'lucide-react';
 
 interface MarketplaceProps {
   items: Equipment[];
@@ -31,6 +31,15 @@ export const Card3D: React.FC<Card3DProps> = ({ item, onClick, ownerName, onOwne
     const index = Math.round(scrollLeft / width);
     setCurrentImageIndex(index);
   };
+  const isRate = (value: number | null | undefined): value is number =>
+    typeof value === 'number' && Number.isFinite(value);
+  const formatRate = (value: number) =>
+    value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const rateRows = [
+    { label: 'Daily', value: item.dailyRate, suffix: '/day' },
+    { label: 'Weekly', value: item.weeklyRate, suffix: '/week' },
+    { label: 'Monthly', value: item.monthlyRate, suffix: '/month' },
+  ].filter((rate): rate is { label: string; value: number; suffix: string } => isRate(rate.value));
 
   return (
     <motion.div
@@ -108,10 +117,23 @@ export const Card3D: React.FC<Card3DProps> = ({ item, onClick, ownerName, onOwne
           </div>
 
           {/* Footer */}
-          <div className="mt-auto pt-4 flex items-center justify-between border-t border-gray-50">
-             <div className="flex items-center gap-1 text-slate-900 font-bold text-lg">
-                <DollarSign size={16} className="text-brand-accent" />
-                {item.pricePerDay} <span className="text-xs text-slate-500 font-normal">/ day</span>
+          <div className="mt-auto pt-4 flex items-start justify-between border-t border-gray-50 gap-3">
+             <div className="min-w-0">
+                {rateRows.length ? (
+                  <div className="flex flex-col gap-1">
+                    {rateRows.map((rate) => (
+                      <div key={rate.label} className="flex items-baseline gap-2 text-slate-900">
+                        <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-slate-400">
+                          {rate.label}
+                        </span>
+                        <span className="text-sm font-bold">${formatRate(rate.value)}</span>
+                        <span className="text-[0.65rem] text-slate-400 font-medium">{rate.suffix}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm font-semibold text-slate-500">Request Quote</div>
+                )}
              </div>
              <button className="px-4 py-2 bg-slate-900 hover:bg-brand-accent hover:text-white text-white border border-transparent rounded-lg text-xs font-bold transition-all shadow-md">
                 RENT NOW

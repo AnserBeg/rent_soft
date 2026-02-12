@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Company, Equipment } from '../types';
 import { motion } from 'framer-motion';
-import { MapPin, Star, Calendar, ArrowLeft, Mail, Phone, MessageCircle } from 'lucide-react';
+import { MapPin, Star, Calendar, ArrowLeft, Mail, Phone, MessageCircle, Globe } from 'lucide-react';
 import { Card3D } from './Marketplace'; // We will export Card3D from Marketplace to reuse it
 
 interface CompanyProfileProps {
@@ -25,7 +25,11 @@ export const CompanyProfile: React.FC<CompanyProfileProps> = ({ company, items, 
   const emailHref = company.email ? `mailto:${encodeURIComponent(company.email)}?subject=${emailSubject}&body=${emailBody}` : null;
   const phoneDigits = company.phone ? company.phone.replace(/[^0-9+]/g, '') : '';
   const phoneHref = phoneDigits ? `tel:${phoneDigits}` : null;
-  const hasContact = !!emailHref || !!phoneHref;
+  const websiteRaw = (company.website || '').trim();
+  const websiteDisplay = websiteRaw.replace(/^https?:\/\//i, '');
+  const websiteHref = websiteRaw ? (/^https?:\/\//i.test(websiteRaw) ? websiteRaw : `https://${websiteRaw}`) : null;
+  const hasDirectContact = !!emailHref || !!phoneHref;
+  const hasContact = hasDirectContact || !!websiteHref;
   const showLogo = !!company.logoUrl && !logoFailed;
 
   return (
@@ -87,7 +91,7 @@ export const CompanyProfile: React.FC<CompanyProfileProps> = ({ company, items, 
                     if (target) window.location.href = target;
                   }}
                   className={`flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-xl font-medium text-slate-700 transition-colors ${
-                    hasContact ? 'hover:bg-gray-50' : 'opacity-60 cursor-not-allowed'
+                    hasDirectContact ? 'hover:bg-gray-50' : 'opacity-60 cursor-not-allowed'
                   }`}
                 >
                   <MessageCircle size={18} /> Message
@@ -100,7 +104,7 @@ export const CompanyProfile: React.FC<CompanyProfileProps> = ({ company, items, 
                     if (target) window.location.href = target;
                   }}
                   className={`flex items-center gap-2 px-4 py-2 bg-brand-accent text-white rounded-xl font-medium transition-colors shadow-lg shadow-yellow-500/20 ${
-                    hasContact ? 'hover:bg-yellow-500' : 'opacity-60 cursor-not-allowed'
+                    hasDirectContact ? 'hover:bg-yellow-500' : 'opacity-60 cursor-not-allowed'
                   }`}
                 >
                   <Phone size={18} /> Contact
@@ -133,6 +137,16 @@ export const CompanyProfile: React.FC<CompanyProfileProps> = ({ company, items, 
                   }}
                 >
                   <Phone size={16} /> {company.phone}
+                </a>
+              )}
+              {websiteHref && (
+                <a
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 border border-gray-200 hover:border-brand-accent hover:text-brand-accent transition-colors"
+                  href={websiteHref}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <Globe size={16} /> {websiteDisplay}
                 </a>
               )}
               {!hasContact && (

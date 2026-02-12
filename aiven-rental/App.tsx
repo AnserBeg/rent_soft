@@ -62,28 +62,61 @@ function listingToCompany(listing: StorefrontListing): Company {
     description: c.streetAddress ? `${c.streetAddress}${c.postalCode ? `, ${c.postalCode}` : ''}` : undefined,
     email: c.email,
     phone: c.phone,
+    website: c.website || undefined,
     logoUrl: c.logoUrl || undefined,
   };
 }
 
 function listingToEquipment(listing: StorefrontListing): Equipment {
   const companyLocation = formatCompanyLocation(listing.company);
-  const images = listing.imageUrl
-    ? [listing.imageUrl]
+  const images = Array.isArray(listing.imageUrls)
+    ? listing.imageUrls.filter(Boolean).map((url) => String(url))
+    : [];
+  const primaryImage = listing.imageUrl ? String(listing.imageUrl) : null;
+  if (primaryImage && !images.includes(primaryImage)) {
+    images.unshift(primaryImage);
+  }
+  const documents = Array.isArray(listing.documents)
+    ? listing.documents
+        .map((doc) => {
+          if (!doc) return null;
+          const url = String((doc as any).url || '').trim();
+          if (!url) return null;
+          const sizeRaw = (doc as any).sizeBytes ?? (doc as any).size_bytes;
+          const sizeNum = Number(sizeRaw);
+          return {
+            url,
+            fileName: (doc as any).fileName || (doc as any).file_name || null,
+            mime: (doc as any).mime || (doc as any).mimetype || null,
+            sizeBytes: Number.isFinite(sizeNum) ? sizeNum : null,
+          };
+        })
+        .filter(Boolean)
+    : [];
+  const finalImages = images.length
+    ? images
     : [`https://picsum.photos/seed/rentsoft-${listing.typeId}/600/400`];
+  const dailyRate = listing.dailyRate ?? null;
+  const weeklyRate = listing.weeklyRate ?? null;
+  const monthlyRate = listing.monthlyRate ?? null;
+  const hasRate = (value: number | null) => typeof value === 'number' && Number.isFinite(value);
 
   return {
     id: String(listing.typeId),
     name: listing.typeName,
     category: listing.categoryName || 'Equipment',
-    pricePerDay: listing.dailyRate ?? 0,
+    pricePerDay: hasRate(dailyRate) ? dailyRate : 0,
+    dailyRate,
+    weeklyRate,
+    monthlyRate,
     description: listing.description || listing.terms || 'No description provided.',
     specs: {
-      ...(listing.dailyRate ? { 'Daily Rate': `$${listing.dailyRate.toFixed(2)}` } : {}),
-      ...(listing.weeklyRate ? { 'Weekly Rate': `$${listing.weeklyRate.toFixed(2)}` } : {}),
-      ...(listing.monthlyRate ? { 'Monthly Rate': `$${listing.monthlyRate.toFixed(2)}` } : {}),
+      ...(hasRate(dailyRate) ? { 'Daily Rate': `$${dailyRate.toFixed(2)}` } : {}),
+      ...(hasRate(weeklyRate) ? { 'Weekly Rate': `$${weeklyRate.toFixed(2)}` } : {}),
+      ...(hasRate(monthlyRate) ? { 'Monthly Rate': `$${monthlyRate.toFixed(2)}` } : {}),
     },
-    images,
+    images: finalImages,
+    documents,
     ownerId: String(listing.company.id),
     available: listing.stock.availableUnits > 0,
     location: companyLocation,
