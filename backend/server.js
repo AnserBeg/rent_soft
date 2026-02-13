@@ -557,9 +557,14 @@ app.use(
   "/uploads",
   express.static(uploadRoot, {
     setHeaders: (res, filePath) => {
-      setNoCacheHeaders(res);
-      res.setHeader("X-Content-Type-Options", "nosniff");
       const ext = path.extname(filePath).toLowerCase();
+      const cacheable = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+      if (cacheable.has(ext)) {
+        res.setHeader("Cache-Control", "private, max-age=604800, immutable");
+      } else {
+        setNoCacheHeaders(res);
+      }
+      res.setHeader("X-Content-Type-Options", "nosniff");
       const inline = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf"]);
       if (!inline.has(ext)) {
         res.setHeader("Content-Disposition", "attachment");
@@ -1390,13 +1395,25 @@ app.post(
       const sigDir = safeUploadPath("customer-links", `link-${link.id}`, `submission-${submissionId}`);
       if (!sigDir) return res.status(400).json({ error: "Invalid upload path." });
       fs.mkdirSync(sigDir, { recursive: true });
-      const sigFilename = `signature-${crypto.randomUUID()}.png`;
+      let sigBuffer = decoded.buffer;
+      let sigMime = decoded.mime || "image/png";
+      let sigExt = ".png";
+      if (String(sigMime).toLowerCase() !== "image/webp") {
+        try {
+          sigBuffer = await convertBufferToWebp(sigBuffer);
+          sigMime = "image/webp";
+          sigExt = ".webp";
+        } catch {
+          return res.status(400).json({ error: "Unable to convert signature image to WebP." });
+        }
+      }
+      const sigFilename = `signature-${crypto.randomUUID()}${sigExt}`;
       const sigPath = path.join(sigDir, sigFilename);
-      fs.writeFileSync(sigPath, decoded.buffer);
+      fs.writeFileSync(sigPath, sigBuffer);
       signature = {
         typedName: signatureName,
         imageUrl: `${uploadBase}${sigFilename}`,
-        imageMime: decoded.mime,
+        imageMime: sigMime,
         signedAt: new Date().toISOString(),
         ip: req.ip,
         userAgent: String(req.headers["user-agent"] || ""),
@@ -4201,6 +4218,13 @@ async function resolvePdfCompatibleImagePath(fullPath) {
   }
 }
 
+async function convertBufferToWebp(buffer, { quality = 82 } = {}) {
+  const input = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || "");
+  if (!input.length) throw new Error("Missing image buffer.");
+  const sharp = require("sharp");
+  return sharp(input, { failOnError: false, animated: true }).webp({ quality }).toBuffer();
+}
+
 const BLOCKED_UPLOAD_MIMES = new Set([
   "text/html",
   "application/xhtml+xml",
@@ -4236,22 +4260,7 @@ function safeUploadPath(...parts) {
 }
 
 const imageUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      const companyId = normalizeCompanyId(req.body.companyId);
-      if (!companyId) return cb(new Error("companyId is required."));
-      req.body.companyId = companyId;
-      const dir = safeUploadPath(`company-${companyId}`);
-      if (!dir) return cb(new Error("Invalid upload path."));
-      fs.mkdirSync(dir, { recursive: true });
-      cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-      const ext = imageExtensionForMime(file.mimetype) || path.extname(file.originalname || "");
-      const safeExt = [".jpg", ".jpeg", ".png", ".webp", ".gif"].includes(ext.toLowerCase()) ? ext.toLowerCase() : "";
-      cb(null, `${crypto.randomUUID()}${safeExt}`);
-    },
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!file.mimetype || !file.mimetype.startsWith("image/")) {
@@ -4426,17 +4435,39 @@ const aiImageUpload = multer({
   },
 });
 
-app.post("/api/uploads/image", (req, res, next) => {
-  imageUpload.single("image")(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message || "Upload failed." });
-    next();
-  });
-}, (req, res) => {
-  const companyId = normalizeCompanyId(req.body.companyId);
-  if (!companyId) return res.status(400).json({ error: "companyId is required." });
-  if (!req.file?.filename) return res.status(400).json({ error: "image file is required." });
-  res.status(201).json({ url: `/uploads/company-${companyId}/${req.file.filename}` });
-});
+app.post(
+  "/api/uploads/image",
+  (req, res, next) => {
+    imageUpload.single("image")(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || "Upload failed." });
+      next();
+    });
+  },
+  asyncHandler(async (req, res) => {
+    const companyId = normalizeCompanyId(req.body.companyId);
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    if (!req.file?.buffer?.length) return res.status(400).json({ error: "image file is required." });
+
+    const dir = safeUploadPath(`company-${companyId}`);
+    if (!dir) return res.status(400).json({ error: "Invalid upload path." });
+    fs.mkdirSync(dir, { recursive: true });
+
+    let outputBuffer = req.file.buffer;
+    if (String(req.file.mimetype || "").toLowerCase() !== "image/webp") {
+      try {
+        outputBuffer = await convertBufferToWebp(req.file.buffer);
+      } catch (err) {
+        return res.status(400).json({ error: "Unable to convert image to WebP." });
+      }
+    }
+
+    const filename = `${crypto.randomUUID()}.webp`;
+    const fullPath = path.join(dir, filename);
+    await fs.promises.writeFile(fullPath, outputBuffer);
+
+    res.status(201).json({ url: `/uploads/company-${companyId}/${filename}` });
+  })
+);
 
 app.post("/api/uploads/file", (req, res, next) => {
   fileUpload.single("file")(req, res, (err) => {

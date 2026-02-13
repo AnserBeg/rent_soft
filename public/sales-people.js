@@ -70,9 +70,9 @@ function hideModal() {
   form?.reset?.();
 }
 
-function jpegFileName(name) {
+function webpFileName(name) {
   const base = String(name || "image").replace(/\.[^/.]+$/, "");
-  return `${base || "image"}.jpg`;
+  return `${base || "image"}.webp`;
 }
 
 async function decodeImageForCanvas(file) {
@@ -98,8 +98,9 @@ async function decodeImageForCanvas(file) {
   });
 }
 
-async function convertPngToJpegFile(file, quality = 0.88) {
-  if (!file || String(file.type || "").toLowerCase() !== "image/png") return file;
+async function convertImageToWebpFile(file, quality = 0.88) {
+  if (!file || !String(file.type || "").startsWith("image/")) return file;
+  if (String(file.type || "").toLowerCase() === "image/webp") return file;
   let decoded;
   try {
     decoded = await decodeImageForCanvas(file);
@@ -114,20 +115,18 @@ async function convertPngToJpegFile(file, quality = 0.88) {
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx || !canvas.toBlob) return file;
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, width, height);
   ctx.drawImage(decoded, 0, 0, width, height);
   if (typeof decoded?.close === "function") decoded.close();
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
-  if (!blob) return file;
-  return new File([blob], jpegFileName(file.name), {
-    type: "image/jpeg",
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", quality));
+  if (!blob || blob.type !== "image/webp") return file;
+  return new File([blob], webpFileName(file.name), {
+    type: "image/webp",
     lastModified: file.lastModified || Date.now(),
   });
 }
 
 async function uploadImage({ companyId, file }) {
-  const prepared = await convertPngToJpegFile(file);
+  const prepared = await convertImageToWebpFile(file);
   const body = new FormData();
   body.append("companyId", String(companyId));
   body.append("image", prepared);

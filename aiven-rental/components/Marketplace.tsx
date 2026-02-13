@@ -24,8 +24,22 @@ interface Card3DProps {
 // Exporting Card3D so CompanyProfile can use it
 export const Card3D: React.FC<Card3DProps> = ({ item, onClick, ownerName, onOwnerClick, showOwner = true }) => {
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [loadAllImages, setLoadAllImages] = useState(false);
+
+  useEffect(() => {
+    setLoadAllImages(false);
+    setCurrentImageIndex(0);
+  }, [item.id]);
+
+  const hasGallery = item.images.length > 1;
+  const imagesToShow = loadAllImages ? item.images : item.images.slice(0, 1);
+
+  const enableCarousel = () => {
+    if (!loadAllImages && hasGallery) setLoadAllImages(true);
+  };
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (!loadAllImages && hasGallery) setLoadAllImages(true);
     const scrollLeft = e.currentTarget.scrollLeft;
     const width = e.currentTarget.offsetWidth;
     const index = Math.round(scrollLeft / width);
@@ -58,12 +72,17 @@ export const Card3D: React.FC<Card3DProps> = ({ item, onClick, ownerName, onOwne
           <div 
             className="w-full h-full flex overflow-x-auto snap-x snap-mandatory scrollbar-hide"
             onScroll={handleScroll}
+            onPointerEnter={enableCarousel}
+            onPointerDown={enableCarousel}
+            onTouchStart={enableCarousel}
           >
-            {item.images.map((img, idx) => (
+            {imagesToShow.map((img, idx) => (
               <img 
                 key={idx}
                 src={img} 
                 alt={`${item.name} - View ${idx + 1}`} 
+                loading={idx === 0 ? 'eager' : 'lazy'}
+                decoding="async"
                 className="w-full h-full object-contain object-center flex-shrink-0 snap-center"
               />
             ))}

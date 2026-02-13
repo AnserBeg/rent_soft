@@ -1860,7 +1860,7 @@ function getGeneralNotesHtml() {
   return cleaned;
 }
 
-function convertPngDataUrlToJpeg(dataUrl, quality = 0.88) {
+function convertDataUrlToWebp(dataUrl, quality = 0.88) {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
@@ -1872,19 +1872,19 @@ function convertPngDataUrlToJpeg(dataUrl, quality = 0.88) {
       canvas.height = height;
       const ctx = canvas.getContext("2d");
       if (!ctx) return resolve(dataUrl);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, width, height);
       ctx.drawImage(img, 0, 0, width, height);
-      resolve(canvas.toDataURL("image/jpeg", quality));
+      const webp = canvas.toDataURL("image/webp", quality);
+      if (!/^data:image\/webp/i.test(webp)) return resolve(dataUrl);
+      resolve(webp);
     };
     img.onerror = () => resolve(dataUrl);
     img.src = dataUrl;
   });
 }
 
-async function convertInlinePngsToJpegHtml(html, quality = 0.88) {
+async function convertInlineImagesToWebpHtml(html, quality = 0.88) {
   const raw = String(html || "");
-  if (!/data:image\/png/i.test(raw)) return raw;
+  if (!/data:image\/(png|jpe?g)/i.test(raw)) return raw;
   const doc = new DOMParser().parseFromString(`<div>${raw}</div>`, "text/html");
   const root = doc.body.firstElementChild;
   if (!root) return raw;
@@ -1892,10 +1892,10 @@ async function convertInlinePngsToJpegHtml(html, quality = 0.88) {
   let changed = false;
   for (const img of imgs) {
     const src = String(img.getAttribute("src") || "");
-    if (!/^data:image\/png/i.test(src)) continue;
-    const jpeg = await convertPngDataUrlToJpeg(src, quality);
-    if (jpeg && jpeg !== src) {
-      img.setAttribute("src", jpeg);
+    if (!/^data:image\/(png|jpe?g)/i.test(src)) continue;
+    const webp = await convertDataUrlToWebp(src, quality);
+    if (webp && webp !== src) {
+      img.setAttribute("src", webp);
       changed = true;
     }
   }
@@ -1949,9 +1949,9 @@ function makeImageId(prefix = "img") {
   return `${prefix}-${Date.now()}-${rand}`;
 }
 
-function jpegFileName(name) {
+function webpFileName(name) {
   const base = String(name || "image").replace(/\.[^/.]+$/, "");
-  return `${base || "image"}.jpg`;
+  return `${base || "image"}.webp`;
 }
 
 async function decodeImageForCanvas(file) {
@@ -1977,8 +1977,9 @@ async function decodeImageForCanvas(file) {
   });
 }
 
-async function convertPngToJpegFile(file, quality = 0.88) {
-  if (!file || String(file.type || "").toLowerCase() !== "image/png") return file;
+async function convertImageToWebpFile(file, quality = 0.88) {
+  if (!file || !String(file.type || "").startsWith("image/")) return file;
+  if (String(file.type || "").toLowerCase() === "image/webp") return file;
   let decoded;
   try {
     decoded = await decodeImageForCanvas(file);
@@ -1993,14 +1994,12 @@ async function convertPngToJpegFile(file, quality = 0.88) {
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   if (!ctx || !canvas.toBlob) return file;
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, width, height);
   ctx.drawImage(decoded, 0, 0, width, height);
   if (typeof decoded?.close === "function") decoded.close();
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
-  if (!blob) return file;
-  return new File([blob], jpegFileName(file.name), {
-    type: "image/jpeg",
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", quality));
+  if (!blob || blob.type !== "image/webp") return file;
+  return new File([blob], webpFileName(file.name), {
+    type: "image/webp",
     lastModified: file.lastModified || Date.now(),
   });
 }
@@ -2010,7 +2009,7 @@ async function uploadImage({ companyId, file }) {
   if (!file || !String(file.type || "").startsWith("image/")) {
     throw new Error("Only image uploads are allowed.");
   }
-  const prepared = await convertPngToJpegFile(file);
+  const prepared = await convertImageToWebpFile(file);
   const body = new FormData();
   body.append("companyId", String(companyId));
   body.append("image", prepared);
@@ -3068,7 +3067,7 @@ generalNotesImagesInput?.addEventListener("change", async (e) => {
 
   const results = await Promise.allSettled(
     files.map(async (file) => {
-      const prepared = await convertPngToJpegFile(file);
+      const prepared = await convertImageToWebpFile(file);
       const url = await uploadImage({ companyId, file: prepared });
       return {
         id: makeImageId("general"),
@@ -3263,7 +3262,7 @@ form?.addEventListener("submit", async (evt) => {
     const accountingContacts = collectContacts(accountingContactsList);
     const primaryContact = contacts[0] || {};
     const originalNotes = getGeneralNotesHtml().trim();
-    const convertedNotes = await convertInlinePngsToJpegHtml(originalNotes);
+    const convertedNotes = await convertInlineImagesToWebpHtml(originalNotes);
     if (convertedNotes !== originalNotes) setGeneralNotesHtml(convertedNotes);
     const payload = {
       customer: {

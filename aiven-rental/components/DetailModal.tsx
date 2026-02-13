@@ -545,14 +545,16 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
                                  : 'bg-slate-900 text-white text-xl font-display font-bold'
                              }`}
                            >
-                             {company?.logoUrl && !companyLogoFailed ? (
-                               <img
-                                 src={company.logoUrl}
-                                 alt={`${company.name} logo`}
-                                 className="w-full h-full object-contain p-2"
-                                 onError={() => setCompanyLogoFailed(true)}
-                               />
-                             ) : (
+                            {company?.logoUrl && !companyLogoFailed ? (
+                              <img
+                                src={company.logoUrl}
+                                alt={`${company.name} logo`}
+                                loading="lazy"
+                                decoding="async"
+                                className="w-full h-full object-contain p-2"
+                                onError={() => setCompanyLogoFailed(true)}
+                              />
+                            ) : (
                                company.name.substring(0, 2).toUpperCase()
                              )}
                            </div>
@@ -588,7 +590,14 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
                             }}
                           >
                             {item.images.map((img, i) => (
-                                <img key={i} src={img} alt={item.name} className="w-full h-full object-cover flex-shrink-0 snap-center" />
+                                <img
+                                  key={i}
+                                  src={img}
+                                  alt={item.name}
+                                  loading={i === 0 ? 'eager' : 'lazy'}
+                                  decoding="async"
+                                  className="w-full h-full object-cover flex-shrink-0 snap-center"
+                                />
                             ))}
                           </div>
 

@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const sharp = require("sharp");
 
 let cachedClientPromise = null;
 
@@ -25,6 +26,12 @@ function extensionForMime(mime) {
     default:
       return ".png";
   }
+}
+
+async function convertBufferToWebp(buffer, { quality = 82 } = {}) {
+  const input = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || "");
+  if (!input.length) throw new Error("Missing image buffer.");
+  return sharp(input, { failOnError: false, animated: true }).webp({ quality }).toBuffer();
 }
 
 async function getGeminiClient() {
@@ -91,7 +98,16 @@ async function writeCompanyUpload({ uploadRoot, companyId, buffer, mimeType }) {
   if (!Number.isFinite(cidNum) || cidNum <= 0) throw new Error("companyId is required.");
   const cid = String(Math.trunc(cidNum));
 
-  const ext = extensionForMime(mimeType);
+  let outputBuffer = buffer;
+  try {
+    if (String(mimeType || "").toLowerCase() !== "image/webp") {
+      outputBuffer = await convertBufferToWebp(buffer);
+    }
+  } catch {
+    throw new Error("Unable to convert image to WebP.");
+  }
+
+  const ext = ".webp";
   const dir = path.join(uploadRoot, `company-${cid}`);
   const safeDir = path.resolve(dir);
   const rel = path.relative(path.resolve(uploadRoot), safeDir);
@@ -101,7 +117,7 @@ async function writeCompanyUpload({ uploadRoot, companyId, buffer, mimeType }) {
   await fs.promises.mkdir(dir, { recursive: true });
   const filename = `${crypto.randomUUID()}${ext}`;
   const fullPath = path.join(dir, filename);
-  await fs.promises.writeFile(fullPath, buffer);
+  await fs.promises.writeFile(fullPath, outputBuffer);
   return { url: `/uploads/company-${cid}/${filename}`, fullPath };
 }
 
