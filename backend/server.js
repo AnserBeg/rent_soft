@@ -75,6 +75,11 @@ const {
   createPurchaseOrder,
   updatePurchaseOrder,
   deletePurchaseOrder,
+  listSalesOrders,
+  getSalesOrder,
+  createSalesOrder,
+  updateSalesOrder,
+  deleteSalesOrder,
   listWorkOrders,
   getWorkOrder,
   createWorkOrder,
@@ -127,6 +132,7 @@ const {
   getBundleAvailability,
   getTypeDemandAvailability,
   listStorefrontListings,
+  listStorefrontSaleListings,
   createStorefrontCustomer,
   authenticateStorefrontCustomer,
   authenticateStorefrontCustomerAnyCompany,
@@ -817,6 +823,12 @@ function pickupBulkInvoiceIncludesLineItem({ docs, bulkDocNumber, lineItemId }) 
 }
 
 function normalizePurchaseOrderStatus(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (raw === "closed") return "closed";
+  return "open";
+}
+
+function normalizeSalesOrderStatus(value) {
   const raw = String(value ?? "").trim().toLowerCase();
   if (raw === "closed") return "closed";
   return "open";
@@ -3843,6 +3855,21 @@ app.get(
       location,
       from,
       to,
+      limit,
+      offset,
+    });
+    res.json({ listings });
+  })
+);
+
+app.get(
+  "/api/storefront/sale-listings",
+  asyncHandler(async (req, res) => {
+    const { equipment, company, location, limit, offset } = req.query || {};
+    const listings = await listStorefrontSaleListings({
+      equipment,
+      company,
+      location,
       limit,
       offset,
     });
@@ -8346,6 +8373,153 @@ app.delete(
     const { companyId } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     await deletePurchaseOrder({ id, companyId });
+    res.status(204).end();
+  })
+);
+
+app.get(
+  "/api/sales-orders",
+  asyncHandler(async (req, res) => {
+    const { companyId, from, to, dateField } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const salesOrders = await listSalesOrders(Number(companyId), { from, to, dateField });
+    res.json({ salesOrders });
+  })
+);
+
+app.get(
+  "/api/sales-orders/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const salesOrder = await getSalesOrder({ companyId: Number(companyId), id: Number(id) });
+    if (!salesOrder) return res.status(404).json({ error: "Sales order not found." });
+    res.json({ salesOrder });
+  })
+);
+
+app.post(
+  "/api/sales-orders",
+  asyncHandler(async (req, res) => {
+    const {
+      companyId,
+      equipmentId,
+      customerId,
+      customerPo,
+      salespersonId,
+      status,
+      salePrice,
+      description,
+      imageUrl,
+      imageUrls,
+      documents,
+    } = req.body || {};
+    if (!companyId || !equipmentId) {
+      return res.status(400).json({ error: "companyId and equipmentId are required." });
+    }
+    const equipmentIdNum = Number(equipmentId);
+    if (!Number.isFinite(equipmentIdNum)) {
+      return res.status(400).json({ error: "equipmentId must be a valid number." });
+    }
+    const customerIdNum = customerId === "" || customerId === null || customerId === undefined ? null : Number(customerId);
+    if (customerIdNum !== null && !Number.isFinite(customerIdNum)) {
+      return res.status(400).json({ error: "customerId must be a valid number." });
+    }
+    const salespersonIdNum =
+      salespersonId === "" || salespersonId === null || salespersonId === undefined ? null : Number(salespersonId);
+    if (salespersonIdNum !== null && !Number.isFinite(salespersonIdNum)) {
+      return res.status(400).json({ error: "salespersonId must be a valid number." });
+    }
+    const normalizedStatus = normalizeSalesOrderStatus(status);
+    const salePriceNum =
+      salePrice === "" || salePrice === null || salePrice === undefined ? null : Number(salePrice);
+    const order = await createSalesOrder({
+      companyId: Number(companyId),
+      equipmentId: equipmentIdNum,
+      customerId: customerIdNum,
+      customerPo: customerPo || null,
+      salespersonId: salespersonIdNum,
+      status: normalizedStatus,
+      salePrice: Number.isFinite(salePriceNum) ? salePriceNum : null,
+      description: description || null,
+      imageUrl,
+      imageUrls: parseStringArray(imageUrls),
+      documents: parseJsonArray(documents),
+      closedAt: normalizedStatus === "closed" ? new Date().toISOString() : null,
+    });
+    res.status(201).json({ salesOrder: order });
+  })
+);
+
+app.put(
+  "/api/sales-orders/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const {
+      companyId,
+      equipmentId,
+      customerId,
+      customerPo,
+      salespersonId,
+      status,
+      salePrice,
+      description,
+      imageUrl,
+      imageUrls,
+      documents,
+    } = req.body || {};
+    if (!companyId || !equipmentId) {
+      return res.status(400).json({ error: "companyId and equipmentId are required." });
+    }
+    const equipmentIdNum = Number(equipmentId);
+    if (!Number.isFinite(equipmentIdNum)) {
+      return res.status(400).json({ error: "equipmentId must be a valid number." });
+    }
+    const customerIdNum = customerId === "" || customerId === null || customerId === undefined ? null : Number(customerId);
+    if (customerIdNum !== null && !Number.isFinite(customerIdNum)) {
+      return res.status(400).json({ error: "customerId must be a valid number." });
+    }
+    const salespersonIdNum =
+      salespersonId === "" || salespersonId === null || salespersonId === undefined ? null : Number(salespersonId);
+    if (salespersonIdNum !== null && !Number.isFinite(salespersonIdNum)) {
+      return res.status(400).json({ error: "salespersonId must be a valid number." });
+    }
+    const existing = await getSalesOrder({ companyId: Number(companyId), id: Number(id) });
+    if (!existing) return res.status(404).json({ error: "Sales order not found." });
+
+    const normalizedStatus = normalizeSalesOrderStatus(status);
+    const salePriceNum =
+      salePrice === "" || salePrice === null || salePrice === undefined ? null : Number(salePrice);
+    const closedAt = normalizedStatus === "closed" ? existing.closed_at || new Date().toISOString() : null;
+
+    const updated = await updateSalesOrder({
+      id,
+      companyId: Number(companyId),
+      equipmentId: equipmentIdNum,
+      customerId: customerIdNum,
+      customerPo: customerPo || null,
+      salespersonId: salespersonIdNum,
+      status: normalizedStatus,
+      salePrice: Number.isFinite(salePriceNum) ? salePriceNum : null,
+      description: description || null,
+      imageUrl,
+      imageUrls: parseStringArray(imageUrls),
+      documents: parseJsonArray(documents),
+      closedAt,
+    });
+    if (!updated) return res.status(404).json({ error: "Sales order not found." });
+    res.json({ salesOrder: updated });
+  })
+);
+
+app.delete(
+  "/api/sales-orders/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    await deleteSalesOrder({ id, companyId });
     res.status(204).end();
   })
 );

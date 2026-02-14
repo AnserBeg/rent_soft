@@ -325,6 +325,7 @@ document.addEventListener("DOMContentLoaded", () => {
     group.innerHTML = `
       <div class="nav-group-title">Purchase</div>
       <a class="nav-link" href="purchase-orders.html">Purchase Orders</a>
+      <a class="nav-link" href="sales-orders.html">Sales Orders</a>
       <a class="nav-link" href="vendors.html">Vendors</a>
     `;
 
@@ -436,6 +437,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (href.includes("dispatch")) return "truck";
     if (href.includes("reports")) return "bar-chart";
     if (href.includes("purchase-order") || href.includes("purchase-orders")) return "clipboard";
+    if (href.includes("sales-order") || href.includes("sales-orders")) return "clipboard";
     if (href.includes("rental-orders")) return "clipboard";
     if (href.includes("work-orders")) return "file-text";
     if (href.includes("rental-quotes")) return "file-text";

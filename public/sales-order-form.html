@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Sales Order</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="invoices.html">Finance</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+        <main class="grid">
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2 id="form-title">Sales order details</h2>
+                <p class="hint" id="so-meta"></p>
+              </div>
+              <div class="inline-actions header-actions">
+                <button class="ghost small" id="close-so" type="button" style="display:none;">Close</button>
+                <button class="ghost small" id="open-so" type="button" style="display:none;">Open</button>
+                <button class="ghost danger" id="delete-so" type="button" style="display:none;">Delete</button>
+              </div>
+            </div>
+            <div class="form-body">
+              <form id="sales-order-form" class="stack">
+                <div class="stack">
+                  <h3 style="margin:0;">Customer &amp; sales</h3>
+                  <div class="three-col">
+                    <label>Customer
+                      <input id="customer-search-input" type="text" placeholder="Select customer" autocomplete="off"
+                        role="combobox" aria-autocomplete="list" aria-expanded="false"
+                        aria-controls="customer-suggestions" />
+                      <div id="customer-suggestions" class="rs-autocomplete rs-autocomplete--scroll" role="listbox" hidden></div>
+                      <select id="customer-select" name="customerId" style="display:none;" aria-hidden="true" tabindex="-1">
+                        <option value="">Select customer</option>
+                        <option value="__new__">+ Add new customer...</option>
+                      </select>
+                    </label>
+                    <label>Customer PO # (optional)
+                      <input id="customer-po" name="customerPo" />
+                    </label>
+                    <label>Salesperson
+                      <select id="sales-select" name="salespersonId">
+                        <option value="">Select salesperson</option>
+                        <option value="__new_sales__">+ Add salesperson...</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="details-panel" id="customer-details" style="display:none;"></div>
+                </div>
+
+                <label>Unit / Asset
+                  <input id="equipment-search-input" type="text" placeholder="Select asset" autocomplete="off" required
+                    role="combobox" aria-autocomplete="list" aria-expanded="false"
+                    aria-controls="equipment-suggestions" />
+                  <div id="equipment-suggestions" class="rs-autocomplete" role="listbox" hidden></div>
+                  <div id="equipment-selected" class="selection-pills"></div>
+                  <select name="equipmentId" id="equipment-select" style="display:none;" aria-hidden="true" tabindex="-1">
+                    <option value="">Select asset</option>
+                  </select>
+                </label>
+                <input name="status" id="status-input" type="hidden" value="open" />
+
+                <label>Sale price ($) <input name="salePrice" type="number" min="0" step="0.01" /></label>
+                <label>Description <textarea name="description" class="notes-area"></textarea></label>
+
+                <label>Images (optional) <input name="imageFiles" type="file" accept="image/*" multiple /></label>
+                <input name="imageUrls" type="hidden" />
+                <input name="imageUrl" type="hidden" />
+                <div class="image-tools">
+                  <div class="thumb-row" id="sales-order-images"></div>
+                  <button type="button" class="ghost small danger" id="remove-sales-images" style="display:none;">Clear images</button>
+                </div>
+
+                <label>PDF (optional) <input name="documentFiles" type="file" accept="application/pdf" /></label>
+                <input name="documents" type="hidden" />
+                <div class="stack" id="sales-documents-list"></div>
+
+                <p class="hint">Open sales orders appear on the marketplace as units for sale.</p>
+                <div class="inline-actions">
+                  <button type="submit" class="primary" id="save-so">Save sales order</button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="sales-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Add salesperson</h3>
+        <button class="ghost small" id="close-sales-modal">Close</button>
+      </div>
+      <form id="sales-form" class="stack">
+        <label>Name <input name="name" required /></label>
+        <label>Email <input name="email" type="email" /></label>
+        <label>Phone number <input name="phone" /></label>
+        <button type="submit" class="primary">Save</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="sales-order-form.js"></script>
+</body>
+</html>

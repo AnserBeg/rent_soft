@@ -25,6 +25,10 @@ export interface EquipmentDocument {
 
 export interface Equipment {
   id: string;
+  listingType?: 'rental' | 'sale';
+  salePrice?: number | null;
+  unitId?: string;
+  unitLabel?: string;
   name: string;
   category: string;
   pricePerDay: number;

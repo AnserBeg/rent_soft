@@ -1,6 +1,11 @@
 import { apiJson } from './rentSoftApi';
 
 export type StorefrontListing = {
+  listingType?: 'rental' | 'sale';
+  saleId?: number | null;
+  unitId?: number | null;
+  unitLabel?: string | null;
+  salePrice?: number | null;
   typeId: number;
   typeName: string;
   imageUrl: string | null;
@@ -65,6 +70,23 @@ export async function listStorefrontListings(params: {
   if (typeof params.limit === 'number') qs.set('limit', String(params.limit));
   if (typeof params.offset === 'number') qs.set('offset', String(params.offset));
   const url = `/api/storefront/listings?${qs.toString()}`;
+  return apiJson<ListStorefrontListingsResponse>(url);
+}
+
+export async function listStorefrontSaleListings(params: {
+  equipment?: string;
+  company?: string;
+  location?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const qs = new URLSearchParams();
+  if (params.equipment) qs.set('equipment', params.equipment);
+  if (params.company) qs.set('company', params.company);
+  if (params.location) qs.set('location', params.location);
+  if (typeof params.limit === 'number') qs.set('limit', String(params.limit));
+  if (typeof params.offset === 'number') qs.set('offset', String(params.offset));
+  const url = `/api/storefront/sale-listings?${qs.toString()}`;
   return apiJson<ListStorefrontListingsResponse>(url);
 }
 

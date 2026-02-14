@@ -33,6 +33,7 @@ export const Card3D: React.FC<Card3DProps> = ({ item, onClick, ownerName, onOwne
 
   const hasGallery = item.images.length > 1;
   const imagesToShow = loadAllImages ? item.images : item.images.slice(0, 1);
+  const isSale = item.listingType === 'sale';
 
   const enableCarousel = () => {
     if (!loadAllImages && hasGallery) setLoadAllImages(true);
@@ -91,6 +92,11 @@ export const Card3D: React.FC<Card3DProps> = ({ item, onClick, ownerName, onOwne
           <div className="absolute top-4 right-4 bg-white/90 backdrop-blur px-3 py-1 rounded-full text-xs font-bold text-brand-accent border border-gray-200 shadow-sm z-10">
             {item.category}
           </div>
+          {isSale && (
+            <div className="absolute top-4 left-4 bg-slate-900/90 text-white backdrop-blur px-3 py-1 rounded-full text-xs font-bold shadow-sm z-10">
+              For Sale
+            </div>
+          )}
           
           {/* Scroll Indicators */}
           {item.images.length > 1 && (
@@ -138,7 +144,18 @@ export const Card3D: React.FC<Card3DProps> = ({ item, onClick, ownerName, onOwne
           {/* Footer */}
           <div className="mt-auto pt-4 flex items-start justify-between border-t border-gray-50 gap-3">
              <div className="min-w-0">
-                {rateRows.length ? (
+                {isSale ? (
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-baseline gap-2 text-slate-900">
+                      <span className="text-[0.65rem] font-semibold uppercase tracking-wide text-slate-400">
+                        Sale
+                      </span>
+                      <span className="text-sm font-bold">
+                        {isRate(item.salePrice) ? `$${formatRate(item.salePrice)}` : 'Contact for price'}
+                      </span>
+                    </div>
+                  </div>
+                ) : rateRows.length ? (
                   <div className="flex flex-col gap-1">
                     {rateRows.map((rate) => (
                       <div key={rate.label} className="flex items-baseline gap-2 text-slate-900">
@@ -155,7 +172,7 @@ export const Card3D: React.FC<Card3DProps> = ({ item, onClick, ownerName, onOwne
                 )}
              </div>
              <button className="px-4 py-2 bg-slate-900 hover:bg-brand-accent hover:text-white text-white border border-transparent rounded-lg text-xs font-bold transition-all shadow-md">
-                RENT NOW
+                {isSale ? 'VIEW DETAILS' : 'RENT NOW'}
              </button>
           </div>
         </div>

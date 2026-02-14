@@ -169,7 +169,15 @@ async function deleteImage({ companyId, url }) {
   });
 }
 
+function isSaleListing(listing) {
+  return String(listing?.listingType || "").trim().toLowerCase() === "sale";
+}
+
 function renderRates(listing) {
+  if (isSaleListing(listing)) {
+    const price = formatMoney(listing?.salePrice);
+    return price ? `Sale ${price}` : "Sale price on request";
+  }
   const bits = [];
   const daily = formatMoney(listing?.dailyRate);
   const weekly = formatMoney(listing?.weeklyRate);
@@ -181,6 +189,7 @@ function renderRates(listing) {
 }
 
 function renderAvailability(listing) {
+  if (isSaleListing(listing)) return "Available for purchase";
   return "Availability on request";
 }
 
@@ -207,6 +216,9 @@ function listingCardHtml(listing) {
   const companyName = escapeHtml(listing?.company?.name || "Unknown company");
   const category = listing?.categoryName ? escapeHtml(listing.categoryName) : null;
   const locations = summarizeLocations(listing?.stock?.locations);
+  const saleBadge = isSaleListing(listing) ? `<span class="mini-badge">For sale</span>` : "";
+  const actionLabel = isSaleListing(listing) ? "Contact" : "Reserve";
+  const actionValue = isSaleListing(listing) ? "contact" : "reserve";
 
   return `
     <div class="storefront-card-inner">
@@ -214,6 +226,7 @@ function listingCardHtml(listing) {
       <div class="storefront-card-body">
         <div class="storefront-title-row">
           <div class="storefront-title">${typeName}</div>
+          ${saleBadge}
         </div>
         <div class="storefront-sub">${companyName}${category ? ` • ${category}` : ""}</div>
         <div class="storefront-sub">${escapeHtml(locations)}</div>
@@ -221,7 +234,7 @@ function listingCardHtml(listing) {
         <div class="storefront-sub">${escapeHtml(renderAvailability(listing))}</div>
       </div>
       <div class="storefront-card-actions">
-        <button class="primary" data-action="reserve">Reserve</button>
+        <button class="primary" data-action="${actionValue}">${actionLabel}</button>
       </div>
     </div>
   `;
@@ -1038,6 +1051,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function openSaleContact(listing) {
+    const email = listing?.company?.email || "";
+    const phone = listing?.company?.phone || "";
+    if (email) {
+      const subject = encodeURIComponent(`Sales inquiry - ${listing?.typeName || "Equipment"}`);
+      window.location.href = `mailto:${email}?subject=${subject}`;
+      return;
+    }
+    if (phone) {
+      window.location.href = `tel:${phone}`;
+      return;
+    }
+    window.alert("No contact details provided for this seller.");
+  }
+
   renderTopbarAccount();
 
   setContactRows(reserveEmergencyContactsList, []);
@@ -1236,6 +1264,10 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       setMeta(rangeHint, "");
     }
+    const saleParams = new URLSearchParams();
+    if (equipment) saleParams.set("equipment", equipment);
+    if (company) saleParams.set("company", company);
+    if (location) saleParams.set("location", location);
 
     setBusy(submitBtn, true, "Searching...");
     setMeta(meta, "Loading listings...");
@@ -1244,10 +1276,42 @@ document.addEventListener("DOMContentLoaded", () => {
     currentListings = [];
 
     try {
-      const res = await fetch(`/api/storefront/listings?${params.toString()}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Unable to load listings.");
-      currentListings = Array.isArray(data.listings) ? data.listings : [];
+      const fetchListings = async (url) => {
+        const res = await fetch(url);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Unable to load listings.");
+        return Array.isArray(data.listings) ? data.listings : [];
+      };
+
+      const [rentalResult, saleResult] = await Promise.allSettled([
+        fetchListings(`/api/storefront/listings?${params.toString()}`),
+        fetchListings(`/api/storefront/sale-listings?${saleParams.toString()}`),
+      ]);
+
+      const merged = [];
+      const errors = [];
+      if (rentalResult.status === "fulfilled") merged.push(...rentalResult.value);
+      else errors.push(rentalResult.reason);
+      if (saleResult.status === "fulfilled") merged.push(...saleResult.value);
+      else errors.push(saleResult.reason);
+
+      if (!merged.length && errors.length) {
+        throw errors[0];
+      }
+
+      const deduped = Array.from(
+        new Map(
+          merged.map((listing) => {
+            const kind = isSaleListing(listing) ? "sale" : "rental";
+            const key = kind === "sale"
+              ? `sale:${listing.saleId || listing.unitId || listing.typeId}`
+              : `rental:${listing.company?.id}:${listing.typeId}`;
+            return [key, listing];
+          })
+        ).values()
+      );
+
+      currentListings = deduped;
       setMeta(count, String(currentListings.length));
 
       if (!currentListings.length) {
@@ -1265,9 +1329,15 @@ document.addEventListener("DOMContentLoaded", () => {
         card.addEventListener("click", (e) => {
           const target = e.target;
           const action = target?.dataset?.action;
-          if (action !== "reserve") return;
+          if (!action) return;
           e.preventDefault();
-          openReserveModal(listing);
+          if (action === "reserve" && !isSaleListing(listing)) {
+            openReserveModal(listing);
+            return;
+          }
+          if (action === "contact" && isSaleListing(listing)) {
+            openSaleContact(listing);
+          }
         });
         grid.appendChild(card);
       });

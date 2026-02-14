@@ -8,7 +8,7 @@ import { CompanyProfile } from './components/CompanyProfile';
 import { Scene3D } from './components/Scene3D';
 import { DetailModal } from './components/DetailModal';
 import { AnimatePresence, motion } from 'framer-motion';
-import { listStorefrontListings, StorefrontListing } from './services/storefront';
+import { listStorefrontListings, listStorefrontSaleListings, StorefrontListing } from './services/storefront';
 import { getSession, setSession as persistSession, RentSoftSession } from './services/session';
 
 function viewFromHash(hash: string): ViewState | null {
@@ -68,6 +68,7 @@ function listingToCompany(listing: StorefrontListing): Company {
 }
 
 function listingToEquipment(listing: StorefrontListing): Equipment {
+  const isSale = listing.listingType === 'sale';
   const companyLocation = formatCompanyLocation(listing.company);
   const images = Array.isArray(listing.imageUrls)
     ? listing.imageUrls.filter(Boolean).map((url) => String(url))
@@ -95,11 +96,37 @@ function listingToEquipment(listing: StorefrontListing): Equipment {
     : [];
   const finalImages = images.length
     ? images
-    : [`https://picsum.photos/seed/rentsoft-${listing.typeId}/600/400`];
+    : [`https://picsum.photos/seed/rentsoft-${listing.typeId || listing.saleId || listing.unitId}/600/400`];
   const dailyRate = listing.dailyRate ?? null;
   const weeklyRate = listing.weeklyRate ?? null;
   const monthlyRate = listing.monthlyRate ?? null;
   const hasRate = (value: number | null) => typeof value === 'number' && Number.isFinite(value);
+
+  if (isSale) {
+    const salePrice = listing.salePrice ?? null;
+    return {
+      id: `sale-${listing.saleId ?? listing.unitId ?? listing.typeId}`,
+      listingType: 'sale',
+      salePrice,
+      unitId: listing.unitId ? String(listing.unitId) : undefined,
+      unitLabel: listing.unitLabel || undefined,
+      name: listing.unitLabel || listing.typeName,
+      category: listing.categoryName || 'Equipment',
+      pricePerDay: 0,
+      dailyRate: null,
+      weeklyRate: null,
+      monthlyRate: null,
+      description: listing.description || 'No description provided.',
+      specs: {
+        ...(hasRate(salePrice) ? { 'Sale Price': `$${salePrice.toFixed(2)}` } : {}),
+      },
+      images: finalImages,
+      documents,
+      ownerId: String(listing.company.id),
+      available: true,
+      location: companyLocation,
+    };
+  }
 
   return {
     id: String(listing.typeId),
@@ -189,12 +216,16 @@ function App() {
 
         const calls: Array<Promise<{ listings: StorefrontListing[] }>> = [];
         const base = { location: loc || undefined, from: hasRange ? from! : undefined, to: hasRange ? to! : undefined, limit: 120 };
+        const saleBase = { location: loc || undefined, limit: 120 };
 
         if (term) {
           calls.push(listStorefrontListings({ ...base, equipment: term }));
           calls.push(listStorefrontListings({ ...base, company: term }));
+          calls.push(listStorefrontSaleListings({ ...saleBase, equipment: term }));
+          calls.push(listStorefrontSaleListings({ ...saleBase, company: term }));
         } else {
           calls.push(listStorefrontListings(base));
+          calls.push(listStorefrontSaleListings(saleBase));
         }
 
         const results = await Promise.allSettled(calls);
@@ -204,7 +235,15 @@ function App() {
         }
 
         const deduped = Array.from(
-          new Map(merged.map((l) => [`${l.company.id}:${l.typeId}`, l])).values()
+          new Map(
+            merged.map((l) => {
+              const kind = l.listingType === 'sale' ? 'sale' : 'rental';
+              const key = kind === 'sale'
+                ? `sale:${l.saleId ?? l.unitId ?? l.typeId}`
+                : `rental:${l.company.id}:${l.typeId}`;
+              return [key, l];
+            })
+          ).values()
         );
 
         if (seq !== requestSeq.current) return;

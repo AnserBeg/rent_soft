@@ -835,6 +835,45 @@ async function ensureTables() {
       `CREATE INDEX IF NOT EXISTS purchase_orders_company_expected_idx ON purchase_orders (company_id, expected_possession_date);`
     );
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS sales_orders (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        so_number TEXT,
+        equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+        customer_po TEXT,
+        salesperson_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        sale_price NUMERIC(12, 2),
+        description TEXT,
+        image_url TEXT,
+        image_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
+        documents JSONB NOT NULL DEFAULT '[]'::jsonb,
+        closed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS so_number TEXT;`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS customer_po TEXT;`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS salesperson_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open';`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS sale_price NUMERIC(12, 2);`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS description TEXT;`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS image_url TEXT;`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS image_urls JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS documents JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;`);
+    await client.query(`ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+    await client.query(`CREATE INDEX IF NOT EXISTS sales_orders_company_id_idx ON sales_orders (company_id);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS sales_orders_company_status_idx ON sales_orders (company_id, status);`);
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS sales_orders_company_so_number_uniq ON sales_orders (company_id, so_number) WHERE so_number IS NOT NULL;`
+    );
+
     // Repair: if a pre-existing location had an address and was accidentally marked non-base, restore it.
     // (Current-only locations created via picker typically have no address, and dropoff/site locations are prefixed.)
     await client.query(`
@@ -3375,6 +3414,200 @@ async function updatePurchaseOrder({
 
 async function deletePurchaseOrder({ id, companyId }) {
   await pool.query(`DELETE FROM purchase_orders WHERE id = $1 AND company_id = $2`, [id, companyId]);
+}
+
+async function listSalesOrders(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
+  const fromIso = from ? normalizeTimestamptz(from) : null;
+  const toIso = to ? normalizeTimestamptz(to) : null;
+  const allowed = new Set(["created_at", "updated_at", "closed_at"]);
+  const field = allowed.has(dateField) ? dateField : "created_at";
+  const params = [companyId];
+  const where = ["so.company_id = $1"];
+  if (fromIso) {
+    params.push(fromIso);
+    where.push(`so.${field} >= $${params.length}::timestamptz`);
+  }
+  if (toIso) {
+    params.push(toIso);
+    where.push(`so.${field} < $${params.length}::timestamptz`);
+  }
+  const result = await pool.query(
+    `SELECT so.id,
+            so.company_id,
+            so.so_number,
+            so.equipment_id,
+            so.customer_id,
+            so.customer_po,
+            so.salesperson_id,
+            so.status,
+            so.sale_price,
+            so.description,
+            so.image_url,
+            so.image_urls,
+            so.documents,
+            so.closed_at,
+            so.created_at,
+            so.updated_at,
+            e.model_name,
+            e.serial_number,
+            e.type AS equipment_type,
+            et.name AS type_name,
+            l.name AS location_name
+       FROM sales_orders so
+  LEFT JOIN equipment e ON e.id = so.equipment_id
+  LEFT JOIN equipment_types et ON et.id = e.type_id
+  LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id)
+      WHERE ${where.join(" AND ")}
+      ORDER BY so.created_at DESC, so.id DESC`,
+    params
+  );
+  return (result.rows || []).map((row) => {
+    if (row) row.documents = normalizeTypeDocuments(row.documents);
+    return row;
+  });
+}
+
+async function getSalesOrder({ companyId, id }) {
+  const result = await pool.query(
+    `SELECT so.id,
+            so.company_id,
+            so.so_number,
+            so.equipment_id,
+            so.customer_id,
+            so.customer_po,
+            so.salesperson_id,
+            so.status,
+            so.sale_price,
+            so.description,
+            so.image_url,
+            so.image_urls,
+            so.documents,
+            so.closed_at,
+            so.created_at,
+            so.updated_at,
+            e.model_name,
+            e.serial_number,
+            e.type AS equipment_type,
+            et.name AS type_name,
+            l.name AS location_name
+       FROM sales_orders so
+  LEFT JOIN equipment e ON e.id = so.equipment_id
+  LEFT JOIN equipment_types et ON et.id = e.type_id
+  LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id)
+      WHERE so.company_id = $1 AND so.id = $2`,
+    [companyId, id]
+  );
+  const row = result.rows[0];
+  if (row) row.documents = normalizeTypeDocuments(row.documents);
+  return row;
+}
+
+async function createSalesOrder({
+  companyId,
+  soNumber,
+  equipmentId,
+  customerId,
+  customerPo,
+  salespersonId,
+  status,
+  salePrice,
+  description,
+  imageUrl,
+  imageUrls,
+  documents,
+  closedAt,
+}) {
+  const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean).map(String) : [];
+  const primaryUrl = urls[0] || imageUrl || null;
+  const docs = normalizeTypeDocuments(documents);
+  const effectiveDate = new Date();
+  const soNumberValue =
+    soNumber || (await nextDocumentNumber(pool, companyId, "SO", effectiveDate, { yearDigits: 4, seqDigits: 5 }));
+  const result = await pool.query(
+    `INSERT INTO sales_orders
+      (company_id, so_number, equipment_id, customer_id, customer_po, salesperson_id, status, sale_price, description, image_url, image_urls, documents, closed_at, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+     RETURNING id, company_id, so_number, equipment_id, customer_id, customer_po, salesperson_id, status, sale_price, description, image_url, image_urls, documents,
+               closed_at, created_at, updated_at`,
+    [
+      companyId,
+      soNumberValue,
+      equipmentId || null,
+      customerId || null,
+      customerPo || null,
+      salespersonId || null,
+      status || "open",
+      salePrice ?? null,
+      description || null,
+      primaryUrl,
+      JSON.stringify(urls),
+      JSON.stringify(docs),
+      closedAt || null,
+    ]
+  );
+  const row = result.rows[0];
+  if (row) row.documents = normalizeTypeDocuments(row.documents);
+  return row;
+}
+
+async function updateSalesOrder({
+  id,
+  companyId,
+  equipmentId,
+  customerId,
+  customerPo,
+  salespersonId,
+  status,
+  salePrice,
+  description,
+  imageUrl,
+  imageUrls,
+  documents,
+  closedAt,
+}) {
+  const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean).map(String) : [];
+  const primaryUrl = urls[0] || imageUrl || null;
+  const docs = normalizeTypeDocuments(documents);
+  const result = await pool.query(
+    `UPDATE sales_orders
+        SET equipment_id = $1,
+            customer_id = $2,
+            customer_po = $3,
+            salesperson_id = $4,
+            status = $5,
+            sale_price = $6,
+            description = $7,
+            image_url = $8,
+            image_urls = $9,
+            documents = $10,
+            closed_at = $11,
+            updated_at = NOW()
+      WHERE id = $12 AND company_id = $13
+      RETURNING id, company_id, so_number, equipment_id, customer_id, customer_po, salesperson_id, status, sale_price, description, image_url, image_urls, documents,
+                closed_at, created_at, updated_at`,
+    [
+      equipmentId || null,
+      customerId || null,
+      customerPo || null,
+      salespersonId || null,
+      status || "open",
+      salePrice ?? null,
+      description || null,
+      primaryUrl,
+      JSON.stringify(urls),
+      JSON.stringify(docs),
+      closedAt || null,
+      id,
+      companyId,
+    ]
+  );
+  const row = result.rows[0];
+  if (row) row.documents = normalizeTypeDocuments(row.documents);
+  return row;
+}
+
+async function deleteSalesOrder({ id, companyId }) {
+  await pool.query(`DELETE FROM sales_orders WHERE id = $1 AND company_id = $2`, [id, companyId]);
 }
 
 function formatWorkOrderRow(row) {
@@ -12672,6 +12905,181 @@ async function listStorefrontListings({
   });
 }
 
+async function listStorefrontSaleListings({
+  equipment = null,
+  company = null,
+  location = null,
+  limit = 48,
+  offset = 0,
+} = {}) {
+  const equipmentTokens = normalizeSearchTokens(equipment);
+  const companyTokens = normalizeSearchTokens(company);
+  const locationTokens = normalizeSearchTokens(location);
+
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 48));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+
+  const params = [];
+  const where = [
+    "so.status = 'open'",
+    "so.equipment_id IS NOT NULL",
+    "e.id IS NOT NULL",
+    "(e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')",
+    "(e.condition IS NULL OR e.condition NOT IN ('Lost','Unusable'))",
+  ];
+
+  for (const token of equipmentTokens) {
+    params.push(token);
+    const idx = params.length;
+    where.push(
+      `(e.model_name ILIKE $${idx} ESCAPE '\\' OR e.serial_number ILIKE $${idx} ESCAPE '\\' OR e.type ILIKE $${idx} ESCAPE '\\' OR et.name ILIKE $${idx} ESCAPE '\\' OR so.description ILIKE $${idx} ESCAPE '\\')`
+    );
+  }
+
+  for (const token of companyTokens) {
+    params.push(token);
+    const idx = params.length;
+    where.push(`(c.name ILIKE $${idx} ESCAPE '\\')`);
+  }
+
+  for (const token of locationTokens) {
+    params.push(token);
+    const idx = params.length;
+    where.push(
+      `(
+        c.city ILIKE $${idx} ESCAPE '\\'
+        OR c.region ILIKE $${idx} ESCAPE '\\'
+        OR c.country ILIKE $${idx} ESCAPE '\\'
+        OR l.name ILIKE $${idx} ESCAPE '\\'
+        OR l.city ILIKE $${idx} ESCAPE '\\'
+        OR l.region ILIKE $${idx} ESCAPE '\\'
+        OR l.country ILIKE $${idx} ESCAPE '\\'
+      )`
+    );
+  }
+
+  const sql = `
+    SELECT
+      so.id AS sale_id,
+      so.equipment_id,
+      so.status,
+      so.sale_price,
+      so.description,
+      so.image_url AS sale_image_url,
+      so.image_urls AS sale_image_urls,
+      so.documents,
+      e.model_name,
+      e.serial_number,
+      e.type AS equipment_type,
+      e.type_id AS equipment_type_id,
+      e.image_url AS equipment_image_url,
+      e.image_urls AS equipment_image_urls,
+      et.name AS type_name,
+      et.image_url AS type_image_url,
+      et.image_urls AS type_image_urls,
+      cat.name AS category_name,
+      c.id AS company_id,
+      c.name AS company_name,
+      c.phone AS company_phone,
+      c.contact_email AS company_email,
+      c.website AS company_website,
+      cs.logo_url AS company_logo_url,
+      c.street_address AS company_street_address,
+      c.city AS company_city,
+      c.region AS company_region,
+      c.country AS company_country,
+      c.postal_code AS company_postal_code,
+      l.id AS location_id,
+      l.name AS location_name,
+      l.street_address AS location_street_address,
+      l.city AS location_city,
+      l.region AS location_region,
+      l.country AS location_country
+    FROM sales_orders so
+    JOIN companies c ON c.id = so.company_id
+    LEFT JOIN company_settings cs ON cs.company_id = c.id
+    LEFT JOIN equipment e ON e.id = so.equipment_id
+    LEFT JOIN equipment_types et ON et.id = e.type_id
+    LEFT JOIN equipment_categories cat ON cat.id = et.category_id
+    LEFT JOIN locations l ON l.id = COALESCE(e.current_location_id, e.location_id)
+    WHERE ${where.join(" AND ")}
+    ORDER BY so.updated_at DESC, so.id DESC
+    LIMIT $${params.length + 1}
+   OFFSET $${params.length + 2}
+  `;
+
+  const result = await pool.query(sql, [...params, safeLimit, safeOffset]);
+  return (result.rows || []).map((row) => {
+    const saleUrls = Array.isArray(row.sale_image_urls)
+      ? row.sale_image_urls.filter(Boolean).map((url) => String(url))
+      : [];
+    const equipmentUrls = Array.isArray(row.equipment_image_urls)
+      ? row.equipment_image_urls.filter(Boolean).map((url) => String(url))
+      : [];
+    const typeUrls = Array.isArray(row.type_image_urls)
+      ? row.type_image_urls.filter(Boolean).map((url) => String(url))
+      : [];
+    let imageUrls = saleUrls.length ? saleUrls : equipmentUrls.length ? equipmentUrls : typeUrls;
+    imageUrls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean) : [];
+    const primaryImageUrl =
+      row.sale_image_url || row.equipment_image_url || row.type_image_url || imageUrls[0] || null;
+    if (primaryImageUrl && !imageUrls.includes(primaryImageUrl)) {
+      imageUrls.unshift(primaryImageUrl);
+    }
+
+    const locations = row.location_id
+      ? [
+          {
+            id: Number(row.location_id),
+            name: row.location_name || null,
+            streetAddress: row.location_street_address || null,
+            city: row.location_city || null,
+            region: row.location_region || null,
+            country: row.location_country || null,
+          },
+        ]
+      : [];
+
+    const unitName = row.model_name || row.type_name || row.equipment_type || "Unit";
+    const serial = row.serial_number ? String(row.serial_number) : "";
+    const unitLabel = serial ? `${unitName} (${serial})` : unitName;
+
+    return {
+      listingType: "sale",
+      saleId: Number(row.sale_id),
+      unitId: Number(row.equipment_id),
+      unitLabel,
+      typeId: Number(row.equipment_type_id || 0),
+      typeName: unitName,
+      imageUrl: imageUrls[0] || null,
+      imageUrls,
+      documents: normalizeTypeDocuments(row.documents),
+      description: row.description || null,
+      categoryName: row.category_name || null,
+      salePrice: row.sale_price === null || row.sale_price === undefined ? null : Number(row.sale_price),
+      company: {
+        id: Number(row.company_id),
+        name: row.company_name,
+        email: row.company_email || null,
+        phone: row.company_phone || null,
+        website: row.company_website || null,
+        logoUrl: row.company_logo_url || null,
+        streetAddress: row.company_street_address || null,
+        city: row.company_city || null,
+        region: row.company_region || null,
+        country: row.company_country || null,
+        postalCode: row.company_postal_code || null,
+      },
+      stock: {
+        totalUnits: 1,
+        reservedUnits: 0,
+        availableUnits: 1,
+        locations,
+      },
+    };
+  });
+}
+
 async function createStorefrontCustomer({
   companyId,
   name,
@@ -14666,6 +15074,11 @@ module.exports = {
   createPurchaseOrder,
   updatePurchaseOrder,
   deletePurchaseOrder,
+  listSalesOrders,
+  getSalesOrder,
+  createSalesOrder,
+  updateSalesOrder,
+  deleteSalesOrder,
   listWorkOrders,
   getWorkOrder,
   createWorkOrder,
@@ -14722,6 +15135,7 @@ module.exports = {
   getBundleAvailability,
   getTypeDemandAvailability,
   listStorefrontListings,
+  listStorefrontSaleListings,
   createStorefrontCustomer,
   authenticateStorefrontCustomer,
   authenticateStorefrontCustomerAnyCompany,

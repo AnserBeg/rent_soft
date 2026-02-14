@@ -156,6 +156,31 @@ CREATE INDEX IF NOT EXISTS purchase_orders_company_id_idx ON purchase_orders (co
 CREATE INDEX IF NOT EXISTS purchase_orders_company_status_idx ON purchase_orders (company_id, status);
 CREATE INDEX IF NOT EXISTS purchase_orders_company_expected_idx ON purchase_orders (company_id, expected_possession_date);
 
+CREATE TABLE IF NOT EXISTS sales_orders (
+  id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  so_number TEXT,
+  equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
+  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  customer_po TEXT,
+  salesperson_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  sale_price NUMERIC(12, 2),
+  description TEXT,
+  image_url TEXT,
+  image_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
+  documents JSONB NOT NULL DEFAULT '[]'::jsonb,
+  closed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS sales_orders_company_id_idx ON sales_orders (company_id);
+CREATE INDEX IF NOT EXISTS sales_orders_company_status_idx ON sales_orders (company_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS sales_orders_company_so_number_uniq
+  ON sales_orders(company_id, so_number)
+  WHERE so_number IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS work_orders (
   id SERIAL PRIMARY KEY,
   company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,

@@ -467,6 +467,192 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
   const documents = Array.isArray(item.documents)
     ? item.documents.filter((doc) => doc && doc.url)
     : [];
+  const isSale = item.listingType === 'sale';
+  const salePriceLabel =
+    typeof item.salePrice === 'number' && Number.isFinite(item.salePrice)
+      ? `$${item.salePrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : 'Contact for price';
+
+  if (isSale) {
+    const email = company?.email || '';
+    const phone = company?.phone || '';
+    const website = company?.website || '';
+    const mailto = email ? `mailto:${email}` : undefined;
+    const tel = phone ? `tel:${phone}` : undefined;
+
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center px-4 sm:px-6">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+          onClick={onClose}
+        />
+
+        <motion.div
+          layout
+          initial={{ opacity: 0, scale: 0.9, y: 20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.9, y: 20 }}
+          className="bg-white w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-3xl shadow-2xl relative z-10 flex flex-col"
+        >
+          <div className="sticky top-0 right-0 z-20 flex justify-between items-center p-4 pointer-events-none">
+            <div />
+            <button
+              onClick={onClose}
+              className="pointer-events-auto bg-white/80 backdrop-blur rounded-full p-2 text-slate-500 hover:text-slate-900 shadow-sm border border-gray-100 transition-colors"
+            >
+              <X size={24} />
+            </button>
+          </div>
+
+          <div className="px-6 pb-10">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+              <div className="space-y-4">
+                <div className="relative rounded-2xl border border-gray-100 overflow-hidden bg-slate-50">
+                  <div
+                    id="sale-gallery-container"
+                    className="w-full h-80 flex overflow-x-auto snap-x snap-mandatory scrollbar-hide"
+                    onScroll={(e) => {
+                      const width = e.currentTarget.offsetWidth;
+                      const index = Math.round(e.currentTarget.scrollLeft / width);
+                      setCurrentImageIndex(index);
+                    }}
+                  >
+                    {item.images.map((img, idx) => (
+                      <img
+                        key={idx}
+                        src={img}
+                        alt={`${item.name} - View ${idx + 1}`}
+                        loading={idx === 0 ? 'eager' : 'lazy'}
+                        decoding="async"
+                        className="w-full h-full object-contain object-center flex-shrink-0 snap-center"
+                      />
+                    ))}
+                  </div>
+
+                  {item.images.length > 1 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => scrollImage('prev', 'sale-gallery-container')}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 bg-white/90 rounded-full p-2 shadow border border-gray-100"
+                      >
+                        <ChevronLeft size={18} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => scrollImage('next', 'sale-gallery-container')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 bg-white/90 rounded-full p-2 shadow border border-gray-100"
+                      >
+                        <ChevronRight size={18} />
+                      </button>
+                      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 p-1.5 rounded-full bg-black/20 backdrop-blur-sm">
+                        {item.images.map((_, i) => (
+                          <div
+                            key={i}
+                            className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
+                              i === currentImageIndex ? 'bg-white scale-125' : 'bg-white/40'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {documents.length > 0 && (
+                  <div className="rounded-2xl border border-gray-100 p-4">
+                    <h4 className="text-sm font-bold text-slate-700 mb-2">Documents</h4>
+                    <div className="flex flex-col gap-2 text-sm">
+                      {documents.map((doc, idx) => (
+                        <a
+                          key={idx}
+                          href={doc.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-brand-secondary hover:underline"
+                        >
+                          {doc.fileName || doc.url.split('/').pop() || 'Document'}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-6">
+                <div className="flex items-center gap-3 text-sm text-slate-500">
+                  <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    For Sale
+                  </span>
+                  <span className="inline-flex items-center gap-2">
+                    <MapPin size={14} />
+                    {item.location || '--'}
+                  </span>
+                </div>
+
+                <div>
+                  <h2 className="text-3xl font-display font-bold text-slate-900">{item.name}</h2>
+                  {item.unitId && (
+                    <p className="text-sm text-slate-500 mt-1">Unit #{item.unitId}</p>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 p-4 bg-slate-50">
+                  <div className="text-xs uppercase tracking-wide text-slate-500 font-semibold">Sale Price</div>
+                  <div className="text-2xl font-bold text-slate-900 mt-1">{salePriceLabel}</div>
+                </div>
+
+                <div>
+                  <h4 className="text-sm font-bold text-slate-700 mb-2">Description</h4>
+                  <p className="text-sm text-slate-600 leading-relaxed">
+                    {item.description || 'No description provided.'}
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 p-4">
+                  <h4 className="text-sm font-bold text-slate-700 mb-3">Contact seller</h4>
+                  <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
+                    {email && (
+                      <a
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 border border-gray-200 hover:border-brand-accent hover:text-brand-accent transition-colors"
+                        href={mailto}
+                      >
+                        <Mail size={16} /> {email}
+                      </a>
+                    )}
+                    {phone && (
+                      <a
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 border border-gray-200 hover:border-brand-accent hover:text-brand-accent transition-colors"
+                        href={tel}
+                      >
+                        <Phone size={16} /> {phone}
+                      </a>
+                    )}
+                    {website && (
+                      <a
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-100 border border-gray-200 hover:border-brand-accent hover:text-brand-accent transition-colors"
+                        href={website}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <Home size={16} /> {website.replace(/^https?:\/\//, '')}
+                      </a>
+                    )}
+                    {!email && !phone && !website && (
+                      <span className="text-xs text-slate-500">No contact details provided yet.</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   const formatDocSize = (sizeBytes?: number | null) => {
     if (!sizeBytes || !Number.isFinite(sizeBytes)) return '';
@@ -474,8 +660,8 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
     return `${Math.round(sizeBytes / 1024)} KB`;
   };
 
-  const scrollImage = (direction: 'next' | 'prev') => {
-      const container = document.getElementById('modal-gallery-container');
+  const scrollImage = (direction: 'next' | 'prev', targetId = 'modal-gallery-container') => {
+      const container = document.getElementById(targetId);
       if (container) {
           const width = container.offsetWidth;
           const newIndex = direction === 'next' 
