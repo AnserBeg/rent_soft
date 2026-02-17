@@ -98,6 +98,7 @@ const ALLOWED_SORT_FIELDS = new Set([
   "purchase_price",
   "rental_order_number",
   "rental_customer_name",
+  "current_location",
 ]);
 let currentView = localStorage.getItem(VIEW_KEY) || "table";
 let pendingOpenEquipmentId = initialEquipmentId ? String(initialEquipmentId) : null;
@@ -282,7 +283,12 @@ function getEquipmentStatusInfo(item, options = {}) {
 function setEquipmentHeaderStatus(item) {
   if (!equipmentFormStatus) return;
   const status = String(item?.availability_status || "").toLowerCase();
-  const showStatus = status === "rented out" || status === "overdue" || item?.is_overdue === true;
+  const showStatus =
+    status === "rented out" ||
+    status === "overdue" ||
+    status === "reserved" ||
+    status.includes("request") ||
+    item?.is_overdue === true;
   if (!item || !showStatus) {
     clearEquipmentHeaderStatus();
     return;
@@ -444,6 +450,31 @@ function formatMoney(v) {
   return v === null || v === undefined || v === "" ? "--" : `$${Number(v).toFixed(2)}`;
 }
 
+function formatLocationAddress(parts) {
+  return parts
+    .map((part) => (part === null || part === undefined ? "" : String(part).trim()))
+    .filter(Boolean)
+    .join(", ");
+}
+
+function getCurrentLocationLabel(row, baseFallback) {
+  const placeholderName = String(row.current_location || "").trim();
+  const isOrderSiteName = /^order\\s+\\d+\\s*-\\s*site$/i.test(placeholderName);
+  const address = formatLocationAddress([
+    row.current_location_street_address,
+    row.current_location_city,
+    row.current_location_region,
+    row.current_location_country,
+  ]);
+  const query = String(row.current_location_query || "").trim();
+  const rentalAddress = String(row.rental_site_address || row.rental_site_address_query || "").trim();
+  if (address) return address;
+  if (query) return query;
+  if (rentalAddress) return rentalAddress;
+  if (isOrderSiteName) return baseFallback || "--";
+  return placeholderName || baseFallback || "--";
+}
+
 function renderEquipment(rows) {
   if (currentView === "cards") {
     renderEquipmentCards(rows);
@@ -462,26 +493,24 @@ function renderEquipmentTable(rows) {
   };
   equipmentTable.innerHTML = `
     <div class="table-row table-header">
-      <span>Photo</span>
       <span class="sort ${sortField === "type" ? "active" : ""}" data-sort="type">Type ${indicator("type")}</span>
       <span class="sort ${sortField === "model_name" ? "active" : ""}" data-sort="model_name">Model ${indicator("model_name")}</span>
       <span class="sort ${sortField === "rental_order_number" ? "active" : ""}" data-sort="rental_order_number">RO ${indicator("rental_order_number")}</span>
       <span class="sort ${sortField === "rental_customer_name" ? "active" : ""}" data-sort="rental_customer_name">Customer ${indicator("rental_customer_name")}</span>
       <span class="sort ${sortField === "availability_status" ? "active" : ""}" data-sort="availability_status">Status ${indicator("availability_status")}</span>
       <span class="sort ${sortField === "location" ? "active" : ""}" data-sort="location">Base ${indicator("location")}</span>
+      <span class="sort ${sortField === "current_location" ? "active" : ""}" data-sort="current_location">Current ${indicator("current_location")}</span>
     </div>`;
 
   rows.forEach((row) => {
     const badge = conditionClasses[row.condition] || "normal";
     const baseLocation = row.location || "--";
+    const currentLocation = getCurrentLocationLabel(row, baseLocation);
     const div = document.createElement("div");
     const isReturnInspection = returnInspectionMap.has(String(row.id));
     const isOutOfService = isReturnInspection || outOfServiceMap.has(String(row.id));
     div.className = `table-row${isOutOfService ? " is-out-of-service" : ""}`;
     div.dataset.id = row.id;
-    const thumb = row.image_url
-      ? `<img class="thumb" src="${row.image_url}" alt="" loading="lazy" referrerpolicy="no-referrer" />`
-      : `<span class="thumb placeholder">--</span>`;
 
     const availabilityStatus = String(
       row.availability_status || row.availabilityStatus || row.status || row.state || row.rental_status || ""
@@ -512,7 +541,6 @@ function renderEquipmentTable(rows) {
     )}</span>`;
 
     div.innerHTML = `
-      <span class="thumb-cell">${thumb}</span>
       <span>${row.type}</span>
       <span>
         ${row.model_name}
@@ -523,6 +551,7 @@ function renderEquipmentTable(rows) {
       <span>${customerCell}</span>
       <span class="status-cell">${statusTag}</span>
       <span>${baseLocation}</span>
+      <span>${currentLocation}</span>
     `;
     equipmentTable.appendChild(div);
   });
@@ -748,6 +777,10 @@ function applyFilters() {
         r.manufacturer,
         r.location,
         r.current_location,
+        r.current_location_street_address,
+        r.current_location_city,
+        r.current_location_region,
+        r.current_location_country,
         r.availability_status,
         r.availabilityStatus,
         r.status,
@@ -757,6 +790,8 @@ function applyFilters() {
         r.notes,
         r.rental_order_number,
         r.rental_customer_name,
+        r.rental_site_address,
+        r.rental_site_address_query,
       ]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(term))
@@ -777,6 +812,10 @@ function applyFilters() {
             row.state ??
             row.rental_status;
           return String(raw || "").toLowerCase();
+        }
+        case "current_location": {
+          const baseFallback = row.location || "";
+          return getCurrentLocationLabel(row, baseFallback).toLowerCase();
         }
         default:
           return (row[sortField] || "").toString().toLowerCase();
@@ -1001,18 +1040,44 @@ function renderEquipmentWorkOrders(rows) {
     </div>`;
 
   items.forEach((order) => {
-    const statusLabel = order?.orderStatus === "closed" ? "Closed" : "Open";
-    const serviceLabel = order?.serviceStatus === "out_of_service" ? "Out of service" : "In service";
-    const inspectionBadge = order?.returnInspection ? ` <span class="badge return-inspection">Return inspection</span>` : "";
-    const updatedLabel = formatHistoryTimestamp(order?.updatedAt || order?.closedAt || order?.date || order?.createdAt);
+    const orderId = order?.id ?? order?.workOrderId ?? order?.work_order_id ?? null;
+    const number =
+      order?.number ??
+      order?.workOrderNumber ??
+      order?.work_order_number ??
+      order?.workorder_number ??
+      "";
+    const orderStatusRaw = order?.orderStatus ?? order?.order_status ?? order?.status ?? "";
+    const orderStatus = String(orderStatusRaw || "").toLowerCase();
+    const serviceStatusRaw = order?.serviceStatus ?? order?.service_status ?? order?.service ?? "";
+    const serviceStatus = String(serviceStatusRaw || "").toLowerCase();
+    const returnInspection = order?.returnInspection ?? order?.return_inspection ?? false;
+    const workSummary = order?.workSummary ?? order?.work_summary ?? order?.summary ?? "";
+    const updatedAt =
+      order?.updatedAt ??
+      order?.updated_at ??
+      order?.closedAt ??
+      order?.closed_at ??
+      order?.completedAt ??
+      order?.completed_at ??
+      order?.workDate ??
+      order?.work_date ??
+      order?.date ??
+      order?.createdAt ??
+      order?.created_at ??
+      null;
+    const statusLabel = orderStatus === "closed" ? "Closed" : orderStatus === "completed" ? "Completed" : "Open";
+    const serviceLabel = serviceStatus === "out_of_service" ? "Out of service" : "In service";
+    const inspectionBadge = returnInspection ? ` <span class="badge return-inspection">Return inspection</span>` : "";
+    const updatedLabel = formatHistoryTimestamp(updatedAt);
     const div = document.createElement("div");
     div.className = "table-row";
-    div.dataset.id = order.id;
+    if (orderId !== null && orderId !== undefined && orderId !== "") div.dataset.id = orderId;
     div.innerHTML = `
-      <span>${escapeHtml(order.number || "--")}</span>
+      <span>${escapeHtml(number || "--")}</span>
       <span>${escapeHtml(statusLabel)}</span>
       <span>${escapeHtml(serviceLabel)}${inspectionBadge}</span>
-      <span>${escapeHtml(order.workSummary || "--")}</span>
+      <span>${escapeHtml(workSummary || "--")}</span>
       <span class="hint">${escapeHtml(updatedLabel)}</span>
     `;
     equipmentWorkOrdersTable.appendChild(div);
@@ -1039,12 +1104,18 @@ async function loadEquipmentWorkOrders(equipmentId) {
   }
   const rows = Array.isArray(data.workOrders) ? data.workOrders : [];
   rows.sort((a, b) => {
-    const aTime = Date.parse(a?.updatedAt || a?.closedAt || a?.date || "");
-    const bTime = Date.parse(b?.updatedAt || b?.closedAt || b?.date || "");
+    const aTime = Date.parse(
+      a?.updatedAt || a?.updated_at || a?.closedAt || a?.closed_at || a?.workDate || a?.work_date || a?.date || ""
+    );
+    const bTime = Date.parse(
+      b?.updatedAt || b?.updated_at || b?.closedAt || b?.closed_at || b?.workDate || b?.work_date || b?.date || ""
+    );
     if (Number.isFinite(aTime) && Number.isFinite(bTime)) return bTime - aTime;
     if (Number.isFinite(aTime)) return -1;
     if (Number.isFinite(bTime)) return 1;
-    return String(a?.number || "").localeCompare(String(b?.number || ""));
+    const aNumber = a?.number ?? a?.workOrderNumber ?? a?.work_order_number ?? "";
+    const bNumber = b?.number ?? b?.workOrderNumber ?? b?.work_order_number ?? "";
+    return String(aNumber || "").localeCompare(String(bNumber || ""));
   });
 
   renderEquipmentWorkOrders(rows);

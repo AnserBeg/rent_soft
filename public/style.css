@@ -3867,7 +3867,7 @@ a.ghost {
 }
 
 #equipment-table .table-row {
-  grid-template-columns: 64px 1.6fr 1.2fr 1fr 1.2fr 1.1fr 1fr;
+  grid-template-columns: 1.6fr 1.2fr 1fr 1.2fr 1.1fr 1fr 1fr;
 }
 
 #types-table .table-row {
@@ -4220,6 +4220,21 @@ a.ghost {
 
 #equipment-work-orders-table .table-row {
   grid-template-columns: 1fr 0.7fr 0.9fr 1.6fr 0.9fr;
+}
+
+#equipment-location-history-list .table-row,
+#equipment-work-orders-table .table-row {
+  color: var(--text);
+}
+
+#equipment-location-history-list .table-row.table-header,
+#equipment-work-orders-table .table-row.table-header {
+  color: var(--muted);
+}
+
+#equipment-location-history-list .table-row span,
+#equipment-work-orders-table .table-row span {
+  color: inherit;
 }
 
 #equipment-work-orders-table .table-row:not(.table-header) {

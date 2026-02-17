@@ -89,6 +89,10 @@ let shortfallExcludedTypeIds = new Set();
 let shortfallEquipmentCache = [];
 let shortfallEquipmentLoaded = false;
 let shortfallEquipmentPromise = null;
+let shortfallWorkOrdersCache = [];
+let shortfallWorkOrdersLoaded = false;
+let shortfallWorkOrdersPromise = null;
+let shortfallWorkOrdersCompanyId = null;
 let shortfallDemandLoadSeq = 0;
 let shortfallMap = null;
 let shortfallMapLoadError = null;
@@ -1889,6 +1893,73 @@ async function loadShortfallEquipmentCache() {
   return shortfallEquipmentPromise;
 }
 
+function normalizeShortfallUnitIds(order) {
+  if (!order) return [];
+  if (Array.isArray(order.unitIds)) {
+    return order.unitIds.map((id) => String(id)).filter(Boolean);
+  }
+  if (order.unitId) return [String(order.unitId)];
+  return [];
+}
+
+function buildShortfallOutOfServiceSet(orders) {
+  const set = new Set();
+  (orders || []).forEach((order) => {
+    if (!order) return;
+    const serviceStatus = String(order.serviceStatus || "").toLowerCase();
+    const orderStatus = String(order.orderStatus || "").toLowerCase();
+    if (serviceStatus !== "out_of_service") return;
+    if (orderStatus === "closed") return;
+    const unitIds = normalizeShortfallUnitIds(order);
+    unitIds.forEach((unitId) => {
+      set.add(String(unitId));
+    });
+  });
+  return set;
+}
+
+async function loadShortfallWorkOrdersCache() {
+  if (!activeCompanyId) return [];
+  if (shortfallWorkOrdersCompanyId !== activeCompanyId) {
+    shortfallWorkOrdersLoaded = false;
+    shortfallWorkOrdersCache = [];
+  }
+  if (shortfallWorkOrdersLoaded) return shortfallWorkOrdersCache;
+  if (shortfallWorkOrdersPromise) return shortfallWorkOrdersPromise;
+
+  const qs = new URLSearchParams({
+    companyId: String(activeCompanyId),
+    serviceStatus: "out_of_service",
+    limit: "1000",
+  });
+
+  shortfallWorkOrdersPromise = fetch(`/api/work-orders?${qs.toString()}`)
+    .then(async (res) => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Unable to load work orders");
+      const rows = Array.isArray(data.workOrders) ? data.workOrders : [];
+      shortfallWorkOrdersCache = rows;
+      shortfallWorkOrdersLoaded = true;
+      shortfallWorkOrdersCompanyId = activeCompanyId;
+      return rows;
+    })
+    .catch((err) => {
+      shortfallWorkOrdersLoaded = false;
+      shortfallWorkOrdersCache = [];
+      throw err;
+    })
+    .finally(() => {
+      shortfallWorkOrdersPromise = null;
+    });
+
+  return shortfallWorkOrdersPromise;
+}
+
+async function loadShortfallOutOfServiceIds() {
+  const orders = await loadShortfallWorkOrdersCache();
+  return buildShortfallOutOfServiceSet(orders);
+}
+
 function shortfallEquipmentMatchesFilters(eq) {
   const eqTypeId = eq.type_id ?? eq.typeId ?? null;
   if (!eqTypeId) return false;
@@ -1909,7 +1980,8 @@ function shortfallEquipmentMatchesFilters(eq) {
   return true;
 }
 
-function buildShortfallCountsByType(equipment) {
+function buildShortfallCountsByType(equipment, outOfServiceIds) {
+  const outOfServiceSet = outOfServiceIds instanceof Set ? outOfServiceIds : new Set();
   const countsByType = new Map();
   (equipment || []).forEach((eq) => {
     if (!shortfallEquipmentMatchesFilters(eq)) return;
@@ -1919,6 +1991,12 @@ function buildShortfallCountsByType(equipment) {
     const bucket = countsByType.get(key) || { out: 0, reserved: 0, available: 0, needsRepair: 0, imageUrl: null };
     if (!bucket.imageUrl && eq.image_url) {
       bucket.imageUrl = eq.image_url;
+    }
+    const eqId = eq.id ?? eq.equipment_id ?? eq.equipmentId ?? null;
+    if (eqId && outOfServiceSet.has(String(eqId))) {
+      bucket.needsRepair += 1;
+      countsByType.set(key, bucket);
+      return;
     }
     if (needsRepairCondition(eq.condition)) {
       bucket.needsRepair += 1;
@@ -2067,12 +2145,12 @@ function renderShortfallSummaryChart() {
       const outerRadius = donutRect.width ? donutRect.width / 2 : 64;
       const innerRadius = centerRect.width ? centerRect.width / 2 : 32;
       const labelRadius = (outerRadius + innerRadius) / 2;
-      const segments = [
-        { kind: "out", label: "Currently out", value: counts.out },
-        { kind: "reserved", label: "Reserved", value: counts.reserved },
-        { kind: "available", label: "Available", value: counts.available },
-        { kind: "repair", label: "Needs repair", value: counts.needsRepair },
-      ];
+    const segments = [
+      { kind: "out", label: "Currently out", value: counts.out },
+      { kind: "reserved", label: "Reserved", value: counts.reserved },
+      { kind: "available", label: "Available", value: counts.available },
+      { kind: "repair", label: "Needs repair / out of service", value: counts.needsRepair },
+    ];
 
       let startPct = 0;
       segments.forEach((segment) => {
@@ -2439,8 +2517,11 @@ async function loadShortfallDashboard() {
         return String(a.typeName || "").localeCompare(String(b.typeName || ""));
       });
 
-    const equipment = await loadShortfallEquipmentCache().catch(() => []);
-    const countsByType = buildShortfallCountsByType(equipment);
+    const [equipment, outOfServiceIds] = await Promise.all([
+      loadShortfallEquipmentCache().catch(() => []),
+      loadShortfallOutOfServiceIds().catch(() => new Set()),
+    ]);
+    const countsByType = buildShortfallCountsByType(equipment, outOfServiceIds);
     shortfallSummaryRows = shortfallSummaryRows.map((row) => {
       const meta = shortfallTypeMeta.get(String(row.typeId)) || {};
       const counts = countsByType.get(String(row.typeId)) || {

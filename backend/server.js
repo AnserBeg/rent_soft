@@ -302,6 +302,28 @@ function resolveImageBaseUrl(req) {
   return `${protocol}://${host}`;
 }
 
+const PUBLIC_UPLOAD_ASSET_EXTS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".pdf",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".csv",
+  ".txt",
+]);
+
+function isPublicCompanyUploadAsset(pathname) {
+  const clean = String(pathname || "");
+  if (!/^\/company-\d+\//.test(clean)) return false;
+  const ext = path.extname(clean).toLowerCase();
+  return PUBLIC_UPLOAD_ASSET_EXTS.has(ext);
+}
+
 function withImageBaseUrl(req, url) {
   const raw = String(url || "").trim();
   if (!raw) return url;
@@ -540,6 +562,9 @@ app.use(
       res.setHeader("Allow", "GET, HEAD");
       return res.status(405).send("Method not allowed.");
     }
+
+    // Allow unauthenticated access to public storefront assets (images + docs).
+    if (isPublicCompanyUploadAsset(req.path)) return next();
 
     const { token } = getCompanyUserToken(req);
     if (token) {

@@ -2537,6 +2537,11 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
            l.latitude AS location_latitude,
            l.longitude AS location_longitude,
            cl.name AS current_location,
+           cl.street_address AS current_location_street_address,
+           cl.city AS current_location_city,
+           cl.region AS current_location_region,
+           cl.country AS current_location_country,
+           cl.geocode_query AS current_location_query,
            e.current_location_id,
            cl.latitude AS current_location_latitude,
            cl.longitude AS current_location_longitude,
@@ -2564,6 +2569,8 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
            COALESCE(active_ro.ro_number, reserved_ro.ro_number) AS rental_order_number,
            COALESCE(active_ro.customer_name, reserved_ro.customer_name) AS rental_customer_name,
            COALESCE(active_ro.customer_id, reserved_ro.customer_id) AS rental_customer_id,
+           COALESCE(active_ro.site_address, reserved_ro.site_address) AS rental_site_address,
+           COALESCE(active_ro.site_address_query, reserved_ro.site_address_query) AS rental_site_address_query,
            e.created_at
     FROM equipment e
     LEFT JOIN locations l ON e.location_id = l.id
@@ -2579,7 +2586,7 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
           AND COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) > NOW()
         ) AS has_ordered,
         BOOL_OR(ro.status = 'ordered' AND li.returned_at IS NULL AND li.end_at < NOW()) AS has_overdue,
-        BOOL_OR(ro.status IN ('reservation','requested') AND li.start_at <= NOW() AND li.end_at > NOW()) AS has_reserved_now
+        BOOL_OR(ro.status IN ('reservation','requested') AND li.end_at > NOW()) AS has_reserved_now
       FROM rental_order_line_inventory liv
       JOIN rental_order_line_items li ON li.id = liv.line_item_id
       JOIN rental_orders ro ON ro.id = li.rental_order_id
@@ -2592,12 +2599,14 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
              ro.ro_number,
              ro.customer_id,
              c.company_name AS customer_name,
+             ro.site_address,
+             ro.site_address_query,
              li.end_at,
              li.returned_at
         FROM rental_order_line_inventory liv
         JOIN rental_order_line_items li ON li.id = liv.line_item_id
         JOIN rental_orders ro ON ro.id = li.rental_order_id
-        JOIN customers c ON c.id = ro.customer_id
+        LEFT JOIN customers c ON c.id = ro.customer_id
        WHERE liv.equipment_id = e.id
          AND ro.company_id = $1
          AND ro.status = 'ordered'
@@ -2619,18 +2628,23 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
              ro.ro_number,
              ro.customer_id,
              c.company_name AS customer_name,
+             ro.site_address,
+             ro.site_address_query,
              li.start_at,
              li.end_at
         FROM rental_order_line_inventory liv
         JOIN rental_order_line_items li ON li.id = liv.line_item_id
         JOIN rental_orders ro ON ro.id = li.rental_order_id
-        JOIN customers c ON c.id = ro.customer_id
+        LEFT JOIN customers c ON c.id = ro.customer_id
        WHERE liv.equipment_id = e.id
          AND ro.company_id = $1
          AND ro.status IN ('reservation','requested')
-         AND li.start_at <= NOW()
          AND li.end_at > NOW()
-       ORDER BY li.start_at DESC, ro.id DESC
+       ORDER BY
+         CASE WHEN li.start_at <= NOW() THEN 0 ELSE 1 END,
+         CASE WHEN li.start_at <= NOW() THEN li.start_at END DESC NULLS LAST,
+         CASE WHEN li.start_at > NOW() THEN li.start_at END ASC NULLS LAST,
+         ro.id DESC
        LIMIT 1
     ) reserved_ro ON TRUE
     WHERE ${where.join(" AND ")}
@@ -3678,9 +3692,17 @@ async function listWorkOrders({
   let idx = 2;
 
   if (unitId !== undefined && unitId !== null && String(unitId || "").trim()) {
-    filters.push(`unit_ids ? $${idx}`);
-    params.push(String(unitId));
-    idx += 1;
+    const unitIdStr = String(unitId || "").trim();
+    const unitIdNum = Number(unitIdStr);
+    if (Number.isFinite(unitIdNum)) {
+      filters.push(`(unit_ids ? $${idx} OR unit_id = $${idx + 1})`);
+      params.push(unitIdStr, unitIdNum);
+      idx += 2;
+    } else {
+      filters.push(`unit_ids ? $${idx}`);
+      params.push(unitIdStr);
+      idx += 1;
+    }
   }
   if (orderStatus) {
     filters.push(`order_status = $${idx}`);
