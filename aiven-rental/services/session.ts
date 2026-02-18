@@ -1,4 +1,5 @@
 import { clearCustomerAccountSession, getCustomerAccountToken } from './customerAccountSession';
+import { apiFetch } from './rentSoftApi';
 
 export type RentSoftSession = {
   user: { id: number; name: string; email: string; role: string; companyId: number };
@@ -61,9 +62,9 @@ export function getCompanyId(): number | null {
 
 export function logout() {
   const customerToken = getCustomerAccountToken();
-  fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  apiFetch('/api/logout', { method: 'POST' }).catch(() => {});
   if (customerToken) {
-    fetch('/api/customers/logout', { method: 'POST', headers: { Authorization: `Bearer ${customerToken}` } }).catch(() => {});
+    apiFetch('/api/customers/logout', { method: 'POST', headers: { Authorization: `Bearer ${customerToken}` } }).catch(() => {});
   }
   clearSession();
   localStorage.removeItem(COMPANY_KEY);

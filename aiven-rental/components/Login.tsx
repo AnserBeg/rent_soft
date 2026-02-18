@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { Mail, Lock, ArrowRight, Loader2, UserCircle } from 'lucide-react';
 import { apiJson } from '../services/rentSoftApi';
 import { RentSoftSession } from '../services/session';
-import { setCustomerAccountSession } from '../services/customerAccountSession';
+import { clearCustomerAccountSession, setCustomerAccountSession } from '../services/customerAccountSession';
 
 interface LoginProps {
   onLogin: (session: RentSoftSession, returnTo?: string | null) => void;
@@ -26,16 +26,6 @@ export const Login: React.FC<LoginProps> = ({ onLogin, returnTo = null }) => {
       let customerSession: { customer: any; token: string; expiresAt?: string | null } | null = null;
 
       try {
-        customerSession = await apiJson<any>('/api/customers/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password }),
-        });
-      } catch {
-        customerSession = null;
-      }
-
-      try {
         companySession = await apiJson<RentSoftSession>('/api/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -45,25 +35,24 @@ export const Login: React.FC<LoginProps> = ({ onLogin, returnTo = null }) => {
         companySession = null;
       }
 
-      if (!customerSession && companySession?.user?.id) {
-        try {
-          customerSession = await apiJson<any>('/api/customers/signup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: companySession.user.name || 'Customer', email, password }),
-          });
-        } catch {
-          customerSession = null;
-        }
+      if (companySession) {
+        clearCustomerAccountSession();
+        onLogin(companySession, returnTo);
+        return;
+      }
+
+      try {
+        customerSession = await apiJson<any>('/api/customers/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+      } catch {
+        customerSession = null;
       }
 
       if (customerSession?.token && customerSession?.customer) {
         setCustomerAccountSession({ token: String(customerSession.token), customer: customerSession.customer });
-      }
-
-      if (companySession) {
-        onLogin(companySession, returnTo);
-        return;
       }
 
       if (customerSession?.token) {

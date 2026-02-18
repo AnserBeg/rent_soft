@@ -112,6 +112,10 @@ const {
   updateRentalOrderStatus,
   deleteRentalOrder,
   listRentalOrderAudits,
+  listDispatchNotes,
+  addDispatchNote,
+  updateDispatchNote,
+  deleteDispatchNote,
   addRentalOrderNote,
   addRentalOrderAttachment,
   deleteRentalOrderAttachment,
@@ -264,6 +268,8 @@ const DISPATCH_ALLOWED_API = [
   { method: "PUT", pattern: /^\/api\/work-orders\/[^/]+$/ },
   { method: "DELETE", pattern: /^\/api\/work-orders\/[^/]+$/ },
   { method: "POST", pattern: /^\/api\/equipment\/[^/]+\/work-order-pause$/ },
+  { method: "GET", pattern: /^\/api\/dispatch-notes$/ },
+  { method: "POST", pattern: /^\/api\/dispatch-notes$/ },
   { method: "POST", pattern: /^\/api\/uploads\/image$/ },
   { method: "DELETE", pattern: /^\/api\/uploads\/image$/ },
 ];
@@ -8098,6 +8104,74 @@ app.post(
     const created = await addRentalOrderNote({ companyId, orderId: Number(id), userName, note });
     if (!created) return res.status(404).json({ error: "Rental order not found" });
     res.status(201).json(created);
+  })
+);
+
+app.get(
+  "/api/dispatch-notes",
+  asyncHandler(async (req, res) => {
+    const { companyId, orderId, equipmentId, lineItemId } = req.query;
+    if (!companyId || !orderId) {
+      return res.status(400).json({ error: "companyId and orderId are required." });
+    }
+    const notes = await listDispatchNotes({
+      companyId: Number(companyId),
+      orderId: Number(orderId),
+      equipmentId: equipmentId ?? null,
+      lineItemId: lineItemId ?? null,
+    });
+    res.json({ notes });
+  })
+);
+
+app.post(
+  "/api/dispatch-notes",
+  asyncHandler(async (req, res) => {
+    const { companyId, orderId, equipmentId, lineItemId, userName, note, images } = req.body || {};
+    if (!companyId || !orderId || !userName || !note) {
+      return res.status(400).json({ error: "companyId, orderId, userName, and note are required." });
+    }
+    const created = await addDispatchNote({
+      companyId: Number(companyId),
+      orderId: Number(orderId),
+      equipmentId,
+      lineItemId,
+      userName,
+      note,
+      images,
+    });
+    if (!created) return res.status(404).json({ error: "Rental order not found" });
+    res.status(201).json(created);
+  })
+);
+
+app.put(
+  "/api/dispatch-notes/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId, note, images } = req.body || {};
+    if (!companyId || !note) {
+      return res.status(400).json({ error: "companyId and note are required." });
+    }
+    const updated = await updateDispatchNote({
+      companyId: Number(companyId),
+      noteId: Number(id),
+      note,
+      images,
+    });
+    if (!updated) return res.status(404).json({ error: "Dispatch note not found" });
+    res.json(updated);
+  })
+);
+
+app.delete(
+  "/api/dispatch-notes/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    await deleteDispatchNote({ companyId: Number(companyId), noteId: Number(id) });
+    res.status(204).end();
   })
 );
 

@@ -763,6 +763,10 @@ function matchesSearchTokens(a, tokens) {
   return tokens.every((t) => hay.includes(t));
 }
 
+function isAssignmentReturned(a) {
+  return Boolean(a?.returned_at || a?.returnedAt);
+}
+
 function currentAssignments() {
   const focus = Boolean(focusEndingOnly);
   const activeEndingDays = Math.max(1, Number(endingDays) || DEFAULT_ENDING_DAYS);
@@ -780,6 +784,7 @@ function currentAssignments() {
       if (!Number.isFinite(endMs)) return false;
       return endMs < now || endMs <= focusCutoff;
     })
+    .filter((a) => !isAssignmentReturned(a))
     .filter((a) => matchesSearchTokens(a, tokens));
 }
 
@@ -789,8 +794,10 @@ function barStateFor(assignment, endingDays) {
   const endRaw = assignment.end_at_raw || assignment.end_at;
   const endMs = Date.parse(endRaw);
   const s = String(assignment.status || "").toLowerCase();
+  const returnedAt = assignment.returned_at || assignment.returnedAt || null;
+  const isReturned = !!returnedAt;
   const endingSoonMs = Math.max(1, Number(endingDays) || 2) * DAY_MS;
-  const isOverdue = s === "ordered" && Number.isFinite(endMs) && endMs < now;
+  const isOverdue = s === "ordered" && !isReturned && Number.isFinite(endMs) && endMs < now;
   const isEndingSoon = s === "ordered" && Number.isFinite(endMs) && endMs >= now && endMs <= now + endingSoonMs;
   const isActive = s === "ordered" && Number.isFinite(startMs) && Number.isFinite(endMs) && startMs <= now && now <= endMs;
   const isReserved = s === "reservation" || s === "requested";
@@ -2642,7 +2649,7 @@ function currentViewRows() {
       seenLine.add(lineKey);
       const row = byType.get(String(a.type_id));
       if (!row) return;
-      row.bars.push({ ...a, qty: countQtyForLine(a.line_item_id) });
+      row.bars.push({ ...a, qty: countQtyForLine(a.line_item_id, assignments) });
     });
     const rows = Array.from(byType.values()).sort((a, b) => a.label.localeCompare(b.label));
     return applyTimelineSort(rows);
@@ -2665,7 +2672,7 @@ function currentViewRows() {
       const label = a.customer_name ? String(a.customer_name) : "Unknown customer";
       const row = byCustomer.get(label);
       if (!row) return;
-      row.bars.push({ ...a, qty: countQtyForOrder(a.order_id) });
+      row.bars.push({ ...a, qty: countQtyForOrder(a.order_id, assignments) });
     });
     const rows = Array.from(byCustomer.values()).sort((a, b) => a.label.localeCompare(b.label));
     return applyTimelineSort(rows);
@@ -2687,7 +2694,7 @@ function currentViewRows() {
       seenOrder.add(ok);
       const row = byLoc.get(String(a.pickup_location_id || "none"));
       if (!row) return;
-      row.bars.push({ ...a, qty: countQtyForOrder(a.order_id) });
+      row.bars.push({ ...a, qty: countQtyForOrder(a.order_id, assignments) });
     });
     const rows = Array.from(byLoc.values()).sort((a, b) => a.label.localeCompare(b.label));
     return applyTimelineSort(rows);
@@ -2749,10 +2756,10 @@ function equipmentLabel(e) {
   return `${type}: ${core}${loc}`;
 }
 
-function countQtyForLine(lineItemId) {
+function countQtyForLine(lineItemId, assignments = rawAssignments) {
   const id = String(lineItemId);
   let count = 0;
-  rawAssignments.forEach((a) => {
+  (assignments || []).forEach((a) => {
     if (String(a.line_item_id) !== id) return;
     if (!a.equipment_id) return;
     count++;
@@ -2760,10 +2767,10 @@ function countQtyForLine(lineItemId) {
   return count;
 }
 
-function countQtyForOrder(orderId) {
+function countQtyForOrder(orderId, assignments = rawAssignments) {
   const id = String(orderId);
   const set = new Set();
-  rawAssignments.forEach((a) => {
+  (assignments || []).forEach((a) => {
     if (String(a.order_id) !== id) return;
     if (!a.equipment_id) return;
     set.add(String(a.equipment_id));
@@ -3012,6 +3019,7 @@ function renderBar(b, endingDays) {
 function endingBadgeText(b, endingDays) {
   const s = String(b.status || "").toLowerCase();
   if (s !== "ordered") return "";
+  if (b.returned_at || b.returnedAt) return "";
   const endMs = Date.parse(b.end_at_raw || b.end_at);
   if (!Number.isFinite(endMs)) return "";
 

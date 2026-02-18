@@ -28,6 +28,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const normalizedRole = userRole ? String(userRole).trim().toLowerCase() : "";
   const isDispatch = isLoggedIn && normalizedRole === "dispatch";
   const appHref = normalizedRole === "dispatch" ? "/dispatch.html" : "/work-bench.html";
+  const appLabel = isDispatch ? "Open Dispatch" : "Open App";
 
   const customerProfileHref = useMemo(() => {
     if (!customerToken) return null;
@@ -95,13 +96,23 @@ export const Navbar: React.FC<NavbarProps> = ({
                 className="flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-900 transition-colors"
               >
                 <LayoutDashboard size={16} />
-                Open App
+                {appLabel}
               </a>
             )}
           </div>
         )}
 
         <div className="flex items-center gap-4">
+          {isDispatch && isLoggedIn && (
+            <a
+              href={appHref}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-slate-200 bg-white/90 text-slate-600 hover:text-slate-900 hover:border-slate-300 hover:shadow-sm transition-colors"
+              title={appLabel}
+            >
+              <LayoutDashboard size={16} />
+              <span className="text-xs font-semibold uppercase tracking-wide">{appLabel}</span>
+            </a>
+          )}
           {!isDispatch && (
             <>
               <button 

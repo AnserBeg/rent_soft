@@ -93,6 +93,7 @@ let guardNotesUploadsInFlight = 0;
 let guardNotesUploadToken = 0;
 let guardNotesEditing = null;
 let guardNotesEditingToken = 0;
+let guardNotesLocalMode = false;
 const guardNotesSelection = { lastRange: null };
 let guardNotesInsertMode = null;
 let equipmentCache = [];
@@ -1839,6 +1840,92 @@ function readGuardNotesFromStorage(key) {
   }
 }
 
+function buildDispatchNotesQuery(row) {
+  if (!activeCompanyId) return null;
+  const orderIdValue = row?.assignment?.order_id || orderId;
+  if (!orderIdValue) return null;
+  const equipmentIdValue = row?.assignment?.equipment_id || equipmentId;
+  const lineItemIdValue = row?.assignment?.line_item_id || lineItemId;
+  const params = new URLSearchParams();
+  params.set("companyId", String(activeCompanyId));
+  params.set("orderId", String(orderIdValue));
+  if (equipmentIdValue) params.set("equipmentId", String(equipmentIdValue));
+  if (lineItemIdValue) params.set("lineItemId", String(lineItemIdValue));
+  return params;
+}
+
+async function fetchDispatchNotes(row) {
+  const params = buildDispatchNotesQuery(row);
+  if (!params) return [];
+  const res = await fetch(`/api/dispatch-notes?${params.toString()}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load dispatch notes.");
+  return normalizeGuardNotesList(data.notes || []);
+}
+
+async function createDispatchNote(row, noteHtml, images, userNameOverride = null) {
+  if (!activeCompanyId) throw new Error("No active company session.");
+  const orderIdValue = row?.assignment?.order_id || orderId;
+  if (!orderIdValue) throw new Error("Select a unit to create a note.");
+  const payload = {
+    companyId: activeCompanyId,
+    orderId: orderIdValue,
+    equipmentId: row?.assignment?.equipment_id || equipmentId || null,
+    lineItemId: row?.assignment?.line_item_id || lineItemId || null,
+    userName: userNameOverride || getGuardNotesUserName(),
+    note: noteHtml,
+    images,
+  };
+  const res = await fetch("/api/dispatch-notes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to save dispatch note.");
+  const normalized = normalizeGuardNotesList([data]);
+  return normalized[0] || null;
+}
+
+async function updateDispatchNoteOnServer(noteId, noteHtml, images) {
+  if (!activeCompanyId) throw new Error("No active company session.");
+  const res = await fetch(`/api/dispatch-notes/${encodeURIComponent(noteId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId: activeCompanyId, note: noteHtml, images }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to update dispatch note.");
+  const normalized = normalizeGuardNotesList([data]);
+  return normalized[0] || null;
+}
+
+async function deleteDispatchNoteOnServer(noteId) {
+  if (!activeCompanyId) throw new Error("No active company session.");
+  const res = await fetch(`/api/dispatch-notes/${encodeURIComponent(noteId)}`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId: activeCompanyId }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Unable to delete dispatch note.");
+  }
+}
+
+async function migrateLocalGuardNotes(row, localNotes) {
+  if (!localNotes.length) return [];
+  const created = [];
+  for (const note of localNotes) {
+    const noteHtml = normalizeRichTextValue(note.note || "");
+    const images = normalizeGuardNoteImages(note.images || []);
+    if (!richTextHasContent(noteHtml) && images.length === 0) continue;
+    const next = await createDispatchNote(row, noteHtml, images, note.userName || null);
+    if (next) created.push(next);
+  }
+  return created;
+}
+
 function buildDispatchWorkOrderSummary() {
   const inputNote = getGuardNotesPlainText();
   if (inputNote) return inputNote;
@@ -2149,13 +2236,14 @@ function collectGuardNoteImageUrls(notes) {
   return urls;
 }
 
-function loadGuardNotes(row) {
+async function loadGuardNotes(row) {
   guardNotesState = [];
   guardNotesPendingImages = [];
   guardNotesUploadsInFlight = 0;
   guardNotesUploadToken += 1;
   guardNotesEditing = null;
   guardNotesEditingToken += 1;
+  guardNotesLocalMode = false;
   setGuardNotesHtml("");
   guardNotesSelection.lastRange = null;
   renderGuardNotesPreviews();
@@ -2164,17 +2252,73 @@ function loadGuardNotes(row) {
     if (guardNotesStatus) guardNotesStatus.textContent = "";
     return;
   }
+  if (guardNotesStatus) guardNotesStatus.textContent = "Loading dispatch notes...";
   const key = guardNotesKey(row);
-  guardNotesState = readGuardNotesFromStorage(key);
-  renderGuardNotesList(guardNotesState);
-  if (guardNotesStatus) guardNotesStatus.textContent = "";
+  const localNotes = readGuardNotesFromStorage(key);
+  if (localNotes.length) {
+    try {
+      await migrateLocalGuardNotes(row, localNotes);
+      localStorage.removeItem(key);
+    } catch (err) {
+      guardNotesLocalMode = true;
+      guardNotesState = localNotes;
+      renderGuardNotesList(guardNotesState);
+      if (guardNotesStatus) {
+        guardNotesStatus.textContent = err?.message || "Saved locally. Unable to sync dispatch notes.";
+      }
+      return;
+    }
+  }
+  try {
+    guardNotesState = await fetchDispatchNotes(row);
+    renderGuardNotesList(guardNotesState);
+    if (guardNotesStatus) guardNotesStatus.textContent = "";
+  } catch (err) {
+    if (localNotes.length) {
+      guardNotesLocalMode = true;
+      guardNotesState = localNotes;
+      renderGuardNotesList(guardNotesState);
+    }
+    if (guardNotesStatus) {
+      guardNotesStatus.textContent = err?.message || "Unable to load dispatch notes.";
+    }
+  }
 }
 
 async function clearGuardNotes(row) {
   if (!row) return;
-  const urls = collectGuardNoteImageUrls(guardNotesState).concat(collectGuardNoteImageUrls([{ images: guardNotesPendingImages }]));
+  if (guardNotesLocalMode) {
+    const urls = collectGuardNoteImageUrls(guardNotesState).concat(
+      collectGuardNoteImageUrls([{ images: guardNotesPendingImages }])
+    );
+    const uniqueUrls = Array.from(new Set(urls));
+    guardNotesState = [];
+    guardNotesPendingImages = [];
+    guardNotesUploadsInFlight = 0;
+    guardNotesUploadToken += 1;
+    guardNotesEditing = null;
+    guardNotesEditingToken += 1;
+    setGuardNotesHtml("");
+    guardNotesSelection.lastRange = null;
+    renderGuardNotesList([]);
+    renderGuardNotesPreviews();
+    const ok = persistGuardNotes(row, []);
+    if (ok && guardNotesStatus) guardNotesStatus.textContent = "Notes cleared (local).";
+    if (uniqueUrls.length) {
+      await Promise.allSettled(uniqueUrls.map((url) => deleteGuardNoteImage(url)));
+    }
+    return;
+  }
+  const notesToDelete = guardNotesState.slice();
+  if (guardNotesStatus) guardNotesStatus.textContent = "Clearing notes...";
+  const results = await Promise.allSettled(notesToDelete.map((note) => deleteDispatchNoteOnServer(note.id)));
+  const failed = notesToDelete.filter((_, idx) => results[idx]?.status === "rejected");
+  const deleted = notesToDelete.filter((_, idx) => results[idx]?.status === "fulfilled");
+
+  const urls = collectGuardNoteImageUrls(deleted).concat(collectGuardNoteImageUrls([{ images: guardNotesPendingImages }]));
   const uniqueUrls = Array.from(new Set(urls));
-  guardNotesState = [];
+
+  guardNotesState = failed;
   guardNotesPendingImages = [];
   guardNotesUploadsInFlight = 0;
   guardNotesUploadToken += 1;
@@ -2182,16 +2326,21 @@ async function clearGuardNotes(row) {
   guardNotesEditingToken += 1;
   setGuardNotesHtml("");
   guardNotesSelection.lastRange = null;
-  renderGuardNotesList([]);
+  renderGuardNotesList(guardNotesState);
   renderGuardNotesPreviews();
-  const ok = persistGuardNotes(row, []);
-  if (ok && guardNotesStatus) guardNotesStatus.textContent = "Notes cleared.";
+
+  if (failed.length) {
+    if (guardNotesStatus) guardNotesStatus.textContent = "Some notes could not be deleted.";
+  } else if (guardNotesStatus) {
+    guardNotesStatus.textContent = "Notes cleared.";
+  }
+
   if (uniqueUrls.length) {
     await Promise.allSettled(uniqueUrls.map((url) => deleteGuardNoteImage(url)));
   }
 }
 
-function submitGuardNote() {
+async function submitGuardNote() {
   if (!selectedUnit) {
     if (guardNotesStatus) guardNotesStatus.textContent = "Select a unit to add guard notes.";
     return;
@@ -2207,24 +2356,43 @@ function submitGuardNote() {
     return;
   }
 
-  const userName = getGuardNotesUserName();
-  const next = guardNotesState.concat({
-    id: makeGuardNoteId(),
-    userName,
-    createdAt: new Date().toISOString(),
-    note: noteHtml,
-    images,
-  });
+  if (guardNotesLocalMode) {
+    const userName = getGuardNotesUserName();
+    const next = guardNotesState.concat({
+      id: makeGuardNoteId(),
+      userName,
+      createdAt: new Date().toISOString(),
+      note: noteHtml,
+      images,
+    });
+    if (!persistGuardNotes(selectedUnit, next)) return;
+    guardNotesState = next;
+    guardNotesPendingImages = [];
+    setGuardNotesHtml("");
+    guardNotesSelection.lastRange = null;
+    renderGuardNotesPreviews();
+    renderGuardNotesList(guardNotesState);
+    if (guardNotesStatus) {
+      guardNotesStatus.textContent = `Saved locally at ${new Date().toLocaleTimeString()}`;
+    }
+    return;
+  }
 
-  if (!persistGuardNotes(selectedUnit, next)) return;
-  guardNotesState = next;
-  guardNotesPendingImages = [];
-  setGuardNotesHtml("");
-  guardNotesSelection.lastRange = null;
-  renderGuardNotesPreviews();
-  renderGuardNotesList(guardNotesState);
-  if (guardNotesStatus) {
-    guardNotesStatus.textContent = `Added ${userName} at ${new Date().toLocaleTimeString()}`;
+  if (guardNotesStatus) guardNotesStatus.textContent = "Saving dispatch note...";
+  try {
+    const created = await createDispatchNote(selectedUnit, noteHtml, images);
+    if (!created) throw new Error("Unable to save dispatch note.");
+    guardNotesState = guardNotesState.concat(created);
+    guardNotesPendingImages = [];
+    setGuardNotesHtml("");
+    guardNotesSelection.lastRange = null;
+    renderGuardNotesPreviews();
+    renderGuardNotesList(guardNotesState);
+    if (guardNotesStatus) {
+      guardNotesStatus.textContent = `Added ${created.userName || "note"} at ${new Date().toLocaleTimeString()}`;
+    }
+  } catch (err) {
+    if (guardNotesStatus) guardNotesStatus.textContent = err?.message || "Unable to save dispatch note.";
   }
 }
 
@@ -2270,7 +2438,7 @@ function cancelGuardNoteEdit() {
   }
 }
 
-function saveGuardNoteEdit(noteId) {
+async function saveGuardNoteEdit(noteId) {
   if (!guardNotesEditing || String(guardNotesEditing.id) !== String(noteId)) return;
   if (guardNotesEditing.uploadsInFlight > 0) {
     setGuardNoteEditStatus(noteId, "Wait for image uploads to finish.");
@@ -2284,26 +2452,49 @@ function saveGuardNoteEdit(noteId) {
     return;
   }
 
-  const next = guardNotesState.map((note) => {
-    if (String(note.id) !== String(noteId)) return note;
-    return { ...note, note: noteHtml, images };
-  });
-  if (!persistGuardNotes(selectedUnit, next)) return;
-  guardNotesState = next;
+  if (guardNotesLocalMode) {
+    const next = guardNotesState.map((note) => {
+      if (String(note.id) !== String(noteId)) return note;
+      return { ...note, note: noteHtml, images };
+    });
+    if (!persistGuardNotes(selectedUnit, next)) return;
+    guardNotesState = next;
 
-  const removed = Array.from(guardNotesEditing.removedUrls || []);
-  guardNotesEditing = null;
-  guardNotesEditingToken += 1;
-  renderGuardNotesList(guardNotesState);
-  if (removed.length) {
-    Promise.allSettled(removed.map((url) => deleteGuardNoteImage(url)));
+    const removed = Array.from(guardNotesEditing.removedUrls || []);
+    guardNotesEditing = null;
+    guardNotesEditingToken += 1;
+    renderGuardNotesList(guardNotesState);
+    if (removed.length) {
+      Promise.allSettled(removed.map((url) => deleteGuardNoteImage(url)));
+    }
+    if (guardNotesStatus) {
+      guardNotesStatus.textContent = `Saved locally at ${new Date().toLocaleTimeString()}`;
+    }
+    return;
   }
-  if (guardNotesStatus) {
-    guardNotesStatus.textContent = `Note updated at ${new Date().toLocaleTimeString()}`;
+
+  setGuardNoteEditStatus(noteId, "Saving...");
+  try {
+    const updated = await updateDispatchNoteOnServer(noteId, noteHtml, images);
+    if (!updated) throw new Error("Unable to update dispatch note.");
+    guardNotesState = guardNotesState.map((note) => (String(note.id) === String(noteId) ? updated : note));
+
+    const removed = Array.from(guardNotesEditing.removedUrls || []);
+    guardNotesEditing = null;
+    guardNotesEditingToken += 1;
+    renderGuardNotesList(guardNotesState);
+    if (removed.length) {
+      Promise.allSettled(removed.map((url) => deleteGuardNoteImage(url)));
+    }
+    if (guardNotesStatus) {
+      guardNotesStatus.textContent = `Note updated at ${new Date().toLocaleTimeString()}`;
+    }
+  } catch (err) {
+    setGuardNoteEditStatus(noteId, err?.message || "Unable to update dispatch note.");
   }
 }
 
-function deleteGuardNote(noteId) {
+async function deleteGuardNote(noteId) {
   if (!selectedUnit) {
     if (guardNotesStatus) guardNotesStatus.textContent = "Select a unit to delete guard notes.";
     return;
@@ -2318,16 +2509,35 @@ function deleteGuardNote(noteId) {
   if (guardNotesEditing && String(guardNotesEditing.id) === String(noteId)) {
     cancelGuardNoteEdit();
   }
-  const next = guardNotesState.filter((note) => String(note.id) !== String(noteId));
-  if (!persistGuardNotes(selectedUnit, next)) return;
-  guardNotesState = next;
-  renderGuardNotesList(guardNotesState);
-  if (guardNotesStatus) {
-    guardNotesStatus.textContent = `Note deleted at ${new Date().toLocaleTimeString()}`;
+  if (guardNotesLocalMode) {
+    const next = guardNotesState.filter((note) => String(note.id) !== String(noteId));
+    if (!persistGuardNotes(selectedUnit, next)) return;
+    guardNotesState = next;
+    renderGuardNotesList(guardNotesState);
+    if (guardNotesStatus) {
+      guardNotesStatus.textContent = `Saved locally at ${new Date().toLocaleTimeString()}`;
+    }
+    const urls = collectGuardNoteImageUrls([target]);
+    if (urls.length) {
+      Promise.allSettled(urls.map((url) => deleteGuardNoteImage(url)));
+    }
+    return;
   }
-  const urls = collectGuardNoteImageUrls([target]);
-  if (urls.length) {
-    Promise.allSettled(urls.map((url) => deleteGuardNoteImage(url)));
+  if (guardNotesStatus) guardNotesStatus.textContent = "Deleting note...";
+  try {
+    await deleteDispatchNoteOnServer(noteId);
+    const next = guardNotesState.filter((note) => String(note.id) !== String(noteId));
+    guardNotesState = next;
+    renderGuardNotesList(guardNotesState);
+    if (guardNotesStatus) {
+      guardNotesStatus.textContent = `Note deleted at ${new Date().toLocaleTimeString()}`;
+    }
+    const urls = collectGuardNoteImageUrls([target]);
+    if (urls.length) {
+      Promise.allSettled(urls.map((url) => deleteGuardNoteImage(url)));
+    }
+  } catch (err) {
+    if (guardNotesStatus) guardNotesStatus.textContent = err?.message || "Unable to delete dispatch note.";
   }
 }
 
@@ -2524,7 +2734,7 @@ async function loadDetail() {
     renderUnitDetail(row);
     orderDetails.innerHTML = detailItem("Loading", "Fetching rental order data...");
     lineItemDetails.innerHTML = "";
-    loadGuardNotes(row);
+    void loadGuardNotes(row);
 
     if (!detail) {
       detail = await loadOrderDetail(row.assignment.order_id);
@@ -2623,7 +2833,7 @@ if (guardNotesToolbar) {
 
 guardNotesSubmitBtn?.addEventListener("click", (e) => {
   e.preventDefault();
-  submitGuardNote();
+  void submitGuardNote();
 });
 
 guardNotesList?.addEventListener("mousedown", (e) => {
@@ -2677,12 +2887,12 @@ guardNotesList?.addEventListener("click", (e) => {
   }
   const deleteBtn = e.target?.closest?.("[data-delete-note]");
   if (deleteBtn) {
-    deleteGuardNote(deleteBtn.dataset.deleteNote);
+    void deleteGuardNote(deleteBtn.dataset.deleteNote);
     return;
   }
   const saveBtn = e.target?.closest?.("[data-save-note]");
   if (saveBtn) {
-    saveGuardNoteEdit(saveBtn.dataset.saveNote);
+    void saveGuardNoteEdit(saveBtn.dataset.saveNote);
     return;
   }
   const cancelBtn = e.target?.closest?.("[data-cancel-note]");
@@ -2882,7 +3092,7 @@ guardNotesPreviews?.addEventListener("click", (e) => {
 
 guardNotesClear?.addEventListener("click", () => {
   if (!selectedUnit) return;
-  clearGuardNotes(selectedUnit);
+  void clearGuardNotes(selectedUnit);
 });
 
 createWorkOrderBtn?.addEventListener("click", (e) => {

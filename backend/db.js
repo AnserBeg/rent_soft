@@ -1107,6 +1107,30 @@ async function ensureTables() {
     await client.query(`CREATE INDEX IF NOT EXISTS rental_order_notes_order_id_idx ON rental_order_notes (rental_order_id);`);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS rental_order_dispatch_notes (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        rental_order_id INTEGER NOT NULL REFERENCES rental_orders(id) ON DELETE CASCADE,
+        equipment_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
+        line_item_id INTEGER REFERENCES rental_order_line_items(id) ON DELETE SET NULL,
+        user_name TEXT NOT NULL,
+        note TEXT NOT NULL,
+        images JSONB NOT NULL DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS rental_order_dispatch_notes_company_order_idx ON rental_order_dispatch_notes (company_id, rental_order_id);`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS rental_order_dispatch_notes_equipment_idx ON rental_order_dispatch_notes (equipment_id);`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS rental_order_dispatch_notes_line_item_idx ON rental_order_dispatch_notes (line_item_id);`
+    );
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS rental_order_attachments (
         id SERIAL PRIMARY KEY,
         rental_order_id INTEGER NOT NULL REFERENCES rental_orders(id) ON DELETE CASCADE,
@@ -6955,6 +6979,7 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            ${timelineStartExpr} AS start_at,
            ${timelineEndExpr} AS end_at,
            ${timelineEndRawExpr} AS end_at_raw,
+           li.returned_at,
            ro.id AS order_id,
            ro.status,
            ro.quote_number,
@@ -6983,6 +7008,7 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            ${timelineStartExpr} AS start_at,
            ${timelineEndExpr} AS end_at,
            ${timelineEndRawExpr} AS end_at_raw,
+           li.returned_at,
            ro.id AS order_id,
            ro.status,
            ro.quote_number,
@@ -11848,6 +11874,88 @@ async function updateRentalOrderSiteAddress({ companyId, orderId, siteAddress, s
   return res.rows[0] || null;
 }
 
+function normalizeDispatchNoteImages(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry) => entry && typeof entry === "object");
+}
+
+async function listDispatchNotes({ companyId, orderId, equipmentId = null, lineItemId = null }) {
+  const values = [companyId, orderId];
+  let idx = 3;
+  let where = "company_id = $1 AND rental_order_id = $2";
+  if (Number.isFinite(Number(equipmentId))) {
+    where += ` AND equipment_id = $${idx++}`;
+    values.push(Number(equipmentId));
+  }
+  if (Number.isFinite(Number(lineItemId))) {
+    where += ` AND line_item_id = $${idx++}`;
+    values.push(Number(lineItemId));
+  }
+  const res = await pool.query(
+    `
+    SELECT id,
+           rental_order_id,
+           equipment_id,
+           line_item_id,
+           user_name,
+           note,
+           images,
+           created_at,
+           updated_at
+      FROM rental_order_dispatch_notes
+     WHERE ${where}
+     ORDER BY created_at
+    `,
+    values
+  );
+  return res.rows;
+}
+
+async function addDispatchNote({ companyId, orderId, equipmentId = null, lineItemId = null, userName, note, images = [] }) {
+  const payload = JSON.stringify(normalizeDispatchNoteImages(images));
+  const res = await pool.query(
+    `
+    INSERT INTO rental_order_dispatch_notes (
+      company_id,
+      rental_order_id,
+      equipment_id,
+      line_item_id,
+      user_name,
+      note,
+      images
+    )
+    SELECT $1, ro.id, $2, $3, $4, $5, $6::jsonb
+      FROM rental_orders ro
+     WHERE ro.id = $7 AND ro.company_id = $1
+     RETURNING id, rental_order_id, equipment_id, line_item_id, user_name, note, images, created_at, updated_at
+    `,
+    [companyId, Number(equipmentId) || null, Number(lineItemId) || null, userName, note, payload, orderId]
+  );
+  return res.rows[0] || null;
+}
+
+async function updateDispatchNote({ companyId, noteId, note, images = [] }) {
+  const payload = JSON.stringify(normalizeDispatchNoteImages(images));
+  const res = await pool.query(
+    `
+    UPDATE rental_order_dispatch_notes
+       SET note = $1,
+           images = $2::jsonb,
+           updated_at = NOW()
+     WHERE id = $3
+       AND company_id = $4
+     RETURNING id, rental_order_id, equipment_id, line_item_id, user_name, note, images, created_at, updated_at
+    `,
+    [note, payload, noteId, companyId]
+  );
+  return res.rows[0] || null;
+}
+
+async function deleteDispatchNote({ companyId, noteId }) {
+  await pool.query(`DELETE FROM rental_order_dispatch_notes WHERE id = $1 AND company_id = $2`, [noteId, companyId]);
+  return { deleted: true };
+}
+
 async function addRentalOrderNote({ companyId, orderId, userName, note }) {
   const result = await pool.query(
     `
@@ -15136,6 +15244,10 @@ module.exports = {
   updateRentalOrderSiteAddress,
   updateRentalOrderStatus,
   deleteRentalOrder,
+  listDispatchNotes,
+  addDispatchNote,
+  updateDispatchNote,
+  deleteDispatchNote,
   addRentalOrderNote,
   addRentalOrderAttachment,
   deleteRentalOrderAttachment,
