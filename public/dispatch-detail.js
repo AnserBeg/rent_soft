@@ -249,8 +249,10 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   siteName: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  monitoringPersonnel: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
+  emergencyContactInstructions: { enabled: true, required: false },
   siteContacts: { enabled: true, required: true },
   notificationCircumstances: { enabled: true, required: false },
   coverageHours: { enabled: true, required: true },
@@ -1699,12 +1701,16 @@ function renderOrderDetail(row, detail) {
   const siteAddress = order.site_address || order.siteAddress || "--";
   const siteAccessInfo = order.site_access_info || order.siteAccessInfo || "--";
   const criticalAreas = order.critical_areas || order.criticalAreas || "--";
+  const monitoringPersonnel = order.monitoring_personnel || order.monitoringPersonnel || "--";
   const generalNotes = order.general_notes || order.generalNotes || "";
+  const emergencyContactInstructions =
+    order.emergency_contact_instructions || order.emergencyContactInstructions || "";
   const generalNotesImages = generalNotesImagesFromDetail(detail);
   const generalNotesText = formatRichText(generalNotes);
   const generalNotesValue = generalNotesImages.length
     ? `${generalNotesText || "--"}<div class="general-notes-media">${renderGeneralNotesImages(generalNotesImages)}</div>`
     : (generalNotesText || "--");
+  const emergencyContactInstructionsValue = formatRichText(emergencyContactInstructions);
 
   const orderDetailItems = [];
   if (isRentalInfoEnabled("siteContacts")) {
@@ -1712,6 +1718,15 @@ function renderOrderDetail(row, detail) {
   }
   if (isRentalInfoEnabled("emergencyContacts")) {
     orderDetailItems.push(detailItem("Emergency contacts", formatContactLines("Emergency contact", emergencyContacts)));
+  }
+  if (isRentalInfoEnabled("emergencyContactInstructions")) {
+    orderDetailItems.push(
+      detailItem(
+        "Additional emergency contact instructions",
+        emergencyContactInstructionsValue || "--",
+        "detail-item-wide"
+      )
+    );
   }
   orderDetails.innerHTML = orderDetailItems.join("");
 
@@ -1726,7 +1741,10 @@ function renderOrderDetail(row, detail) {
     lineDetailItems.push(detailItem("Site access information / pin", siteAccessInfo || "--"));
   }
   if (isRentalInfoEnabled("criticalAreas")) {
-    lineDetailItems.push(detailItem("Critical areas on site", criticalAreas || "--"));
+    lineDetailItems.push(detailItem("Critical Assets and Locations on Site", criticalAreas || "--"));
+  }
+  if (isRentalInfoEnabled("monitoringPersonnel")) {
+    lineDetailItems.push(detailItem("Personnel/contractors expected on site during monitoring hours", monitoringPersonnel || "--"));
   }
   if (isRentalInfoEnabled("notificationCircumstances")) {
     const notifValue = Array.isArray(notificationCircumstances) && notificationCircumstances.length
@@ -3157,3 +3175,4 @@ saveSiteAddressPickerBtn?.addEventListener("click", (e) => {
 document.addEventListener("DOMContentLoaded", () => {
   loadCompanySettings().finally(() => loadDetail());
 });
+

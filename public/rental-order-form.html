@@ -287,8 +287,13 @@
               </div>
               <div class="stack rental-info-notes">
                 <div data-rental-info-field="criticalAreas">
-                  <label>Critical Areas on Site
+                  <label>Critical Assets and Locations on Site
                     <textarea id="critical-areas"></textarea>
+                  </label>
+                </div>
+                <div data-rental-info-field="monitoringPersonnel">
+                  <label>Personnel/contractors expected on site during monitoring hours
+                    <textarea id="monitoring-personnel" class="compact-textarea" rows="1"></textarea>
                   </label>
                 </div>
                 <div data-rental-info-field="generalNotes">
@@ -353,6 +358,11 @@
                 </div>
                 <div class="contacts-list stack" id="emergency-contacts-list"></div>
               </div>
+              <div data-rental-info-field="emergencyContactInstructions">
+                <label>Additional emergency contact instructions
+                  <textarea id="emergency-contact-instructions" class="compact-textarea" rows="1"></textarea>
+                </label>
+              </div>
               <div class="contact-block" data-rental-info-field="siteContacts">
                 <div class="contact-header">
                   <strong>Site contacts</strong>
@@ -387,6 +397,10 @@
                     <label class="coverage-timezone">
                       <span class="hint">Time zone</span>
                       <select id="coverage-timezone"></select>
+                    </label>
+                    <label class="coverage-stat-holidays">
+                      <input type="checkbox" id="coverage-stat-holidays" />
+                      <span class="hint">Stat holidays required</span>
                     </label>
                     <span class="hint">Use 24-hour time - 5-minute steps</span>
                     <button type="button" class="ghost small" id="add-coverage-slot">+ Add time slot</button>
@@ -748,4 +762,5 @@
 </body>
 
 </html>
+
 

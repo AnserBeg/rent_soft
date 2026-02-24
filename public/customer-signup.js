@@ -102,6 +102,124 @@ function collectContacts(list) {
     .filter(Boolean);
 }
 
+const DEFAULT_CONTACT_CATEGORIES = [
+  { key: "contacts", label: "Contacts" },
+  { key: "accountingContacts", label: "Accounting contacts" },
+];
+let contactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
+const contactCategoryLists = new Map();
+
+function contactCategoryKeyFromLabel(label) {
+  return String(label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .map((part, idx) =>
+      idx === 0 ? part : part.slice(0, 1).toUpperCase() + part.slice(1)
+    )
+    .join("");
+}
+
+function normalizeContactCategories(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const normalized = [];
+  const usedKeys = new Set();
+
+  const pushEntry = (key, label) => {
+    const cleanLabel = String(label || "").trim();
+    if (!cleanLabel) return;
+    let cleanKey = String(key || "").trim();
+    if (!cleanKey) cleanKey = contactCategoryKeyFromLabel(cleanLabel);
+    if (!cleanKey || usedKeys.has(cleanKey)) return;
+    usedKeys.add(cleanKey);
+    normalized.push({ key: cleanKey, label: cleanLabel });
+  };
+
+  raw.forEach((entry) => {
+    if (!entry) return;
+    if (typeof entry === "string") {
+      pushEntry("", entry);
+      return;
+    }
+    if (typeof entry !== "object") return;
+    pushEntry(entry.key || entry.id || "", entry.label || entry.name || entry.title || "");
+  });
+
+  const byKey = new Map(normalized.map((entry) => [entry.key, entry]));
+  const baseContacts = byKey.get("contacts")?.label || DEFAULT_CONTACT_CATEGORIES[0].label;
+  const baseAccounting =
+    byKey.get("accountingContacts")?.label || DEFAULT_CONTACT_CATEGORIES[1].label;
+  const extras = normalized.filter(
+    (entry) => entry.key !== "contacts" && entry.key !== "accountingContacts"
+  );
+  return [
+    { key: "contacts", label: baseContacts },
+    { key: "accountingContacts", label: baseAccounting },
+    ...extras,
+  ];
+}
+
+function renderContactCategories(container, categories) {
+  if (!container) return;
+  container.innerHTML = "";
+  contactCategoryLists.clear();
+  contactCategoryConfig = normalizeContactCategories(categories);
+
+  contactCategoryConfig.forEach((category) => {
+    const block = document.createElement("div");
+    block.className = "contact-block";
+    block.dataset.contactCategoryKey = category.key;
+
+    const header = document.createElement("div");
+    header.className = "contact-header";
+
+    const title = document.createElement("strong");
+    title.textContent = category.label;
+
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "ghost small";
+    addBtn.textContent = "+ Add contact";
+    addBtn.dataset.addContactCategory = category.key;
+
+    header.appendChild(title);
+    header.appendChild(addBtn);
+
+    const list = document.createElement("div");
+    list.className = "contacts-list stack";
+    list.dataset.contactListKey = category.key;
+
+    block.appendChild(header);
+    block.appendChild(list);
+    container.appendChild(block);
+    contactCategoryLists.set(category.key, list);
+  });
+}
+
+function setContactCategoryRows(groups) {
+  contactCategoryConfig.forEach((category) => {
+    const list = contactCategoryLists.get(category.key);
+    const rows = Array.isArray(groups?.[category.key]) ? groups[category.key] : [];
+    setContactRows(list, rows);
+  });
+}
+
+function collectContactCategoryPayload() {
+  let contacts = [];
+  let accountingContacts = [];
+  const contactGroups = {};
+  contactCategoryConfig.forEach((category) => {
+    const list = contactCategoryLists.get(category.key);
+    const rows = collectContacts(list);
+    if (category.key === "contacts") contacts = rows;
+    else if (category.key === "accountingContacts") accountingContacts = rows;
+    else contactGroups[category.key] = rows;
+  });
+  return { contacts, accountingContacts, contactGroups };
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const form = $("customer-signup-form");
   const meta = $("customer-signup-meta");
@@ -111,10 +229,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const businessSection = $("business-section");
   const continueBtn = $("customer-signup-continue");
   const backBtn = $("customer-signup-back");
-  const contactsList = $("contacts-list");
-  const addContactRowBtn = $("add-contact-row");
-  const accountingContactsList = $("accounting-contacts-list");
-  const addAccountingContactRowBtn = $("add-accounting-contact-row");
+  const contactCategoriesContainer = $("customer-contact-categories");
 
   const returnTo = getQueryParam("returnTo");
   const companyId = normalizeCompanyId(getQueryParam("companyId"));
@@ -165,35 +280,42 @@ document.addEventListener("DOMContentLoaded", () => {
     showAccountSection();
   });
 
-  setContactRows(contactsList, []);
-  setContactRows(accountingContactsList, []);
+  async function loadContactCategories() {
+    let categories = DEFAULT_CONTACT_CATEGORIES;
+    if (companyId) {
+      try {
+        const res = await fetch(
+          `/api/public/company-contact-categories?companyId=${encodeURIComponent(String(companyId))}`
+        );
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) categories = data.categories || categories;
+      } catch {
+        // ignore
+      }
+    }
+    renderContactCategories(contactCategoriesContainer, categories);
+    setContactCategoryRows({});
+  }
 
-  addContactRowBtn?.addEventListener("click", (e) => {
-    e.preventDefault();
-    addContactRow(contactsList, {}, { focus: true });
-  });
+  loadContactCategories();
 
-  contactsList?.addEventListener("click", (e) => {
-    const btn = e.target.closest?.(".contact-remove");
-    if (!btn) return;
+  contactCategoriesContainer?.addEventListener("click", (e) => {
+    const addBtn = e.target.closest?.("[data-add-contact-category]");
+    if (addBtn) {
+      e.preventDefault();
+      const key = addBtn.getAttribute("data-add-contact-category");
+      const list = contactCategoryLists.get(String(key || ""));
+      if (list) addContactRow(list, {}, { focus: true });
+      return;
+    }
+
+    const removeBtn = e.target.closest?.(".contact-remove");
+    if (!removeBtn) return;
     e.preventDefault();
-    const row = btn.closest(".contact-row");
+    const row = removeBtn.closest(".contact-row");
+    const list = row?.parentElement || null;
     if (row) row.remove();
-    updateContactRemoveButtons(contactsList);
-  });
-
-  addAccountingContactRowBtn?.addEventListener("click", (e) => {
-    e.preventDefault();
-    addContactRow(accountingContactsList, {}, { focus: true });
-  });
-
-  accountingContactsList?.addEventListener("click", (e) => {
-    const btn = e.target.closest?.(".contact-remove");
-    if (!btn) return;
-    e.preventDefault();
-    const row = btn.closest(".contact-row");
-    if (row) row.remove();
-    updateContactRemoveButtons(accountingContactsList);
+    updateContactRemoveButtons(list);
   });
 
   form?.addEventListener("submit", async (e) => {
@@ -206,8 +328,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (submit) submit.disabled = true;
     try {
       const formData = new FormData(form);
-      const contacts = collectContacts(contactsList);
-      const accountingContacts = collectContacts(accountingContactsList);
+      const { contacts, accountingContacts, contactGroups } = collectContactCategoryPayload();
       const accountName = String(formData.get("name") || "").trim();
       const accountEmail = String(formData.get("email") || "").trim();
       const accountPhone = String(formData.get("phone") || "").trim();
@@ -216,6 +337,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       formData.set("contacts", JSON.stringify(contacts));
       formData.set("accountingContacts", JSON.stringify(accountingContacts));
+      formData.set("contactGroups", JSON.stringify(contactGroups));
 
       const companyName = String(formData.get("companyName") || "").trim();
       if (companyName && !formData.get("businessName")) {

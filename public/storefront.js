@@ -262,17 +262,21 @@ document.addEventListener("DOMContentLoaded", () => {
   const reserveAuthActions = $("reserve-auth-actions");
   const topbarAccountActions = $("storefront-account-actions");
   const reserveCriticalAreas = $("reserve-critical-areas");
+  const reserveMonitoringPersonnel = $("reserve-monitoring-personnel");
   const reserveGeneralNotes = $("reserve-general-notes");
   const reserveGeneralNotesImagesInput = $("reserve-general-notes-images");
   const reserveGeneralNotesStatus = $("reserve-general-notes-status");
   const reserveGeneralNotesPreviews = $("reserve-general-notes-previews");
   const reserveSiteAddress = $("reserve-site-address");
   const reserveSiteAccessInfo = $("reserve-site-access-info");
+  const reserveEmergencyContactInstructions = $("reserve-emergency-contact-instructions");
   const reserveCoverageTimeZone = $("reserve-coverage-timezone");
     const rentalInfoFieldContainers = {
       siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
       siteAccessInfo: document.querySelector('[data-rental-info-field="siteAccessInfo"]'),
       criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
+      monitoringPersonnel: document.querySelector('[data-rental-info-field="monitoringPersonnel"]'),
+      emergencyContactInstructions: document.querySelector('[data-rental-info-field="emergencyContactInstructions"]'),
       generalNotes: document.querySelector('[data-rental-info-field="generalNotes"]'),
       emergencyContacts: document.querySelector('[data-rental-info-field="emergencyContacts"]'),
       siteContacts: document.querySelector('[data-rental-info-field="siteContacts"]'),
@@ -411,8 +415,10 @@ document.addEventListener("DOMContentLoaded", () => {
     siteAddress: { enabled: true, required: false },
     siteAccessInfo: { enabled: true, required: false },
     criticalAreas: { enabled: true, required: true },
+    monitoringPersonnel: { enabled: true, required: false },
     generalNotes: { enabled: true, required: true },
     emergencyContacts: { enabled: true, required: true },
+    emergencyContactInstructions: { enabled: true, required: false },
     siteContacts: { enabled: true, required: true },
     coverageHours: { enabled: true, required: true },
   };
@@ -466,6 +472,15 @@ document.addEventListener("DOMContentLoaded", () => {
     if (reserveCriticalAreas) {
       reserveCriticalAreas.required =
         activeRentalInfoConfig?.criticalAreas?.enabled && activeRentalInfoConfig?.criticalAreas?.required;
+    }
+    if (reserveMonitoringPersonnel) {
+      reserveMonitoringPersonnel.required =
+        activeRentalInfoConfig?.monitoringPersonnel?.enabled && activeRentalInfoConfig?.monitoringPersonnel?.required;
+    }
+    if (reserveEmergencyContactInstructions) {
+      reserveEmergencyContactInstructions.required =
+        activeRentalInfoConfig?.emergencyContactInstructions?.enabled &&
+        activeRentalInfoConfig?.emergencyContactInstructions?.required;
     }
     if (reserveGeneralNotes) {
       reserveGeneralNotes.required =
@@ -834,6 +849,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (reserveSiteAddress) reserveSiteAddress.value = "";
     if (reserveSiteAccessInfo) reserveSiteAccessInfo.value = "";
     if (reserveCriticalAreas) reserveCriticalAreas.value = "";
+    if (reserveMonitoringPersonnel) reserveMonitoringPersonnel.value = "";
+    if (reserveEmergencyContactInstructions) reserveEmergencyContactInstructions.value = "";
     if (reserveGeneralNotes) reserveGeneralNotes.value = "";
     setContactRows(reserveEmergencyContactsList, []);
     setContactRows(reserveSiteContactsList, []);
@@ -1395,6 +1412,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const siteAddress = normalizeContactValue(reserveSiteAddress?.value);
     const siteAccessInfo = normalizeContactValue(reserveSiteAccessInfo?.value);
     const criticalAreas = normalizeContactValue(reserveCriticalAreas?.value);
+    const monitoringPersonnel = normalizeContactValue(reserveMonitoringPersonnel?.value);
+    const emergencyContactInstructions = normalizeContactValue(reserveEmergencyContactInstructions?.value);
     const generalNotes = normalizeContactValue(reserveGeneralNotes?.value);
 
     if (isFieldRequired("siteAddress") && !siteAddress) {
@@ -1406,11 +1425,19 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     if (isFieldRequired("criticalAreas") && !criticalAreas) {
-      setMeta(reserveMeta, "Critical Areas on Site is required.");
+      setMeta(reserveMeta, "Critical Assets and Locations on Site is required.");
+      return;
+    }
+    if (isFieldRequired("monitoringPersonnel") && !monitoringPersonnel) {
+      setMeta(reserveMeta, "Personnel/contractors expected on site during monitoring hours is required.");
       return;
     }
     if (isFieldRequired("generalNotes") && !generalNotes) {
       setMeta(reserveMeta, "General notes are required.");
+      return;
+    }
+    if (isFieldRequired("emergencyContactInstructions") && !emergencyContactInstructions) {
+      setMeta(reserveMeta, "Additional emergency contact instructions are required.");
       return;
     }
     if (reserveGeneralNotesUploadsInFlight > 0) {
@@ -1453,7 +1480,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isFieldEnabled("siteAddress") && siteAddress) payload.siteAddress = siteAddress;
     if (isFieldEnabled("siteAccessInfo") && siteAccessInfo) payload.siteAccessInfo = siteAccessInfo;
     if (isFieldEnabled("criticalAreas") && criticalAreas) payload.criticalAreas = criticalAreas;
+    if (isFieldEnabled("monitoringPersonnel") && monitoringPersonnel) payload.monitoringPersonnel = monitoringPersonnel;
     if (isFieldEnabled("generalNotes") && generalNotes) payload.generalNotes = generalNotes;
+    if (isFieldEnabled("emergencyContactInstructions") && emergencyContactInstructions) {
+      payload.emergencyContactInstructions = emergencyContactInstructions;
+    }
     if (isFieldEnabled("generalNotes") && reserveGeneralNotesImages.length) {
       payload.generalNotesImages = reserveGeneralNotesImages.map((img) => ({
         url: img.url,
@@ -1511,3 +1542,4 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 });
+

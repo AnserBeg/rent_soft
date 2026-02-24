@@ -14,7 +14,17 @@ const documentsSection = document.getElementById("documents-section");
 const documentUploads = document.getElementById("document-uploads");
 const termsSection = document.getElementById("terms-section");
 const termsText = document.getElementById("terms-text");
+const serviceAgreementSection = document.getElementById("service-agreement-section");
+const serviceAgreementStatus = document.getElementById("service-agreement-status");
+const serviceAgreementName = document.getElementById("service-agreement-name");
+const serviceAgreementDownload = document.getElementById("service-agreement-download");
+const serviceAgreementSignedDownload = document.getElementById("service-agreement-signed-download");
+const serviceAgreementSignedCheck = document.getElementById("service-agreement-signed-check");
+const serviceAgreementTopCheck = document.getElementById("service-agreement-top-check");
+const serviceAgreementAck = document.getElementById("service-agreement-ack");
+const serviceAgreementAckRow = document.getElementById("service-agreement-ack-row");
 const signatureSection = document.getElementById("signature-section");
+const signatureTitle = document.getElementById("signature-title");
 const signatureName = document.getElementById("signature-name");
 const signatureCanvas = document.getElementById("signature-canvas");
 const clearSignatureBtn = document.getElementById("clear-signature");
@@ -27,10 +37,7 @@ const linkUsedProofActions = document.getElementById("link-used-proof-actions");
 const linkUsedProof = document.getElementById("link-used-proof");
 
 const companyNameInput = document.getElementById("company-name");
-const contactsList = document.getElementById("contacts-list");
-const addContactRowBtn = document.getElementById("add-contact-row");
-const accountingContactsList = document.getElementById("accounting-contacts-list");
-const addAccountingContactRowBtn = document.getElementById("add-accounting-contact-row");
+const contactCategoriesContainer = document.getElementById("customer-contact-categories");
 const streetInput = document.getElementById("street-address");
 const cityInput = document.getElementById("city");
 const regionInput = document.getElementById("region");
@@ -45,6 +52,7 @@ const siteNameInput = document.getElementById("site-name");
 const siteAddressInput = document.getElementById("site-address");
 const siteAccessInfoInput = document.getElementById("site-access-info");
 const criticalAreasInput = document.getElementById("critical-areas");
+const monitoringPersonnelInput = document.getElementById("monitoring-personnel");
 const generalNotesInput = document.getElementById("general-notes");
 const generalNotesEditor = document.getElementById("general-notes-editor");
 const generalNotesToolbar = document.getElementById("general-notes-toolbar");
@@ -52,6 +60,7 @@ const generalNotesImagesInput = document.getElementById("general-notes-images");
 const generalNotesImagesStatus = document.getElementById("general-notes-images-status");
 const generalNotesPreviews = document.getElementById("general-notes-previews");
 const emergencyContactsList = document.getElementById("emergency-contacts-list");
+const emergencyContactInstructionsInput = document.getElementById("emergency-contact-instructions");
 const addEmergencyContactRowBtn = document.getElementById("add-emergency-contact-row");
 const siteContactsList = document.getElementById("site-contacts-list");
 const addSiteContactRowBtn = document.getElementById("add-site-contact-row");
@@ -173,13 +182,16 @@ function getCoverageTimeZoneInputValue() {
 const coverageSlotsContainer = document.getElementById("coverage-slots");
 const addCoverageSlotBtn = document.getElementById("add-coverage-slot");
 const coverageTimeZoneSelect = document.getElementById("coverage-timezone");
+const coverageStatHolidaysCheckbox = document.getElementById("coverage-stat-holidays");
 const rentalInfoFieldContainers = {
   siteName: document.querySelector('[data-rental-info-field="siteName"]'),
   siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
   siteAccessInfo: document.querySelector('[data-rental-info-field="siteAccessInfo"]'),
   criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
+  monitoringPersonnel: document.querySelector('[data-rental-info-field="monitoringPersonnel"]'),
   generalNotes: document.querySelector('[data-rental-info-field="generalNotes"]'),
   emergencyContacts: document.querySelector('[data-rental-info-field="emergencyContacts"]'),
+  emergencyContactInstructions: document.querySelector('[data-rental-info-field="emergencyContactInstructions"]'),
   siteContacts: document.querySelector('[data-rental-info-field="siteContacts"]'),
   notificationCircumstances: document.querySelector('[data-rental-info-field="notificationCircumstances"]'),
   coverageHours: document.querySelector('[data-rental-info-field="coverageHours"]'),
@@ -207,6 +219,8 @@ let types = [];
 let lineItems = [];
 let docCategoryMap = {};
 let signatureActive = false;
+let serviceAgreementRequired = false;
+let signatureRequired = false;
 let rentalInfoFields = null;
 let generalNotesImages = [];
 let generalNotesUploadsInFlight = 0;
@@ -221,6 +235,13 @@ let siteAddressLat = null;
 let siteAddressLng = null;
 let siteAddressQuery = "";
 let siteAddressInputLock = false;
+
+const DEFAULT_CONTACT_CATEGORIES = [
+  { key: "contacts", label: "Contacts" },
+  { key: "accountingContacts", label: "Accounting contacts" },
+];
+let contactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
+const contactCategoryLists = new Map();
 
 let sideAddressPicker = {
   selected: null,
@@ -256,8 +277,10 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   siteName: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  monitoringPersonnel: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
+  emergencyContactInstructions: { enabled: true, required: false },
   siteContacts: { enabled: true, required: true },
   coverageHours: { enabled: true, required: true },
 };
@@ -331,6 +354,153 @@ function toFiniteCoordinate(value) {
 function normalizeMapStyle(value) {
   const raw = String(value || "").trim().toLowerCase();
   return raw === "satellite" ? "satellite" : "street";
+}
+
+function contactCategoryKeyFromLabel(label) {
+  return String(label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .map((part, idx) =>
+      idx === 0 ? part : part.slice(0, 1).toUpperCase() + part.slice(1)
+    )
+    .join("");
+}
+
+function normalizeContactCategories(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const normalized = [];
+  const usedKeys = new Set();
+
+  const pushEntry = (key, label) => {
+    const cleanLabel = String(label || "").trim();
+    if (!cleanLabel) return;
+    let cleanKey = String(key || "").trim();
+    if (!cleanKey) cleanKey = contactCategoryKeyFromLabel(cleanLabel);
+    if (!cleanKey || usedKeys.has(cleanKey)) return;
+    usedKeys.add(cleanKey);
+    normalized.push({ key: cleanKey, label: cleanLabel });
+  };
+
+  raw.forEach((entry) => {
+    if (!entry) return;
+    if (typeof entry === "string") {
+      pushEntry("", entry);
+      return;
+    }
+    if (typeof entry !== "object") return;
+    pushEntry(entry.key || entry.id || "", entry.label || entry.name || entry.title || "");
+  });
+
+  const byKey = new Map(normalized.map((entry) => [entry.key, entry]));
+  const baseContacts = byKey.get("contacts")?.label || DEFAULT_CONTACT_CATEGORIES[0].label;
+  const baseAccounting =
+    byKey.get("accountingContacts")?.label || DEFAULT_CONTACT_CATEGORIES[1].label;
+  const extras = normalized.filter(
+    (entry) => entry.key !== "contacts" && entry.key !== "accountingContacts"
+  );
+  return [
+    { key: "contacts", label: baseContacts },
+    { key: "accountingContacts", label: baseAccounting },
+    ...extras,
+  ];
+}
+
+function renderContactCategories(categories) {
+  if (!contactCategoriesContainer) return;
+  contactCategoriesContainer.innerHTML = "";
+  contactCategoryLists.clear();
+  contactCategoryConfig = normalizeContactCategories(categories);
+
+  contactCategoryConfig.forEach((category) => {
+    const block = document.createElement("div");
+    block.className = "contact-block";
+    block.dataset.contactCategoryKey = category.key;
+
+    const header = document.createElement("div");
+    header.className = "contact-header";
+
+    const title = document.createElement("strong");
+    title.textContent = category.label;
+
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "ghost small";
+    addBtn.textContent = "+ Add contact";
+    addBtn.dataset.addContactCategory = category.key;
+
+    header.appendChild(title);
+    header.appendChild(addBtn);
+
+    const list = document.createElement("div");
+    list.className = "contacts-list stack";
+    list.dataset.contactListKey = category.key;
+
+    block.appendChild(header);
+    block.appendChild(list);
+    contactCategoriesContainer.appendChild(block);
+    contactCategoryLists.set(category.key, list);
+  });
+}
+
+function normalizeContactGroups(value) {
+  let raw = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = null;
+    }
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const groups = {};
+  Object.entries(raw).forEach(([key, list]) => {
+    groups[key] = Array.isArray(list) ? list : [];
+  });
+  return groups;
+}
+
+function buildCustomerContactGroups(customer) {
+  const groups = normalizeContactGroups(customer?.contactGroups || customer?.contact_groups);
+  const contactRows = Array.isArray(customer?.contacts) ? customer.contacts : [];
+  if (!contactRows.length && (customer?.contactName || customer?.email || customer?.phone)) {
+    contactRows.push({
+      name: customer?.contactName || "",
+      email: customer?.email || "",
+      phone: customer?.phone || "",
+    });
+  }
+  groups.contacts = contactRows;
+  groups.accountingContacts = Array.isArray(customer?.accountingContacts)
+    ? customer.accountingContacts
+    : Array.isArray(customer?.accounting_contacts)
+      ? customer.accounting_contacts
+      : [];
+  return groups;
+}
+
+function setContactCategoryRows(groups) {
+  contactCategoryConfig.forEach((category) => {
+    const list = contactCategoryLists.get(category.key);
+    const rows = Array.isArray(groups?.[category.key]) ? groups[category.key] : [];
+    setContactRows(list, rows);
+  });
+}
+
+function collectContactCategoryPayload() {
+  let contacts = [];
+  let accountingContacts = [];
+  const contactGroups = {};
+  contactCategoryConfig.forEach((category) => {
+    const list = contactCategoryLists.get(category.key);
+    const rows = collectContacts(list);
+    if (category.key === "contacts") contacts = rows;
+    else if (category.key === "accountingContacts") accountingContacts = rows;
+    else contactGroups[category.key] = rows;
+  });
+  return { contacts, accountingContacts, contactGroups };
 }
 
 function parsePredictionText(prediction) {
@@ -2693,21 +2863,9 @@ async function loadLink() {
 
     const customer = data.customer || {};
     companyNameInput.value = customer.companyName || "";
-    const contactRows = Array.isArray(customer.contacts) ? customer.contacts : [];
-    if (!contactRows.length && (customer.contactName || customer.email || customer.phone)) {
-      contactRows.push({
-        name: customer.contactName || "",
-        email: customer.email || "",
-        phone: customer.phone || "",
-      });
-    }
-    setContactRows(contactsList, contactRows);
-    const accountingRows = Array.isArray(customer.accountingContacts)
-      ? customer.accountingContacts
-      : Array.isArray(customer.accounting_contacts)
-        ? customer.accounting_contacts
-        : [];
-    setContactRows(accountingContactsList, accountingRows);
+    renderContactCategories(data.contactCategories || []);
+    const groups = buildCustomerContactGroups(customer);
+    setContactCategoryRows(groups);
     streetInput.value = customer.streetAddress || "";
     cityInput.value = customer.city || "";
     regionInput.value = customer.region || "";
@@ -2744,12 +2902,24 @@ async function loadLink() {
       siteAddressQuery = order?.siteAddressQuery ? String(order.siteAddressQuery) : "";
       if (siteAccessInfoInput) siteAccessInfoInput.value = order?.siteAccessInfo || "";
       if (criticalAreasInput) criticalAreasInput.value = order?.criticalAreas || "";
+      if (monitoringPersonnelInput) monitoringPersonnelInput.value = order?.monitoringPersonnel || "";
       setGeneralNotesHtml(order?.generalNotes || "");
       setContactRows(emergencyContactsList, order?.emergencyContacts || []);
+      if (emergencyContactInstructionsInput) {
+        emergencyContactInstructionsInput.value =
+          order?.emergencyContactInstructions || order?.emergency_contact_instructions || "";
+      }
       setContactRows(siteContactsList, order?.siteContacts || []);
       applyNotificationCircumstances(order?.notificationCircumstances || []);
       setCoverageInputs(normalizeCoverageHours(order?.coverageHours || []));
       setCoverageTimeZoneInput(order?.coverageTimeZone || order?.coverage_timezone || null);
+      if (coverageStatHolidaysCheckbox) {
+        const statRequired =
+          order?.coverageStatHolidaysRequired ??
+          order?.coverage_stat_holidays_required ??
+          false;
+        coverageStatHolidaysCheckbox.checked = statRequired === true;
+      }
       applyRentalInfoConfig(data.rentalInfoFields || null);
     }
 
@@ -2783,8 +2953,50 @@ async function loadLink() {
       termsText.textContent = data.link.termsText;
     }
 
-    if (data.link?.requireEsignature) {
-      signatureSection.style.display = "block";
+    serviceAgreementRequired = false;
+    signatureRequired = false;
+    const agreement = data.link?.serviceAgreement || null;
+    if (agreement?.url && serviceAgreementSection) {
+      if (serviceAgreementTopCheck) serviceAgreementTopCheck.style.display = "none";
+      if (serviceAgreementSignedCheck) serviceAgreementSignedCheck.style.display = "none";
+      serviceAgreementSection.style.display = "block";
+      if (serviceAgreementDownload) serviceAgreementDownload.href = agreement.url;
+      if (serviceAgreementName) {
+        serviceAgreementName.textContent = agreement.fileName
+          ? `Agreement: ${agreement.fileName}`
+          : "Review the service agreement below.";
+      }
+      const signedDoc = agreement.signedDoc || null;
+      if (signedDoc?.url) {
+        if (serviceAgreementSignedDownload) serviceAgreementSignedDownload.style.display = "none";
+        if (serviceAgreementSignedCheck) serviceAgreementSignedCheck.style.display = "inline-flex";
+        if (serviceAgreementTopCheck) serviceAgreementTopCheck.style.display = "inline-flex";
+        if (serviceAgreementStatus) {
+          const signedAt = signedDoc.signedAt ? new Date(signedDoc.signedAt).toLocaleString() : "";
+          serviceAgreementStatus.textContent = signedAt ? `Signed on ${signedAt}.` : "Signed agreement on file.";
+        }
+        if (serviceAgreementAck) serviceAgreementAck.checked = true;
+        if (serviceAgreementAckRow) serviceAgreementAckRow.style.display = "none";
+      } else {
+        serviceAgreementRequired = true;
+        if (serviceAgreementSignedDownload) serviceAgreementSignedDownload.style.display = "none";
+        if (serviceAgreementSignedCheck) serviceAgreementSignedCheck.style.display = "none";
+        if (serviceAgreementTopCheck) serviceAgreementTopCheck.style.display = "none";
+        if (serviceAgreementStatus) {
+          serviceAgreementStatus.textContent = "Please review and acknowledge the service agreement below.";
+        }
+        if (serviceAgreementAck) {
+          serviceAgreementAck.checked = false;
+          serviceAgreementAck.disabled = false;
+        }
+        if (serviceAgreementAckRow) serviceAgreementAckRow.style.display = "flex";
+      }
+    }
+
+    signatureRequired = !!data.link?.requireEsignature || serviceAgreementRequired;
+    if (signatureSection) signatureSection.style.display = signatureRequired ? "block" : "none";
+    if (signatureTitle) {
+      signatureTitle.textContent = serviceAgreementRequired ? "Service agreement signature" : "E-signature";
     }
 
   } catch (err) {
@@ -2897,32 +3109,22 @@ lineItemsEl?.addEventListener("click", (evt) => {
   renderLineItems();
 });
 
-addContactRowBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  addContactRow(contactsList, {}, { focus: true });
-});
+contactCategoriesContainer?.addEventListener("click", (e) => {
+  const addBtn = e.target.closest?.("[data-add-contact-category]");
+  if (addBtn) {
+    e.preventDefault();
+    const key = addBtn.getAttribute("data-add-contact-category");
+    const list = contactCategoryLists.get(String(key || ""));
+    if (list) addContactRow(list, {}, { focus: true });
+    return;
+  }
 
-contactsList?.addEventListener("click", (e) => {
-  const btn = e.target.closest(".contact-remove");
-  if (!btn) return;
-  const row = btn.closest(".contact-row");
-  if (!row) return;
-  row.remove();
-  updateContactRemoveButtons(contactsList);
-});
-
-addAccountingContactRowBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  addContactRow(accountingContactsList, {}, { focus: true });
-});
-
-accountingContactsList?.addEventListener("click", (e) => {
-  const btn = e.target.closest(".contact-remove");
-  if (!btn) return;
-  const row = btn.closest(".contact-row");
-  if (!row) return;
-  row.remove();
-  updateContactRemoveButtons(accountingContactsList);
+  const removeBtn = e.target.closest(".contact-remove");
+  if (!removeBtn) return;
+  const row = removeBtn.closest(".contact-row");
+  const list = row?.parentElement || null;
+  if (row) row.remove();
+  updateContactRemoveButtons(list);
 });
 
 addEmergencyContactRowBtn?.addEventListener("click", (e) => {
@@ -3258,8 +3460,7 @@ form?.addEventListener("submit", async (evt) => {
       fulfillmentMethod === "dropoff"
         ? dropoffInput.value.trim()
         : String(lastDropoffAddress || originalDropoffAddress || "").trim();
-    const contacts = collectContacts(contactsList);
-    const accountingContacts = collectContacts(accountingContactsList);
+    const { contacts, accountingContacts, contactGroups } = collectContactCategoryPayload();
     const primaryContact = contacts[0] || {};
     const originalNotes = getGeneralNotesHtml().trim();
     const convertedNotes = await convertInlineImagesToWebpHtml(originalNotes);
@@ -3272,6 +3473,7 @@ form?.addEventListener("submit", async (evt) => {
         phone: String(primaryContact.phone || "").trim(),
         contacts,
         accountingContacts,
+        contactGroups,
         streetAddress: streetInput.value.trim(),
         city: cityInput.value.trim(),
         region: regionInput.value.trim(),
@@ -3290,11 +3492,14 @@ form?.addEventListener("submit", async (evt) => {
         ...(siteAddressQuery ? { siteAddressQuery } : {}),
         siteAccessInfo: siteAccessInfoInput?.value.trim() || "",
         criticalAreas: criticalAreasInput?.value.trim() || "",
+        monitoringPersonnel: monitoringPersonnelInput?.value.trim() || "",
         generalNotes: convertedNotes.trim(),
         notificationCircumstances: collectNotificationCircumstances(),
         coverageHours: collectCoverageHoursFromInputs(),
         coverageTimeZone: getCoverageTimeZoneInputValue(),
+        coverageStatHolidaysRequired: coverageStatHolidaysCheckbox?.checked === true,
         emergencyContacts: collectContacts(emergencyContactsList),
+        emergencyContactInstructions: emergencyContactInstructionsInput?.value.trim() || "",
         siteContacts: collectContacts(siteContactsList),
       } : {},
       lineItems: lineItemsSection.style.display !== "none" ? lineItems.map((li) => ({
@@ -3315,13 +3520,19 @@ form?.addEventListener("submit", async (evt) => {
       }));
     }
 
-    if (linkData.link?.requireEsignature && (!signatureName.value.trim() || !signatureActive)) {
+    if (serviceAgreementRequired && serviceAgreementAck && !serviceAgreementAck.checked) {
+      throw new Error("Please confirm the service agreement.");
+    }
+    if (signatureRequired && (!signatureName.value.trim() || !signatureActive)) {
       throw new Error("Please provide your typed name and drawn signature.");
     }
 
     const formData = new FormData();
     formData.append("payload", JSON.stringify(payload));
     formData.append("docCategoryMap", JSON.stringify(docCategoryMap));
+    if (serviceAgreementAck) {
+      formData.append("serviceAgreementAck", serviceAgreementAck.checked ? "true" : "false");
+    }
     if (signatureSection.style.display !== "none") {
       formData.append("signatureName", signatureName.value.trim());
       formData.append("signatureData", signatureCanvas.toDataURL("image/png"));

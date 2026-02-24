@@ -460,11 +460,11 @@ async function ensureTables() {
     await client.query(`ALTER TABLE sales_people ADD COLUMN IF NOT EXISTS phone TEXT;`);
     await client.query(`ALTER TABLE sales_people ADD COLUMN IF NOT EXISTS image_url TEXT;`);
     await client.query(`
-      CREATE TABLE IF NOT EXISTS customers (
-        id SERIAL PRIMARY KEY,
-        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-        parent_customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
-        company_name TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS customers (
+          id SERIAL PRIMARY KEY,
+          company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+          parent_customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+          company_name TEXT NOT NULL,
         contact_name TEXT,
         street_address TEXT,
         city TEXT,
@@ -473,14 +473,15 @@ async function ensureTables() {
         postal_code TEXT,
         email TEXT,
         phone TEXT,
-        qbo_customer_id TEXT,
-        contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
-        accounting_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
-        can_charge_deposit BOOLEAN NOT NULL DEFAULT FALSE,
-        sales_person_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL,
-        follow_up_date DATE,
-        notes TEXT,
-        is_pending BOOLEAN NOT NULL DEFAULT FALSE,
+          qbo_customer_id TEXT,
+          contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
+          accounting_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
+          contact_groups JSONB NOT NULL DEFAULT '{}'::jsonb,
+          can_charge_deposit BOOLEAN NOT NULL DEFAULT FALSE,
+          sales_person_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL,
+          follow_up_date DATE,
+          notes TEXT,
+          is_pending BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
@@ -493,14 +494,15 @@ async function ensureTables() {
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS postal_code TEXT;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS email TEXT;`);
     await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS phone TEXT;`);
-    await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS qbo_customer_id TEXT;`);
-    await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
-    await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS accounting_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
-    await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS can_charge_deposit BOOLEAN NOT NULL DEFAULT FALSE;`);
-    await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS sales_person_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL;`);
-    await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS follow_up_date DATE;`);
-    await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS notes TEXT;`);
-    await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_pending BOOLEAN NOT NULL DEFAULT FALSE;`);
+      await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS qbo_customer_id TEXT;`);
+      await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+      await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS accounting_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+      await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS contact_groups JSONB NOT NULL DEFAULT '{}'::jsonb;`);
+      await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS can_charge_deposit BOOLEAN NOT NULL DEFAULT FALSE;`);
+      await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS sales_person_id INTEGER REFERENCES sales_people(id) ON DELETE SET NULL;`);
+      await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS follow_up_date DATE;`);
+      await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS notes TEXT;`);
+      await client.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS is_pending BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`CREATE INDEX IF NOT EXISTS customers_parent_customer_id_idx ON customers (parent_customer_id);`);
 
     await client.query(`
@@ -982,9 +984,12 @@ async function ensureTables() {
         logistics_instructions TEXT,
         special_instructions TEXT,
         critical_areas TEXT,
+        monitoring_personnel TEXT,
         notification_circumstances JSONB NOT NULL DEFAULT '[]'::jsonb,
         coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb,
         coverage_timezone TEXT,
+        coverage_stat_holidays_required BOOLEAN NOT NULL DEFAULT FALSE,
+        emergency_contact_instructions TEXT,
         emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
         site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
         monthly_recurring_subtotal NUMERIC(12, 2),
@@ -1018,11 +1023,14 @@ async function ensureTables() {
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS logistics_instructions TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS special_instructions TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS critical_areas TEXT;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS monitoring_personnel TEXT;`);
     await client.query(
       `ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS notification_circumstances JSONB NOT NULL DEFAULT '[]'::jsonb;`
     );
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS coverage_timezone TEXT;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS coverage_stat_holidays_required BOOLEAN NOT NULL DEFAULT FALSE;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS emergency_contact_instructions TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS monthly_recurring_subtotal NUMERIC(12, 2);`);
@@ -1207,6 +1215,10 @@ async function ensureTables() {
         reviewed_at TIMESTAMPTZ,
         reviewed_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
         review_notes TEXT,
+        customer_review_status TEXT,
+        order_review_status TEXT,
+        customer_reviewed_at TIMESTAMPTZ,
+        order_reviewed_at TIMESTAMPTZ,
         source_ip TEXT,
         user_agent TEXT,
         applied_customer_id INTEGER,
@@ -1218,6 +1230,10 @@ async function ensureTables() {
     await client.query(`CREATE INDEX IF NOT EXISTS customer_change_requests_order_id_idx ON customer_change_requests (rental_order_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS customer_change_requests_link_id_idx ON customer_change_requests (link_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS customer_change_requests_status_idx ON customer_change_requests (status);`);
+    await client.query(`ALTER TABLE customer_change_requests ADD COLUMN IF NOT EXISTS customer_review_status TEXT;`);
+    await client.query(`ALTER TABLE customer_change_requests ADD COLUMN IF NOT EXISTS order_review_status TEXT;`);
+    await client.query(`ALTER TABLE customer_change_requests ADD COLUMN IF NOT EXISTS customer_reviewed_at TIMESTAMPTZ;`);
+    await client.query(`ALTER TABLE customer_change_requests ADD COLUMN IF NOT EXISTS order_reviewed_at TIMESTAMPTZ;`);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS company_settings (
@@ -1236,13 +1252,18 @@ async function ensureTables() {
         default_tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0,
         tax_registration_number TEXT,
         tax_inclusive_pricing BOOLEAN NOT NULL DEFAULT FALSE,
-        auto_apply_customer_credit BOOLEAN NOT NULL DEFAULT TRUE,
-        auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE,
-        required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
-        rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"siteAccessInfo":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
+          auto_apply_customer_credit BOOLEAN NOT NULL DEFAULT TRUE,
+          auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE,
+          required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+          rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"siteAccessInfo":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"monitoringPersonnel":{"enabled":true,"required":false},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"emergencyContactInstructions":{"enabled":true,"required":false},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
+        customer_contact_categories JSONB NOT NULL DEFAULT '[{"key":"contacts","label":"Contacts"},{"key":"accountingContacts","label":"Accounting contacts"}]'::jsonb,
         customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
         customer_terms_template TEXT,
         customer_esign_required BOOLEAN NOT NULL DEFAULT TRUE,
+        customer_service_agreement_url TEXT,
+        customer_service_agreement_file_name TEXT,
+        customer_service_agreement_mime TEXT,
+        customer_service_agreement_size_bytes INTEGER,
         email_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         email_smtp_provider TEXT NOT NULL DEFAULT 'custom',
         email_smtp_host TEXT,
@@ -1277,11 +1298,18 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(
-      `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"siteAccessInfo":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb;`
+      `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"siteAccessInfo":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"monitoringPersonnel":{"enabled":true,"required":false},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"emergencyContactInstructions":{"enabled":true,"required":false},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb;`
+    );
+    await client.query(
+      `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_contact_categories JSONB NOT NULL DEFAULT '[{"key":"contacts","label":"Contacts"},{"key":"accountingContacts","label":"Accounting contacts"}]'::jsonb;`
     );
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_terms_template TEXT;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_esign_required BOOLEAN NOT NULL DEFAULT TRUE;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_service_agreement_url TEXT;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_service_agreement_file_name TEXT;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_service_agreement_mime TEXT;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_service_agreement_size_bytes INTEGER;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_smtp_provider TEXT NOT NULL DEFAULT 'custom';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_smtp_host TEXT;`);
@@ -4010,9 +4038,10 @@ async function listCustomers(companyId, { from = null, to = null, dateField = "c
             c.email,
             c.phone,
             c.qbo_customer_id,
-            c.contacts,
-            c.accounting_contacts,
-            c.can_charge_deposit,
+              c.contacts,
+              c.accounting_contacts,
+              c.contact_groups,
+              c.can_charge_deposit,
             c.sales_person_id,
             c.follow_up_date,
             c.notes,
@@ -4046,9 +4075,10 @@ async function getCustomerById({ companyId, id }) {
             c.email,
             c.phone,
             c.qbo_customer_id,
-            c.contacts,
-            c.accounting_contacts,
-            c.can_charge_deposit,
+              c.contacts,
+              c.accounting_contacts,
+              c.contact_groups,
+              c.can_charge_deposit,
             c.sales_person_id,
             c.follow_up_date,
             c.notes,
@@ -4103,51 +4133,13 @@ function normalizeContactField(value) {
   return clean || null;
 }
 
-function normalizeCustomerContacts({ contacts, contactName, email, phone }) {
+function normalizeContactEntries(value) {
   let raw = [];
-  if (Array.isArray(contacts)) {
-    raw = contacts;
-  } else if (typeof contacts === "string") {
+  if (Array.isArray(value)) {
+    raw = value;
+  } else if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(contacts);
-      if (Array.isArray(parsed)) raw = parsed;
-    } catch {
-      raw = [];
-    }
-  }
-
-  const normalized = raw
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") return null;
-      const name = normalizeContactField(entry.name || entry.contactName || entry.contact_name);
-      const title = normalizeContactField(entry.title || entry.contactTitle || entry.contact_title);
-      const emailValue = normalizeContactField(entry.email);
-      const phoneValue = normalizeContactField(entry.phone);
-      if (!name && !emailValue && !phoneValue) return null;
-      return { name, title, email: emailValue, phone: phoneValue };
-    })
-    .filter(Boolean);
-
-  if (!normalized.length) {
-    const name = normalizeContactField(contactName);
-    const title = null;
-    const emailValue = normalizeContactField(email);
-    const phoneValue = normalizeContactField(phone);
-    if (name || emailValue || phoneValue) {
-      normalized.push({ name, title, email: emailValue, phone: phoneValue });
-    }
-  }
-
-  return normalized;
-}
-
-function normalizeAccountingContacts({ accountingContacts }) {
-  let raw = [];
-  if (Array.isArray(accountingContacts)) {
-    raw = accountingContacts;
-  } else if (typeof accountingContacts === "string") {
-    try {
-      const parsed = JSON.parse(accountingContacts);
+      const parsed = JSON.parse(value);
       if (Array.isArray(parsed)) raw = parsed;
     } catch {
       raw = [];
@@ -4165,6 +4157,46 @@ function normalizeAccountingContacts({ accountingContacts }) {
       return { name, title, email: emailValue, phone: phoneValue };
     })
     .filter(Boolean);
+}
+
+function normalizeCustomerContacts({ contacts, contactName, email, phone }) {
+  const normalized = normalizeContactEntries(contacts);
+
+  if (!normalized.length) {
+    const name = normalizeContactField(contactName);
+    const title = null;
+    const emailValue = normalizeContactField(email);
+    const phoneValue = normalizeContactField(phone);
+    if (name || emailValue || phoneValue) {
+      normalized.push({ name, title, email: emailValue, phone: phoneValue });
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeAccountingContacts({ accountingContacts }) {
+  return normalizeContactEntries(accountingContacts);
+}
+
+function normalizeContactGroups(contactGroups) {
+  let raw = contactGroups;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = null;
+    }
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const normalized = {};
+  Object.entries(raw).forEach(([key, value]) => {
+    const cleanKey = normalizeContactCategoryKey(key);
+    if (!cleanKey || cleanKey === "contacts" || cleanKey === "accountingContacts") return;
+    const list = normalizeContactEntries(value);
+    if (list.length) normalized[cleanKey] = list;
+  });
+  return normalized;
 }
 
 function normalizeOrderContacts(contacts) {
@@ -4418,21 +4450,23 @@ async function createCustomer({
   notes,
   contacts,
   accountingContacts,
+  contactGroups,
   isPending = false,
 }) {
   const parent = await resolveParentCustomer({ companyId, parentCustomerId });
   const isBranch = !!parent;
   const contactList = normalizeCustomerContacts({ contacts, contactName, email, phone });
   const accountingContactList = normalizeAccountingContacts({ accountingContacts });
+  const contactGroupMap = normalizeContactGroups(contactGroups);
   const primary = contactList[0] || {};
   const primaryName = normalizeContactField(primary.name) || normalizeContactField(contactName);
   const primaryEmail = normalizeContactField(primary.email) || normalizeContactField(email);
   const primaryPhone = normalizeContactField(primary.phone) || normalizeContactField(phone);
   const finalCompanyName = parent?.company_name || companyName;
   const result = await pool.query(
-    `INSERT INTO customers (company_id, parent_customer_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, is_pending)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
-     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id, is_pending`,
+    `INSERT INTO customers (company_id, parent_customer_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, contact_groups, can_charge_deposit, sales_person_id, follow_up_date, notes, is_pending)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, contact_groups, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id, is_pending`,
     [
       companyId,
       parent?.id || null,
@@ -4448,6 +4482,7 @@ async function createCustomer({
       qboCustomerId ? String(qboCustomerId).trim() : null,
       JSON.stringify(contactList),
       JSON.stringify(accountingContactList),
+      JSON.stringify(contactGroupMap),
       isBranch ? false : !!canChargeDeposit,
       salesPersonId || null,
       followUpDate || null,
@@ -4478,6 +4513,7 @@ async function updateCustomer({
   notes,
   contacts,
   accountingContacts,
+  contactGroups,
 }) {
   const normalizedParentId = normalizeCustomerId(parentCustomerId);
   if (normalizedParentId && Number(id) === normalizedParentId) {
@@ -4487,6 +4523,7 @@ async function updateCustomer({
   const isBranch = !!parent;
   const contactList = normalizeCustomerContacts({ contacts, contactName, email, phone });
   const accountingContactList = normalizeAccountingContacts({ accountingContacts });
+  const contactGroupMap = normalizeContactGroups(contactGroups);
   const primary = contactList[0] || {};
   const primaryName = normalizeContactField(primary.name) || normalizeContactField(contactName);
   const primaryEmail = normalizeContactField(primary.email) || normalizeContactField(email);
@@ -4507,12 +4544,13 @@ async function updateCustomer({
          qbo_customer_id = $11,
          contacts = $12,
          accounting_contacts = $13,
-         can_charge_deposit = $14,
-         sales_person_id = $15,
-         follow_up_date = $16,
-         notes = $17
-     WHERE id = $18 AND company_id = $19
-     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id, is_pending`,
+         contact_groups = $14,
+         can_charge_deposit = $15,
+         sales_person_id = $16,
+         follow_up_date = $17,
+         notes = $18
+     WHERE id = $19 AND company_id = $20
+     RETURNING id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, contact_groups, can_charge_deposit, sales_person_id, follow_up_date, notes, parent_customer_id, is_pending`,
     [
       parent?.id || null,
       finalCompanyName,
@@ -4527,6 +4565,7 @@ async function updateCustomer({
       qboCustomerId ? String(qboCustomerId).trim() : null,
       JSON.stringify(contactList),
       JSON.stringify(accountingContactList),
+      JSON.stringify(contactGroupMap),
       isBranch ? false : !!canChargeDeposit,
       salesPersonId || null,
       followUpDate || null,
@@ -5582,14 +5621,19 @@ async function getCompanySettings(companyId) {
             default_tax_rate,
             tax_registration_number,
             tax_inclusive_pricing,
-            auto_apply_customer_credit,
-            auto_work_order_on_return,
-                required_storefront_customer_fields,
-                rental_info_fields,
-                customer_document_categories,
-                customer_terms_template,
-                customer_esign_required
-     FROM company_settings
+              auto_apply_customer_credit,
+              auto_work_order_on_return,
+                  required_storefront_customer_fields,
+            rental_info_fields,
+            customer_contact_categories,
+            customer_document_categories,
+            customer_terms_template,
+            customer_esign_required,
+            customer_service_agreement_url,
+            customer_service_agreement_file_name,
+            customer_service_agreement_mime,
+            customer_service_agreement_size_bytes
+       FROM company_settings
      WHERE company_id = $1
      LIMIT 1`,
     [companyId]
@@ -5611,14 +5655,21 @@ async function getCompanySettings(companyId) {
       default_tax_rate: Number(res.rows[0].default_tax_rate || 0),
       tax_registration_number: res.rows[0].tax_registration_number || null,
       tax_inclusive_pricing: res.rows[0].tax_inclusive_pricing === true,
-      auto_apply_customer_credit: res.rows[0].auto_apply_customer_credit === true,
-      auto_work_order_on_return: res.rows[0].auto_work_order_on_return === true,
-        required_storefront_customer_fields: normalizeStorefrontCustomerRequirements(res.rows[0].required_storefront_customer_fields),
-        rental_info_fields: normalizeRentalInfoFields(res.rows[0].rental_info_fields),
-        customer_document_categories: normalizeCustomerDocumentCategories(res.rows[0].customer_document_categories),
-        customer_terms_template: res.rows[0].customer_terms_template || null,
-        customer_esign_required: res.rows[0].customer_esign_required === true,
-    };
+        auto_apply_customer_credit: res.rows[0].auto_apply_customer_credit === true,
+        auto_work_order_on_return: res.rows[0].auto_work_order_on_return === true,
+          required_storefront_customer_fields: normalizeStorefrontCustomerRequirements(res.rows[0].required_storefront_customer_fields),
+          rental_info_fields: normalizeRentalInfoFields(res.rows[0].rental_info_fields),
+          customer_contact_categories: normalizeCustomerContactCategories(res.rows[0].customer_contact_categories),
+          customer_document_categories: normalizeCustomerDocumentCategories(res.rows[0].customer_document_categories),
+          customer_terms_template: res.rows[0].customer_terms_template || null,
+          customer_esign_required: res.rows[0].customer_esign_required === true,
+          customer_service_agreement_url: res.rows[0].customer_service_agreement_url || null,
+          customer_service_agreement_file_name: res.rows[0].customer_service_agreement_file_name || null,
+          customer_service_agreement_mime: res.rows[0].customer_service_agreement_mime || null,
+          customer_service_agreement_size_bytes: Number.isFinite(Number(res.rows[0].customer_service_agreement_size_bytes))
+            ? Number(res.rows[0].customer_service_agreement_size_bytes)
+            : null,
+      };
   }
   return {
     company_id: Number(companyId),
@@ -5636,14 +5687,19 @@ async function getCompanySettings(companyId) {
     default_tax_rate: 0,
     tax_registration_number: null,
     tax_inclusive_pricing: false,
-    auto_apply_customer_credit: true,
-    auto_work_order_on_return: false,
-      required_storefront_customer_fields: [],
-      rental_info_fields: normalizeRentalInfoFields(null),
-      customer_document_categories: [],
-      customer_terms_template: null,
-      customer_esign_required: true,
-  };
+      auto_apply_customer_credit: true,
+      auto_work_order_on_return: false,
+        required_storefront_customer_fields: [],
+        rental_info_fields: normalizeRentalInfoFields(null),
+        customer_contact_categories: normalizeCustomerContactCategories(null),
+        customer_document_categories: [],
+        customer_terms_template: null,
+        customer_esign_required: true,
+        customer_service_agreement_url: null,
+        customer_service_agreement_file_name: null,
+        customer_service_agreement_mime: null,
+        customer_service_agreement_size_bytes: null,
+    };
 }
 
 async function getCompanyEmailSettings(companyId) {
@@ -5794,8 +5850,8 @@ async function upsertCompanyEmailSettings({
   }
 }
 
-async function upsertCompanySettings({
-  companyId,
+  async function upsertCompanySettings({
+    companyId,
   billingRoundingMode = null,
   billingRoundingGranularity = null,
   monthlyProrationMethod = null,
@@ -5807,11 +5863,16 @@ async function upsertCompanySettings({
   autoApplyCustomerCredit = null,
   autoWorkOrderOnReturn = null,
   logoUrl = undefined,
-  requiredStorefrontCustomerFields = undefined,
-  rentalInfoFields = undefined,
-  customerDocumentCategories = undefined,
-  customerTermsTemplate = undefined,
-  customerEsignRequired = undefined,
+    requiredStorefrontCustomerFields = undefined,
+    rentalInfoFields = undefined,
+    customerContactCategories = undefined,
+    customerDocumentCategories = undefined,
+    customerTermsTemplate = undefined,
+    customerEsignRequired = undefined,
+    customerServiceAgreementUrl = undefined,
+    customerServiceAgreementFileName = undefined,
+    customerServiceAgreementMime = undefined,
+    customerServiceAgreementSizeBytes = undefined,
   qboEnabled = null,
   qboBillingDay = null,
   qboAdjustmentPolicy = null,
@@ -5864,17 +5925,47 @@ async function upsertCompanySettings({
   const nextRentalInfoFields = normalizeRentalInfoFields(
     rentalInfoFields === undefined ? current.rental_info_fields : rentalInfoFields
   );
-  const nextCustomerDocumentCategories = normalizeCustomerDocumentCategories(
-    customerDocumentCategories === undefined ? current.customer_document_categories : customerDocumentCategories
-  );
-  const nextCustomerTermsTemplate =
-    customerTermsTemplate === undefined
-      ? current.customer_terms_template || null
-      : (customerTermsTemplate ? String(customerTermsTemplate).trim() : null);
+    const nextCustomerDocumentCategories = normalizeCustomerDocumentCategories(
+      customerDocumentCategories === undefined ? current.customer_document_categories : customerDocumentCategories
+    );
+    const nextCustomerContactCategories = normalizeCustomerContactCategories(
+      customerContactCategories === undefined ? current.customer_contact_categories : customerContactCategories
+    );
+    const nextCustomerTermsTemplate =
+      customerTermsTemplate === undefined
+        ? current.customer_terms_template || null
+        : (customerTermsTemplate ? String(customerTermsTemplate).trim() : null);
   const nextCustomerEsignRequired =
     customerEsignRequired === undefined
       ? current.customer_esign_required === true
       : customerEsignRequired === true;
+  let nextServiceAgreementUrl =
+    customerServiceAgreementUrl === undefined
+      ? current.customer_service_agreement_url || null
+      : (customerServiceAgreementUrl ? String(customerServiceAgreementUrl).trim() : null);
+  let nextServiceAgreementFileName =
+    customerServiceAgreementFileName === undefined
+      ? current.customer_service_agreement_file_name || null
+      : (customerServiceAgreementFileName ? String(customerServiceAgreementFileName).trim() : null);
+  let nextServiceAgreementMime =
+    customerServiceAgreementMime === undefined
+      ? current.customer_service_agreement_mime || null
+      : (customerServiceAgreementMime ? String(customerServiceAgreementMime).trim() : null);
+  let nextServiceAgreementSizeBytes =
+    customerServiceAgreementSizeBytes === undefined
+      ? (Number.isFinite(Number(current.customer_service_agreement_size_bytes))
+          ? Number(current.customer_service_agreement_size_bytes)
+          : null)
+      : (() => {
+          const parsed = Number(customerServiceAgreementSizeBytes);
+          return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null;
+        })();
+  if (!nextServiceAgreementUrl) {
+    nextServiceAgreementUrl = null;
+    nextServiceAgreementFileName = null;
+    nextServiceAgreementMime = null;
+    nextServiceAgreementSizeBytes = null;
+  }
   const nextQboEnabled =
     qboEnabled === null || qboEnabled === undefined ? current.qbo_enabled === true : qboEnabled === true;
   const nextQboBillingDay =
@@ -5892,57 +5983,67 @@ async function upsertCompanySettings({
     qboDefaultTaxCode === undefined ? normalizeQboTaxCodeId(current.qbo_default_tax_code) : normalizeQboTaxCodeId(qboDefaultTaxCode);
   const res = await pool.query(
     `
-    INSERT INTO company_settings
-      (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields, customer_document_categories, customer_terms_template, customer_esign_required)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21, $22)
-    ON CONFLICT (company_id)
-    DO UPDATE SET billing_rounding_mode = EXCLUDED.billing_rounding_mode,
-                  billing_rounding_granularity = EXCLUDED.billing_rounding_granularity,
-                  monthly_proration_method = EXCLUDED.monthly_proration_method,
-                  billing_timezone = EXCLUDED.billing_timezone,
-                  logo_url = EXCLUDED.logo_url,
-                  qbo_enabled = EXCLUDED.qbo_enabled,
-                  qbo_billing_day = EXCLUDED.qbo_billing_day,
-                  qbo_adjustment_policy = EXCLUDED.qbo_adjustment_policy,
-                  qbo_income_account_ids = EXCLUDED.qbo_income_account_ids,
-                  qbo_default_tax_code = EXCLUDED.qbo_default_tax_code,
-                  tax_enabled = EXCLUDED.tax_enabled,
-                  default_tax_rate = EXCLUDED.default_tax_rate,
-                  tax_registration_number = EXCLUDED.tax_registration_number,
-                  tax_inclusive_pricing = EXCLUDED.tax_inclusive_pricing,
-                  auto_apply_customer_credit = EXCLUDED.auto_apply_customer_credit,
-                  auto_work_order_on_return = EXCLUDED.auto_work_order_on_return,
-                  required_storefront_customer_fields = EXCLUDED.required_storefront_customer_fields,
-                  rental_info_fields = EXCLUDED.rental_info_fields,
-                  customer_document_categories = EXCLUDED.customer_document_categories,
-                  customer_terms_template = EXCLUDED.customer_terms_template,
-                  customer_esign_required = EXCLUDED.customer_esign_required,
-                  updated_at = NOW()
-    RETURNING company_id,
-              billing_rounding_mode,
-              billing_rounding_granularity,
-              monthly_proration_method,
-              billing_timezone,
-              logo_url,
-              qbo_enabled,
-              qbo_billing_day,
-              qbo_adjustment_policy,
-              qbo_income_account_ids,
-              qbo_default_tax_code,
-              tax_enabled,
-              default_tax_rate,
-              tax_registration_number,
-              tax_inclusive_pricing,
-              auto_apply_customer_credit,
-              auto_work_order_on_return,
-              required_storefront_customer_fields,
-              rental_info_fields,
-              customer_document_categories,
-              customer_terms_template,
-              customer_esign_required
-    `,
-    [
-      companyId,
+        INSERT INTO company_settings
+          (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields, customer_contact_categories, customer_document_categories, customer_terms_template, customer_esign_required, customer_service_agreement_url, customer_service_agreement_file_name, customer_service_agreement_mime, customer_service_agreement_size_bytes)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, $22, $23, $24, $25, $26, $27)
+      ON CONFLICT (company_id)
+      DO UPDATE SET billing_rounding_mode = EXCLUDED.billing_rounding_mode,
+                    billing_rounding_granularity = EXCLUDED.billing_rounding_granularity,
+                    monthly_proration_method = EXCLUDED.monthly_proration_method,
+                    billing_timezone = EXCLUDED.billing_timezone,
+                    logo_url = EXCLUDED.logo_url,
+                    qbo_enabled = EXCLUDED.qbo_enabled,
+                    qbo_billing_day = EXCLUDED.qbo_billing_day,
+                    qbo_adjustment_policy = EXCLUDED.qbo_adjustment_policy,
+                    qbo_income_account_ids = EXCLUDED.qbo_income_account_ids,
+                    qbo_default_tax_code = EXCLUDED.qbo_default_tax_code,
+                    tax_enabled = EXCLUDED.tax_enabled,
+                    default_tax_rate = EXCLUDED.default_tax_rate,
+                    tax_registration_number = EXCLUDED.tax_registration_number,
+                    tax_inclusive_pricing = EXCLUDED.tax_inclusive_pricing,
+                    auto_apply_customer_credit = EXCLUDED.auto_apply_customer_credit,
+                    auto_work_order_on_return = EXCLUDED.auto_work_order_on_return,
+                    required_storefront_customer_fields = EXCLUDED.required_storefront_customer_fields,
+                    rental_info_fields = EXCLUDED.rental_info_fields,
+                    customer_contact_categories = EXCLUDED.customer_contact_categories,
+                    customer_document_categories = EXCLUDED.customer_document_categories,
+                    customer_terms_template = EXCLUDED.customer_terms_template,
+                    customer_esign_required = EXCLUDED.customer_esign_required,
+                    customer_service_agreement_url = EXCLUDED.customer_service_agreement_url,
+                    customer_service_agreement_file_name = EXCLUDED.customer_service_agreement_file_name,
+                    customer_service_agreement_mime = EXCLUDED.customer_service_agreement_mime,
+                    customer_service_agreement_size_bytes = EXCLUDED.customer_service_agreement_size_bytes,
+                    updated_at = NOW()
+      RETURNING company_id,
+                billing_rounding_mode,
+                billing_rounding_granularity,
+                monthly_proration_method,
+                billing_timezone,
+                logo_url,
+                qbo_enabled,
+                qbo_billing_day,
+                qbo_adjustment_policy,
+                qbo_income_account_ids,
+                qbo_default_tax_code,
+                tax_enabled,
+                default_tax_rate,
+                tax_registration_number,
+                tax_inclusive_pricing,
+                auto_apply_customer_credit,
+                auto_work_order_on_return,
+                required_storefront_customer_fields,
+                rental_info_fields,
+                customer_contact_categories,
+                customer_document_categories,
+                customer_terms_template,
+                customer_esign_required,
+                customer_service_agreement_url,
+                customer_service_agreement_file_name,
+                customer_service_agreement_mime,
+                customer_service_agreement_size_bytes
+      `,
+      [
+        companyId,
       nextMode,
       nextGranularity,
       nextProrationMethod,
@@ -5955,16 +6056,21 @@ async function upsertCompanySettings({
       nextQboDefaultTaxCode,
       nextTaxEnabled,
       nextTaxRate,
-      nextTaxRegistration,
-      nextTaxInclusive,
-      nextAutoApplyCustomerCredit,
-      nextAutoWorkOrderOnReturn,
-      JSON.stringify(nextRequired),
-      JSON.stringify(nextRentalInfoFields),
-      JSON.stringify(nextCustomerDocumentCategories),
-      nextCustomerTermsTemplate,
-      nextCustomerEsignRequired,
-    ]
+        nextTaxRegistration,
+        nextTaxInclusive,
+        nextAutoApplyCustomerCredit,
+        nextAutoWorkOrderOnReturn,
+        JSON.stringify(nextRequired),
+        JSON.stringify(nextRentalInfoFields),
+        JSON.stringify(nextCustomerContactCategories),
+        JSON.stringify(nextCustomerDocumentCategories),
+        nextCustomerTermsTemplate,
+        nextCustomerEsignRequired,
+        nextServiceAgreementUrl,
+        nextServiceAgreementFileName,
+        nextServiceAgreementMime,
+        nextServiceAgreementSizeBytes,
+      ]
     );
   return res.rows[0];
 }
@@ -6012,7 +6118,7 @@ function normalizeStorefrontCustomerRequirements(value) {
     );
   }
 
-function normalizeCustomerDocumentCategories(value) {
+  function normalizeCustomerDocumentCategories(value) {
   const raw = Array.isArray(value)
     ? value
     : typeof value === "string"
@@ -6028,23 +6134,124 @@ function normalizeCustomerDocumentCategories(value) {
         ? value
         : [];
   const arr = Array.isArray(raw) ? raw : [];
-  return Array.from(
-    new Set(
-      arr
-        .map((v) => String(v || "").trim())
-        .filter(Boolean)
-        .slice(0, 50)
-    )
-  );
-}
+    return Array.from(
+      new Set(
+        arr
+          .map((v) => String(v || "").trim())
+          .filter(Boolean)
+          .slice(0, 50)
+      )
+    );
+  }
+
+  const DEFAULT_CUSTOMER_CONTACT_CATEGORIES = [
+    { key: "contacts", label: "Contacts" },
+    { key: "accountingContacts", label: "Accounting contacts" },
+  ];
+
+  function normalizeContactCategoryKey(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    if (/^[A-Za-z][A-Za-z0-9]*$/.test(raw)) {
+      return raw.slice(0, 1).toLowerCase() + raw.slice(1);
+    }
+    if (/^[A-Za-z][A-Za-z0-9_]*$/.test(raw)) {
+      const parts = raw
+        .split("_")
+        .map((part) => part.trim())
+        .filter(Boolean);
+      if (!parts.length) return "";
+      return parts
+        .map((part, idx) => {
+          const lower = part.toLowerCase();
+          return idx === 0 ? lower : lower.slice(0, 1).toUpperCase() + lower.slice(1);
+        })
+        .join("");
+    }
+    const cleaned = raw.replace(/[^A-Za-z0-9]+/g, " ").trim();
+    if (!cleaned) return "";
+    const parts = cleaned.split(/\s+/);
+    return parts
+      .map((part, idx) => {
+        const lower = part.toLowerCase();
+        return idx === 0 ? lower : lower.slice(0, 1).toUpperCase() + lower.slice(1);
+      })
+      .join("");
+  }
+
+  function normalizeCustomerContactCategories(value) {
+    const raw = Array.isArray(value)
+      ? value
+      : typeof value === "string"
+        ? (() => {
+            try {
+              const parsed = JSON.parse(value);
+              return Array.isArray(parsed) ? parsed : [];
+            } catch {
+              return [];
+            }
+          })()
+        : value && typeof value === "object"
+          ? value
+          : [];
+    const arr = Array.isArray(raw) ? raw : [];
+    const normalized = [];
+    const usedKeys = new Set();
+
+    const pushEntry = (key, label) => {
+      const cleanLabel = String(label || "").trim();
+      if (!cleanLabel) return;
+      let cleanKey = String(key || "").trim();
+      if (!cleanKey) cleanKey = normalizeContactCategoryKey(cleanLabel);
+      if (!cleanKey) return;
+      if (usedKeys.has(cleanKey)) {
+        let suffix = 2;
+        let candidate = `${cleanKey}${suffix}`;
+        while (usedKeys.has(candidate)) {
+          suffix += 1;
+          candidate = `${cleanKey}${suffix}`;
+        }
+        cleanKey = candidate;
+      }
+      usedKeys.add(cleanKey);
+      normalized.push({ key: cleanKey, label: cleanLabel });
+    };
+
+    arr.forEach((entry) => {
+      if (!entry) return;
+      if (typeof entry === "string") {
+        pushEntry("", entry);
+        return;
+      }
+      if (typeof entry !== "object") return;
+      const label = entry.label || entry.name || entry.title || "";
+      const key = entry.key || entry.id || "";
+      pushEntry(key, label);
+    });
+
+    const byKey = new Map(normalized.map((entry) => [entry.key, entry]));
+    const baseContacts = byKey.get("contacts")?.label || DEFAULT_CUSTOMER_CONTACT_CATEGORIES[0].label;
+    const baseAccounting =
+      byKey.get("accountingContacts")?.label || DEFAULT_CUSTOMER_CONTACT_CATEGORIES[1].label;
+    const extras = normalized.filter(
+      (entry) => entry.key !== "contacts" && entry.key !== "accountingContacts"
+    );
+    return [
+      { key: "contacts", label: baseContacts },
+      { key: "accountingContacts", label: baseAccounting },
+      ...extras,
+    ];
+  }
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
   siteName: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  monitoringPersonnel: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
+  emergencyContactInstructions: { enabled: true, required: false },
   siteContacts: { enabled: true, required: true },
   notificationCircumstances: { enabled: true, required: false },
   coverageHours: { enabled: true, required: true },
@@ -6492,6 +6699,7 @@ async function listRentalOrders(companyId, { statuses = null, quoteOnly = false 
            ro.critical_areas,
            ro.coverage_hours,
            ro.coverage_timezone,
+           ro.coverage_stat_holidays_required,
            ro.monthly_recurring_subtotal,
            ro.monthly_recurring_total,
            ro.show_monthly_recurring,
@@ -6603,6 +6811,7 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
            ro.critical_areas,
            ro.coverage_hours,
            ro.coverage_timezone,
+           ro.coverage_stat_holidays_required,
            ro.monthly_recurring_subtotal,
            ro.monthly_recurring_total,
            ro.show_monthly_recurring,
@@ -9698,10 +9907,13 @@ async function createRentalOrder({
   logisticsInstructions,
   specialInstructions,
   criticalAreas,
+  monitoringPersonnel,
   notificationCircumstances,
   coverageHours,
   coverageTimeZone,
+  coverageStatHolidaysRequired,
   emergencyContacts,
+  emergencyContactInstructions,
   siteContacts,
   lineItems = [],
   fees = [],
@@ -9718,6 +9930,7 @@ async function createRentalOrder({
     const notificationCircumstancesValue = normalizeNotificationCircumstances(notificationCircumstances);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
     const coverageTimeZoneValue = normalizeCoverageTimeZone(coverageTimeZone, settings?.billing_timezone);
+    const coverageStatHolidaysRequiredValue = coverageStatHolidaysRequired === true;
     const effectiveDate = createdAt ? new Date(createdAt) : new Date();
       const quoteNumber = isQuoteStatus(effectiveStatus) ? await nextDocumentNumber(client, companyId, "QO", effectiveDate) : null;
       const roNumber = !isQuoteStatus(effectiveStatus) ? await nextDocumentNumber(client, companyId, "RO", effectiveDate) : null;
@@ -9758,9 +9971,10 @@ async function createRentalOrder({
       INSERT INTO rental_orders
         (company_id, quote_number, ro_number, external_contract_number, legacy_data, customer_id, customer_po, salesperson_id, fulfillment_method, status,
          terms, general_notes, pickup_location_id, dropoff_address, site_name, site_address, site_access_info, site_address_lat, site_address_lng, site_address_query,
-         logistics_instructions, special_instructions, critical_areas,
-         notification_circumstances, coverage_hours, coverage_timezone, emergency_contacts, site_contacts, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24::jsonb,$25::jsonb,$26,$27::jsonb,$28::jsonb,COALESCE($29::timestamptz, NOW()),COALESCE($29::timestamptz, NOW()))
+         logistics_instructions, special_instructions, critical_areas, monitoring_personnel,
+         notification_circumstances, coverage_hours, coverage_timezone, coverage_stat_holidays_required,
+         emergency_contact_instructions, emergency_contacts, site_contacts, created_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25::jsonb,$26::jsonb,$27,$28,$29,$30::jsonb,$31::jsonb,COALESCE($32::timestamptz, NOW()),COALESCE($32::timestamptz, NOW()))
       RETURNING id, quote_number, ro_number
       `,
       [
@@ -9787,9 +10001,12 @@ async function createRentalOrder({
         logisticsInstructions || null,
         specialInstructions || null,
         criticalAreas || null,
+        monitoringPersonnel || null,
         JSON.stringify(notificationCircumstancesValue),
         JSON.stringify(coverageHoursValue),
         coverageTimeZoneValue || null,
+        coverageStatHolidaysRequiredValue,
+        emergencyContactInstructions || null,
         JSON.stringify(emergencyContactList),
         JSON.stringify(siteContactList),
         createdIso,
@@ -11362,10 +11579,13 @@ async function updateRentalOrder({
   logisticsInstructions,
   specialInstructions,
   criticalAreas,
+  monitoringPersonnel,
   notificationCircumstances,
   coverageHours,
   coverageTimeZone,
+  coverageStatHolidaysRequired,
   emergencyContacts,
+  emergencyContactInstructions,
   siteContacts,
   lineItems = [],
   fees = [],
@@ -11437,6 +11657,7 @@ async function updateRentalOrder({
       coverageTimeZone,
       existing.coverage_timezone || settings?.billing_timezone
     );
+    const coverageStatHolidaysRequiredValue = coverageStatHolidaysRequired === true;
     const headerRes = await client.query(
       `
       UPDATE rental_orders
@@ -11460,13 +11681,16 @@ async function updateRentalOrder({
              logistics_instructions = $18,
              special_instructions = $19,
              critical_areas = $20,
-             notification_circumstances = $21::jsonb,
-             coverage_hours = $22::jsonb,
-             coverage_timezone = $23,
-             emergency_contacts = $24::jsonb,
-             site_contacts = $25::jsonb,
+             monitoring_personnel = $21,
+             notification_circumstances = $22::jsonb,
+             coverage_hours = $23::jsonb,
+             coverage_timezone = $24,
+             coverage_stat_holidays_required = $25,
+             emergency_contact_instructions = $26,
+             emergency_contacts = $27::jsonb,
+             site_contacts = $28::jsonb,
              updated_at = NOW()
-       WHERE id = $26 AND company_id = $27
+       WHERE id = $29 AND company_id = $30
        RETURNING id, quote_number, ro_number
       `,
       [
@@ -11490,9 +11714,12 @@ async function updateRentalOrder({
         logisticsInstructions || null,
         specialInstructions || null,
         criticalAreas || null,
+        monitoringPersonnel || null,
         JSON.stringify(notificationCircumstancesValue),
         JSON.stringify(coverageHoursValue),
         coverageTimeZoneValue || null,
+        coverageStatHolidaysRequiredValue,
+        emergencyContactInstructions || null,
         JSON.stringify(emergencyContactList),
         JSON.stringify(siteContactList),
         id,
@@ -12317,8 +12544,10 @@ async function updateCustomerChangeRequestStatus({
   status,
   reviewedByUserId = null,
   reviewNotes = null,
-  appliedCustomerId = null,
-  appliedOrderId = null,
+  appliedCustomerId = undefined,
+  appliedOrderId = undefined,
+  customerReviewStatus = undefined,
+  orderReviewStatus = undefined,
   proofPdfPath = undefined,
 } = {}) {
   const cid = Number(companyId);
@@ -12334,9 +12563,17 @@ async function updateCustomerChangeRequestStatus({
   if (status) push("status =", String(status).trim().toLowerCase());
   if (reviewedByUserId !== null) push("reviewed_by_user_id =", Number(reviewedByUserId));
   if (reviewNotes !== null) push("review_notes =", reviewNotes ? String(reviewNotes) : null);
-  if (appliedCustomerId !== null) push("applied_customer_id =", Number(appliedCustomerId));
-  if (appliedOrderId !== null) push("applied_order_id =", Number(appliedOrderId));
+  if (appliedCustomerId !== undefined) {
+    push("applied_customer_id =", appliedCustomerId === null ? null : Number(appliedCustomerId));
+  }
+  if (appliedOrderId !== undefined) {
+    push("applied_order_id =", appliedOrderId === null ? null : Number(appliedOrderId));
+  }
+  if (customerReviewStatus !== undefined) push("customer_review_status =", customerReviewStatus ? String(customerReviewStatus).trim().toLowerCase() : null);
+  if (orderReviewStatus !== undefined) push("order_review_status =", orderReviewStatus ? String(orderReviewStatus).trim().toLowerCase() : null);
   if (proofPdfPath !== undefined) push("proof_pdf_path =", proofPdfPath ? String(proofPdfPath) : null);
+  if (customerReviewStatus !== undefined) updates.push("customer_reviewed_at = NOW()");
+  if (orderReviewStatus !== undefined) updates.push("order_reviewed_at = NOW()");
   const shouldSetReviewedAt =
     (status && String(status).trim() && String(status).trim().toLowerCase() !== "pending") ||
     reviewedByUserId !== null ||
@@ -12349,7 +12586,7 @@ async function updateCustomerChangeRequestStatus({
     UPDATE customer_change_requests
        SET ${updates.join(", ")}
      WHERE id = $${params.length - 1} AND company_id = $${params.length}
-     RETURNING id, status, reviewed_at, reviewed_by_user_id, review_notes, applied_customer_id, applied_order_id, proof_pdf_path
+     RETURNING id, status, reviewed_at, reviewed_by_user_id, review_notes, applied_customer_id, applied_order_id, proof_pdf_path, customer_review_status, order_review_status, customer_reviewed_at, order_reviewed_at
     `,
     params
   );
@@ -12382,6 +12619,8 @@ async function listCustomerChangeRequests({ companyId, status = null, customerId
     SELECT r.id,
            r.scope,
            r.status,
+           r.customer_review_status,
+           r.order_review_status,
            r.customer_id,
            r.rental_order_id,
            r.link_id,
@@ -12410,7 +12649,7 @@ async function getCustomerChangeRequest({ companyId, id }) {
   if (!Number.isFinite(reqId) || reqId <= 0) throw new Error("id is required.");
   const res = await pool.query(
     `
-    SELECT id, company_id, customer_id, rental_order_id, link_id, scope, status, payload, documents, signature, proof_pdf_path, submitted_at, reviewed_at, reviewed_by_user_id, review_notes, applied_customer_id, applied_order_id
+    SELECT id, company_id, customer_id, rental_order_id, link_id, scope, status, customer_review_status, order_review_status, customer_reviewed_at, order_reviewed_at, payload, documents, signature, proof_pdf_path, submitted_at, reviewed_at, reviewed_by_user_id, review_notes, applied_customer_id, applied_order_id
       FROM customer_change_requests
      WHERE id = $1 AND company_id = $2
      LIMIT 1
@@ -12427,6 +12666,10 @@ async function getCustomerChangeRequest({ companyId, id }) {
     link_id: row.link_id === null ? null : Number(row.link_id),
     scope: row.scope || null,
     status: row.status || null,
+    customer_review_status: row.customer_review_status || null,
+    order_review_status: row.order_review_status || null,
+    customer_reviewed_at: row.customer_reviewed_at || null,
+    order_reviewed_at: row.order_reviewed_at || null,
     payload: normalizeJsonObject(row.payload),
     documents: normalizeJsonArray(row.documents),
     signature: normalizeJsonObject(row.signature),
@@ -13227,6 +13470,7 @@ async function createStorefrontCustomer({
   documents = {},
   contacts,
   accountingContacts,
+  contactGroups,
   followUpDate = null,
   notes = null,
   canChargeDeposit = null,
@@ -13255,6 +13499,7 @@ async function createStorefrontCustomer({
     phone,
   });
   const accountingContactList = normalizeAccountingContacts({ accountingContacts });
+  const contactGroupMap = normalizeContactGroups(contactGroups);
   const primary = contactList[0] || {};
   const primaryName = normalizeContactField(primary.name) || normalizeContactField(cleanName);
   const primaryEmail = normalizeContactField(primary.email) || normalizeContactField(cleanEmail);
@@ -13268,57 +13513,59 @@ async function createStorefrontCustomer({
     await client.query("BEGIN");
 
     let internalCustomerRow = null;
-    const internalByEmail = await client.query(
-      `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, follow_up_date, notes
-       FROM customers
-       WHERE company_id = $1 AND LOWER(email) = $2
-       ORDER BY id ASC
-       LIMIT 1`,
-      [cid, cleanEmail]
-    );
+      const internalByEmail = await client.query(
+        `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, contact_groups, can_charge_deposit, follow_up_date, notes
+         FROM customers
+         WHERE company_id = $1 AND LOWER(email) = $2
+         ORDER BY id ASC
+         LIMIT 1`,
+        [cid, cleanEmail]
+      );
     if (internalByEmail.rows?.[0]) {
       internalCustomerRow = internalByEmail.rows[0];
     }
 
     if (!internalCustomerRow && finalCompanyName && primaryName) {
-      const internalByName = await client.query(
-        `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, follow_up_date, notes
-         FROM customers
-         WHERE company_id = $1
-           AND LOWER(company_name) = LOWER($2)
-           AND LOWER(contact_name) = LOWER($3)
-           AND COALESCE(NULLIF(email, ''), '') = ''
-         ORDER BY id ASC
-         LIMIT 1`,
-        [cid, finalCompanyName, primaryName]
-      );
+        const internalByName = await client.query(
+          `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, contact_groups, can_charge_deposit, follow_up_date, notes
+           FROM customers
+           WHERE company_id = $1
+             AND LOWER(company_name) = LOWER($2)
+             AND LOWER(contact_name) = LOWER($3)
+             AND COALESCE(NULLIF(email, ''), '') = ''
+           ORDER BY id ASC
+           LIMIT 1`,
+          [cid, finalCompanyName, primaryName]
+        );
       if (internalByName.rows?.[0]) internalCustomerRow = internalByName.rows[0];
     }
 
     if (!internalCustomerRow && primaryPhone) {
       const phoneDigits = String(primaryPhone).replace(/\D/g, "");
       if (phoneDigits.length >= 7) {
-        const internalByPhone = await client.query(
-          `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, can_charge_deposit, follow_up_date, notes
-           FROM customers
-           WHERE company_id = $1
-             AND regexp_replace(COALESCE(phone, ''), '\\\\D', '', 'g') = $2
-             AND COALESCE(NULLIF(email, ''), '') = ''
-           ORDER BY id ASC
-           LIMIT 1`,
-          [cid, phoneDigits]
-        );
+          const internalByPhone = await client.query(
+            `SELECT id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, contacts, accounting_contacts, contact_groups, can_charge_deposit, follow_up_date, notes
+             FROM customers
+             WHERE company_id = $1
+               AND regexp_replace(COALESCE(phone, ''), '\\\\D', '', 'g') = $2
+               AND COALESCE(NULLIF(email, ''), '') = ''
+             ORDER BY id ASC
+             LIMIT 1`,
+            [cid, phoneDigits]
+          );
         if (internalByPhone.rows?.[0]) internalCustomerRow = internalByPhone.rows[0];
       }
     }
 
     let internalCustomerId = internalCustomerRow ? Number(internalCustomerRow.id) : null;
-    if (internalCustomerRow) {
-      const updates = {};
-      const isBlank = (value) => value === null || value === undefined || String(value).trim() === "";
-      const isEmptyArray = (value) => !Array.isArray(value) || value.length === 0;
-      if (isBlank(internalCustomerRow.company_name) && finalCompanyName) updates.company_name = finalCompanyName;
-      if (isBlank(internalCustomerRow.contact_name) && primaryName) updates.contact_name = primaryName;
+      if (internalCustomerRow) {
+        const updates = {};
+        const isBlank = (value) => value === null || value === undefined || String(value).trim() === "";
+        const isEmptyArray = (value) => !Array.isArray(value) || value.length === 0;
+        const isEmptyObject = (value) =>
+          !value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length === 0;
+        if (isBlank(internalCustomerRow.company_name) && finalCompanyName) updates.company_name = finalCompanyName;
+        if (isBlank(internalCustomerRow.contact_name) && primaryName) updates.contact_name = primaryName;
       if (isBlank(internalCustomerRow.street_address) && streetAddress) updates.street_address = String(streetAddress).trim();
       if (isBlank(internalCustomerRow.city) && city) updates.city = String(city).trim();
       if (isBlank(internalCustomerRow.region) && region) updates.region = String(region).trim();
@@ -13326,12 +13573,15 @@ async function createStorefrontCustomer({
       if (isBlank(internalCustomerRow.postal_code)) updates.postal_code = normalizePostalCode(postalCode);
       if (isBlank(internalCustomerRow.email) && primaryEmail) updates.email = primaryEmail;
       if (isBlank(internalCustomerRow.phone) && primaryPhone) updates.phone = primaryPhone;
-      if (isEmptyArray(internalCustomerRow.contacts) && contactList.length) updates.contacts = contactList;
-      if (isEmptyArray(internalCustomerRow.accounting_contacts) && accountingContactList.length) {
-        updates.accounting_contacts = accountingContactList;
-      }
-      if (internalCustomerRow.follow_up_date === null && followUpDate) updates.follow_up_date = followUpDate;
-      if (isBlank(internalCustomerRow.notes) && cleanedNotes) updates.notes = cleanedNotes;
+        if (isEmptyArray(internalCustomerRow.contacts) && contactList.length) updates.contacts = contactList;
+        if (isEmptyArray(internalCustomerRow.accounting_contacts) && accountingContactList.length) {
+          updates.accounting_contacts = accountingContactList;
+        }
+        if (isEmptyObject(normalizeContactGroups(internalCustomerRow.contact_groups)) && Object.keys(contactGroupMap).length) {
+          updates.contact_groups = contactGroupMap;
+        }
+        if (internalCustomerRow.follow_up_date === null && followUpDate) updates.follow_up_date = followUpDate;
+        if (isBlank(internalCustomerRow.notes) && cleanedNotes) updates.notes = cleanedNotes;
 
       const keys = Object.keys(updates);
       if (keys.length) {
@@ -13347,43 +13597,45 @@ async function createStorefrontCustomer({
       const finalNotes = cleanedNotes || "Created from customer signup.";
       const internal = await client.query(
         `
-        INSERT INTO customers (
-          company_id,
-          company_name,
-          contact_name,
-          street_address,
-          city,
-          region,
-          country,
-          postal_code,
-          email,
-          phone,
-          contacts,
-          accounting_contacts,
-          can_charge_deposit,
-          follow_up_date,
-          notes
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-        RETURNING id
-        `,
-        [
-          cid,
-          finalCompanyName,
-          primaryName,
+          INSERT INTO customers (
+            company_id,
+            company_name,
+            contact_name,
+            street_address,
+            city,
+            region,
+            country,
+            postal_code,
+            email,
+            phone,
+            contacts,
+            accounting_contacts,
+            contact_groups,
+            can_charge_deposit,
+            follow_up_date,
+            notes
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          RETURNING id
+          `,
+          [
+            cid,
+            finalCompanyName,
+            primaryName,
           streetAddress ? String(streetAddress).trim() : null,
           city ? String(city).trim() : null,
           region ? String(region).trim() : null,
           country ? String(country).trim() : null,
-          normalizePostalCode(postalCode),
-          primaryEmail,
-          primaryPhone,
-          contactList,
-          accountingContactList,
-          depositFlag,
-          followUpDate || null,
-          finalNotes,
-        ]
+            normalizePostalCode(postalCode),
+            primaryEmail,
+            primaryPhone,
+            contactList,
+            accountingContactList,
+            contactGroupMap,
+            depositFlag,
+            followUpDate || null,
+            finalNotes,
+          ]
       );
       internalCustomerId = Number(internal.rows?.[0]?.id) || null;
     }
@@ -14156,13 +14408,16 @@ async function createStorefrontReservation({
   siteAccessInfo,
   deliveryInstructions,
   criticalAreas,
+  monitoringPersonnel,
   notificationCircumstances,
   generalNotes,
   generalNotesImages,
   emergencyContacts,
+  emergencyContactInstructions,
   siteContacts,
   coverageHours,
   coverageTimeZone,
+  coverageStatHolidaysRequired,
 } = {}) {
   const cid = Number(companyId);
   const tid = Number(typeId);
@@ -14222,14 +14477,21 @@ async function createStorefrontReservation({
   const siteAddressValue = useRentalInfoField("siteAddress") ? String(siteAddress || "").trim() || null : null;
   const siteAccessInfoValue = useRentalInfoField("siteAccessInfo") ? String(siteAccessInfo || "").trim() || null : null;
   const criticalAreasValue = useRentalInfoField("criticalAreas") ? String(criticalAreas || "").trim() || null : null;
+  const monitoringPersonnelValue = useRentalInfoField("monitoringPersonnel")
+    ? String(monitoringPersonnel || "").trim() || null
+    : null;
   const notificationCircumstancesValue = useRentalInfoField("notificationCircumstances")
     ? normalizeNotificationCircumstances(notificationCircumstances)
     : [];
   const generalNotesValue = useRentalInfoField("generalNotes") ? String(generalNotes || "").trim() || null : null;
   const emergencyContactList = useRentalInfoField("emergencyContacts") ? normalizeOrderContacts(emergencyContacts) : [];
+  const emergencyContactInstructionsValue = useRentalInfoField("emergencyContactInstructions")
+    ? String(emergencyContactInstructions || "").trim() || null
+    : null;
   const siteContactList = useRentalInfoField("siteContacts") ? normalizeOrderContacts(siteContacts) : [];
   const coverageHoursValue = useRentalInfoField("coverageHours") ? normalizeCoverageHours(coverageHours) : [];
   const coverageTimeZoneValue = normalizeCoverageTimeZone(coverageTimeZone, settings?.billing_timezone);
+  const coverageStatHolidaysRequiredValue = useRentalInfoField("coverageHours") ? coverageStatHolidaysRequired === true : false;
 
   const missingRentalInfo = [];
   const contactIsValid = (list) =>
@@ -14260,7 +14522,14 @@ async function createStorefrontReservation({
     missingRentalInfo.push("Site access information / pin");
   }
   if (rentalInfoFields?.criticalAreas?.enabled && rentalInfoFields?.criticalAreas?.required && !criticalAreasValue) {
-    missingRentalInfo.push("Critical areas on site");
+    missingRentalInfo.push("Critical Assets and Locations on Site");
+  }
+  if (
+    rentalInfoFields?.monitoringPersonnel?.enabled &&
+    rentalInfoFields?.monitoringPersonnel?.required &&
+    !monitoringPersonnelValue
+  ) {
+    missingRentalInfo.push("Personnel/contractors expected on site during monitoring hours");
   }
   if (
     rentalInfoFields?.notificationCircumstances?.enabled &&
@@ -14278,6 +14547,13 @@ async function createStorefrontReservation({
     !contactIsValid(emergencyContactList)
   ) {
     missingRentalInfo.push("Emergency contacts");
+  }
+  if (
+    rentalInfoFields?.emergencyContactInstructions?.enabled &&
+    rentalInfoFields?.emergencyContactInstructions?.required &&
+    !emergencyContactInstructionsValue
+  ) {
+    missingRentalInfo.push("Additional emergency contact instructions");
   }
   if (
     rentalInfoFields?.siteContacts?.enabled &&
@@ -14361,10 +14637,13 @@ async function createStorefrontReservation({
     terms: typeRow.terms || null,
     generalNotes: combinedGeneralNotes,
     criticalAreas: criticalAreasValue,
+    monitoringPersonnel: monitoringPersonnelValue,
     notificationCircumstances: notificationCircumstancesValue,
     coverageHours: coverageHoursValue,
     coverageTimeZone: coverageTimeZoneValue,
+    coverageStatHolidaysRequired: coverageStatHolidaysRequiredValue,
     emergencyContacts: emergencyContactList,
+    emergencyContactInstructions: emergencyContactInstructionsValue,
     siteContacts: siteContactList,
     siteName: siteNameValue,
     siteAddress: siteAddressValue,
@@ -15322,3 +15601,4 @@ module.exports = {
   getLocationTypeStockSummary,
   getPasswordValidationError,
 };
+

@@ -4,15 +4,18 @@ const detailCard = document.getElementById("detail-card");
 const detailBody = document.getElementById("detail-body");
 const detailMeta = document.getElementById("detail-meta");
 const detailHint = document.getElementById("detail-hint");
-const acceptBtn = document.getElementById("accept-update");
-const rejectBtn = document.getElementById("reject-update");
+const applyUpdateBtn = document.getElementById("apply-update");
+const rejectUpdateBtn = document.getElementById("reject-update");
 const backToOrderBtn = document.getElementById("back-to-order");
+const backToCustomerBtn = document.getElementById("back-to-customer");
 
 const viewParams = new URLSearchParams(window.location.search);
 const statusParam = String(viewParams.get("status") || "").trim().toLowerCase();
 const rentalOrderIdParam = String(viewParams.get("rentalOrderId") || viewParams.get("orderId") || "").trim();
+const customerIdParam = String(viewParams.get("customerId") || viewParams.get("customer") || "").trim();
 const STATUS_ALLOWED = new Set(["pending", "accepted", "rejected"]);
 const STATUS_ALL_TOKENS = new Set(["all", "any", "*"]);
+const SERVICE_AGREEMENT_CATEGORY = "Service Agreement";
 const hasStatusParam = viewParams.has("status");
 let statusFilter = "pending";
 if (hasStatusParam) {
@@ -23,10 +26,73 @@ if (hasStatusParam) {
   }
 }
 
-const initialCompanyId = window.RentSoft?.getCompanyId?.();
+const companyIdParam = viewParams.get("companyId");
+const initialCompanyId = companyIdParam || window.RentSoft?.getCompanyId?.();
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let requestsCache = [];
 let activeRequest = null;
+let canReviewCustomer = false;
+let canReviewOrder = false;
+let selectionState = null;
+
+const DEFAULT_CONTACT_CATEGORIES = [
+  { key: "contacts", label: "Contacts" },
+  { key: "accountingContacts", label: "Accounting contacts" },
+];
+let contactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
+let contactCategoriesPromise = null;
+
+function resetSelectionState() {
+  selectionState = {
+    customerFields: new Set(),
+    orderFields: new Set(),
+    lineItemKeys: new Set(),
+    lineItemMeta: new Map(),
+    customerAvailable: new Set(),
+    orderAvailable: new Set(),
+    lineItemAvailable: new Set(),
+  };
+}
+
+function setFieldSelection(section, key, checked) {
+  if (!section || !key || !selectionState) return;
+  if (section === "customer") {
+    if (checked) selectionState.customerFields.add(key);
+    else selectionState.customerFields.delete(key);
+    return;
+  }
+  if (section === "order") {
+    if (checked) selectionState.orderFields.add(key);
+    else selectionState.orderFields.delete(key);
+    return;
+  }
+  if (section === "lineItem") {
+    if (checked) selectionState.lineItemKeys.add(key);
+    else selectionState.lineItemKeys.delete(key);
+  }
+}
+
+function registerFieldAvailability(section, key) {
+  if (!section || !key || !selectionState) return;
+  if (section === "customer") selectionState.customerAvailable.add(key);
+  else if (section === "order") selectionState.orderAvailable.add(key);
+  else if (section === "lineItem") selectionState.lineItemAvailable.add(key);
+}
+
+function updateAcceptButtons() {
+  if (applyUpdateBtn) {
+    const requiresCustomerSelection = canReviewCustomer && (selectionState?.customerAvailable?.size || 0) > 0;
+    const requiresOrderSelection =
+      canReviewOrder &&
+      ((selectionState?.orderAvailable?.size || 0) > 0 || (selectionState?.lineItemAvailable?.size || 0) > 0);
+    const requiresSelection = requiresCustomerSelection || requiresOrderSelection;
+    const hasSelection =
+      (selectionState?.customerFields?.size || 0) > 0 ||
+      (selectionState?.orderFields?.size || 0) > 0 ||
+      (selectionState?.lineItemKeys?.size || 0) > 0;
+    applyUpdateBtn.disabled = !(canReviewCustomer || canReviewOrder) || (requiresSelection && !hasSelection);
+  }
+}
 
 async function fetchJson(url, options = {}) {
   const res = await fetch(url, { credentials: "include", ...options });
@@ -52,6 +118,11 @@ function normalizeStatus(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function normalizeReviewStatus(value) {
+  const status = String(value || "").trim().toLowerCase();
+  return status === "pending" || status === "accepted" || status === "rejected" ? status : null;
+}
+
 function setBackToOrderTarget(orderId) {
   if (!backToOrderBtn) return;
   const id = String(orderId || "").trim();
@@ -64,15 +135,28 @@ function setBackToOrderTarget(orderId) {
   backToOrderBtn.style.display = "inline-flex";
 }
 
+function setBackToCustomerTarget(customerId) {
+  if (!backToCustomerBtn) return;
+  const id = String(customerId || "").trim();
+  if (!id) {
+    backToCustomerBtn.style.display = "none";
+    backToCustomerBtn.dataset.customerId = "";
+    return;
+  }
+  backToCustomerBtn.dataset.customerId = id;
+  backToCustomerBtn.style.display = "inline-flex";
+}
+
 function closeDetailCard() {
   activeRequest = null;
   if (detailBody) detailBody.innerHTML = "";
   if (detailMeta) detailMeta.textContent = "";
   if (detailHint) detailHint.textContent = "";
-  if (acceptBtn) acceptBtn.disabled = true;
-  if (rejectBtn) rejectBtn.disabled = true;
+  if (applyUpdateBtn) applyUpdateBtn.disabled = true;
+  if (rejectUpdateBtn) rejectUpdateBtn.disabled = true;
   if (detailCard) detailCard.style.display = "none";
   setBackToOrderTarget("");
+  setBackToCustomerTarget("");
 }
 
 function escapeHtml(value) {
@@ -258,6 +342,47 @@ function formatRichText(value) {
   return sanitizeRichText(html);
 }
 
+function normalizeCompareValue(value) {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return JSON.stringify(value);
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value).trim();
+}
+
+function isValueEqual(current, proposed) {
+  return normalizeCompareValue(current) === normalizeCompareValue(proposed);
+}
+
+function createAcceptToggle({ section, key, checked = true, disabled = false, meta = null, extraKeys = [] } = {}) {
+  if (!section || !key) return null;
+  const isChecked = disabled ? false : checked;
+  if (!disabled) {
+    registerFieldAvailability(section, key);
+    if (section === "lineItem" && meta && selectionState) {
+      selectionState.lineItemMeta.set(key, meta);
+    }
+    setFieldSelection(section, key, isChecked);
+    extraKeys.forEach((extra) => setFieldSelection(section, extra, isChecked));
+  }
+
+  const label = document.createElement("label");
+  label.className = "review-field-toggle";
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = isChecked;
+  input.disabled = disabled;
+  const text = document.createElement("span");
+  text.textContent = "Accept";
+  label.appendChild(input);
+  label.appendChild(text);
+  input.addEventListener("change", () => {
+    setFieldSelection(section, key, input.checked);
+    extraKeys.forEach((extra) => setFieldSelection(section, extra, input.checked));
+    updateAcceptButtons();
+  });
+  return label;
+}
+
 function normalizeArrayValue(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value;
@@ -316,6 +441,75 @@ function formatContactHtml(value) {
     })
     .filter(Boolean);
   return rows.length ? rows.join("<br />") : "";
+}
+
+function contactCategoryKeyFromLabel(label) {
+  return String(label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .map((part, idx) =>
+      idx === 0 ? part : part.slice(0, 1).toUpperCase() + part.slice(1)
+    )
+    .join("");
+}
+
+function normalizeContactCategories(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const normalized = [];
+  const usedKeys = new Set();
+
+  const pushEntry = (key, label) => {
+    const cleanLabel = String(label || "").trim();
+    if (!cleanLabel) return;
+    let cleanKey = String(key || "").trim();
+    if (!cleanKey) cleanKey = contactCategoryKeyFromLabel(cleanLabel);
+    if (!cleanKey || usedKeys.has(cleanKey)) return;
+    usedKeys.add(cleanKey);
+    normalized.push({ key: cleanKey, label: cleanLabel });
+  };
+
+  raw.forEach((entry) => {
+    if (!entry) return;
+    if (typeof entry === "string") {
+      pushEntry("", entry);
+      return;
+    }
+    if (typeof entry !== "object") return;
+    pushEntry(entry.key || entry.id || "", entry.label || entry.name || entry.title || "");
+  });
+
+  const byKey = new Map(normalized.map((entry) => [entry.key, entry]));
+  const baseContacts = byKey.get("contacts")?.label || DEFAULT_CONTACT_CATEGORIES[0].label;
+  const baseAccounting =
+    byKey.get("accountingContacts")?.label || DEFAULT_CONTACT_CATEGORIES[1].label;
+  const extras = normalized.filter(
+    (entry) => entry.key !== "contacts" && entry.key !== "accountingContacts"
+  );
+  return [
+    { key: "contacts", label: baseContacts },
+    { key: "accountingContacts", label: baseAccounting },
+    ...extras,
+  ];
+}
+
+function normalizeContactGroups(value) {
+  let raw = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = null;
+    }
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const groups = {};
+  Object.entries(raw).forEach(([key, list]) => {
+    groups[key] = normalizeArrayValue(list);
+  });
+  return groups;
 }
 
 function normalizeCoverageSlots(value) {
@@ -379,6 +573,81 @@ function formatLineItemHtml(item) {
   return fields.map(([label, value]) => `${escapeHtml(label)}: ${escapeHtml(displayValue(value))}`).join("<br />");
 }
 
+function formatBoolean(value) {
+  if (value === true) return "Yes";
+  if (value === false) return "No";
+  return "--";
+}
+
+function formatArraySummary(value) {
+  const list = normalizeArrayValue(value);
+  if (!list.length) return "--";
+  if (list.every((item) => typeof item !== "object" || item === null)) {
+    return list.map((entry) => escapeHtml(displayValue(entry))).join(", ");
+  }
+  return `${list.length} item(s)`;
+}
+
+function formatInventoryDetails(value) {
+  const list = normalizeArrayValue(value);
+  if (!list.length) return "--";
+  return list
+    .map((item) => {
+      const serial = escapeHtml(String(item?.serial_number || item?.serialNumber || "").trim() || "--");
+      const model = escapeHtml(String(item?.model_name || item?.modelName || "").trim());
+      const location = escapeHtml(String(item?.location || "").trim());
+      const pieces = [serial, model].filter(Boolean).join(" - ");
+      return location ? `${pieces} (${location})` : pieces;
+    })
+    .join("<br />");
+}
+
+function formatBundleItems(value) {
+  const list = normalizeArrayValue(value);
+  if (!list.length) return "--";
+  return list
+    .map((item) => {
+      const serial = escapeHtml(String(item?.serialNumber || item?.serial_number || "").trim() || "--");
+      const model = escapeHtml(String(item?.modelName || item?.model_name || "").trim());
+      const type = escapeHtml(String(item?.typeName || item?.type_name || "").trim());
+      const pieces = [serial, model].filter(Boolean).join(" - ");
+      return type ? `${pieces} (${type})` : pieces;
+    })
+    .join("<br />");
+}
+
+function formatLineItemDetailsHtml(item) {
+  if (!item) return "";
+  const fields = [
+    ["Line item ID", item.lineItemId || item.id, false],
+    ["Type", item.typeName || item.typeId || item.type_name, false],
+    ["Bundle", item.bundleName || item.bundleId || item.bundle_name, false],
+    ["Start", item.startAt || item.start_at, false],
+    ["End", item.endAt || item.end_at, false],
+    ["Fulfilled", item.fulfilledAt || item.fulfilled_at, false],
+    ["Returned", item.returnedAt || item.returned_at, false],
+    ["Rate basis", item.rateBasis || item.rate_basis, false],
+    ["Rate amount", item.rateAmount ?? item.rate_amount, false],
+    ["Billable units", item.billableUnits ?? item.billable_units, false],
+    ["Line amount", item.lineAmount ?? item.line_amount, false],
+    ["Unit description", item.unitDescription || item.unit_description, false],
+    ["Before notes", item.beforeNotes || item.before_notes, false],
+    ["After notes", item.afterNotes || item.after_notes, false],
+    ["Pause periods", formatArraySummary(item.pausePeriods || item.pause_periods), false],
+    ["AI damage report generated", item.aiDamageReportGeneratedAt || item.ai_report_generated_at, false],
+    ["AI damage report", item.aiDamageReport || item.ai_report_markdown, false],
+    ["Inventory", formatInventoryDetails(item.inventoryDetails || item.inventory_details), true],
+    ["Bundle items", formatBundleItems(item.bundleItems || item.bundle_items), true],
+  ];
+  return fields
+    .map(([label, value, html]) => {
+      const safeLabel = escapeHtml(label);
+      const safeValue = html ? (value || "--") : escapeHtml(displayValue(value));
+      return `${safeLabel}: ${safeValue}`;
+    })
+    .join("<br />");
+}
+
 function normalizeImageList(value, { category } = {}) {
   const rows = normalizeArrayValue(value);
   return rows
@@ -426,29 +695,49 @@ function renderTable() {
 
 function renderDetail(request, currentCustomer, currentOrder) {
   detailBody.innerHTML = "";
+  resetSelectionState();
   const payload = request?.payload || {};
   const customer = payload.customer || {};
   const order = payload.order || {};
   const lineItems = Array.isArray(payload.lineItems) ? payload.lineItems : [];
+  const hasCustomerKey = (key) => Object.prototype.hasOwnProperty.call(customer, key);
+  const hasOrderKey = (key) => Object.prototype.hasOwnProperty.call(order, key);
   const documents = Array.isArray(request.documents) ? request.documents : [];
   const signature = request.signature || {};
   const normalizedStatus = normalizeStatus(request?.status);
-  const canReview = normalizedStatus === "pending";
-  if (acceptBtn) acceptBtn.disabled = !canReview;
-  if (rejectBtn) rejectBtn.disabled = !canReview;
+  const hasCustomerSection = Object.keys(customer).length > 0 || documents.length > 0;
+  const hasOrderSection =
+    Object.keys(order).length > 0 || lineItems.length > 0 || (signature && Object.keys(signature).length > 0);
+  const customerReviewStatus = normalizeReviewStatus(request?.customer_review_status) || "pending";
+  const orderReviewStatus = normalizeReviewStatus(request?.order_review_status) || "pending";
+  canReviewCustomer =
+    normalizedStatus === "pending" && hasCustomerSection && customerReviewStatus === "pending";
+  canReviewOrder = normalizedStatus === "pending" && hasOrderSection && orderReviewStatus === "pending";
+
+  if (applyUpdateBtn) {
+    applyUpdateBtn.disabled = !(canReviewCustomer || canReviewOrder);
+    applyUpdateBtn.style.display = canReviewCustomer || canReviewOrder ? "inline-flex" : "none";
+  }
+  if (rejectUpdateBtn) {
+    rejectUpdateBtn.disabled = !(canReviewCustomer || canReviewOrder);
+    rejectUpdateBtn.style.display = canReviewCustomer || canReviewOrder ? "inline-flex" : "none";
+  }
   const currentLineItems = normalizeArrayValue(currentOrder?.lineItems);
   const currentAttachments = normalizeArrayValue(currentOrder?.attachments);
   const currentDocuments = currentAttachments.filter((doc) => String(doc?.category || "") !== "general_notes");
   const currentGeneralNotesImages = normalizeImageList(currentAttachments, { category: "general_notes" });
   const proposedGeneralNotesImages = normalizeImageList(order.generalNotesImages);
 
-  const createTwoColBlock = (label) => {
+  const createTwoColBlock = (label, { toggle } = {}) => {
     const row = document.createElement("div");
     row.className = "two-col";
     const currentCol = document.createElement("div");
     const currentLabel = document.createElement("div");
-    currentLabel.className = "hint";
-    currentLabel.textContent = `${label} (current)`;
+    currentLabel.className = toggle ? "hint review-field-label" : "hint";
+    const currentLabelText = document.createElement("span");
+    currentLabelText.textContent = `${label} (current)`;
+    currentLabel.appendChild(currentLabelText);
+    if (toggle) currentLabel.appendChild(toggle);
     const currentBody = document.createElement("div");
     currentCol.appendChild(currentLabel);
     currentCol.appendChild(currentBody);
@@ -490,7 +779,13 @@ function renderDetail(request, currentCustomer, currentOrder) {
     wrap.className = "stack";
     list.forEach((doc) => {
       const row = document.createElement("div");
+      row.className = "document-row";
       const label = `${doc?.category || "Document"}: ${doc?.fileName || doc?.file_name || "File"}`;
+      const isServiceAgreement =
+        String(doc?.category || "")
+          .trim()
+          .toLowerCase() === SERVICE_AGREEMENT_CATEGORY.toLowerCase();
+      if (isServiceAgreement) row.classList.add("document-row--service-agreement");
       const url = String(doc?.url || "").trim();
       if (url && isSafeUrl(url)) {
         const link = document.createElement("a");
@@ -587,54 +882,257 @@ function renderDetail(request, currentCustomer, currentOrder) {
     return pairs;
   };
 
-  const pushField = (label, current, proposed, { html = false } = {}) => {
-    const { currentBody, proposedBody } = createTwoColBlock(label);
+  const normalizeLineItemCompare = (item) => {
+    if (!item) return null;
+    return {
+      lineItemId: item.lineItemId || item.id || null,
+      typeId: item.typeId || item.type_id || null,
+      bundleId: item.bundleId || item.bundle_id || null,
+      startAt: item.startAt || item.start_at || null,
+      endAt: item.endAt || item.end_at || null,
+    };
+  };
+
+  const lineItemHasChange = (current, proposed) => {
+    if (!current && !proposed) return false;
+    if (!proposed) return false;
+    if (!current) return true;
+    return !isValueEqual(normalizeLineItemCompare(current), normalizeLineItemCompare(proposed));
+  };
+
+  const lineItemKey = (item, index) => {
+    const id = item?.lineItemId || item?.id;
+    return id ? `id:${id}` : `idx:${index}`;
+  };
+
+  const pushField = (
+    label,
+    current,
+    proposed,
+    {
+      html = false,
+      section = null,
+      key = null,
+      compareCurrent = null,
+      compareProposed = null,
+      hasProposed = null,
+      extraKeys = null,
+      disabled = null,
+    } = {}
+  ) => {
+    const currentCompare = compareCurrent !== null ? compareCurrent : current;
+    const proposedCompare = compareProposed !== null ? compareProposed : proposed;
+    const proposedPresent = hasProposed !== null ? hasProposed : proposed !== undefined;
+    const hasChange = proposedPresent && !isValueEqual(currentCompare, proposedCompare);
+    const toggleDisabled =
+      disabled !== null
+        ? disabled
+        : section === "customer"
+          ? !canReviewCustomer
+          : section
+            ? !canReviewOrder
+            : false;
+    const toggle =
+      hasChange && section && key
+        ? createAcceptToggle({
+            section,
+            key,
+            extraKeys: Array.isArray(extraKeys) ? extraKeys : [],
+            disabled: toggleDisabled,
+          })
+        : null;
+    const { currentBody, proposedBody } = createTwoColBlock(label, { toggle });
     setTwoColContent(currentBody, current, { html });
     setTwoColContent(proposedBody, proposed, { html });
   };
 
-  const lineItemPairs = buildLineItemPairs(currentLineItems, lineItems);
   const currentSignature = currentOrder?.signature || currentOrder?.order?.signature || null;
 
   if (Object.keys(customer).length) {
     const section = document.createElement("div");
     section.innerHTML = `<div style="font-weight:700; margin-bottom:6px;">Customer</div>`;
     detailBody.appendChild(section);
-    pushField("Company", currentCustomer?.company_name, customer.companyName);
-    pushField("Contact", currentCustomer?.contact_name, customer.contactName);
-    pushField("Email", currentCustomer?.email, customer.email);
-    pushField("Phone", currentCustomer?.phone, customer.phone);
-    pushField("Address", currentCustomer?.street_address, customer.streetAddress);
-    pushField("City", currentCustomer?.city, customer.city);
-    pushField("Region", currentCustomer?.region, customer.region);
-    pushField("Postal code", currentCustomer?.postal_code, customer.postalCode);
-    pushField("Country", currentCustomer?.country, customer.country);
-    pushField("Contacts", formatContactHtml(currentCustomer?.contacts), formatContactHtml(customer.contacts), { html: true });
+    const labelMap = new Map(contactCategoryConfig.map((entry) => [entry.key, entry.label]));
+    const contactsLabel = labelMap.get("contacts") || "Contacts";
+    const accountingLabel = labelMap.get("accountingContacts") || "Accounting contacts";
+    pushField("Company", currentCustomer?.company_name, customer.companyName, {
+      section: "customer",
+      key: "companyName",
+      hasProposed: hasCustomerKey("companyName"),
+    });
+    pushField("Contact", currentCustomer?.contact_name, customer.contactName, {
+      section: "customer",
+      key: "contactName",
+      hasProposed: hasCustomerKey("contactName"),
+    });
+    pushField("Email", currentCustomer?.email, customer.email, {
+      section: "customer",
+      key: "email",
+      hasProposed: hasCustomerKey("email"),
+    });
+    pushField("Phone", currentCustomer?.phone, customer.phone, {
+      section: "customer",
+      key: "phone",
+      hasProposed: hasCustomerKey("phone"),
+    });
+    pushField("Address", currentCustomer?.street_address, customer.streetAddress, {
+      section: "customer",
+      key: "streetAddress",
+      hasProposed: hasCustomerKey("streetAddress"),
+    });
+    pushField("City", currentCustomer?.city, customer.city, {
+      section: "customer",
+      key: "city",
+      hasProposed: hasCustomerKey("city"),
+    });
+    pushField("Region", currentCustomer?.region, customer.region, {
+      section: "customer",
+      key: "region",
+      hasProposed: hasCustomerKey("region"),
+    });
+    pushField("Postal code", currentCustomer?.postal_code, customer.postalCode, {
+      section: "customer",
+      key: "postalCode",
+      hasProposed: hasCustomerKey("postalCode"),
+    });
+    pushField("Country", currentCustomer?.country, customer.country, {
+      section: "customer",
+      key: "country",
+      hasProposed: hasCustomerKey("country"),
+    });
     pushField(
-      "Accounting contacts",
+      contactsLabel,
+      formatContactHtml(currentCustomer?.contacts),
+      formatContactHtml(customer.contacts),
+      {
+        html: true,
+        section: "customer",
+        key: "contacts",
+        compareCurrent: currentCustomer?.contacts,
+        compareProposed: customer.contacts,
+        hasProposed: hasCustomerKey("contacts"),
+      }
+    );
+    pushField(
+      accountingLabel,
       formatContactHtml(currentCustomer?.accounting_contacts),
       formatContactHtml(customer.accountingContacts),
-      { html: true }
+      {
+        html: true,
+        section: "customer",
+        key: "accountingContacts",
+        compareCurrent: currentCustomer?.accounting_contacts,
+        compareProposed: customer.accountingContacts,
+        hasProposed: hasCustomerKey("accountingContacts"),
+      }
     );
+
+    const currentGroups = normalizeContactGroups(currentCustomer?.contact_groups);
+    const proposedGroups = normalizeContactGroups(customer.contactGroups);
+    contactCategoryConfig
+      .filter((entry) => entry.key !== "contacts" && entry.key !== "accountingContacts")
+      .forEach((entry, idx) => {
+        pushField(
+          entry.label,
+          formatContactHtml(currentGroups[entry.key]),
+          formatContactHtml(proposedGroups[entry.key]),
+          {
+            html: true,
+            section: idx === 0 ? "customer" : null,
+            key: idx === 0 ? "contactGroups" : null,
+            compareCurrent: currentGroups,
+            compareProposed: proposedGroups,
+            hasProposed: hasCustomerKey("contactGroups"),
+          }
+        );
+      });
   }
 
   if (Object.keys(order).length) {
     const section = document.createElement("div");
     section.innerHTML = `<div style="font-weight:700; margin:10px 0 6px;">Order</div>`;
     detailBody.appendChild(section);
-    pushField("Customer PO", currentOrder?.order?.customer_po, order.customerPo);
-    pushField("Fulfillment", currentOrder?.order?.fulfillment_method, order.fulfillmentMethod);
-    pushField("Dropoff address", currentOrder?.order?.dropoff_address, order.dropoffAddress, { html: true });
-    pushField("Site address", currentOrder?.order?.site_address, order.siteAddress);
-    pushField("Site access information / pin", currentOrder?.order?.site_access_info, order.siteAccessInfo);
-    pushField("Logistics instructions", currentOrder?.order?.logistics_instructions, order.logisticsInstructions, { html: true });
-    pushField("Special instructions", currentOrder?.order?.special_instructions, order.specialInstructions, { html: true });
-    pushField("Critical areas", currentOrder?.order?.critical_areas, order.criticalAreas, { html: true });
+    pushField("Customer PO", currentOrder?.order?.customer_po, order.customerPo, {
+      section: "order",
+      key: "customerPo",
+      hasProposed: hasOrderKey("customerPo"),
+    });
+    pushField("Fulfillment", currentOrder?.order?.fulfillment_method, order.fulfillmentMethod, {
+      section: "order",
+      key: "fulfillmentMethod",
+      hasProposed: hasOrderKey("fulfillmentMethod"),
+    });
+    pushField("Dropoff address", currentOrder?.order?.dropoff_address, order.dropoffAddress, {
+      html: true,
+      section: "order",
+      key: "dropoffAddress",
+      hasProposed: hasOrderKey("dropoffAddress"),
+    });
+    pushField("Site name", currentOrder?.order?.site_name, order.siteName, {
+      section: "order",
+      key: "siteName",
+      hasProposed: hasOrderKey("siteName"),
+    });
+    pushField("Site address", currentOrder?.order?.site_address, order.siteAddress, {
+      section: "order",
+      key: "siteAddress",
+      hasProposed: hasOrderKey("siteAddress"),
+    });
+    pushField("Site access information / pin", currentOrder?.order?.site_access_info, order.siteAccessInfo, {
+      section: "order",
+      key: "siteAccessInfo",
+      hasProposed: hasOrderKey("siteAccessInfo"),
+    });
+    pushField("Site address latitude", currentOrder?.order?.site_address_lat, order.siteAddressLat, {
+      section: "order",
+      key: "siteAddressLat",
+      hasProposed: hasOrderKey("siteAddressLat"),
+    });
+    pushField("Site address longitude", currentOrder?.order?.site_address_lng, order.siteAddressLng, {
+      section: "order",
+      key: "siteAddressLng",
+      hasProposed: hasOrderKey("siteAddressLng"),
+    });
+    pushField("Site address search query", currentOrder?.order?.site_address_query, order.siteAddressQuery, {
+      section: "order",
+      key: "siteAddressQuery",
+      hasProposed: hasOrderKey("siteAddressQuery"),
+    });
+    pushField("Logistics instructions", currentOrder?.order?.logistics_instructions, order.logisticsInstructions, {
+      html: true,
+      section: "order",
+      key: "logisticsInstructions",
+      hasProposed: hasOrderKey("logisticsInstructions"),
+    });
+    pushField("Special instructions", currentOrder?.order?.special_instructions, order.specialInstructions, {
+      html: true,
+      section: "order",
+      key: "specialInstructions",
+      hasProposed: hasOrderKey("specialInstructions"),
+    });
+    pushField("Critical Assets and Locations", currentOrder?.order?.critical_areas, order.criticalAreas, {
+      html: true,
+      section: "order",
+      key: "criticalAreas",
+      hasProposed: hasOrderKey("criticalAreas"),
+    });
+    pushField("Monitoring personnel", currentOrder?.order?.monitoring_personnel, order.monitoringPersonnel, {
+      section: "order",
+      key: "monitoringPersonnel",
+      hasProposed: hasOrderKey("monitoringPersonnel"),
+    });
     pushField(
       "Notification circumstances",
       formatListHtml(currentOrder?.order?.notification_circumstances),
       formatListHtml(order.notificationCircumstances),
-      { html: true }
+      {
+        html: true,
+        section: "order",
+        key: "notificationCircumstances",
+        compareCurrent: currentOrder?.order?.notification_circumstances,
+        compareProposed: order.notificationCircumstances,
+        hasProposed: hasOrderKey("notificationCircumstances"),
+      }
     );
     pushField(
       "Coverage hours",
@@ -643,38 +1141,107 @@ function renderDetail(request, currentCustomer, currentOrder) {
         currentOrder?.order?.coverage_timezone || currentOrder?.order?.coverageTimeZone || null
       ),
       formatCoverageHoursHtml(order.coverageHours, order.coverageTimeZone || null),
-      { html: true }
+      {
+        html: true,
+        section: "order",
+        key: "coverageHours",
+        compareCurrent: {
+          hours: currentOrder?.order?.coverage_hours || [],
+          timeZone: currentOrder?.order?.coverage_timezone || currentOrder?.order?.coverageTimeZone || null,
+        },
+        compareProposed: {
+          hours: order.coverageHours || [],
+          timeZone: order.coverageTimeZone || null,
+        },
+        hasProposed: hasOrderKey("coverageHours") || hasOrderKey("coverageTimeZone"),
+        extraKeys: hasOrderKey("coverageTimeZone") ? ["coverageTimeZone"] : [],
+      }
+    );
+    pushField(
+      "Coverage stat holidays required",
+      formatBoolean(currentOrder?.order?.coverage_stat_holidays_required),
+      formatBoolean(order.coverageStatHolidaysRequired),
+      { section: "order", key: "coverageStatHolidaysRequired", hasProposed: hasOrderKey("coverageStatHolidaysRequired") }
     );
     pushField(
       "Emergency contacts",
       formatContactHtml(currentOrder?.order?.emergency_contacts),
       formatContactHtml(order.emergencyContacts),
-      { html: true }
+      {
+        html: true,
+        section: "order",
+        key: "emergencyContacts",
+        compareCurrent: currentOrder?.order?.emergency_contacts,
+        compareProposed: order.emergencyContacts,
+        hasProposed: hasOrderKey("emergencyContacts"),
+      }
+    );
+    pushField(
+      "Additional emergency contact instructions",
+      currentOrder?.order?.emergency_contact_instructions,
+      order.emergencyContactInstructions,
+      {
+        html: true,
+        section: "order",
+        key: "emergencyContactInstructions",
+        hasProposed: hasOrderKey("emergencyContactInstructions"),
+      }
     );
     pushField("Site contacts", formatContactHtml(currentOrder?.order?.site_contacts), formatContactHtml(order.siteContacts), {
       html: true,
+      section: "order",
+      key: "siteContacts",
+      compareCurrent: currentOrder?.order?.site_contacts,
+      compareProposed: order.siteContacts,
+      hasProposed: hasOrderKey("siteContacts"),
     });
-    pushField("General notes", currentOrder?.order?.general_notes, order.generalNotes, { html: true });
+    pushField("General notes", currentOrder?.order?.general_notes, order.generalNotes, {
+      html: true,
+      section: "order",
+      key: "generalNotes",
+      hasProposed: hasOrderKey("generalNotes"),
+    });
+  }
+
+  if (currentLineItems.length || lineItems.length) {
+    const section = document.createElement("div");
+    section.innerHTML = `<div style="font-weight:700; margin:10px 0 6px;">Line items</div>`;
+    detailBody.appendChild(section);
+    const pairs = buildLineItemPairs(currentLineItems, lineItems);
+    pairs.forEach((pair, index) => {
+      const label = `Line item ${index + 1}`;
+      const hasChange = lineItemHasChange(pair.current, pair.proposed);
+      const key = lineItemKey(pair.proposed || pair.current, index);
+        const toggle = hasChange
+          ? createAcceptToggle({
+              section: "lineItem",
+              key,
+              disabled: !canReviewOrder,
+              meta: {
+                id: pair.proposed?.lineItemId || pair.proposed?.id || pair.current?.lineItemId || pair.current?.id || null,
+                index,
+              },
+            })
+          : null;
+      const { currentBody, proposedBody } = createTwoColBlock(label, { toggle });
+      setTwoColContent(currentBody, formatLineItemDetailsHtml(pair.current), { html: true });
+      setTwoColContent(proposedBody, formatLineItemDetailsHtml(pair.proposed), { html: true });
+    });
   }
 
   if (currentGeneralNotesImages.length || proposedGeneralNotesImages.length) {
     const section = document.createElement("div");
     section.innerHTML = `<div style="font-weight:700; margin:10px 0 6px;">General notes photos</div>`;
     detailBody.appendChild(section);
-    const { currentBody, proposedBody } = createTwoColBlock("General notes photos");
+    const currentPhotos = currentGeneralNotesImages.map((img) => img.url);
+    const proposedPhotos = proposedGeneralNotesImages.map((img) => img.url);
+    const hasPhotoChange = hasOrderKey("generalNotesImages") && !isValueEqual(currentPhotos, proposedPhotos);
+    const toggle = hasPhotoChange
+      ? createAcceptToggle({ section: "order", key: "generalNotesImages", disabled: !canReviewOrder })
+      : null;
+    const { currentBody, proposedBody } = createTwoColBlock("General notes photos", { toggle });
     appendElementOrDash(currentBody, buildImageGrid(currentGeneralNotesImages));
     appendElementOrDash(proposedBody, buildImageGrid(proposedGeneralNotesImages));
-  }
-
-  if (lineItemPairs.length) {
-    const section = document.createElement("div");
-    section.innerHTML = `<div style="font-weight:700; margin:10px 0 6px;">Line items</div>`;
-    detailBody.appendChild(section);
-    lineItemPairs.forEach((pair, idx) => {
-      const { currentBody, proposedBody } = createTwoColBlock(`Line item ${idx + 1}`);
-      setTwoColContent(currentBody, formatLineItemHtml(pair.current), { html: true });
-      setTwoColContent(proposedBody, formatLineItemHtml(pair.proposed), { html: true });
-    });
   }
 
   if (currentDocuments.length || documents.length) {
@@ -694,14 +1261,29 @@ function renderDetail(request, currentCustomer, currentOrder) {
     appendElementOrDash(currentBody, buildSignatureBlock(currentSignature));
     appendElementOrDash(proposedBody, buildSignatureBlock(signature));
   }
+
+  updateAcceptButtons();
+}
+
+async function loadContactCategories() {
+  if (!activeCompanyId) return;
+  try {
+    const res = await fetch(`/api/company-settings?companyId=${encodeURIComponent(String(activeCompanyId))}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load contact categories.");
+    contactCategoryConfig = normalizeContactCategories(data.settings?.customer_contact_categories || []);
+  } catch {
+    contactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
+  }
 }
 
 async function loadRequests() {
   try {
-    if (!rentalOrderIdParam) {
-      updatesMeta.textContent = "Open a rental order to review customer updates.";
-      if (updatesTable) updatesTable.innerHTML = `<div class="hint">No rental order selected.</div>`;
+    if (!rentalOrderIdParam && !customerIdParam) {
+      updatesMeta.textContent = "Select a customer or rental order to review customer updates.";
+      if (updatesTable) updatesTable.innerHTML = `<div class="hint">No customer or rental order selected.</div>`;
       setBackToOrderTarget("");
+      setBackToCustomerTarget("");
       return;
     }
     if (!activeCompanyId) {
@@ -711,17 +1293,38 @@ async function loadRequests() {
     const query = new URLSearchParams();
     query.set("companyId", String(activeCompanyId));
     if (rentalOrderIdParam) query.set("rentalOrderId", rentalOrderIdParam);
+    if (customerIdParam) query.set("customerId", customerIdParam);
     if (statusFilter) query.set("status", statusFilter);
     const data = await fetchJson(`/api/customer-change-requests?${query.toString()}`);
     const raw = Array.isArray(data.requests) ? data.requests : [];
-    requestsCache = raw.filter((req) => STATUS_ALLOWED.has(normalizeStatus(req.status)));
+    let scoped = raw;
+    const normalizedCustomerId = Number(customerIdParam);
+    if (Number.isFinite(normalizedCustomerId) && normalizedCustomerId > 0) {
+      scoped = scoped.filter((req) => Number(req.customer_id) === normalizedCustomerId);
+    }
+    const normalizedRentalOrderId = Number(rentalOrderIdParam);
+    if (Number.isFinite(normalizedRentalOrderId) && normalizedRentalOrderId > 0) {
+      scoped = scoped.filter((req) => Number(req.rental_order_id) === normalizedRentalOrderId);
+    }
+    requestsCache = scoped.filter((req) => STATUS_ALLOWED.has(normalizeStatus(req.status)));
     if (statusFilter) {
       requestsCache = requestsCache.filter((req) => normalizeStatus(req.status) === statusFilter);
     }
     const statusLabel = statusFilter ? statusFilter : "all statuses";
-    const orderLabel = rentalOrderIdParam ? `Order #${rentalOrderIdParam}` : "All orders";
-    updatesMeta.textContent = `${requestsCache.length} update(s). ${orderLabel} · ${statusLabel}`;
+    const customerName =
+      customerIdParam && scoped.length
+        ? scoped.find((req) => String(req.customer_id || "") === customerIdParam)?.customer_name || null
+        : null;
+    const customerLabel = customerIdParam
+      ? customerName
+        ? `${customerName} (Customer #${customerIdParam})`
+        : `Customer #${customerIdParam}`
+      : null;
+    const orderLabel = rentalOrderIdParam ? `Order #${rentalOrderIdParam}` : null;
+    const scopeLabel = [customerLabel, orderLabel].filter(Boolean).join(" · ") || "All updates";
+    updatesMeta.textContent = `${requestsCache.length} update(s). ${scopeLabel} · ${statusLabel}`;
     setBackToOrderTarget(rentalOrderIdParam);
+    setBackToCustomerTarget(customerIdParam);
     renderTable();
   } catch (err) {
     updatesMeta.textContent = err?.message ? String(err.message) : "Unable to load updates.";
@@ -742,20 +1345,34 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) loadRequests();
 });
 
+async function loadRequestDetail(id) {
+  detailHint.textContent = "";
+  if (!contactCategoriesPromise) {
+    contactCategoriesPromise = loadContactCategories();
+  }
+  await contactCategoriesPromise;
+  const data = await fetchJson(
+    `/api/customer-change-requests/${encodeURIComponent(id)}?companyId=${encodeURIComponent(activeCompanyId)}`
+  );
+  activeRequest = data.request;
+  detailMeta.textContent = `Update #${activeRequest.id} - ${fmtDate(activeRequest.submitted_at)}`;
+  renderDetail(activeRequest, data.currentCustomer, data.currentOrder);
+  setBackToOrderTarget(activeRequest?.rental_order_id || rentalOrderIdParam);
+  setBackToCustomerTarget(activeRequest?.customer_id || customerIdParam);
+  detailCard.style.display = "block";
+}
+
+async function refreshActiveRequest() {
+  if (!activeRequest?.id) return;
+  await loadRequestDetail(activeRequest.id);
+}
+
 updatesTable?.addEventListener("click", async (evt) => {
   const btn = evt.target.closest("button[data-id]");
   if (!btn) return;
   const id = btn.dataset.id;
   try {
-    detailHint.textContent = "";
-    const data = await fetchJson(
-      `/api/customer-change-requests/${encodeURIComponent(id)}?companyId=${encodeURIComponent(activeCompanyId)}`
-    );
-    activeRequest = data.request;
-    detailMeta.textContent = `Update #${activeRequest.id} - ${fmtDate(activeRequest.submitted_at)}`;
-    renderDetail(activeRequest, data.currentCustomer, data.currentOrder);
-    setBackToOrderTarget(activeRequest?.rental_order_id || rentalOrderIdParam);
-    detailCard.style.display = "block";
+    await loadRequestDetail(id);
   } catch (err) {
     detailHint.textContent = err?.message ? String(err.message) : "Unable to load update.";
   }
@@ -771,39 +1388,104 @@ backToOrderBtn?.addEventListener("click", (e) => {
   window.location.href = `rental-order-form.html?${qs.toString()}`;
 });
 
-acceptBtn?.addEventListener("click", async () => {
+backToCustomerBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  const customerId = String(backToCustomerBtn?.dataset?.customerId || "").trim();
+  if (!customerId) return;
+  const qs = new URLSearchParams();
+  qs.set("id", customerId);
+  if (activeCompanyId) qs.set("companyId", String(activeCompanyId));
+  window.location.href = `customers-form.html?${qs.toString()}`;
+});
+
+applyUpdateBtn?.addEventListener("click", async () => {
   if (!activeRequest) return;
   try {
     detailHint.textContent = "";
-    await fetchJson(`/api/customer-change-requests/${encodeURIComponent(activeRequest.id)}/accept`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId: activeCompanyId }),
-    });
-    detailHint.textContent = "Accepted.";
+    const acceptedCustomerFields = canReviewCustomer ? Array.from(selectionState?.customerFields || []) : [];
+    const acceptedOrderFields = canReviewOrder ? Array.from(selectionState?.orderFields || []) : [];
+    const acceptedLineItemIds = [];
+    const acceptedLineItemIndexes = [];
+    if (canReviewOrder) {
+      (selectionState?.lineItemKeys || new Set()).forEach((key) => {
+        const meta = selectionState?.lineItemMeta?.get(key) || null;
+        if (meta?.id) {
+          acceptedLineItemIds.push(meta.id);
+          return;
+        }
+        if (Number.isFinite(meta?.index)) acceptedLineItemIndexes.push(meta.index);
+      });
+    }
+    const requiresCustomerSelection =
+      canReviewCustomer && (selectionState?.customerAvailable?.size || 0) > 0;
+    const requiresOrderSelection =
+      canReviewOrder &&
+      ((selectionState?.orderAvailable?.size || 0) > 0 || (selectionState?.lineItemAvailable?.size || 0) > 0);
+    const requiresSelection = requiresCustomerSelection || requiresOrderSelection;
+    const hasSelection =
+      acceptedCustomerFields.length > 0 || acceptedOrderFields.length > 0 || acceptedLineItemIds.length > 0 || acceptedLineItemIndexes.length > 0;
+    if (requiresSelection && !hasSelection) {
+      detailHint.textContent = "Select at least one field or line item to accept.";
+      return;
+    }
+    const payload = { companyId: activeCompanyId };
+    const endpoint =
+      canReviewCustomer && canReviewOrder
+        ? "accept"
+        : canReviewCustomer
+          ? "accept-customer"
+          : "accept-order";
+    if (requiresSelection) {
+      if (requiresCustomerSelection) payload.acceptedCustomerFields = acceptedCustomerFields;
+      if (requiresOrderSelection) {
+        payload.acceptedOrderFields = acceptedOrderFields;
+        payload.acceptedLineItemIds = acceptedLineItemIds;
+        payload.acceptedLineItemIndexes = acceptedLineItemIndexes;
+      }
+    }
+    const result = await fetchJson(
+      `/api/customer-change-requests/${encodeURIComponent(activeRequest.id)}/${endpoint}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
+    detailHint.textContent = "Updates applied.";
     await loadRequests();
-    closeDetailCard();
+    if (endpoint === "accept" || (result?.status && result.status !== "pending")) {
+      closeDetailCard();
+    } else {
+      await refreshActiveRequest();
+    }
   } catch (err) {
-    detailHint.textContent = err?.message ? String(err.message) : "Unable to accept update.";
+    detailHint.textContent = err?.message ? String(err.message) : "Unable to apply updates.";
   }
 });
 
-rejectBtn?.addEventListener("click", async () => {
+rejectUpdateBtn?.addEventListener("click", async () => {
   if (!activeRequest) return;
   try {
     detailHint.textContent = "";
     const note = window.prompt("Rejection note (optional):", "");
-    await fetchJson(`/api/customer-change-requests/${encodeURIComponent(activeRequest.id)}/reject`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId: activeCompanyId, reviewNotes: note || null }),
-    });
-    detailHint.textContent = "Rejected.";
+    await fetchJson(
+      `/api/customer-change-requests/${encodeURIComponent(activeRequest.id)}/reject`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companyId: activeCompanyId, reviewNotes: note || null }),
+      }
+    );
+    detailHint.textContent = "Updates rejected.";
     await loadRequests();
+    closeDetailCard();
   } catch (err) {
-    detailHint.textContent = err?.message ? String(err.message) : "Unable to reject update.";
+    detailHint.textContent = err?.message ? String(err.message) : "Unable to reject updates.";
   }
 });
 
+contactCategoriesPromise = loadContactCategories();
 loadRequests();
 startAutoRefresh();
+
+

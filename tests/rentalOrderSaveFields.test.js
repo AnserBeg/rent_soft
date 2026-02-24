@@ -129,12 +129,14 @@ function shouldRunDbTest() {
         logisticsInstructions: "Gate code is 1234",
         specialInstructions: "Call on arrival",
         criticalAreas: "Keep clear of loading zone",
+        monitoringPersonnel: "Two contractors on site during monitoring hours",
         notificationCircumstances: ["After hours", "Gate locked"],
         coverageHours: [
           { startDay: "mon", startTime: "08:00", endTime: "17:00" },
           { startDay: "sat", startTime: "10:00", endTime: "14:00" },
         ],
         emergencyContacts: [{ name: "Alice", email: "alice@example.com", phone: "555-0101" }],
+        emergencyContactInstructions: "Notify safety lead before calling emergency services.",
         siteContacts: [{ name: "Bob", email: "bob@example.com", phone: "555-0202" }],
         lineItems: [
           {
@@ -171,12 +173,14 @@ function shouldRunDbTest() {
       assert.equal(order1.logistics_instructions, "Gate code is 1234");
       assert.equal(order1.special_instructions, "Call on arrival");
       assert.equal(order1.critical_areas, "Keep clear of loading zone");
+      assert.equal(order1.monitoring_personnel, "Two contractors on site during monitoring hours");
       assert.deepEqual(order1.notification_circumstances, ["After hours", "Gate locked"]);
       assert.deepEqual(order1.coverage_hours, [
         { startDay: "mon", startTime: "08:00", endDay: "mon", endTime: "17:00" },
         { startDay: "sat", startTime: "10:00", endDay: "sat", endTime: "14:00" },
       ]);
       assert.deepEqual(order1.emergency_contacts, [{ name: "Alice", email: "alice@example.com", phone: "555-0101" }]);
+      assert.equal(order1.emergency_contact_instructions, "Notify safety lead before calling emergency services.");
       assert.deepEqual(order1.site_contacts, [{ name: "Bob", email: "bob@example.com", phone: "555-0202" }]);
 
       assert.equal(Array.isArray(fetched1.lineItems) ? fetched1.lineItems.length : 0, 1);
@@ -216,9 +220,11 @@ function shouldRunDbTest() {
         logisticsInstructions: "Gate code is 5678",
         specialInstructions: "Do not block driveway",
         criticalAreas: "Stage near loading dock",
+        monitoringPersonnel: "Supervisor on site only",
         notificationCircumstances: ["After hours", "after hours", "  "],
         coverageHours: [{ startDay: "mon", startTime: "08:00", endTime: "17:00" }],
         emergencyContacts: [{ name: "Alice", email: "alice@example.com", phone: "555-0101" }],
+        emergencyContactInstructions: "Call 911 first, then site supervisor.",
         siteContacts: [{ name: "Bob", email: "bob@example.com", phone: "555-0202" }],
         lineItems: [
           {
@@ -247,6 +253,8 @@ function shouldRunDbTest() {
       assert.equal(order2.logistics_instructions, "Gate code is 5678");
       assert.equal(order2.special_instructions, "Do not block driveway");
       assert.equal(order2.critical_areas, "Stage near loading dock");
+      assert.equal(order2.emergency_contact_instructions, "Call 911 first, then site supervisor.");
+      assert.equal(order2.monitoring_personnel, "Supervisor on site only");
       assert.deepEqual(order2.notification_circumstances, ["After hours"]);
       assert.deepEqual(order2.coverage_hours, [{ startDay: "mon", startTime: "08:00", endDay: "mon", endTime: "17:00" }]);
 

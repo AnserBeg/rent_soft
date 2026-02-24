@@ -120,8 +120,14 @@
               </div>
               <div data-rental-info-field="criticalAreas">
                 <label>
-                  Critical Areas on Site
+                  Critical Assets and Locations on Site
                   <textarea id="reserve-critical-areas" required></textarea>
+                </label>
+              </div>
+              <div data-rental-info-field="monitoringPersonnel">
+                <label>
+                  Personnel/contractors expected on site during monitoring hours
+                  <textarea id="reserve-monitoring-personnel" name="monitoringPersonnel" class="compact-textarea" rows="1"></textarea>
                 </label>
               </div>
               <div data-rental-info-field="generalNotes">
@@ -142,6 +148,12 @@
                   <button type="button" class="ghost small" id="reserve-add-emergency-contact">+ Add contact</button>
                 </div>
                 <div class="contacts-list stack" id="reserve-emergency-contacts-list"></div>
+              </div>
+              <div data-rental-info-field="emergencyContactInstructions">
+                <label>
+                  Additional emergency contact instructions
+                  <textarea id="reserve-emergency-contact-instructions" name="emergencyContactInstructions" class="compact-textarea" rows="1"></textarea>
+                </label>
               </div>
               <div class="contact-block" data-rental-info-field="siteContacts">
                 <div class="contact-header">
@@ -184,6 +196,7 @@
   <script src="storefront.js"></script>
 </body>
 </html>
+
 
 
 

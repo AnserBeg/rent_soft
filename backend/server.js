@@ -1,12 +1,14 @@
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const { PassThrough } = require("stream");
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const cors = require("cors");
 const multer = require("multer");
 const dotenv = require("dotenv");
 const PDFDocument = require("pdfkit");
+const { PDFDocument: PDFLibDocument } = require("pdf-lib");
 
 // Load env from repo root even if server is started from `backend/`.
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
@@ -1077,6 +1079,16 @@ app.get(
 );
 
 app.get(
+  "/api/public/company-contact-categories",
+  asyncHandler(async (req, res) => {
+    const { companyId } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const settings = await getCompanySettings(companyId);
+    res.json({ categories: settings?.customer_contact_categories || [] });
+  })
+);
+
+app.get(
   "/api/public/customer-links/:token",
   customerLinkLimiter,
   asyncHandler(async (req, res) => {
@@ -1159,6 +1171,38 @@ app.get(
       };
     });
 
+    const serviceAgreement =
+      settings?.customer_service_agreement_url
+        ? {
+            url: settings.customer_service_agreement_url,
+            fileName: settings.customer_service_agreement_file_name || null,
+            mime: settings.customer_service_agreement_mime || null,
+            sizeBytes: Number.isFinite(Number(settings.customer_service_agreement_size_bytes))
+              ? Number(settings.customer_service_agreement_size_bytes)
+              : null,
+          }
+        : null;
+    let signedServiceAgreement = null;
+    if (serviceAgreement && link.customer_id) {
+      try {
+        const docs = await listCustomerDocuments({ companyId: link.company_id, customerId: link.customer_id });
+        const signedDocs = docs.filter(
+          (d) => String(d.category || "").trim().toLowerCase() === SERVICE_AGREEMENT_CATEGORY.toLowerCase()
+        );
+        if (signedDocs.length) {
+          const latest = signedDocs[signedDocs.length - 1];
+          signedServiceAgreement = {
+            id: latest.id,
+            url: latest.url,
+            fileName: latest.file_name || null,
+            signedAt: latest.created_at || null,
+          };
+        }
+      } catch {
+        signedServiceAgreement = null;
+      }
+    }
+
     res.json({
       link: {
         id: link.id,
@@ -1168,6 +1212,7 @@ app.get(
         expiresAt: link.expires_at || null,
         requireEsignature: link.require_esignature === true,
         termsText: link.terms_text || settings?.customer_terms_template || null,
+        serviceAgreement: serviceAgreement ? { ...serviceAgreement, signedDoc: signedServiceAgreement } : null,
         documentCategories:
           Array.isArray(link.allowed_document_categories) && link.allowed_document_categories.length
             ? link.allowed_document_categories
@@ -1194,6 +1239,7 @@ app.get(
             phone: customer.phone || null,
             contacts: Array.isArray(customer.contacts) ? customer.contacts : [],
             accountingContacts: Array.isArray(customer.accounting_contacts) ? customer.accounting_contacts : [],
+            contactGroups: customer.contact_groups || {},
           }
         : null,
       order: order
@@ -1212,6 +1258,7 @@ app.get(
             siteName: order.site_name || null,
             siteAddress: order.site_address || null,
             siteAccessInfo: order.site_access_info || null,
+            monitoringPersonnel: order.monitoring_personnel || null,
             siteAddressLat: order.site_address_lat || null,
             siteAddressLng: order.site_address_lng || null,
             siteAddressQuery: order.site_address_query || null,
@@ -1221,7 +1268,9 @@ app.get(
             notificationCircumstances: order.notification_circumstances || [],
             coverageHours: order.coverage_hours || [],
             coverageTimeZone: order.coverage_timezone || null,
+            coverageStatHolidaysRequired: order.coverage_stat_holidays_required === true,
             emergencyContacts: order.emergency_contacts || [],
+            emergencyContactInstructions: order.emergency_contact_instructions || null,
             siteContacts: order.site_contacts || [],
             generalNotes: order.general_notes || null,
           }
@@ -1230,6 +1279,7 @@ app.get(
       lineItems: preparedLineItems,
       types: sanitizedTypes,
       rentalInfoFields: settings?.rental_info_fields || null,
+      contactCategories: settings?.customer_contact_categories || null,
       proofAvailable: !!(latestProof?.proof_pdf_path),
     });
   })
@@ -1385,20 +1435,54 @@ app.post(
       return res.status(400).json({ error: "At least one line item is required." });
     }
 
+    const settings = await getCompanySettings(link.company_id);
+    const serviceAgreement =
+      settings?.customer_service_agreement_url
+        ? {
+            url: settings.customer_service_agreement_url,
+            fileName: settings.customer_service_agreement_file_name || null,
+            mime: settings.customer_service_agreement_mime || null,
+            sizeBytes: Number.isFinite(Number(settings.customer_service_agreement_size_bytes))
+              ? Number(settings.customer_service_agreement_size_bytes)
+              : null,
+          }
+        : null;
+    let serviceAgreementOnFile = null;
+    if (serviceAgreement && link.customer_id) {
+      try {
+        const docsOnFile = await listCustomerDocuments({ companyId: link.company_id, customerId: link.customer_id });
+        const signedDocs = docsOnFile.filter(
+          (d) => String(d.category || "").trim().toLowerCase() === SERVICE_AGREEMENT_CATEGORY.toLowerCase()
+        );
+        if (signedDocs.length) serviceAgreementOnFile = signedDocs[signedDocs.length - 1];
+      } catch {
+        serviceAgreementOnFile = null;
+      }
+    }
+    const serviceAgreementRequired = !!serviceAgreement && !serviceAgreementOnFile;
+    const serviceAgreementAck = parseBoolean(req.body?.serviceAgreementAck) === true;
+
     const signatureName = String(req.body?.signatureName || "").trim();
     const signatureDataUrl = String(req.body?.signatureData || "").trim();
-    if (link.require_esignature && (!signatureName || !signatureDataUrl)) {
+    const signatureRequired = link.require_esignature || serviceAgreementRequired;
+    if (signatureRequired && (!signatureName || !signatureDataUrl)) {
       return res.status(400).json({ error: "Typed name and signature are required." });
+    }
+    if (serviceAgreementRequired && !serviceAgreementAck) {
+      return res.status(400).json({ error: "Service agreement acknowledgement is required." });
     }
 
     const docCategoryMap = parseJsonObject(req.body?.docCategoryMap);
     const allowedDocCategories =
       Array.isArray(link.allowed_document_categories) && link.allowed_document_categories.length
         ? link.allowed_document_categories
-        : (await getCompanySettings(link.company_id)).customer_document_categories || [];
+        : settings.customer_document_categories || [];
 
     const submissionId = req.body?.submissionId || crypto.randomUUID();
     const uploadBase = `/uploads/customer-links/link-${link.id}/submission-${submissionId}/`;
+    const submissionDir = safeUploadPath("customer-links", `link-${link.id}`, `submission-${submissionId}`);
+    if (!submissionDir) return res.status(400).json({ error: "Invalid upload path." });
+    fs.mkdirSync(submissionDir, { recursive: true });
     const docs = [];
     const files = Array.isArray(req.files) ? req.files : [];
     for (const file of files) {
@@ -1435,9 +1519,6 @@ app.post(
     if (signatureName && signatureDataUrl) {
       const decoded = decodeDataUrlImage(signatureDataUrl);
       if (!decoded) return res.status(400).json({ error: "Invalid signature image data." });
-      const sigDir = safeUploadPath("customer-links", `link-${link.id}`, `submission-${submissionId}`);
-      if (!sigDir) return res.status(400).json({ error: "Invalid upload path." });
-      fs.mkdirSync(sigDir, { recursive: true });
       let sigBuffer = decoded.buffer;
       let sigMime = decoded.mime || "image/png";
       let sigExt = ".png";
@@ -1451,7 +1532,7 @@ app.post(
         }
       }
       const sigFilename = `signature-${crypto.randomUUID()}${sigExt}`;
-      const sigPath = path.join(sigDir, sigFilename);
+      const sigPath = path.join(submissionDir, sigFilename);
       fs.writeFileSync(sigPath, sigBuffer);
       signature = {
         typedName: signatureName,
@@ -1462,6 +1543,34 @@ app.post(
         userAgent: String(req.headers["user-agent"] || ""),
       };
       signatureForPdf = { ...signature, imageDataUrl: signatureDataUrl };
+    }
+
+    let serviceAgreementDoc = null;
+    if (serviceAgreementRequired && serviceAgreement) {
+      const agreementBaseName = String(serviceAgreement.fileName || "Service Agreement").trim() || "Service Agreement";
+      const signedLabel = agreementBaseName.replace(/\.[a-z0-9]+$/i, "").trim() || "Service Agreement";
+      const signedFileName = `${signedLabel} - signed.pdf`;
+      const agreementFilename = `service-agreement-${crypto.randomUUID()}.pdf`;
+      const agreementPath = path.join(submissionDir, agreementFilename);
+      await writeServiceAgreementPdf({
+        filePath: agreementPath,
+        company: await getCompanyProfile(link.company_id),
+        customer: {
+          companyName: customerPayload.companyName || null,
+          contactName: customerPayload.contactName || null,
+        },
+        agreement: serviceAgreement,
+        signature: signatureForPdf || signature || {},
+      });
+      const stats = fs.statSync(agreementPath);
+      serviceAgreementDoc = {
+        category: SERVICE_AGREEMENT_CATEGORY,
+        fileName: signedFileName,
+        mime: "application/pdf",
+        sizeBytes: stats?.size || null,
+        url: `${uploadBase}${agreementFilename}`,
+      };
+      docs.push(serviceAgreementDoc);
     }
 
     let lineItemsForStore = [...lineItemsPayload];
@@ -1499,22 +1608,34 @@ app.post(
 
     let pendingCustomer = null;
     if (!link.customer_id && (customerPayload.companyName || customerPayload.contactName)) {
-      pendingCustomer = await createCustomer({
-        companyId: link.company_id,
-        companyName: customerPayload.companyName || customerPayload.contactName || "New customer",
-        contactName: customerPayload.contactName || null,
-        streetAddress: customerPayload.streetAddress || null,
-        city: customerPayload.city || null,
-        region: customerPayload.region || null,
-        country: customerPayload.country || null,
-        postalCode: customerPayload.postalCode || null,
-        email: customerPayload.email || null,
-        phone: customerPayload.phone || null,
-        contacts: customerPayload.contacts || null,
-        accountingContacts: customerPayload.accountingContacts || null,
-        isPending: true,
-      });
-    }
+        pendingCustomer = await createCustomer({
+          companyId: link.company_id,
+          companyName: customerPayload.companyName || customerPayload.contactName || "New customer",
+          contactName: customerPayload.contactName || null,
+          streetAddress: customerPayload.streetAddress || null,
+          city: customerPayload.city || null,
+          region: customerPayload.region || null,
+          country: customerPayload.country || null,
+          postalCode: customerPayload.postalCode || null,
+          email: customerPayload.email || null,
+          phone: customerPayload.phone || null,
+          contacts: customerPayload.contacts || null,
+          accountingContacts: customerPayload.accountingContacts || null,
+          contactGroups: customerPayload.contactGroups || null,
+          isPending: true,
+        });
+      }
+
+    const serviceAgreementPayload = serviceAgreementDoc
+      ? {
+          agreementUrl: serviceAgreement?.url || null,
+          agreementFileName: serviceAgreement?.fileName || null,
+          signedDocUrl: serviceAgreementDoc.url,
+          acknowledged: serviceAgreementAck === true,
+          signedAt: signature?.signedAt || null,
+          typedName: signature?.typedName || null,
+        }
+      : null;
 
     const changeRequest = await createCustomerChangeRequest({
       companyId: link.company_id,
@@ -1526,6 +1647,7 @@ app.post(
         customer: customerPayload,
         order: orderPayload,
         lineItems: lineItemsWithNames,
+        ...(serviceAgreementPayload ? { serviceAgreement: serviceAgreementPayload } : {}),
       },
       documents: docs,
       signature: signature || {},
@@ -1781,6 +1903,7 @@ const ALLOWED_CUSTOMER_FIELDS = new Set([
   "phone",
   "contacts",
   "accountingContacts",
+  "contactGroups",
   "streetAddress",
   "city",
   "region",
@@ -1800,15 +1923,19 @@ const ALLOWED_ORDER_FIELDS = new Set([
   "logisticsInstructions",
   "specialInstructions",
   "criticalAreas",
+  "monitoringPersonnel",
   "notificationCircumstances",
   "coverageHours",
   "coverageTimeZone",
+  "coverageStatHolidaysRequired",
   "emergencyContacts",
+  "emergencyContactInstructions",
   "siteContacts",
   "generalNotes",
   "generalNotesImages",
 ]);
 const ALLOWED_LINE_ITEM_FIELDS = new Set(["lineItemId", "typeId", "bundleId", "startAt", "endAt"]);
+const SERVICE_AGREEMENT_CATEGORY = "Service Agreement";
 
 function normalizeCustomerShareScope(value) {
   const raw = String(value || "").trim().toLowerCase();
@@ -1950,6 +2077,7 @@ async function writeCustomerChangeRequestPdf({ filePath, company, link, payload,
         doc.text(`Fulfillment: ${order.fulfillmentMethod || "--"}`);
         doc.text(`Site address: ${order.siteAddress || "--"}`);
         doc.text(`Site access information / pin: ${order.siteAccessInfo || "--"}`);
+        doc.text(`Personnel/contractors expected on site during monitoring hours: ${order.monitoringPersonnel || "--"}`);
         doc.text(`Dropoff address: ${order.dropoffAddress || "--"}`);
         doc.text(`General notes: ${stripHtml(order.generalNotes || "--")}`);
         const generalNotesImages = Array.isArray(order.generalNotesImages) ? order.generalNotesImages : [];
@@ -1993,6 +2121,25 @@ async function writeCustomerChangeRequestPdf({ filePath, company, link, payload,
         doc.moveDown();
       }
 
+      const serviceAgreement = payload?.serviceAgreement || null;
+      if (serviceAgreement) {
+        doc.fontSize(14).text("Service Agreement");
+        doc.fontSize(10);
+        if (serviceAgreement.agreementFileName || serviceAgreement.agreementUrl) {
+          doc.text(`Agreement: ${serviceAgreement.agreementFileName || serviceAgreement.agreementUrl || "--"}`);
+        }
+        if (serviceAgreement.signedDocUrl) {
+          doc.text(`Signed document: ${serviceAgreement.signedDocUrl}`);
+        }
+        if (serviceAgreement.signedAt) {
+          doc.text(`Signed at: ${new Date(serviceAgreement.signedAt).toLocaleString()}`);
+        }
+        if (serviceAgreement.typedName) {
+          doc.text(`Signed by: ${serviceAgreement.typedName}`);
+        }
+        doc.moveDown();
+      }
+
       if (signature && signature.typedName) {
         doc.fontSize(14).text("Signature");
         doc.fontSize(10).text(`Signed by: ${signature.typedName}`);
@@ -2015,6 +2162,127 @@ async function writeCustomerChangeRequestPdf({ filePath, company, link, payload,
   });
 }
 
+async function buildServiceAgreementCoverBuffer({ company, customer, agreement }) {
+  const doc = new PDFDocument({ size: "LETTER", margin: 50 });
+  const stream = new PassThrough();
+  const chunks = [];
+  stream.on("data", (c) => chunks.push(c));
+
+  const done = new Promise((resolve, reject) => {
+    stream.on("end", resolve);
+    stream.on("error", reject);
+    doc.on("error", reject);
+  });
+
+  doc.pipe(stream);
+  doc.fontSize(18).text("Service Agreement", { align: "center" });
+  doc.moveDown(0.5);
+  doc.fontSize(10).text(`Company: ${company?.name || "Unknown"}`);
+
+  const custName = customer?.companyName || customer?.contactName || "";
+  if (custName) {
+    doc.text(`Customer: ${custName}`);
+  }
+
+  if (agreement?.fileName || agreement?.url) {
+    doc.moveDown(0.5);
+    doc.fontSize(12).text("Agreement Details");
+    doc.fontSize(10);
+    if (agreement?.fileName) doc.text(`File: ${agreement.fileName}`);
+    if (agreement?.url) doc.text(`URL: ${agreement.url}`);
+  }
+
+  doc.end();
+  await done;
+  return Buffer.concat(chunks);
+}
+
+async function buildServiceAgreementSignatureBuffer({ signature }) {
+  if (!signature) return null;
+  const hasSigData =
+    !!signature.typedName ||
+    !!signature.signedAt ||
+    !!signature.imageDataUrl ||
+    !!signature.imageData;
+  if (!hasSigData) return null;
+
+  const doc = new PDFDocument({ size: "LETTER", margin: 50 });
+  const stream = new PassThrough();
+  const chunks = [];
+  stream.on("data", (c) => chunks.push(c));
+
+  const done = new Promise((resolve, reject) => {
+    stream.on("end", resolve);
+    stream.on("error", reject);
+    doc.on("error", reject);
+  });
+
+  doc.pipe(stream);
+  doc.fontSize(18).text("Service Agreement", { align: "center" });
+  doc.moveDown(0.5);
+  doc.fontSize(12).text("Signature");
+  doc.fontSize(10);
+  if (signature.typedName) doc.text(`Signed by: ${signature.typedName}`);
+  if (signature.signedAt) doc.text(`Signed at: ${new Date(signature.signedAt).toLocaleString()}`);
+  const decoded = decodeDataUrlImage(signature.imageDataUrl || signature.imageData || "");
+  if (decoded) {
+    try {
+      doc.moveDown(0.5);
+      doc.image(decoded.buffer, { width: 220 });
+    } catch {
+      // Ignore signature image failures.
+    }
+  }
+
+  doc.end();
+  await done;
+  return Buffer.concat(chunks);
+}
+
+async function mergePdfBuffers(buffers) {
+  const merged = await PDFLibDocument.create();
+  for (const buffer of buffers) {
+    if (!buffer || !buffer.length) continue;
+    const doc = await PDFLibDocument.load(buffer);
+    const pages = await merged.copyPages(doc, doc.getPageIndices());
+    pages.forEach((page) => merged.addPage(page));
+  }
+  return Buffer.from(await merged.save());
+}
+
+async function writeServiceAgreementPdf({ filePath, company, customer, agreement, signature }) {
+  const coverBuffer = await buildServiceAgreementCoverBuffer({ company, customer, agreement });
+  const signatureBuffer = await buildServiceAgreementSignatureBuffer({ signature });
+  const agreementPath = resolveCompanyUploadPath({
+    companyId: company?.id,
+    url: agreement?.url,
+    allowFiles: true,
+  });
+
+  if (!agreementPath || path.extname(agreementPath).toLowerCase() !== ".pdf") {
+    if (signatureBuffer) {
+      const mergedBytes = await mergePdfBuffers([coverBuffer, signatureBuffer]);
+      await fs.promises.writeFile(filePath, mergedBytes);
+      return;
+    }
+    await fs.promises.writeFile(filePath, coverBuffer);
+    return;
+  }
+
+  try {
+    const agreementBuffer = await fs.promises.readFile(agreementPath);
+    const mergedBytes = await mergePdfBuffers([coverBuffer, agreementBuffer, signatureBuffer]);
+    await fs.promises.writeFile(filePath, mergedBytes);
+  } catch {
+    if (signatureBuffer) {
+      const mergedBytes = await mergePdfBuffers([coverBuffer, signatureBuffer]);
+      await fs.promises.writeFile(filePath, mergedBytes);
+      return;
+    }
+    await fs.promises.writeFile(filePath, coverBuffer);
+  }
+}
+
 async function resolveCustomerShareLink(token, { allowExpired = false } = {}) {
   const clean = String(token || "").trim();
   if (!clean) return { error: "Share link token is required." };
@@ -2032,35 +2300,51 @@ function sanitizeCustomerPayload(input, allowedFields) {
   const src = input && typeof input === "object" ? input : {};
   const read = (k) => (allowedFields.includes(k) ? String(src[k] || "").trim() : "");
   const out = {};
+  const normalizeContacts = (value) =>
+    parseJsonArray(value)
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const name = String(entry.name || entry.contactName || entry.contact_name || "").trim();
+        const title = String(entry.title || entry.contactTitle || entry.contact_title || "").trim();
+        const email = String(entry.email || "").trim();
+        const phone = String(entry.phone || "").trim();
+        if (!name && !title && !email && !phone) return null;
+        return { name, title, email, phone };
+      })
+      .filter(Boolean);
   if (allowedFields.includes("companyName")) out.companyName = read("companyName") || null;
   if (allowedFields.includes("contactName")) out.contactName = read("contactName") || null;
   if (allowedFields.includes("email")) out.email = read("email") || null;
   if (allowedFields.includes("phone")) out.phone = read("phone") || null;
   if (allowedFields.includes("contacts")) {
-    const normalized = parseJsonArray(src.contacts)
-      .map((entry) => {
-        if (!entry || typeof entry !== "object") return null;
-        const name = String(entry.name || entry.contactName || entry.contact_name || "").trim();
-        const email = String(entry.email || "").trim();
-        const phone = String(entry.phone || "").trim();
-        if (!name && !email && !phone) return null;
-        return { name, email, phone };
-      })
-      .filter(Boolean);
+    const normalized = normalizeContacts(src.contacts);
     if (normalized.length) out.contacts = normalized;
   }
   if (allowedFields.includes("accountingContacts")) {
-    const normalized = parseJsonArray(src.accountingContacts)
-      .map((entry) => {
-        if (!entry || typeof entry !== "object") return null;
-        const name = String(entry.name || entry.contactName || entry.contact_name || "").trim();
-        const email = String(entry.email || "").trim();
-        const phone = String(entry.phone || "").trim();
-        if (!name && !email && !phone) return null;
-        return { name, email, phone };
-      })
-      .filter(Boolean);
+    const normalized = normalizeContacts(src.accountingContacts);
     if (normalized.length) out.accountingContacts = normalized;
+  }
+  if (allowedFields.includes("contactGroups")) {
+    const rawGroups = src.contactGroups || src.contact_groups || {};
+    const parsed =
+      typeof rawGroups === "string"
+        ? (() => {
+            try {
+              const decoded = JSON.parse(rawGroups);
+              return decoded && typeof decoded === "object" && !Array.isArray(decoded) ? decoded : {};
+            } catch {
+              return {};
+            }
+          })()
+        : rawGroups && typeof rawGroups === "object" && !Array.isArray(rawGroups)
+          ? rawGroups
+          : {};
+    const normalizedGroups = {};
+    Object.entries(parsed).forEach(([key, value]) => {
+      const list = normalizeContacts(value);
+      if (list.length) normalizedGroups[key] = list;
+    });
+    if (Object.keys(normalizedGroups).length) out.contactGroups = normalizedGroups;
   }
   if (allowedFields.includes("streetAddress")) out.streetAddress = read("streetAddress") || null;
   if (allowedFields.includes("city")) out.city = read("city") || null;
@@ -2095,6 +2379,7 @@ function sanitizeOrderPayload(input, allowedFields) {
   if (allowedFields.includes("logisticsInstructions")) out.logisticsInstructions = read("logisticsInstructions") || null;
   if (allowedFields.includes("specialInstructions")) out.specialInstructions = read("specialInstructions") || null;
   if (allowedFields.includes("criticalAreas")) out.criticalAreas = read("criticalAreas") || null;
+  if (allowedFields.includes("monitoringPersonnel")) out.monitoringPersonnel = read("monitoringPersonnel") || null;
   if (allowedFields.includes("generalNotes")) out.generalNotes = read("generalNotes") || null;
   if (allowedFields.includes("generalNotesImages") || allowedFields.includes("generalNotes")) {
     const images = parseJsonArray(src.generalNotesImages);
@@ -2103,7 +2388,14 @@ function sanitizeOrderPayload(input, allowedFields) {
   if (allowedFields.includes("notificationCircumstances")) out.notificationCircumstances = parseJsonArray(src.notificationCircumstances);
   if (allowedFields.includes("coverageHours")) out.coverageHours = parseJsonCoverage(src.coverageHours);
   if (allowedFields.includes("coverageTimeZone")) out.coverageTimeZone = read("coverageTimeZone") || null;
+  if (allowedFields.includes("coverageStatHolidaysRequired")) {
+    const parsed = parseBoolean(src.coverageStatHolidaysRequired ?? src.coverage_stat_holidays_required);
+    if (parsed !== null) out.coverageStatHolidaysRequired = parsed;
+  }
   if (allowedFields.includes("emergencyContacts")) out.emergencyContacts = parseJsonArray(src.emergencyContacts);
+  if (allowedFields.includes("emergencyContactInstructions")) {
+    out.emergencyContactInstructions = read("emergencyContactInstructions") || null;
+  }
   if (allowedFields.includes("siteContacts")) out.siteContacts = parseJsonArray(src.siteContacts);
   return out;
 }
@@ -3927,13 +4219,16 @@ app.post(
         siteAccessInfo,
         deliveryInstructions,
         criticalAreas,
+        monitoringPersonnel,
         notificationCircumstances,
         generalNotes,
         generalNotesImages,
         emergencyContacts,
+        emergencyContactInstructions,
         siteContacts,
         coverageHours,
         coverageTimeZone,
+        coverageStatHolidaysRequired,
       } = req.body || {};
 
     const authHeader = String(req.headers.authorization || "").trim();
@@ -3945,6 +4240,7 @@ app.post(
         error: "companyId, typeId, startAt, endAt, and customer login token are required.",
       });
     }
+    const coverageStatHolidaysRequiredValue = parseBoolean(coverageStatHolidaysRequired) === true;
 
       try {
         const result = await createStorefrontReservation({
@@ -3962,13 +4258,16 @@ app.post(
           siteAccessInfo,
           deliveryInstructions,
           criticalAreas,
+          monitoringPersonnel,
           notificationCircumstances,
           generalNotes,
           generalNotesImages,
           emergencyContacts,
+          emergencyContactInstructions,
           siteContacts,
           coverageHours,
           coverageTimeZone,
+          coverageStatHolidaysRequired: coverageStatHolidaysRequiredValue,
         });
         if (!result.ok) {
           if (result.error === "missing_rental_information") return res.status(400).json(result);
@@ -4059,13 +4358,14 @@ app.post(
         email: String(req.body.email || "").trim(),
         phone: String(req.body.phone || "").trim() || null,
         password: String(req.body.password || ""),
-        creditCardNumber: String(req.body.creditCardNumber || "").trim() || null,
-        contacts: req.body.contacts,
-        accountingContacts: req.body.accountingContacts,
-        followUpDate: String(req.body.followUpDate || "").trim() || null,
-        notes: String(req.body.notes || "").trim() || null,
-      canChargeDeposit: parsedDeposit === null ? null : parsedDeposit,
-      documents,
+          creditCardNumber: String(req.body.creditCardNumber || "").trim() || null,
+          contacts: req.body.contacts,
+          accountingContacts: req.body.accountingContacts,
+          contactGroups: req.body.contactGroups,
+          followUpDate: String(req.body.followUpDate || "").trim() || null,
+          notes: String(req.body.notes || "").trim() || null,
+        canChargeDeposit: parsedDeposit === null ? null : parsedDeposit,
+        documents,
     };
     const passwordError = getPasswordValidationError(payload.password);
     if (passwordError) return res.status(400).json({ error: passwordError });
@@ -4240,10 +4540,18 @@ function resolveCompanyUploadPath({ companyId, url, allowFiles = false }) {
   const cid = normalizeCompanyId(companyId);
   const raw = String(url || "").trim();
   if (!cid || !raw) return null;
+  let cleanUrl = raw;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      cleanUrl = new URL(raw).pathname || raw;
+    } catch {
+      cleanUrl = raw;
+    }
+  }
   const base = `/uploads/company-${cid}/`;
-  if (!raw.startsWith(base)) return null;
-  if (!allowFiles && raw.startsWith(`${base}files/`)) return null;
-  const clean = raw.replace(/^\/+/, "");
+  if (!cleanUrl.startsWith(base)) return null;
+  if (!allowFiles && cleanUrl.startsWith(`${base}files/`)) return null;
+  const clean = cleanUrl.replace(/^\/+/, "");
   if (!clean.startsWith("uploads/")) return null;
   const rel = clean.slice("uploads/".length);
   const full = path.join(uploadRoot, rel);
@@ -5312,23 +5620,24 @@ app.delete(
 app.post(
   "/api/customers",
   asyncHandler(async (req, res) => {
-    const {
-      companyId,
-      companyName,
-      parentCustomerId,
-      contactName,
-      streetAddress,
-      city,
-      region,
-      country,
-      postalCode,
-      email,
-      phone,
-      qboCustomerId,
-      contacts,
-      accountingContacts,
-      canChargeDeposit,
-    } = req.body;
+      const {
+        companyId,
+        companyName,
+        parentCustomerId,
+        contactName,
+        streetAddress,
+        city,
+        region,
+        country,
+        postalCode,
+        email,
+        phone,
+        qboCustomerId,
+        contacts,
+        accountingContacts,
+        contactGroups,
+        canChargeDeposit,
+      } = req.body;
     if (!companyId || (!companyName && !parentCustomerId)) {
       return res.status(400).json({ error: "companyId and companyName are required." });
     }
@@ -5345,11 +5654,12 @@ app.post(
         postalCode,
         email,
         phone,
-        qboCustomerId,
-        contacts,
-        accountingContacts,
-        canChargeDeposit: canChargeDeposit === true || canChargeDeposit === "true" || canChargeDeposit === "on",
-      });
+          qboCustomerId,
+          contacts,
+          accountingContacts,
+          contactGroups,
+          canChargeDeposit: canChargeDeposit === true || canChargeDeposit === "true" || canChargeDeposit === "on",
+        });
       res.status(201).json(customer);
     } catch (err) {
       const message = err?.message ? String(err.message) : "Unable to save customer.";
@@ -5365,23 +5675,24 @@ app.put(
   "/api/customers/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const {
-      companyId,
-      companyName,
-      parentCustomerId,
-      contactName,
-      streetAddress,
-      city,
-      region,
-      country,
-      postalCode,
-      email,
-      phone,
-      qboCustomerId,
-      contacts,
-      accountingContacts,
-      canChargeDeposit,
-    } = req.body;
+      const {
+        companyId,
+        companyName,
+        parentCustomerId,
+        contactName,
+        streetAddress,
+        city,
+        region,
+        country,
+        postalCode,
+        email,
+        phone,
+        qboCustomerId,
+        contacts,
+        accountingContacts,
+        contactGroups,
+        canChargeDeposit,
+      } = req.body;
     if (!companyId || (!companyName && !parentCustomerId)) {
       return res.status(400).json({ error: "companyId and companyName are required." });
     }
@@ -5399,11 +5710,12 @@ app.put(
         postalCode,
         email,
         phone,
-        qboCustomerId,
-        contacts,
-        accountingContacts,
-        canChargeDeposit: canChargeDeposit === true || canChargeDeposit === "true" || canChargeDeposit === "on",
-      });
+          qboCustomerId,
+          contacts,
+          accountingContacts,
+          contactGroups,
+          canChargeDeposit: canChargeDeposit === true || canChargeDeposit === "true" || canChargeDeposit === "on",
+        });
       if (!updated) return res.status(404).json({ error: "Customer not found" });
       res.json(updated);
     } catch (err) {
@@ -5687,6 +5999,375 @@ app.get(
   })
 );
 
+function normalizeChangeRequestReviewStatus(value) {
+  const status = String(value || "").trim().toLowerCase();
+  return status === "accepted" || status === "rejected" || status === "pending" ? status : null;
+}
+
+  function getChangeRequestSections(request) {
+    const payload = request?.payload && typeof request.payload === "object" ? request.payload : {};
+    const customerUpdate = payload.customer && typeof payload.customer === "object" ? payload.customer : {};
+    const orderUpdate = payload.order && typeof payload.order === "object" ? payload.order : {};
+    const lineItems = Array.isArray(payload.lineItems) ? payload.lineItems : [];
+  const docs = Array.isArray(request?.documents) ? request.documents : [];
+  const signature = request?.signature && typeof request.signature === "object" ? request.signature : {};
+  const hasCustomerSection = Object.keys(customerUpdate).length > 0 || docs.length > 0;
+    const hasOrderSection =
+      Object.keys(orderUpdate).length > 0 || lineItems.length > 0 || Object.keys(signature).length > 0;
+    return { customerUpdate, orderUpdate, lineItems, docs, signature, hasCustomerSection, hasOrderSection };
+  }
+
+  function normalizeAcceptedFields(input, allowed) {
+    const list = Array.isArray(input) ? input : [];
+    return list
+      .map((entry) => String(entry || "").trim())
+      .filter((entry) => entry && allowed.has(entry));
+  }
+
+  function filterAcceptedFields(update, acceptedFields) {
+    if (!acceptedFields) return update;
+    const allowed = new Set(acceptedFields);
+    const next = {};
+    Object.entries(update || {}).forEach(([key, value]) => {
+      if (allowed.has(key)) next[key] = value;
+    });
+    return next;
+  }
+
+  function filterAcceptedLineItems(lineItems, { acceptedLineItemIds, acceptedLineItemIndexes } = {}) {
+    if (!Array.isArray(lineItems) || (!acceptedLineItemIds && !acceptedLineItemIndexes)) return lineItems;
+    const idSet = new Set((acceptedLineItemIds || []).map((id) => String(id)));
+    const indexSet = new Set(
+      (acceptedLineItemIndexes || []).map((idx) => Number(idx)).filter((idx) => Number.isFinite(idx))
+    );
+    if (!idSet.size && !indexSet.size) return [];
+    return lineItems
+      .map((item, idx) => ({ ...item, _index: idx }))
+      .filter((item) => {
+        const id = item?.lineItemId || item?.id || null;
+        if (id && idSet.size && idSet.has(String(id))) return true;
+        if (indexSet.size && indexSet.has(item._index)) return true;
+        return false;
+      });
+  }
+
+  function buildRequestedLineItemsFromSelection(existingItems, selectedItems) {
+    const base = (existingItems || []).map((li) => ({
+      lineItemId: li.id,
+      typeId: li.type_id,
+      bundleId: li.bundle_id,
+      startAt: li.start_at,
+      endAt: li.end_at,
+    }));
+    if (!selectedItems?.length) return base;
+    const byId = new Map();
+    base.forEach((item, idx) => {
+      if (item.lineItemId) byId.set(String(item.lineItemId), idx);
+    });
+    selectedItems.forEach((item) => {
+      const incoming = {
+        lineItemId: item.lineItemId ? Number(item.lineItemId) : item.id ? Number(item.id) : null,
+        typeId: item.typeId ?? item.type_id ?? null,
+        bundleId: item.bundleId ?? item.bundle_id ?? null,
+        startAt: item.startAt ?? item.start_at ?? null,
+        endAt: item.endAt ?? item.end_at ?? null,
+      };
+      if (incoming.lineItemId && byId.has(String(incoming.lineItemId))) {
+        const idx = byId.get(String(incoming.lineItemId));
+        base[idx] = { ...base[idx], ...incoming };
+        return;
+      }
+      const index = Number.isFinite(item._index) ? item._index : null;
+      if (index !== null && base[index]) {
+        base[index] = { ...base[index], ...incoming, lineItemId: base[index].lineItemId };
+        return;
+      }
+      if (incoming.typeId || incoming.bundleId) {
+        base.push({ ...incoming, lineItemId: null });
+      }
+    });
+    return base;
+  }
+
+function resolveOverallChangeRequestStatus({
+  hasCustomerSection,
+  hasOrderSection,
+  customerReviewStatus,
+  orderReviewStatus,
+}) {
+  const customerDone = !hasCustomerSection || (customerReviewStatus && customerReviewStatus !== "pending");
+  const orderDone = !hasOrderSection || (orderReviewStatus && orderReviewStatus !== "pending");
+  if (!customerDone || !orderDone) return "pending";
+  if (
+    (hasCustomerSection && customerReviewStatus === "rejected") ||
+    (hasOrderSection && orderReviewStatus === "rejected")
+  ) {
+    return "rejected";
+  }
+  return "accepted";
+}
+
+  async function applyCustomerChangeRequest({ request, companyId, acceptedFields = null }) {
+    const { customerUpdate } = getChangeRequestSections(request);
+    const filteredCustomerUpdate = acceptedFields ? filterAcceptedFields(customerUpdate, acceptedFields) : customerUpdate;
+    let customerId = request.customer_id;
+
+    if (!customerId && (request.scope === "new_customer" || request.scope === "new_quote")) {
+      const createdCustomer = await createCustomer({
+        companyId,
+        companyName: filteredCustomerUpdate.companyName || filteredCustomerUpdate.contactName || "New customer",
+        contactName: filteredCustomerUpdate.contactName || null,
+        streetAddress: filteredCustomerUpdate.streetAddress || null,
+        city: filteredCustomerUpdate.city || null,
+        region: filteredCustomerUpdate.region || null,
+        country: filteredCustomerUpdate.country || null,
+        postalCode: filteredCustomerUpdate.postalCode || null,
+        email: filteredCustomerUpdate.email || null,
+        phone: filteredCustomerUpdate.phone || null,
+        contacts: filteredCustomerUpdate.contacts || null,
+        accountingContacts: filteredCustomerUpdate.accountingContacts || null,
+        contactGroups: filteredCustomerUpdate.contactGroups || null,
+      });
+      customerId = createdCustomer?.id || null;
+    } else if (customerId && Object.keys(filteredCustomerUpdate).length) {
+      const existing = await getCustomerById({ companyId, id: customerId });
+      const merged = mergeCustomerPayload(
+        {
+        companyName: existing?.company_name || null,
+        contactName: existing?.contact_name || null,
+        streetAddress: existing?.street_address || null,
+        city: existing?.city || null,
+        region: existing?.region || null,
+        country: existing?.country || null,
+        postalCode: existing?.postal_code || null,
+        email: existing?.email || null,
+        phone: existing?.phone || null,
+        contacts: Array.isArray(existing?.contacts) ? existing.contacts : [],
+        accountingContacts: Array.isArray(existing?.accounting_contacts) ? existing.accounting_contacts : [],
+          contactGroups: existing?.contact_groups || {},
+        },
+        filteredCustomerUpdate
+      );
+      await updateCustomer({
+        id: customerId,
+      companyId,
+      companyName: merged.companyName,
+      contactName: merged.contactName,
+      streetAddress: merged.streetAddress,
+      city: merged.city,
+      region: merged.region,
+      country: merged.country,
+      postalCode: merged.postalCode,
+      email: merged.email,
+      phone: merged.phone,
+      contacts: merged.contacts,
+      accountingContacts: merged.accountingContacts,
+      contactGroups: merged.contactGroups,
+    });
+  }
+
+  if (customerId) {
+    await setCustomerPendingStatus({ companyId, customerId, isPending: false });
+  }
+
+  return customerId;
+}
+
+  async function applyOrderChangeRequest({
+    request,
+    companyId,
+    customerId,
+    actorName,
+    actorEmail,
+    acceptedOrderFields = null,
+    acceptedLineItemIds = null,
+    acceptedLineItemIndexes = null,
+    hasLineItemSelection = false,
+  }) {
+    const { orderUpdate, lineItems } = getChangeRequestSections(request);
+    const filteredOrderUpdate = acceptedOrderFields ? filterAcceptedFields(orderUpdate, acceptedOrderFields) : orderUpdate;
+    const filteredLineItems = hasLineItemSelection
+      ? filterAcceptedLineItems(lineItems, { acceptedLineItemIds, acceptedLineItemIndexes })
+      : lineItems;
+    const normalizedGeneralNotesImages = normalizeGeneralNotesImages({
+      companyId,
+      images: filteredOrderUpdate?.generalNotesImages,
+    });
+
+  let orderId = request.rental_order_id;
+  if (request.scope === "order_update" || request.scope === "new_quote") {
+    if (!customerId) throw new Error("Customer is required to accept this request.");
+    if (orderId) {
+      const existingOrder = await getRentalOrder({ companyId, id: orderId });
+      const existing = existingOrder?.order;
+      if (!existing) throw new Error("Rental order not found.");
+        const mergedOrder = mergeOrderPayload(
+          {
+            customerPo: existing.customer_po || null,
+          fulfillmentMethod: existing.fulfillment_method || "pickup",
+          dropoffAddress: existing.dropoff_address || null,
+          siteName: existing.site_name || null,
+          siteAddress: existing.site_address || null,
+          siteAccessInfo: existing.site_access_info || null,
+          siteAddressLat: existing.site_address_lat || null,
+          siteAddressLng: existing.site_address_lng || null,
+          siteAddressQuery: existing.site_address_query || null,
+          logisticsInstructions: existing.logistics_instructions || null,
+          specialInstructions: existing.special_instructions || null,
+          criticalAreas: existing.critical_areas || null,
+          monitoringPersonnel: existing.monitoring_personnel || null,
+          notificationCircumstances: existing.notification_circumstances || [],
+          coverageHours: existing.coverage_hours || [],
+          coverageTimeZone: existing.coverage_timezone || null,
+          coverageStatHolidaysRequired: existing.coverage_stat_holidays_required === true,
+          emergencyContacts: existing.emergency_contacts || [],
+          emergencyContactInstructions: existing.emergency_contact_instructions || null,
+          siteContacts: existing.site_contacts || [],
+            generalNotes: existing.general_notes || null,
+          },
+          filteredOrderUpdate
+        );
+        const existingLineItems = Array.isArray(existingOrder?.lineItems) ? existingOrder.lineItems : [];
+        const requestedLineItems = hasLineItemSelection
+          ? buildRequestedLineItemsFromSelection(existingLineItems, filteredLineItems)
+          : filteredLineItems.length
+            ? filteredLineItems
+            : existingLineItems.map((li) => ({
+                lineItemId: li.id,
+                typeId: li.type_id,
+                bundleId: li.bundle_id,
+                startAt: li.start_at,
+                endAt: li.end_at,
+              }));
+      const mergedLineItems = mergeLineItemsWithExisting(existingLineItems, requestedLineItems);
+      await updateRentalOrder({
+        id: orderId,
+        companyId,
+        customerId,
+        customerPo: mergedOrder.customerPo,
+        fulfillmentMethod: mergedOrder.fulfillmentMethod,
+        dropoffAddress: mergedOrder.dropoffAddress,
+        siteName: mergedOrder.siteName,
+        siteAddress: mergedOrder.siteAddress,
+        siteAccessInfo: mergedOrder.siteAccessInfo,
+        siteAddressLat: mergedOrder.siteAddressLat,
+        siteAddressLng: mergedOrder.siteAddressLng,
+        siteAddressQuery: mergedOrder.siteAddressQuery,
+        logisticsInstructions: mergedOrder.logisticsInstructions,
+        specialInstructions: mergedOrder.specialInstructions,
+        criticalAreas: mergedOrder.criticalAreas,
+        monitoringPersonnel: mergedOrder.monitoringPersonnel,
+        notificationCircumstances: mergedOrder.notificationCircumstances,
+        coverageHours: mergedOrder.coverageHours,
+        coverageTimeZone: mergedOrder.coverageTimeZone,
+        coverageStatHolidaysRequired: mergedOrder.coverageStatHolidaysRequired,
+        emergencyContacts: mergedOrder.emergencyContacts,
+        emergencyContactInstructions: mergedOrder.emergencyContactInstructions,
+        siteContacts: mergedOrder.siteContacts,
+        generalNotes: mergedOrder.generalNotes,
+        status: existing.status || "quote",
+        lineItems: mergedLineItems,
+        actorName,
+        actorEmail,
+      });
+      try {
+        await updateEquipmentCurrentLocationFromSiteAddress({
+          companyId,
+          orderId,
+          siteAddress: mergedOrder.siteAddress,
+          siteAddressLat: mergedOrder.siteAddressLat,
+          siteAddressLng: mergedOrder.siteAddressLng,
+          siteAddressQuery: mergedOrder.siteAddressQuery,
+        });
+      } catch (err) {
+        console.warn("Site-address current-location update failed:", err?.message || err);
+      }
+      if (normalizedGeneralNotesImages.length) {
+        for (const img of normalizedGeneralNotesImages) {
+          await addRentalOrderAttachment({
+            companyId,
+            orderId,
+            fileName: img.fileName,
+            mime: img.mime,
+            sizeBytes: img.sizeBytes,
+            url: img.url,
+            category: img.category,
+            actorName,
+            actorEmail,
+          });
+        }
+      }
+    } else {
+        const createdOrder = await createRentalOrder({
+          companyId,
+          customerId,
+          customerPo: filteredOrderUpdate.customerPo || null,
+          fulfillmentMethod: filteredOrderUpdate.fulfillmentMethod || "pickup",
+          dropoffAddress: filteredOrderUpdate.dropoffAddress || null,
+          siteName: filteredOrderUpdate.siteName || null,
+          siteAddress: filteredOrderUpdate.siteAddress || null,
+          siteAccessInfo: filteredOrderUpdate.siteAccessInfo || null,
+          siteAddressLat: filteredOrderUpdate.siteAddressLat || null,
+          siteAddressLng: filteredOrderUpdate.siteAddressLng || null,
+          siteAddressQuery: filteredOrderUpdate.siteAddressQuery || null,
+          logisticsInstructions: filteredOrderUpdate.logisticsInstructions || null,
+          specialInstructions: filteredOrderUpdate.specialInstructions || null,
+          criticalAreas: filteredOrderUpdate.criticalAreas || null,
+          monitoringPersonnel: filteredOrderUpdate.monitoringPersonnel || null,
+          notificationCircumstances: filteredOrderUpdate.notificationCircumstances || [],
+          coverageHours: filteredOrderUpdate.coverageHours || [],
+          coverageTimeZone: filteredOrderUpdate.coverageTimeZone || null,
+          coverageStatHolidaysRequired: filteredOrderUpdate.coverageStatHolidaysRequired === true,
+          emergencyContacts: filteredOrderUpdate.emergencyContacts || [],
+          emergencyContactInstructions: filteredOrderUpdate.emergencyContactInstructions || null,
+          siteContacts: filteredOrderUpdate.siteContacts || [],
+          generalNotes: filteredOrderUpdate.generalNotes || null,
+          status: "quote",
+          lineItems: filteredLineItems.map((li) => ({
+            typeId: li.typeId,
+            bundleId: li.bundleId,
+            startAt: li.startAt,
+            endAt: li.endAt,
+          })),
+          actorName,
+        actorEmail,
+      });
+      orderId = createdOrder?.id || null;
+      if (orderId) {
+          try {
+            await updateEquipmentCurrentLocationFromSiteAddress({
+              companyId,
+              orderId,
+              siteAddress: filteredOrderUpdate.siteAddress,
+              siteAddressLat: filteredOrderUpdate.siteAddressLat,
+              siteAddressLng: filteredOrderUpdate.siteAddressLng,
+              siteAddressQuery: filteredOrderUpdate.siteAddressQuery,
+            });
+          } catch (err) {
+            console.warn("Site-address current-location update failed:", err?.message || err);
+          }
+        }
+      if (orderId && normalizedGeneralNotesImages.length) {
+        for (const img of normalizedGeneralNotesImages) {
+          await addRentalOrderAttachment({
+            companyId,
+            orderId,
+            fileName: img.fileName,
+            mime: img.mime,
+            sizeBytes: img.sizeBytes,
+            url: img.url,
+            category: img.category,
+            actorName,
+            actorEmail,
+          });
+        }
+      }
+    }
+  }
+
+  return orderId || null;
+}
+
 app.post(
   "/api/customer-change-requests/:id/accept",
   asyncHandler(async (req, res) => {
@@ -5699,239 +6380,58 @@ app.post(
       return res.status(409).json({ error: "Change request has already been reviewed." });
     }
 
-    const payload = request.payload || {};
-    const customerUpdate = payload.customer || {};
-    const orderUpdate = payload.order || {};
-    const lineItems = Array.isArray(payload.lineItems) ? payload.lineItems : [];
-    const normalizedGeneralNotesImages = normalizeGeneralNotesImages({
-      companyId,
-      images: orderUpdate?.generalNotesImages,
-    });
+      const sections = getChangeRequestSections(request);
+      const actorName = req.auth?.user?.name || null;
+      const actorEmail = req.auth?.user?.email || null;
 
-    let customerId = request.customer_id;
-    if (!customerId && (request.scope === "new_customer" || request.scope === "new_quote")) {
-      const createdCustomer = await createCustomer({
-        companyId,
-        companyName: customerUpdate.companyName || customerUpdate.contactName || "New customer",
-        contactName: customerUpdate.contactName || null,
-        streetAddress: customerUpdate.streetAddress || null,
-        city: customerUpdate.city || null,
-        region: customerUpdate.region || null,
-        country: customerUpdate.country || null,
-        postalCode: customerUpdate.postalCode || null,
-        email: customerUpdate.email || null,
-        phone: customerUpdate.phone || null,
-        contacts: customerUpdate.contacts || null,
-        accountingContacts: customerUpdate.accountingContacts || null,
-      });
-      customerId = createdCustomer?.id || null;
-    } else if (customerId && Object.keys(customerUpdate).length) {
-      const existing = await getCustomerById({ companyId, id: customerId });
-      const merged = mergeCustomerPayload(
-        {
-          companyName: existing?.company_name || null,
-          contactName: existing?.contact_name || null,
-          streetAddress: existing?.street_address || null,
-          city: existing?.city || null,
-          region: existing?.region || null,
-          country: existing?.country || null,
-          postalCode: existing?.postal_code || null,
-          email: existing?.email || null,
-          phone: existing?.phone || null,
-          contacts: Array.isArray(existing?.contacts) ? existing.contacts : [],
-          accountingContacts: Array.isArray(existing?.accounting_contacts) ? existing.accounting_contacts : [],
-        },
-        customerUpdate
-      );
-      await updateCustomer({
-        id: customerId,
-        companyId,
-        companyName: merged.companyName,
-        contactName: merged.contactName,
-        streetAddress: merged.streetAddress,
-        city: merged.city,
-        region: merged.region,
-        country: merged.country,
-        postalCode: merged.postalCode,
-        email: merged.email,
-        phone: merged.phone,
-        contacts: merged.contacts,
-        accountingContacts: merged.accountingContacts,
-      });
-    }
-
-    if (customerId) {
-      await setCustomerPendingStatus({ companyId, customerId, isPending: false });
-    }
-
-    let orderId = request.rental_order_id;
-    if (request.scope === "order_update" || request.scope === "new_quote") {
-      if (!customerId) return res.status(400).json({ error: "Customer is required to accept this request." });
-      if (orderId) {
-        const existingOrder = await getRentalOrder({ companyId, id: orderId });
-        const existing = existingOrder?.order;
-        if (!existing) return res.status(404).json({ error: "Rental order not found." });
-        if (!isDemandOnlyStatus(existing.status)) {
-          return res.status(400).json({ error: "Only quotes or requests can be updated by customers." });
-        }
-        const mergedOrder = mergeOrderPayload(
-          {
-            customerPo: existing.customer_po || null,
-            fulfillmentMethod: existing.fulfillment_method || "pickup",
-            dropoffAddress: existing.dropoff_address || null,
-            siteName: existing.site_name || null,
-            siteAddress: existing.site_address || null,
-            siteAccessInfo: existing.site_access_info || null,
-            siteAddressLat: existing.site_address_lat || null,
-            siteAddressLng: existing.site_address_lng || null,
-            siteAddressQuery: existing.site_address_query || null,
-            logisticsInstructions: existing.logistics_instructions || null,
-            specialInstructions: existing.special_instructions || null,
-            criticalAreas: existing.critical_areas || null,
-            notificationCircumstances: existing.notification_circumstances || [],
-            coverageHours: existing.coverage_hours || [],
-            coverageTimeZone: existing.coverage_timezone || null,
-            emergencyContacts: existing.emergency_contacts || [],
-            siteContacts: existing.site_contacts || [],
-            generalNotes: existing.general_notes || null,
-          },
-          orderUpdate
-        );
-        const existingLineItems = Array.isArray(existingOrder?.lineItems) ? existingOrder.lineItems : [];
-        const requestedLineItems = lineItems.length
-          ? lineItems
-          : existingLineItems.map((li) => ({
-              lineItemId: li.id,
-              typeId: li.type_id,
-              bundleId: li.bundle_id,
-              startAt: li.start_at,
-              endAt: li.end_at,
-            }));
-        const mergedLineItems = mergeLineItemsWithExisting(existingLineItems, requestedLineItems);
-        await updateRentalOrder({
-          id: orderId,
-          companyId,
-          customerId,
-          customerPo: mergedOrder.customerPo,
-          fulfillmentMethod: mergedOrder.fulfillmentMethod,
-          dropoffAddress: mergedOrder.dropoffAddress,
-          siteName: mergedOrder.siteName,
-          siteAddress: mergedOrder.siteAddress,
-          siteAccessInfo: mergedOrder.siteAccessInfo,
-          siteAddressLat: mergedOrder.siteAddressLat,
-          siteAddressLng: mergedOrder.siteAddressLng,
-          siteAddressQuery: mergedOrder.siteAddressQuery,
-          logisticsInstructions: mergedOrder.logisticsInstructions,
-          specialInstructions: mergedOrder.specialInstructions,
-          criticalAreas: mergedOrder.criticalAreas,
-          notificationCircumstances: mergedOrder.notificationCircumstances,
-          coverageHours: mergedOrder.coverageHours,
-          coverageTimeZone: mergedOrder.coverageTimeZone,
-          emergencyContacts: mergedOrder.emergencyContacts,
-          siteContacts: mergedOrder.siteContacts,
-          generalNotes: mergedOrder.generalNotes,
-          status: existing.status || "quote",
-          lineItems: mergedLineItems,
-          actorName: req.auth?.user?.name || null,
-          actorEmail: req.auth?.user?.email || null,
-        });
-        try {
-          await updateEquipmentCurrentLocationFromSiteAddress({
-            companyId,
-            orderId,
-            siteAddress: mergedOrder.siteAddress,
-            siteAddressLat: mergedOrder.siteAddressLat,
-            siteAddressLng: mergedOrder.siteAddressLng,
-            siteAddressQuery: mergedOrder.siteAddressQuery,
-          });
-        } catch (err) {
-          console.warn("Site-address current-location update failed:", err?.message || err);
-        }
-        if (normalizedGeneralNotesImages.length) {
-          const actorName = req.auth?.user?.name ? String(req.auth.user.name) : null;
-          const actorEmail = req.auth?.user?.email ? String(req.auth.user.email) : null;
-          for (const img of normalizedGeneralNotesImages) {
-            await addRentalOrderAttachment({
-              companyId,
-              orderId,
-              fileName: img.fileName,
-              mime: img.mime,
-              sizeBytes: img.sizeBytes,
-              url: img.url,
-              category: img.category,
-              actorName,
-              actorEmail,
-            });
-          }
-        }
-      } else {
-        const createdOrder = await createRentalOrder({
-          companyId,
-          customerId,
-          customerPo: orderUpdate.customerPo || null,
-          fulfillmentMethod: orderUpdate.fulfillmentMethod || "pickup",
-          dropoffAddress: orderUpdate.dropoffAddress || null,
-          siteName: orderUpdate.siteName || null,
-          siteAddress: orderUpdate.siteAddress || null,
-          siteAccessInfo: orderUpdate.siteAccessInfo || null,
-          siteAddressLat: orderUpdate.siteAddressLat || null,
-          siteAddressLng: orderUpdate.siteAddressLng || null,
-          siteAddressQuery: orderUpdate.siteAddressQuery || null,
-          logisticsInstructions: orderUpdate.logisticsInstructions || null,
-          specialInstructions: orderUpdate.specialInstructions || null,
-          criticalAreas: orderUpdate.criticalAreas || null,
-          notificationCircumstances: orderUpdate.notificationCircumstances || [],
-          coverageHours: orderUpdate.coverageHours || [],
-          coverageTimeZone: orderUpdate.coverageTimeZone || null,
-          emergencyContacts: orderUpdate.emergencyContacts || [],
-          siteContacts: orderUpdate.siteContacts || [],
-          generalNotes: orderUpdate.generalNotes || null,
-          status: "quote",
-          lineItems: lineItems.map((li) => ({
-            typeId: li.typeId,
-            bundleId: li.bundleId,
-            startAt: li.startAt,
-            endAt: li.endAt,
-          })),
-          actorName: req.auth?.user?.name || null,
-          actorEmail: req.auth?.user?.email || null,
-        });
-        orderId = createdOrder?.id || null;
-        if (orderId) {
-          try {
-            await updateEquipmentCurrentLocationFromSiteAddress({
-              companyId,
-              orderId,
-              siteAddress: orderUpdate.siteAddress,
-              siteAddressLat: orderUpdate.siteAddressLat,
-              siteAddressLng: orderUpdate.siteAddressLng,
-              siteAddressQuery: orderUpdate.siteAddressQuery,
-            });
-          } catch (err) {
-            console.warn("Site-address current-location update failed:", err?.message || err);
-          }
-        }
-        if (orderId && normalizedGeneralNotesImages.length) {
-          const actorName = req.auth?.user?.name ? String(req.auth.user.name) : null;
-          const actorEmail = req.auth?.user?.email ? String(req.auth.user.email) : null;
-          for (const img of normalizedGeneralNotesImages) {
-            await addRentalOrderAttachment({
-              companyId,
-              orderId,
-              fileName: img.fileName,
-              mime: img.mime,
-              sizeBytes: img.sizeBytes,
-              url: img.url,
-              category: img.category,
-              actorName,
-              actorEmail,
-            });
-          }
-        }
+      const hasCustomerSelection = Array.isArray(req.body?.acceptedCustomerFields);
+      const acceptedCustomerFields = hasCustomerSelection
+        ? normalizeAcceptedFields(req.body.acceptedCustomerFields, ALLOWED_CUSTOMER_FIELDS)
+        : null;
+      if (hasCustomerSelection && acceptedCustomerFields.length === 0) {
+        return res.status(400).json({ error: "Select at least one customer field to accept." });
       }
-    }
+      if (
+        hasCustomerSelection &&
+        (request.scope === "new_customer" || request.scope === "new_quote") &&
+        !acceptedCustomerFields.includes("companyName") &&
+        !acceptedCustomerFields.includes("contactName")
+      ) {
+        return res.status(400).json({ error: "Customer name is required." });
+      }
 
-    const docs = Array.isArray(request.documents) ? request.documents : [];
+      const hasOrderSelection = Array.isArray(req.body?.acceptedOrderFields);
+      const acceptedOrderFields = hasOrderSelection
+        ? normalizeAcceptedFields(req.body.acceptedOrderFields, ALLOWED_ORDER_FIELDS)
+        : null;
+      const hasLineItemSelection =
+        Array.isArray(req.body?.acceptedLineItemIds) || Array.isArray(req.body?.acceptedLineItemIndexes);
+      const acceptedLineItemIds = Array.isArray(req.body?.acceptedLineItemIds)
+        ? req.body.acceptedLineItemIds
+        : [];
+      const acceptedLineItemIndexes = Array.isArray(req.body?.acceptedLineItemIndexes)
+        ? req.body.acceptedLineItemIndexes.map((idx) => Number(idx)).filter((idx) => Number.isFinite(idx))
+        : [];
+      const hasAnyOrderSelection =
+        (acceptedOrderFields?.length || 0) > 0 || acceptedLineItemIds.length > 0 || acceptedLineItemIndexes.length > 0;
+      if ((hasOrderSelection || hasLineItemSelection) && !hasAnyOrderSelection) {
+        return res.status(400).json({ error: "Select at least one order field or line item to accept." });
+      }
+      if (
+        hasLineItemSelection &&
+        request.scope === "new_quote" &&
+        acceptedLineItemIds.length === 0 &&
+        acceptedLineItemIndexes.length === 0
+      ) {
+        return res.status(400).json({ error: "At least one line item is required." });
+      }
+
+      const customerId = await applyCustomerChangeRequest({
+        request,
+        companyId,
+        acceptedFields: acceptedCustomerFields,
+      });
+    const docs = sections.docs;
     if (customerId && docs.length) {
       for (const doc of docs) {
         try {
@@ -5950,17 +6450,299 @@ app.post(
       }
     }
 
+      const orderId = await applyOrderChangeRequest({
+        request,
+        companyId,
+        customerId,
+        actorName,
+        actorEmail,
+        acceptedOrderFields,
+        acceptedLineItemIds,
+        acceptedLineItemIndexes,
+        hasLineItemSelection,
+      });
+
+    const customerReviewStatus = sections.hasCustomerSection ? "accepted" : null;
+    const orderReviewStatus = sections.hasOrderSection ? "accepted" : null;
+    const overallStatus = resolveOverallChangeRequestStatus({
+      hasCustomerSection: sections.hasCustomerSection,
+      hasOrderSection: sections.hasOrderSection,
+      customerReviewStatus: customerReviewStatus || null,
+      orderReviewStatus: orderReviewStatus || null,
+    });
+
     await updateCustomerChangeRequestStatus({
       companyId,
       id: Number(id),
-      status: "accepted",
+      status: overallStatus,
       reviewedByUserId: req.auth?.userId || null,
       reviewNotes: reviewNotes || null,
       appliedCustomerId: customerId || null,
       appliedOrderId: orderId || null,
+      customerReviewStatus,
+      orderReviewStatus,
     });
 
     res.json({ ok: true, customerId, orderId });
+  })
+);
+
+app.post(
+  "/api/customer-change-requests/:id/accept-customer",
+  asyncHandler(async (req, res) => {
+    const { companyId, reviewNotes } = req.body || {};
+    const { id } = req.params || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const request = await getCustomerChangeRequest({ companyId, id: Number(id) });
+    if (!request) return res.status(404).json({ error: "Change request not found." });
+    if (String(request.status || "") !== "pending") {
+      return res.status(409).json({ error: "Change request has already been reviewed." });
+    }
+
+      const sections = getChangeRequestSections(request);
+      if (!sections.hasCustomerSection) {
+        return res.status(400).json({ error: "No customer updates to accept." });
+      }
+      const existingCustomerReview = normalizeChangeRequestReviewStatus(request.customer_review_status) || "pending";
+      if (existingCustomerReview !== "pending") {
+        return res.status(409).json({ error: "Customer updates have already been reviewed." });
+      }
+
+      const hasCustomerSelection = Array.isArray(req.body?.acceptedCustomerFields);
+      const acceptedCustomerFields = hasCustomerSelection
+        ? normalizeAcceptedFields(req.body.acceptedCustomerFields, ALLOWED_CUSTOMER_FIELDS)
+        : null;
+      if (hasCustomerSelection && acceptedCustomerFields.length === 0) {
+        return res.status(400).json({ error: "Select at least one customer field to accept." });
+      }
+      if (
+        hasCustomerSelection &&
+        (request.scope === "new_customer" || request.scope === "new_quote") &&
+        !acceptedCustomerFields.includes("companyName") &&
+        !acceptedCustomerFields.includes("contactName")
+      ) {
+        return res.status(400).json({ error: "Customer name is required." });
+      }
+
+      const customerId = await applyCustomerChangeRequest({
+        request,
+        companyId,
+        acceptedFields: acceptedCustomerFields,
+      });
+    const docs = sections.docs;
+    if (customerId && docs.length) {
+      for (const doc of docs) {
+        try {
+          await addCustomerDocument({
+            companyId,
+            customerId,
+            fileName: doc.fileName || doc.file_name,
+            mime: doc.mime || null,
+            sizeBytes: doc.sizeBytes || doc.size_bytes || null,
+            url: doc.url,
+            category: doc.category || null,
+          });
+        } catch {
+          // Ignore document insert errors to avoid blocking acceptance.
+        }
+      }
+    }
+
+    const currentOrderReview = normalizeChangeRequestReviewStatus(request.order_review_status) || "pending";
+    const orderReviewStatus = sections.hasOrderSection ? currentOrderReview : null;
+    const overallStatus = resolveOverallChangeRequestStatus({
+      hasCustomerSection: sections.hasCustomerSection,
+      hasOrderSection: sections.hasOrderSection,
+      customerReviewStatus: "accepted",
+      orderReviewStatus: orderReviewStatus || null,
+    });
+
+    await updateCustomerChangeRequestStatus({
+      companyId,
+      id: Number(id),
+      status: overallStatus,
+      reviewedByUserId: req.auth?.userId || null,
+      reviewNotes: reviewNotes || null,
+      appliedCustomerId: customerId || null,
+      customerReviewStatus: "accepted",
+    });
+
+    res.json({ ok: true, customerId, status: overallStatus });
+  })
+);
+
+app.post(
+  "/api/customer-change-requests/:id/reject-customer",
+  asyncHandler(async (req, res) => {
+    const { companyId, reviewNotes } = req.body || {};
+    const { id } = req.params || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const request = await getCustomerChangeRequest({ companyId, id: Number(id) });
+    if (!request) return res.status(404).json({ error: "Change request not found." });
+    if (String(request.status || "") !== "pending") {
+      return res.status(409).json({ error: "Change request has already been reviewed." });
+    }
+
+    const sections = getChangeRequestSections(request);
+    if (!sections.hasCustomerSection) {
+      return res.status(400).json({ error: "No customer updates to reject." });
+    }
+    const existingCustomerReview = normalizeChangeRequestReviewStatus(request.customer_review_status) || "pending";
+    if (existingCustomerReview !== "pending") {
+      return res.status(409).json({ error: "Customer updates have already been reviewed." });
+    }
+
+    const currentOrderReview = normalizeChangeRequestReviewStatus(request.order_review_status) || "pending";
+    const orderReviewStatus = sections.hasOrderSection ? currentOrderReview : null;
+    const overallStatus = resolveOverallChangeRequestStatus({
+      hasCustomerSection: sections.hasCustomerSection,
+      hasOrderSection: sections.hasOrderSection,
+      customerReviewStatus: "rejected",
+      orderReviewStatus: orderReviewStatus || null,
+    });
+
+    await updateCustomerChangeRequestStatus({
+      companyId,
+      id: Number(id),
+      status: overallStatus,
+      reviewedByUserId: req.auth?.userId || null,
+      reviewNotes: reviewNotes || null,
+      customerReviewStatus: "rejected",
+    });
+
+    res.json({ ok: true, status: overallStatus });
+  })
+);
+
+app.post(
+  "/api/customer-change-requests/:id/accept-order",
+  asyncHandler(async (req, res) => {
+    const { companyId, reviewNotes } = req.body || {};
+    const { id } = req.params || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const request = await getCustomerChangeRequest({ companyId, id: Number(id) });
+    if (!request) return res.status(404).json({ error: "Change request not found." });
+    if (String(request.status || "") !== "pending") {
+      return res.status(409).json({ error: "Change request has already been reviewed." });
+    }
+
+    const sections = getChangeRequestSections(request);
+    if (!sections.hasOrderSection) {
+      return res.status(400).json({ error: "No order updates to accept." });
+    }
+    const existingOrderReview = normalizeChangeRequestReviewStatus(request.order_review_status) || "pending";
+    if (existingOrderReview !== "pending") {
+      return res.status(409).json({ error: "Order updates have already been reviewed." });
+    }
+
+      const actorName = req.auth?.user?.name || null;
+      const actorEmail = req.auth?.user?.email || null;
+      const customerId = request.customer_id || request.applied_customer_id || null;
+      if (!customerId) {
+        return res.status(400).json({ error: "Customer is required to accept this request." });
+      }
+
+      const hasOrderSelection = Array.isArray(req.body?.acceptedOrderFields);
+      const acceptedOrderFields = hasOrderSelection
+        ? normalizeAcceptedFields(req.body.acceptedOrderFields, ALLOWED_ORDER_FIELDS)
+        : null;
+      const hasLineItemSelection =
+        Array.isArray(req.body?.acceptedLineItemIds) || Array.isArray(req.body?.acceptedLineItemIndexes);
+      const acceptedLineItemIds = Array.isArray(req.body?.acceptedLineItemIds)
+        ? req.body.acceptedLineItemIds
+        : [];
+      const acceptedLineItemIndexes = Array.isArray(req.body?.acceptedLineItemIndexes)
+        ? req.body.acceptedLineItemIndexes.map((idx) => Number(idx)).filter((idx) => Number.isFinite(idx))
+        : [];
+      const hasAnySelection =
+        (acceptedOrderFields?.length || 0) > 0 || acceptedLineItemIds.length > 0 || acceptedLineItemIndexes.length > 0;
+      if ((hasOrderSelection || hasLineItemSelection) && !hasAnySelection) {
+        return res.status(400).json({ error: "Select at least one order field or line item to accept." });
+      }
+      if (
+        hasLineItemSelection &&
+        request.scope === "new_quote" &&
+        acceptedLineItemIds.length === 0 &&
+        acceptedLineItemIndexes.length === 0
+      ) {
+        return res.status(400).json({ error: "At least one line item is required." });
+      }
+
+      const orderId = await applyOrderChangeRequest({
+        request,
+        companyId,
+        customerId,
+        actorName,
+        actorEmail,
+        acceptedOrderFields,
+        acceptedLineItemIds,
+        acceptedLineItemIndexes,
+        hasLineItemSelection,
+      });
+
+    const currentCustomerReview = normalizeChangeRequestReviewStatus(request.customer_review_status) || "pending";
+    const customerReviewStatus = sections.hasCustomerSection ? currentCustomerReview : null;
+    const overallStatus = resolveOverallChangeRequestStatus({
+      hasCustomerSection: sections.hasCustomerSection,
+      hasOrderSection: sections.hasOrderSection,
+      customerReviewStatus: customerReviewStatus || null,
+      orderReviewStatus: "accepted",
+    });
+
+    await updateCustomerChangeRequestStatus({
+      companyId,
+      id: Number(id),
+      status: overallStatus,
+      reviewedByUserId: req.auth?.userId || null,
+      reviewNotes: reviewNotes || null,
+      appliedOrderId: orderId || null,
+      orderReviewStatus: "accepted",
+    });
+
+    res.json({ ok: true, orderId, status: overallStatus });
+  })
+);
+
+app.post(
+  "/api/customer-change-requests/:id/reject-order",
+  asyncHandler(async (req, res) => {
+    const { companyId, reviewNotes } = req.body || {};
+    const { id } = req.params || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const request = await getCustomerChangeRequest({ companyId, id: Number(id) });
+    if (!request) return res.status(404).json({ error: "Change request not found." });
+    if (String(request.status || "") !== "pending") {
+      return res.status(409).json({ error: "Change request has already been reviewed." });
+    }
+
+    const sections = getChangeRequestSections(request);
+    if (!sections.hasOrderSection) {
+      return res.status(400).json({ error: "No order updates to reject." });
+    }
+    const existingOrderReview = normalizeChangeRequestReviewStatus(request.order_review_status) || "pending";
+    if (existingOrderReview !== "pending") {
+      return res.status(409).json({ error: "Order updates have already been reviewed." });
+    }
+
+    const currentCustomerReview = normalizeChangeRequestReviewStatus(request.customer_review_status) || "pending";
+    const customerReviewStatus = sections.hasCustomerSection ? currentCustomerReview : null;
+    const overallStatus = resolveOverallChangeRequestStatus({
+      hasCustomerSection: sections.hasCustomerSection,
+      hasOrderSection: sections.hasOrderSection,
+      customerReviewStatus: customerReviewStatus || null,
+      orderReviewStatus: "rejected",
+    });
+
+    await updateCustomerChangeRequestStatus({
+      companyId,
+      id: Number(id),
+      status: overallStatus,
+      reviewedByUserId: req.auth?.userId || null,
+      reviewNotes: reviewNotes || null,
+      orderReviewStatus: "rejected",
+    });
+
+    res.json({ ok: true, status: overallStatus });
   })
 );
 
@@ -5975,12 +6757,17 @@ app.post(
     if (String(request.status || "") !== "pending") {
       return res.status(409).json({ error: "Change request has already been reviewed." });
     }
+    const sections = getChangeRequestSections(request);
+    const customerReviewStatus = sections.hasCustomerSection ? "rejected" : null;
+    const orderReviewStatus = sections.hasOrderSection ? "rejected" : null;
     await updateCustomerChangeRequestStatus({
       companyId,
       id: Number(id),
       status: "rejected",
       reviewedByUserId: req.auth?.userId || null,
       reviewNotes: reviewNotes || null,
+      customerReviewStatus,
+      orderReviewStatus,
     });
     res.json({ ok: true });
   })
@@ -6132,11 +6919,16 @@ app.put(
       autoApplyCustomerCredit,
       autoWorkOrderOnReturn,
       logoUrl,
-      requiredStorefrontCustomerFields,
-      rentalInfoFields,
-      customerDocumentCategories,
-      customerTermsTemplate,
-      customerEsignRequired,
+        requiredStorefrontCustomerFields,
+        rentalInfoFields,
+        customerContactCategories,
+        customerDocumentCategories,
+        customerTermsTemplate,
+        customerEsignRequired,
+        customerServiceAgreementUrl,
+        customerServiceAgreementFileName,
+        customerServiceAgreementMime,
+        customerServiceAgreementSizeBytes,
       qboEnabled,
       qboBillingDay,
       qboAdjustmentPolicy,
@@ -6157,11 +6949,16 @@ app.put(
           autoApplyCustomerCredit: autoApplyCustomerCredit ?? null,
           autoWorkOrderOnReturn: autoWorkOrderOnReturn ?? null,
           logoUrl,
-          requiredStorefrontCustomerFields,
-          rentalInfoFields,
-          customerDocumentCategories,
-          customerTermsTemplate,
-          customerEsignRequired,
+            requiredStorefrontCustomerFields,
+            rentalInfoFields,
+            customerContactCategories,
+            customerDocumentCategories,
+            customerTermsTemplate,
+            customerEsignRequired,
+            customerServiceAgreementUrl,
+            customerServiceAgreementFileName,
+            customerServiceAgreementMime,
+            customerServiceAgreementSizeBytes,
       qboEnabled: qboEnabled ?? null,
       qboBillingDay: qboBillingDay ?? null,
       qboAdjustmentPolicy: qboAdjustmentPolicy ?? null,
@@ -7674,10 +8471,13 @@ app.post(
       logisticsInstructions,
       specialInstructions,
       criticalAreas,
+      monitoringPersonnel,
       notificationCircumstances,
       coverageHours,
       coverageTimeZone,
+      coverageStatHolidaysRequired,
       emergencyContacts,
+      emergencyContactInstructions,
       siteContacts,
       lineItems,
       fees,
@@ -7693,6 +8493,7 @@ app.post(
     if (!isDemandOnlyStatus(normalizedStatus) && !normalizedCustomerId) {
       return res.status(400).json({ error: "customerId is required for ordered rental orders." });
     }
+    const coverageStatHolidaysRequiredValue = parseBoolean(coverageStatHolidaysRequired) === true;
     let created;
     try {
       created = await createRentalOrder({
@@ -7717,10 +8518,13 @@ app.post(
         logisticsInstructions,
         specialInstructions,
         criticalAreas,
+        monitoringPersonnel,
         notificationCircumstances,
         coverageHours,
         coverageTimeZone,
+        coverageStatHolidaysRequired: coverageStatHolidaysRequiredValue,
         emergencyContacts,
+        emergencyContactInstructions,
         siteContacts,
         lineItems,
         fees,
@@ -7798,10 +8602,13 @@ app.put(
       logisticsInstructions,
       specialInstructions,
       criticalAreas,
+      monitoringPersonnel,
       notificationCircumstances,
       coverageHours,
       coverageTimeZone,
+      coverageStatHolidaysRequired,
       emergencyContacts,
+      emergencyContactInstructions,
       siteContacts,
       lineItems,
       fees,
@@ -7817,6 +8624,7 @@ app.put(
     if (!isDemandOnlyStatus(normalizedStatus) && !normalizedCustomerId) {
       return res.status(400).json({ error: "customerId is required for ordered rental orders." });
     }
+    const coverageStatHolidaysRequiredValue = parseBoolean(coverageStatHolidaysRequired) === true;
     let updated;
     try {
       updated = await updateRentalOrder({
@@ -7842,10 +8650,13 @@ app.put(
         logisticsInstructions,
         specialInstructions,
         criticalAreas,
+        monitoringPersonnel,
         notificationCircumstances,
         coverageHours,
         coverageTimeZone,
+        coverageStatHolidaysRequired: coverageStatHolidaysRequiredValue,
         emergencyContacts,
+        emergencyContactInstructions,
         siteContacts,
         lineItems,
         fees,
@@ -9151,3 +9962,4 @@ module.exports = {
   safeUploadPath,
   isAllowedRedirectHost,
 };
+

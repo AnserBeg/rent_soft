@@ -1170,7 +1170,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
                                <ShieldCheck size={16} /> Rental Information
                             </h3>
                             <label className="block">
-                               <span className="text-xs font-bold text-slate-500">Critical Areas on Site</span>
+                               <span className="text-xs font-bold text-slate-500">Critical Assets and Locations on Site</span>
                                <textarea
                                  rows={3}
                                  value={formData.criticalAreas}
@@ -1472,3 +1472,4 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
     </div>
   );
 };
+

@@ -69,10 +69,12 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  monitoringPersonnel: { enabled: true, required: false },
   specialInstructions: { enabled: true, required: false },
   notificationCircumstances: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
+  emergencyContactInstructions: { enabled: true, required: false },
   siteContacts: { enabled: true, required: true },
   coverageHours: { enabled: true, required: true },
 };
@@ -946,7 +948,11 @@ function writeOrderPdf(
   }
   if (showRentalInfo("criticalAreas")) {
     const val = safeText(order?.critical_areas || order?.criticalAreas);
-    if (val) rentalInfoLines.push({ label: "Critical Areas", value: val });
+    if (val) rentalInfoLines.push({ label: "Critical Assets and Locations", value: val });
+  }
+  if (showRentalInfo("monitoringPersonnel")) {
+    const val = safeText(order?.monitoring_personnel || order?.monitoringPersonnel);
+    if (val) rentalInfoLines.push({ label: "Personnel/contractors expected on site during monitoring hours", value: val });
   }
   if (showRentalInfo("specialInstructions")) {
     const val = safeText(stripHtml(order?.special_instructions || order?.specialInstructions));
@@ -960,6 +966,10 @@ function writeOrderPdf(
     const val = formatContactLines(order?.emergency_contacts || order?.emergencyContacts, "");
     if (val !== "--") rentalInfoLines.push({ label: "Emergency Contacts", value: val });
   }
+  if (showRentalInfo("emergencyContactInstructions")) {
+    const val = safeText(stripHtml(order?.emergency_contact_instructions || order?.emergencyContactInstructions));
+    if (val) rentalInfoLines.push({ label: "Additional emergency contact instructions", value: val });
+  }
   if (showRentalInfo("siteContacts")) {
     const val = formatContactLines(order?.site_contacts || order?.siteContacts, "");
     if (val !== "--") rentalInfoLines.push({ label: "Site Contacts", value: val });
@@ -970,6 +980,12 @@ function writeOrderPdf(
       order?.coverage_timezone || order?.coverageTimeZone || null
     );
     if (val) rentalInfoLines.push({ label: "Coverage Hours", value: val });
+    const statRequired =
+      order?.coverage_stat_holidays_required ??
+      order?.coverageStatHolidaysRequired;
+    if (statRequired === true) {
+      rentalInfoLines.push({ label: "Stat Holidays Required", value: "Yes" });
+    }
   }
 
   const generalNotes = safeText(stripHtml(order?.general_notes || order?.generalNotes));
@@ -1453,3 +1469,4 @@ module.exports = {
   streamOrderPdf,
   buildOrderPdfBuffer,
 };
+

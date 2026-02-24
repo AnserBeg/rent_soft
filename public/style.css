@@ -496,6 +496,33 @@ body.no-top-headers .company-context-card {
   flex-wrap: wrap;
 }
 
+.status-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(22, 163, 74, 0.28);
+}
+
+.status-check svg {
+  width: 16px;
+  height: 16px;
+}
+
+.status-check--sm {
+  width: 22px;
+  height: 22px;
+}
+
+.status-check--sm svg {
+  width: 12px;
+  height: 12px;
+}
+
 .eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -710,6 +737,22 @@ textarea:focus {
   gap: 12px;
 }
 
+.document-row {
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.document-row--service-agreement {
+  background: rgba(22, 163, 74, 0.12);
+  border: 1px solid rgba(22, 163, 74, 0.25);
+}
+
+.document-row--service-agreement,
+.document-row--service-agreement a {
+  color: #166534;
+  font-weight: 600;
+}
+
 .two-col {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -776,6 +819,21 @@ textarea:focus {
 
 .coverage-timezone select {
   min-width: 200px;
+}
+
+.coverage-stat-holidays {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.coverage-stat-holidays input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .coverage-table {
@@ -1805,6 +1863,30 @@ a.ghost {
   height: 18px;
   border: none;
   background: transparent;
+  margin: 0;
+}
+
+.review-field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.review-field-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.review-field-toggle input[type="checkbox"] {
+  appearance: auto;
+  -webkit-appearance: auto;
+  -moz-appearance: auto;
+  width: 16px;
+  height: 16px;
   margin: 0;
 }
 
@@ -5553,6 +5635,22 @@ body.drawer-open {
 .detail-item {
   display: grid;
   gap: 4px;
+}
+
+.detail-item.detail-item-success {
+  background: rgba(22, 163, 74, 0.12);
+  border: 1px solid rgba(22, 163, 74, 0.25);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.detail-item.detail-item-success .detail-label {
+  color: #15803d;
+}
+
+.detail-item.detail-item-success .detail-value {
+  color: #166534;
+  font-weight: 600;
 }
 
 .detail-item.detail-item-wide {

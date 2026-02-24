@@ -34,6 +34,11 @@
             <div>
               <div class="title-row">
                 <h1 id="page-title" style="margin:0;">Complete your details</h1>
+                <span class="status-check" id="service-agreement-top-check" role="img" aria-label="Service agreement signed" style="display:none;">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path fill="currentColor" d="M9.2 16.6 5.6 13l-1.4 1.4 5 5 11-11-1.4-1.4z"></path>
+                  </svg>
+                </span>
               </div>
               <h2>Customer &amp; sales</h2>
               <p class="hint" id="page-subtitle">Review and submit your information below.</p>
@@ -45,20 +50,7 @@
               <label>Company name
                 <input id="company-name" autocomplete="organization" />
               </label>
-              <div class="contact-block">
-                <div class="contact-header">
-                  <strong>Contacts</strong>
-                  <button type="button" class="ghost small" id="add-contact-row">+ Add contact</button>
-                </div>
-                <div class="contacts-list stack" id="contacts-list"></div>
-              </div>
-              <div class="contact-block">
-                <div class="contact-header">
-                  <strong>Accounting contacts</strong>
-                  <button type="button" class="ghost small" id="add-accounting-contact-row">+ Add contact</button>
-                </div>
-                <div class="contacts-list stack" id="accounting-contacts-list"></div>
-              </div>
+              <div class="stack" id="customer-contact-categories"></div>
               <label>Street address
                 <input id="street-address" autocomplete="street-address" />
               </label>
@@ -150,8 +142,13 @@
               </div>
             </div>
             <div data-rental-info-field="criticalAreas">
-              <label>Critical Areas on Site
+              <label>Critical Assets and Locations on Site
                 <textarea id="critical-areas"></textarea>
+              </label>
+            </div>
+            <div data-rental-info-field="monitoringPersonnel">
+              <label>Personnel/contractors expected on site during monitoring hours
+                <textarea id="monitoring-personnel" class="compact-textarea" rows="1"></textarea>
               </label>
             </div>
             <div data-rental-info-field="generalNotes">
@@ -215,6 +212,11 @@
               </div>
               <div class="contacts-list stack" id="emergency-contacts-list"></div>
             </div>
+            <div data-rental-info-field="emergencyContactInstructions">
+              <label>Additional emergency contact instructions
+                <textarea id="emergency-contact-instructions" class="compact-textarea" rows="1"></textarea>
+              </label>
+            </div>
             <div class="contact-block" data-rental-info-field="siteContacts">
               <div class="contact-header">
                 <strong>Site contacts</strong>
@@ -250,6 +252,10 @@
                     <span class="hint">Time zone</span>
                     <select id="coverage-timezone"></select>
                   </label>
+                  <label class="coverage-stat-holidays">
+                    <input type="checkbox" id="coverage-stat-holidays" />
+                    <span class="hint">Stat holidays required</span>
+                  </label>
                   <span class="hint">Use 24-hour time - 5-minute steps</span>
                   <button type="button" class="ghost small" id="add-coverage-slot">+ Add time slot</button>
                 </div>
@@ -277,10 +283,38 @@
           <div class="info" id="terms-text"></div>
         </section>
 
+        <section class="card wide" id="service-agreement-section" style="display:none;">
+          <div class="card-header">
+            <div>
+              <h2>Service agreement</h2>
+              <p class="hint" id="service-agreement-status" style="margin:6px 0 0;"></p>
+            </div>
+            <div class="inline-actions">
+              <a class="ghost" id="service-agreement-download" href="#" target="_blank" rel="noreferrer">Download agreement</a>
+              <a class="ghost" id="service-agreement-signed-download" href="#" target="_blank" rel="noreferrer" style="display:none;">Signed copy</a>
+              <span class="status-check status-check--sm" id="service-agreement-signed-check" role="img" aria-label="Service agreement signed" style="display:none;">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path fill="currentColor" d="M9.2 16.6 5.6 13l-1.4 1.4 5 5 11-11-1.4-1.4z"></path>
+                </svg>
+              </span>
+            </div>
+          </div>
+          <div class="stack">
+            <p class="hint" id="service-agreement-name" style="margin:0;"></p>
+            <label
+              id="service-agreement-ack-row"
+              style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;"
+            >
+              <input type="checkbox" id="service-agreement-ack" />
+              <span>I have read and agree to the service agreement.</span>
+            </label>
+          </div>
+        </section>
+
         <section class="card wide" id="signature-section" style="display:none;">
           <div class="card-header">
             <div>
-              <h2>E-signature</h2>
+              <h2 id="signature-title">E-signature</h2>
             </div>
           </div>
           <div class="stack">
@@ -359,3 +393,4 @@
   <script src="customer-link.js"></script>
 </body>
 </html>
+

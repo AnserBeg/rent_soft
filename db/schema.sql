@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS customers (
   phone TEXT,
   contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
   accounting_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  contact_groups JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -236,6 +237,7 @@ CREATE TABLE IF NOT EXISTS rental_orders (
   critical_areas TEXT,
   notification_circumstances JSONB NOT NULL DEFAULT '[]'::jsonb,
   coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb,
+  emergency_contact_instructions TEXT,
   emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
   site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
   monthly_recurring_subtotal NUMERIC(12, 2),
@@ -290,7 +292,15 @@ CREATE TABLE IF NOT EXISTS company_settings (
   auto_apply_customer_credit BOOLEAN NOT NULL DEFAULT TRUE,
   auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE,
   required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
-  rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
+  rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"emergencyContactInstructions":{"enabled":true,"required":false},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
+  customer_contact_categories JSONB NOT NULL DEFAULT '[{"key":"contacts","label":"Contacts"},{"key":"accountingContacts","label":"Accounting contacts"}]'::jsonb,
+  customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+  customer_terms_template TEXT,
+  customer_esign_required BOOLEAN NOT NULL DEFAULT TRUE,
+  customer_service_agreement_url TEXT,
+  customer_service_agreement_file_name TEXT,
+  customer_service_agreement_mime TEXT,
+  customer_service_agreement_size_bytes INTEGER,
   email_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   email_smtp_provider TEXT NOT NULL DEFAULT 'custom',
   email_smtp_host TEXT,

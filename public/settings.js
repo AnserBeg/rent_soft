@@ -13,8 +13,15 @@ const rentalInfoFieldsContainer = document.getElementById("rental-info-fields");
 const rentalInfoFieldsHint = document.getElementById("rental-info-fields-hint");
 const saveRentalInfoFieldsBtn = document.getElementById("save-rental-info-fields");
 const customerDocCategoriesInput = document.getElementById("customer-doc-categories");
+const customerContactCategoriesContainer = document.getElementById("customer-contact-categories");
+const addContactCategoryBtn = document.getElementById("add-contact-category");
 const customerTermsTemplateInput = document.getElementById("customer-terms-template");
 const customerEsignRequiredToggle = document.getElementById("customer-esign-required");
+const serviceAgreementFileInput = document.getElementById("service-agreement-file");
+const uploadServiceAgreementBtn = document.getElementById("upload-service-agreement");
+const removeServiceAgreementBtn = document.getElementById("remove-service-agreement");
+const serviceAgreementLink = document.getElementById("service-agreement-link");
+const serviceAgreementHint = document.getElementById("service-agreement-hint");
 const customerLinkSettingsHint = document.getElementById("customer-link-settings-hint");
 const saveCustomerLinkSettingsBtn = document.getElementById("save-customer-link-settings");
 
@@ -73,6 +80,7 @@ const emailSettingsHint = document.getElementById("email-settings-hint");
 
 let activeCompanyId = window.RentSoft?.getCompanyId?.() ? Number(window.RentSoft.getCompanyId()) : null;
 let currentLogoUrl = null;
+let currentServiceAgreement = null;
 let companyProfileLoaded = false;
 let storefrontRequirementsLoaded = false;
 let rentalInfoFieldsLoaded = false;
@@ -108,9 +116,11 @@ const rentalInfoFieldOptions = [
   { key: "siteAddress", label: "Site address" },
   { key: "siteName", label: "Site name" },
   { key: "siteAccessInfo", label: "Site access information / pin" },
-  { key: "criticalAreas", label: "Critical areas on site" },
+  { key: "criticalAreas", label: "Critical Assets and Locations on Site" },
+  { key: "monitoringPersonnel", label: "Personnel/contractors expected on site during monitoring hours" },
   { key: "generalNotes", label: "General notes" },
   { key: "emergencyContacts", label: "Emergency contacts" },
+  { key: "emergencyContactInstructions", label: "Additional emergency contact instructions" },
   { key: "siteContacts", label: "Site contacts" },
   { key: "notificationCircumstances", label: "Notification circumstance" },
   { key: "coverageHours", label: "Hours of coverage" },
@@ -121,12 +131,19 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   siteName: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  monitoringPersonnel: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
+  emergencyContactInstructions: { enabled: true, required: false },
   siteContacts: { enabled: true, required: true },
   notificationCircumstances: { enabled: true, required: false },
   coverageHours: { enabled: true, required: true },
 };
+
+const DEFAULT_CONTACT_CATEGORIES = [
+  { key: "contacts", label: "Contacts", locked: true },
+  { key: "accountingContacts", label: "Accounting contacts", locked: true },
+];
 
 function normalizeRentalInfoFields(value) {
   let raw = value;
@@ -154,6 +171,153 @@ function normalizeRentalInfoFields(value) {
     normalized[key] = { enabled, required };
   });
   return normalized;
+}
+
+function normalizeContactCategoryKey(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^[A-Za-z][A-Za-z0-9]*$/.test(raw)) {
+    return raw.slice(0, 1).toLowerCase() + raw.slice(1);
+  }
+  if (/^[A-Za-z][A-Za-z0-9_]*$/.test(raw)) {
+    const parts = raw
+      .split("_")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (!parts.length) return "";
+    return parts
+      .map((part, idx) => {
+        const lower = part.toLowerCase();
+        return idx === 0 ? lower : lower.slice(0, 1).toUpperCase() + lower.slice(1);
+      })
+      .join("");
+  }
+  const cleaned = raw.replace(/[^A-Za-z0-9]+/g, " ").trim();
+  if (!cleaned) return "";
+  const parts = cleaned.split(/\s+/);
+  return parts
+    .map((part, idx) => {
+      const lower = part.toLowerCase();
+      return idx === 0 ? lower : lower.slice(0, 1).toUpperCase() + lower.slice(1);
+    })
+    .join("");
+}
+
+function normalizeContactCategories(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const normalized = [];
+  const usedKeys = new Set();
+
+  const pushEntry = (key, label) => {
+    const cleanLabel = String(label || "").trim();
+    if (!cleanLabel) return;
+    let cleanKey = String(key || "").trim();
+    if (!cleanKey) cleanKey = normalizeContactCategoryKey(cleanLabel);
+    if (!cleanKey) return;
+    if (usedKeys.has(cleanKey)) return;
+    usedKeys.add(cleanKey);
+    normalized.push({ key: cleanKey, label: cleanLabel, locked: false });
+  };
+
+  raw.forEach((entry) => {
+    if (!entry) return;
+    if (typeof entry === "string") {
+      pushEntry("", entry);
+      return;
+    }
+    if (typeof entry !== "object") return;
+    pushEntry(entry.key || entry.id || "", entry.label || entry.name || entry.title || "");
+  });
+
+  const byKey = new Map(normalized.map((entry) => [entry.key, entry]));
+  const baseContacts = byKey.get("contacts")?.label || DEFAULT_CONTACT_CATEGORIES[0].label;
+  const baseAccounting = byKey.get("accountingContacts")?.label || DEFAULT_CONTACT_CATEGORIES[1].label;
+  const extras = normalized.filter(
+    (entry) => entry.key !== "contacts" && entry.key !== "accountingContacts"
+  );
+
+  return [
+    { key: "contacts", label: baseContacts, locked: true },
+    { key: "accountingContacts", label: baseAccounting, locked: true },
+    ...extras,
+  ];
+}
+
+function appendContactCategoryRow(category) {
+  if (!customerContactCategoriesContainer) return;
+  const row = document.createElement("div");
+  row.className = "inline-actions";
+  row.style.justifyContent = "space-between";
+  row.style.alignItems = "flex-end";
+  row.dataset.contactCategoryKey = category.key;
+
+  const label = document.createElement("label");
+  label.style.flex = "1";
+  label.textContent = "Category label";
+  const input = document.createElement("input");
+  input.value = category.label;
+  input.dataset.contactCategoryLabel = "true";
+  label.appendChild(input);
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "ghost small danger";
+  removeBtn.textContent = "Remove";
+  removeBtn.dataset.removeContactCategory = "true";
+  removeBtn.disabled = category.locked === true;
+
+  row.appendChild(label);
+  row.appendChild(removeBtn);
+  customerContactCategoriesContainer.appendChild(row);
+}
+
+function renderContactCategories(categories) {
+  if (!customerContactCategoriesContainer) return;
+  customerContactCategoriesContainer.innerHTML = "";
+  const normalized = normalizeContactCategories(categories);
+  normalized.forEach((category) => appendContactCategoryRow(category));
+}
+
+function readContactCategories() {
+  if (!customerContactCategoriesContainer) return DEFAULT_CONTACT_CATEGORIES.map(({ key, label }) => ({ key, label }));
+  const rows = Array.from(customerContactCategoriesContainer.querySelectorAll("[data-contact-category-key]"));
+  const categories = rows
+    .map((row) => {
+      const key = String(row.dataset.contactCategoryKey || "").trim();
+      const label = String(row.querySelector("input")?.value || "").trim();
+      if (!key) return null;
+      if (!label) {
+        if (key === "contacts") return { key, label: DEFAULT_CONTACT_CATEGORIES[0].label };
+        if (key === "accountingContacts") return { key, label: DEFAULT_CONTACT_CATEGORIES[1].label };
+        return null;
+      }
+      return { key, label };
+    })
+    .filter(Boolean);
+  if (!categories.find((entry) => entry.key === "contacts")) {
+    categories.unshift({ key: "contacts", label: DEFAULT_CONTACT_CATEGORIES[0].label });
+  }
+  if (!categories.find((entry) => entry.key === "accountingContacts")) {
+    categories.splice(1, 0, { key: "accountingContacts", label: DEFAULT_CONTACT_CATEGORIES[1].label });
+  }
+  return categories;
+}
+
+function nextContactCategoryKey(seed = "category") {
+  const base = normalizeContactCategoryKey(seed) || "category";
+  if (!customerContactCategoriesContainer) return base;
+  const existing = new Set(
+    Array.from(customerContactCategoriesContainer.querySelectorAll("[data-contact-category-key]")).map(
+      (row) => String(row.dataset.contactCategoryKey || "").trim()
+    )
+  );
+  let candidate = base;
+  let suffix = 2;
+  while (existing.has(candidate)) {
+    candidate = `${base}${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
 }
 
 function setStorefrontRequirementsHint(message) {
@@ -333,6 +497,29 @@ function renderLogoPreview(url) {
     }
   }
   if (removeLogoBtn) removeLogoBtn.disabled = !currentLogoUrl;
+}
+
+function setServiceAgreementHint(message) {
+  if (!serviceAgreementHint) return;
+  serviceAgreementHint.textContent = String(message || "");
+}
+
+function renderServiceAgreement(agreement) {
+  currentServiceAgreement = agreement && agreement.url ? agreement : null;
+  if (serviceAgreementLink) {
+    if (currentServiceAgreement?.url) {
+      serviceAgreementLink.href = currentServiceAgreement.url;
+      serviceAgreementLink.textContent = currentServiceAgreement.fileName || "Download service agreement";
+      serviceAgreementLink.style.display = "inline-flex";
+    } else {
+      serviceAgreementLink.href = "#";
+      serviceAgreementLink.textContent = "No agreement uploaded.";
+      serviceAgreementLink.style.display = "none";
+    }
+  }
+  if (removeServiceAgreementBtn) {
+    removeServiceAgreementBtn.disabled = !currentServiceAgreement?.url;
+  }
 }
 
 function setQboIncomeAccountsEnabled(enabled) {
@@ -554,6 +741,48 @@ async function saveLogoUrl(url) {
   return data.settings;
 }
 
+async function uploadServiceAgreementFile({ file }) {
+  const body = new FormData();
+  body.append("companyId", String(activeCompanyId));
+  body.append("file", file);
+  const res = await fetch("/api/uploads/file", { method: "POST", body });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Upload failed");
+  if (!data.url) throw new Error("Upload did not return a url");
+  return data;
+}
+
+async function deleteServiceAgreementFile(url) {
+  const res = await fetch("/api/uploads/file", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId: activeCompanyId, url }),
+  });
+  if (!res.ok && res.status !== 204) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Unable to delete file");
+  }
+}
+
+async function saveServiceAgreementSettings(agreement) {
+  const payload = {
+    companyId: activeCompanyId,
+    customerServiceAgreementUrl: agreement?.url || null,
+    customerServiceAgreementFileName: agreement?.fileName || null,
+    customerServiceAgreementMime: agreement?.mime || null,
+    customerServiceAgreementSizeBytes:
+      agreement?.sizeBytes !== undefined && agreement?.sizeBytes !== null ? Number(agreement.sizeBytes) : null,
+  };
+  const res = await fetch("/api/company-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to save service agreement");
+  return data.settings;
+}
+
 function companyProfilePayload() {
   return {
     companyId: activeCompanyId,
@@ -753,8 +982,17 @@ async function loadSettings() {
     const categories = Array.isArray(data.settings?.customer_document_categories) ? data.settings.customer_document_categories : [];
     customerDocCategoriesInput.value = categories.join("\n");
   }
+  if (customerContactCategoriesContainer) {
+    renderContactCategories(data.settings?.customer_contact_categories || []);
+  }
   if (customerTermsTemplateInput) customerTermsTemplateInput.value = data.settings?.customer_terms_template || "";
   if (customerEsignRequiredToggle) customerEsignRequiredToggle.checked = data.settings?.customer_esign_required === true;
+  renderServiceAgreement({
+    url: data.settings?.customer_service_agreement_url || null,
+    fileName: data.settings?.customer_service_agreement_file_name || null,
+    mime: data.settings?.customer_service_agreement_mime || null,
+    sizeBytes: data.settings?.customer_service_agreement_size_bytes ?? null,
+  });
   customerLinkSettingsLoaded = true;
   if (saveCustomerLinkSettingsBtn) saveCustomerLinkSettingsBtn.disabled = false;
   setQboSettingsFields(data.settings || null);
@@ -1002,12 +1240,14 @@ saveCustomerLinkSettingsBtn?.addEventListener("click", async (e) => {
       .split(/\r?\n/)
       .map((v) => v.trim())
       .filter(Boolean);
+    const contactCategories = readContactCategories();
     const res = await fetch("/api/company-settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         companyId: activeCompanyId,
         customerDocumentCategories: categories,
+        customerContactCategories: contactCategories,
         customerTermsTemplate: customerTermsTemplateInput?.value || "",
         customerEsignRequired: customerEsignRequiredToggle?.checked === true,
       }),
@@ -1024,12 +1264,36 @@ saveCustomerLinkSettingsBtn?.addEventListener("click", async (e) => {
     if (customerEsignRequiredToggle) {
       customerEsignRequiredToggle.checked = data.settings?.customer_esign_required === true;
     }
+    if (customerContactCategoriesContainer) {
+      const nextCategories = data.settings?.customer_contact_categories || contactCategories;
+      renderContactCategories(nextCategories);
+    }
     setCustomerLinkSettingsHint("Customer update settings saved.");
   } catch (err) {
     setCustomerLinkSettingsHint(err?.message ? String(err.message) : "Unable to save customer update settings.");
   } finally {
     saveCustomerLinkSettingsBtn.disabled = !customerLinkSettingsLoaded;
   }
+});
+
+addContactCategoryBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  const key = nextContactCategoryKey("category");
+  appendContactCategoryRow({ key, label: "New category", locked: false });
+  const input = customerContactCategoriesContainer?.querySelector(
+    `[data-contact-category-key="${key}"] input`
+  );
+  if (input) {
+    input.focus();
+    input.select();
+  }
+});
+
+customerContactCategoriesContainer?.addEventListener("click", (e) => {
+  const btn = e.target.closest?.("[data-remove-contact-category]");
+  if (!btn || btn.disabled) return;
+  const row = btn.closest?.("[data-contact-category-key]");
+  if (row) row.remove();
 });
 
 logoFileInput?.addEventListener("change", async (e) => {
@@ -1075,6 +1339,60 @@ removeLogoBtn?.addEventListener("click", async (e) => {
   } finally {
     logoFileInput.disabled = false;
     removeLogoBtn.disabled = !currentLogoUrl;
+  }
+});
+
+uploadServiceAgreementBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  const file = serviceAgreementFileInput?.files?.[0] || null;
+  if (!file) {
+    setServiceAgreementHint("Choose a file to upload.");
+    return;
+  }
+  setServiceAgreementHint("Uploading...");
+  uploadServiceAgreementBtn.disabled = true;
+  if (removeServiceAgreementBtn) removeServiceAgreementBtn.disabled = true;
+  try {
+    const uploaded = await uploadServiceAgreementFile({ file });
+    const previous = currentServiceAgreement?.url || null;
+    const settings = await saveServiceAgreementSettings(uploaded);
+    renderServiceAgreement({
+      url: settings?.customer_service_agreement_url || uploaded.url,
+      fileName: settings?.customer_service_agreement_file_name || uploaded.fileName || null,
+      mime: settings?.customer_service_agreement_mime || uploaded.mime || null,
+      sizeBytes: settings?.customer_service_agreement_size_bytes ?? uploaded.sizeBytes ?? null,
+    });
+    setServiceAgreementHint("Service agreement saved.");
+    if (previous && previous !== uploaded.url) {
+      deleteServiceAgreementFile(previous).catch(() => { });
+    }
+  } catch (err) {
+    setServiceAgreementHint(err?.message ? String(err.message) : "Unable to upload service agreement.");
+  } finally {
+    uploadServiceAgreementBtn.disabled = false;
+    if (serviceAgreementFileInput) serviceAgreementFileInput.value = "";
+    if (removeServiceAgreementBtn) removeServiceAgreementBtn.disabled = !currentServiceAgreement?.url;
+  }
+});
+
+removeServiceAgreementBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId || !currentServiceAgreement?.url) return;
+  const previous = currentServiceAgreement.url;
+  setServiceAgreementHint("Removing...");
+  removeServiceAgreementBtn.disabled = true;
+  if (uploadServiceAgreementBtn) uploadServiceAgreementBtn.disabled = true;
+  try {
+    await saveServiceAgreementSettings(null);
+    renderServiceAgreement(null);
+    setServiceAgreementHint("Service agreement removed.");
+    await deleteServiceAgreementFile(previous).catch(() => { });
+  } catch (err) {
+    setServiceAgreementHint(err?.message ? String(err.message) : "Unable to remove service agreement.");
+    renderServiceAgreement(currentServiceAgreement);
+  } finally {
+    if (uploadServiceAgreementBtn) uploadServiceAgreementBtn.disabled = false;
   }
 });
 
@@ -1240,3 +1558,4 @@ if (activeCompanyId) {
 if (logoutBtn) {
   window.RentSoft?.mountLogoutButton?.({ buttonId: "logout-button", redirectTo: "index.html" });
 }
+

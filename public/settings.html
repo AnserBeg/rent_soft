@@ -133,7 +133,7 @@
             <div class="card-header">
               <div>
                 <h2>Customer update settings</h2>
-                <p class="hint" style="margin:6px 0 0;">Define required documents, terms, and e-signature for customer update links.</p>
+                <p class="hint" style="margin:6px 0 0;">Define required documents, terms, service agreements, and e-signature for customer update links.</p>
               </div>
               <div class="inline-actions">
                 <button class="primary" id="save-customer-link-settings" disabled>Save</button>
@@ -144,9 +144,29 @@
               <label>Document categories (one per line)
                 <textarea id="customer-doc-categories" class="notes-area" rows="4"></textarea>
               </label>
+              <div class="stack" style="gap: 10px;">
+                <div style="font-weight: 700;">Contact categories</div>
+                <p class="hint" style="margin:0;">Contacts and Accounting contacts are always included.</p>
+                <div class="stack" id="customer-contact-categories"></div>
+                <div class="inline-actions" style="justify-content:flex-start;">
+                  <button class="ghost small" id="add-contact-category" type="button">+ Add category</button>
+                </div>
+              </div>
               <label>Terms shown to customers
                 <textarea id="customer-terms-template" class="notes-area" rows="6"></textarea>
               </label>
+              <div class="stack" style="gap:10px;">
+                <div style="font-weight: 700;">Service agreement</div>
+                <div class="inline">
+                  <input id="service-agreement-file" type="file" />
+                  <button class="primary" id="upload-service-agreement" type="button">Upload</button>
+                  <button class="ghost danger" id="remove-service-agreement" type="button" disabled>Remove</button>
+                </div>
+                <div class="inline-actions" style="justify-content:flex-start;">
+                  <a class="ghost small" id="service-agreement-link" href="#" target="_blank" rel="noreferrer" style="display:none;">Download service agreement</a>
+                </div>
+                <span class="hint" id="service-agreement-hint"></span>
+              </div>
               <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
                 <input id="customer-esign-required" type="checkbox" />
                 <span>Require e-signature (typed + drawn)</span>

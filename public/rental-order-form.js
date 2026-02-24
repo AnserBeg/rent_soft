@@ -70,6 +70,7 @@ const salesSelect = document.getElementById("sales-select");
 const customerDetailsEl = document.getElementById("customer-details");
 const emergencyContactsList = document.getElementById("emergency-contacts-list");
 const addEmergencyContactRowBtn = document.getElementById("add-emergency-contact-row");
+const emergencyContactInstructionsInput = document.getElementById("emergency-contact-instructions");
 const siteContactsList = document.getElementById("site-contacts-list");
 const addSiteContactRowBtn = document.getElementById("add-site-contact-row");
 const fulfillmentSelects = [
@@ -92,6 +93,7 @@ const siteNameInput = document.getElementById("site-name");
 const siteAddressInput = document.getElementById("site-address");
 const siteAccessInfoInput = document.getElementById("site-access-info");
 const criticalAreasInput = document.getElementById("critical-areas");
+const monitoringPersonnelInput = document.getElementById("monitoring-personnel");
 const generalNotesInput = document.getElementById("general-notes");
 const generalNotesEditor = document.getElementById("general-notes-editor");
 const generalNotesToolbar = document.getElementById("general-notes-toolbar");
@@ -107,8 +109,10 @@ const rentalInfoFieldContainers = {
   siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
   siteAccessInfo: document.querySelector('[data-rental-info-field="siteAccessInfo"]'),
   criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
+  monitoringPersonnel: document.querySelector('[data-rental-info-field="monitoringPersonnel"]'),
   generalNotes: document.querySelector('[data-rental-info-field="generalNotes"]'),
   emergencyContacts: document.querySelector('[data-rental-info-field="emergencyContacts"]'),
+  emergencyContactInstructions: document.querySelector('[data-rental-info-field="emergencyContactInstructions"]'),
   siteContacts: document.querySelector('[data-rental-info-field="siteContacts"]'),
   notificationCircumstances: document.querySelector('[data-rental-info-field="notificationCircumstances"]'),
   coverageHours: document.querySelector('[data-rental-info-field="coverageHours"]'),
@@ -140,6 +144,7 @@ const coverageDayLabels = {
 const coverageSlotsContainer = document.getElementById("coverage-slots");
 const addCoverageSlotBtn = document.getElementById("add-coverage-slot");
 const coverageTimeZoneSelect = document.getElementById("coverage-timezone");
+const coverageStatHolidaysCheckbox = document.getElementById("coverage-stat-holidays");
 const termsPanel = document.getElementById("terms-panel");
 const toggleTermsBtn = document.getElementById("toggle-terms");
 const extrasNotesBadge = document.getElementById("extras-notes-badge");
@@ -301,8 +306,10 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   siteName: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  monitoringPersonnel: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
+  emergencyContactInstructions: { enabled: true, required: false },
   siteContacts: { enabled: true, required: true },
   coverageHours: { enabled: true, required: true },
 };
@@ -1111,10 +1118,13 @@ let draft = {
   siteAddressLng: null,
   siteAddressQuery: "",
   criticalAreas: "",
+  monitoringPersonnel: "",
   generalNotes: "",
   coverageHours: [],
   coverageTimeZone: null,
+  coverageStatHolidaysRequired: false,
   emergencyContacts: [],
+  emergencyContactInstructions: "",
   siteContacts: [],
   notificationCircumstances: [],
   lineItems: [],
@@ -1149,10 +1159,13 @@ function resetDraftForNew() {
     siteAddressLng: null,
     siteAddressQuery: "",
     criticalAreas: "",
+    monitoringPersonnel: "",
     generalNotes: "",
     coverageHours: [],
     coverageTimeZone: null,
+    coverageStatHolidaysRequired: false,
     emergencyContacts: [],
+    emergencyContactInstructions: "",
     siteContacts: [],
     notificationCircumstances: [],
     lineItems: [],
@@ -3588,9 +3601,11 @@ function buildDraftSnapshot() {
     siteAddressLng: toFiniteCoordinate(draft.siteAddressLng),
     siteAddressQuery: draft.siteAddressQuery || "",
     criticalAreas: draft.criticalAreas || "",
+    monitoringPersonnel: draft.monitoringPersonnel || "",
     generalNotes: draft.generalNotes || "",
     coverageHours: collectCoverageHoursFromInputs(),
     coverageTimeZone: getCoverageTimeZoneInputValue(),
+    coverageStatHolidaysRequired: coverageStatHolidaysCheckbox?.checked === true,
     emergencyContacts: collectContacts(emergencyContactsList),
     siteContacts: collectContacts(siteContactsList),
     notificationCircumstances: collectNotificationCircumstances(),
@@ -6379,11 +6394,16 @@ function initFormFieldsFromDraft() {
   if (siteAddressInput) siteAddressInput.value = draft.siteAddress || "";
   if (siteAccessInfoInput) siteAccessInfoInput.value = draft.siteAccessInfo || "";
   if (criticalAreasInput) criticalAreasInput.value = draft.criticalAreas || "";
+  if (monitoringPersonnelInput) monitoringPersonnelInput.value = draft.monitoringPersonnel || "";
   setGeneralNotesHtml(draft.generalNotes || "");
   setCoverageInputs(draft.coverageHours || []);
   setCoverageTimeZoneInput(draft.coverageTimeZone, { silent: true });
+  if (coverageStatHolidaysCheckbox) {
+    coverageStatHolidaysCheckbox.checked = draft.coverageStatHolidaysRequired === true;
+  }
   applyNotificationCircumstances(draft.notificationCircumstances || []);
   setContactRows(emergencyContactsList, draft.emergencyContacts || [], emergencyContactOptions);
+  if (emergencyContactInstructionsInput) emergencyContactInstructionsInput.value = draft.emergencyContactInstructions || "";
   setContactRows(siteContactsList, draft.siteContacts || [], siteContactOptions);
   setPickupPreview();
   syncTermsBadgeFromInputs();
@@ -6409,13 +6429,16 @@ function syncRentalInfoDraft() {
   draft.siteAccessInfo = siteAccessInfoInput?.value || "";
   if (!String(draft.siteAddress || "").trim() || draft.siteAddress !== draft.siteAddressQuery) {
     draft.siteAddressLat = null;
-    draft.siteAddressLng = null;
-    draft.siteAddressQuery = "";
+  draft.siteAddressLng = null;
+  draft.siteAddressQuery = "";
   }
   draft.criticalAreas = criticalAreasInput?.value || "";
+  draft.monitoringPersonnel = monitoringPersonnelInput?.value || "";
   draft.generalNotes = getGeneralNotesHtml();
+  draft.emergencyContactInstructions = emergencyContactInstructionsInput?.value || "";
   draft.coverageHours = collectCoverageHoursFromInputs();
   draft.coverageTimeZone = getCoverageTimeZoneInputValue();
+  draft.coverageStatHolidaysRequired = coverageStatHolidaysCheckbox?.checked === true;
   draft.notificationCircumstances = collectNotificationCircumstances();
   scheduleDraftSave();
   syncTermsBadgeFromInputs();
@@ -6454,7 +6477,10 @@ async function loadOrder() {
     ? String(o.site_address_query ?? o.siteAddressQuery)
     : "";
   draft.criticalAreas = o.critical_areas || o.criticalAreas || "";
+  draft.monitoringPersonnel = o.monitoring_personnel || o.monitoringPersonnel || "";
   draft.generalNotes = o.general_notes || o.generalNotes || "";
+  draft.emergencyContactInstructions =
+    o.emergency_contact_instructions || o.emergencyContactInstructions || "";
   const rawNotificationCircumstances = o.notification_circumstances || o.notificationCircumstances || [];
   draft.notificationCircumstances = Array.isArray(rawNotificationCircumstances)
     ? rawNotificationCircumstances
@@ -6463,6 +6489,7 @@ async function loadOrder() {
   draft.coverageTimeZone = normalizeCoverageTimeZone(
     o.coverage_timezone || o.coverageTimeZone || draft.coverageTimeZone || billingTimeZone
   );
+  draft.coverageStatHolidaysRequired = o.coverage_stat_holidays_required === true || o.coverageStatHolidaysRequired === true;
   draft.emergencyContacts = parseContacts(o.emergency_contacts || o.emergencyContacts || []);
   draft.siteContacts = parseContacts(o.site_contacts || o.siteContacts || []);
   draft.pickupInvoiceMode = null;
@@ -6980,6 +7007,8 @@ const rentalInfoInputs = [
   siteAddressInput,
   siteAccessInfoInput,
   criticalAreasInput,
+  monitoringPersonnelInput,
+  emergencyContactInstructionsInput,
 ].filter(Boolean);
 const minuteStepInputs = [
   lineItemStartInput,
@@ -7146,6 +7175,11 @@ addCoverageSlotBtn?.addEventListener("click", (e) => {
 
 coverageTimeZoneSelect?.addEventListener("change", () => {
   draft.coverageTimeZone = getCoverageTimeZoneInputValue();
+  scheduleDraftSave();
+});
+
+coverageStatHolidaysCheckbox?.addEventListener("change", () => {
+  draft.coverageStatHolidaysRequired = coverageStatHolidaysCheckbox.checked === true;
   scheduleDraftSave();
 });
 
@@ -7523,10 +7557,13 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     siteAddressLng: toFiniteCoordinate(draft.siteAddressLng),
     siteAddressQuery: draft.siteAddressQuery || null,
     criticalAreas: draft.criticalAreas || null,
+    monitoringPersonnel: draft.monitoringPersonnel || null,
     generalNotes: draft.generalNotes || null,
     coverageHours: draft.coverageHours || [],
     coverageTimeZone: getCoverageTimeZoneInputValue(),
+    coverageStatHolidaysRequired: draft.coverageStatHolidaysRequired === true,
     emergencyContacts: collectContacts(emergencyContactsList),
+    emergencyContactInstructions: draft.emergencyContactInstructions || null,
     siteContacts: collectContacts(siteContactsList),
     notificationCircumstances: collectNotificationCircumstances(),
     status: normalizeOrderStatus(draft.status || "quote"),

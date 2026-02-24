@@ -23,17 +23,16 @@ const pricingMonthly = document.getElementById("pricing-monthly");
 const savePricingBtn = document.getElementById("save-pricing");
 const pricingTable = document.getElementById("pricing-table");
 const pricingSearchInput = document.getElementById("pricing-search");
-const contactsList = document.getElementById("contacts-list");
-const addContactRowBtn = document.getElementById("add-contact-row");
-const accountingContactsList = document.getElementById("accounting-contacts-list");
-const addAccountingContactRowBtn = document.getElementById("add-accounting-contact-row");
+const contactCategoriesContainer = document.getElementById("customer-contact-categories");
 const salesModal = document.getElementById("sales-modal");
 const closeSalesModalBtn = document.getElementById("close-sales-modal");
 const salesForm = document.getElementById("sales-form");
 const canChargeDepositInput = customerForm?.querySelector('input[name="canChargeDeposit"]');
+const customerServiceAgreementCheck = document.getElementById("customer-service-agreement-check");
 
 const openCustomerDocumentsBtn = document.getElementById("open-customer-documents");
 const openCustomerVerificationBtn = document.getElementById("open-customer-verification");
+const openCustomerUpdatesBtn = document.getElementById("open-customer-updates");
 const extrasDocsBadge = document.getElementById("extras-docs-badge");
 const extrasCardBadge = document.getElementById("extras-card-badge");
 const extrasDrawerOverlay = document.getElementById("extras-drawer-overlay");
@@ -67,16 +66,28 @@ let customerExtras = { documents: [], storefront: null };
 let extrasDrawerOpen = false;
 let extrasActiveTab = "documents";
 
+const DEFAULT_CONTACT_CATEGORIES = [
+  { key: "contacts", label: "Contacts" },
+  { key: "accountingContacts", label: "Accounting contacts" },
+];
+let contactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
+const contactCategoryLists = new Map();
+let contactCategoriesPromise = null;
+
+const SERVICE_AGREEMENT_CATEGORY = "Service Agreement";
+
 
 function updateModeLabels() {
   if (editingCustomerId) {
     modeLabel.textContent = `Edit customer #${editingCustomerId}`;
     formTitle.textContent = "Edit customer";
     deleteCustomerBtn.style.display = "inline-flex";
+    if (openCustomerUpdatesBtn) openCustomerUpdatesBtn.style.display = "inline-flex";
   } else {
     modeLabel.textContent = "New customer";
     formTitle.textContent = "Customer details";
     deleteCustomerBtn.style.display = "none";
+    if (openCustomerUpdatesBtn) openCustomerUpdatesBtn.style.display = "none";
   }
 }
 
@@ -96,6 +107,149 @@ function parseContacts(raw) {
     }
   }
   return [];
+}
+
+function contactCategoryKeyFromLabel(label) {
+  return String(label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .map((part, idx) =>
+      idx === 0 ? part : part.slice(0, 1).toUpperCase() + part.slice(1)
+    )
+    .join("");
+}
+
+function normalizeContactCategories(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const normalized = [];
+  const usedKeys = new Set();
+
+  const pushEntry = (key, label) => {
+    const cleanLabel = String(label || "").trim();
+    if (!cleanLabel) return;
+    let cleanKey = String(key || "").trim();
+    if (!cleanKey) cleanKey = contactCategoryKeyFromLabel(cleanLabel);
+    if (!cleanKey || usedKeys.has(cleanKey)) return;
+    usedKeys.add(cleanKey);
+    normalized.push({ key: cleanKey, label: cleanLabel });
+  };
+
+  raw.forEach((entry) => {
+    if (!entry) return;
+    if (typeof entry === "string") {
+      pushEntry("", entry);
+      return;
+    }
+    if (typeof entry !== "object") return;
+    pushEntry(entry.key || entry.id || "", entry.label || entry.name || entry.title || "");
+  });
+
+  const byKey = new Map(normalized.map((entry) => [entry.key, entry]));
+  const baseContacts = byKey.get("contacts")?.label || DEFAULT_CONTACT_CATEGORIES[0].label;
+  const baseAccounting =
+    byKey.get("accountingContacts")?.label || DEFAULT_CONTACT_CATEGORIES[1].label;
+  const extras = normalized.filter(
+    (entry) => entry.key !== "contacts" && entry.key !== "accountingContacts"
+  );
+  return [
+    { key: "contacts", label: baseContacts },
+    { key: "accountingContacts", label: baseAccounting },
+    ...extras,
+  ];
+}
+
+function renderContactCategories(categories) {
+  if (!contactCategoriesContainer) return;
+  contactCategoriesContainer.innerHTML = "";
+  contactCategoryLists.clear();
+  contactCategoryConfig = normalizeContactCategories(categories);
+
+  contactCategoryConfig.forEach((category) => {
+    const block = document.createElement("div");
+    block.className = "contact-block";
+    block.dataset.contactCategoryKey = category.key;
+
+    const header = document.createElement("div");
+    header.className = "contact-header";
+
+    const title = document.createElement("strong");
+    title.textContent = category.label;
+
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "ghost small";
+    addBtn.textContent = "+ Add contact";
+    addBtn.dataset.addContactCategory = category.key;
+
+    header.appendChild(title);
+    header.appendChild(addBtn);
+
+    const list = document.createElement("div");
+    list.className = "contacts-list stack";
+    list.dataset.contactListKey = category.key;
+
+    block.appendChild(header);
+    block.appendChild(list);
+    contactCategoriesContainer.appendChild(block);
+    contactCategoryLists.set(category.key, list);
+  });
+}
+
+function normalizeContactGroups(value) {
+  let raw = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = null;
+    }
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const groups = {};
+  Object.entries(raw).forEach(([key, list]) => {
+    groups[key] = parseContacts(list);
+  });
+  return groups;
+}
+
+function buildCustomerContactGroups(customer) {
+  const groups = normalizeContactGroups(customer?.contact_groups);
+  const contactRows = parseContacts(customer?.contacts);
+  if (!contactRows.length && (customer?.contact_name || customer?.email || customer?.phone)) {
+    contactRows.push({
+      name: customer?.contact_name || "",
+      email: customer?.email || "",
+      phone: customer?.phone || "",
+    });
+  }
+  groups.contacts = contactRows;
+  groups.accountingContacts = parseContacts(customer?.accounting_contacts);
+  return groups;
+}
+
+function setContactCategoryRows(groups) {
+  contactCategoryConfig.forEach((category) => {
+    const list = contactCategoryLists.get(category.key);
+    const rows = Array.isArray(groups?.[category.key]) ? groups[category.key] : [];
+    setContactRows(list, rows);
+  });
+}
+
+function collectContactCategoryPayload() {
+  let contacts = [];
+  let accountingContacts = [];
+  const contactGroups = {};
+  contactCategoryConfig.forEach((category) => {
+    const list = contactCategoryLists.get(category.key);
+    const rows = collectContacts(list);
+    if (category.key === "contacts") contacts = rows;
+    else if (category.key === "accountingContacts") accountingContacts = rows;
+    else contactGroups[category.key] = rows;
+  });
+  return { contacts, accountingContacts, contactGroups };
 }
 
 function findCustomerById(value) {
@@ -149,6 +303,21 @@ async function ensureCustomersCache() {
   const data = await res.json();
   customersCache = data.customers || [];
   renderParentOptions();
+}
+
+async function loadContactCategories() {
+  if (!contactCategoriesContainer) return contactCategoryConfig;
+  let categories = DEFAULT_CONTACT_CATEGORIES;
+  if (activeCompanyId) {
+    const res = await fetch(`/api/company-settings?companyId=${activeCompanyId}`);
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      categories = data.settings?.customer_contact_categories || DEFAULT_CONTACT_CATEGORIES;
+    }
+  }
+  contactCategoryConfig = normalizeContactCategories(categories);
+  renderContactCategories(contactCategoryConfig);
+  return contactCategoryConfig;
 }
 
 function updateContactRemoveButtons(list) {
@@ -360,7 +529,8 @@ function renderCustomerDocuments() {
     const hint = document.createElement("span");
     hint.className = "hint";
     const sizeText = d.size_bytes ? ` • ${Math.round(d.size_bytes / 1024)} KB` : "";
-    hint.textContent = `${d.mime || ""}${sizeText}`;
+    const categoryText = d.category ? ` • ${d.category}` : "";
+    hint.textContent = `${d.mime || ""}${sizeText}${categoryText}`;
     div.appendChild(hint);
 
     const removeBtn = document.createElement("button");
@@ -420,22 +590,65 @@ function renderCustomerDocuments() {
   }
 }
 
+function formatShortDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleDateString();
+}
+
+function findLatestServiceAgreementDoc(documents) {
+  const list = Array.isArray(documents) ? documents : [];
+  const matches = list.filter(
+    (doc) =>
+      String(doc?.category || "")
+        .trim()
+        .toLowerCase() === SERVICE_AGREEMENT_CATEGORY.toLowerCase()
+  );
+  if (!matches.length) return null;
+  let latest = null;
+  let latestTime = -Infinity;
+  let latestId = -Infinity;
+  matches.forEach((doc) => {
+    const time = Date.parse(doc?.created_at || "");
+    const id = Number(doc?.id);
+    if (Number.isFinite(time)) {
+      if (time > latestTime || (time === latestTime && Number.isFinite(id) && id > latestId)) {
+        latest = doc;
+        latestTime = time;
+        latestId = Number.isFinite(id) ? id : latestId;
+      }
+      return;
+    }
+    if (latestTime === -Infinity && Number.isFinite(id) && id > latestId) {
+      latest = doc;
+      latestId = id;
+    }
+  });
+  return latest;
+}
+
 function renderCustomerVerification() {
   if (!customerVerificationPanel) return;
   const sf = customerExtras?.storefront || null;
   const cardOk = !!sf?.hasCardOnFile;
   const last4 = sf?.ccLast4 ? String(sf.ccLast4) : null;
   const email = sf?.email ? String(sf.email) : null;
+  const serviceAgreementDoc = findLatestServiceAgreementDoc(customerExtras?.documents);
 
   if (extrasCardBadge) {
     extrasCardBadge.textContent = cardOk ? "Card" : "";
     extrasCardBadge.style.display = cardOk ? "inline-flex" : "none";
   }
+  if (customerServiceAgreementCheck) {
+    customerServiceAgreementCheck.style.display = serviceAgreementDoc ? "inline-flex" : "none";
+  }
 
   customerVerificationPanel.replaceChildren();
-  const addRow = (label, value) => {
+  const addRow = (label, value, { highlight = false } = {}) => {
     const row = document.createElement("div");
     row.className = "detail-item";
+    if (highlight) row.classList.add("detail-item-success");
     const labelEl = document.createElement("div");
     labelEl.className = "detail-label";
     labelEl.textContent = String(label);
@@ -448,8 +661,11 @@ function renderCustomerVerification() {
 
   const cardText = cardOk ? `On file${last4 ? ` (•••• ${last4})` : ""}` : "Not on file";
   const accountText = sf ? (email || `Customer #${sf.storefrontCustomerId}`) : "Not linked";
+  const agreementDate = serviceAgreementDoc?.created_at ? formatShortDate(serviceAgreementDoc.created_at) : null;
+  const agreementText = serviceAgreementDoc ? `Signed${agreementDate ? ` (${agreementDate})` : ""}` : "Not on file";
   addRow("Credit card", cardText);
   addRow("Storefront account", accountText);
+  addRow("Service agreement", agreementText, { highlight: !!serviceAgreementDoc });
 }
 
 async function loadCustomerExtras() {
@@ -585,6 +801,7 @@ async function loadPricing(customerId) {
 async function loadCustomer() {
   if (!activeCompanyId || !editingCustomerId) return;
   try {
+    await contactCategoriesPromise;
     await ensureCustomersCache();
     const customer = customersCache.find((c) => Number(c.id) === Number(editingCustomerId));
     if (!customer) {
@@ -592,17 +809,8 @@ async function loadCustomer() {
       return;
     }
     customerForm.companyName.value = customer.company_name || "";
-    const contactRows = parseContacts(customer.contacts);
-    if (!contactRows.length && (customer.contact_name || customer.email || customer.phone)) {
-      contactRows.push({
-        name: customer.contact_name || "",
-        email: customer.email || "",
-        phone: customer.phone || "",
-      });
-    }
-    setContactRows(contactsList, contactRows);
-    const accountingRows = parseContacts(customer.accounting_contacts);
-    setContactRows(accountingContactsList, accountingRows);
+    const groups = buildCustomerContactGroups(customer);
+    setContactCategoryRows(groups);
     customerForm.streetAddress.value = customer.street_address || "";
     customerForm.city.value = customer.city || "";
     customerForm.region.value = customer.region || "";
@@ -649,11 +857,11 @@ customerForm.addEventListener("submit", async (e) => {
     return;
   }
   const payload = Object.fromEntries(new FormData(customerForm).entries());
-  const contacts = collectContacts(contactsList);
-  const accountingContacts = collectContacts(accountingContactsList);
+  const { contacts, accountingContacts, contactGroups } = collectContactCategoryPayload();
   const primaryContact = contacts[0] || {};
   payload.contacts = contacts;
   payload.accountingContacts = accountingContacts;
+  payload.contactGroups = contactGroups;
   payload.contactName = primaryContact.name || null;
   payload.email = primaryContact.email || null;
   payload.phone = primaryContact.phone || null;
@@ -814,32 +1022,23 @@ salesSelect.addEventListener("change", (e) => {
   }
 });
 
-addContactRowBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  addContactRow(contactsList, {}, { focus: true });
-});
+contactCategoriesContainer?.addEventListener("click", (e) => {
+  const addBtn = e.target.closest?.("[data-add-contact-category]");
+  if (addBtn) {
+    e.preventDefault();
+    const key = addBtn.getAttribute("data-add-contact-category");
+    const list = contactCategoryLists.get(String(key || ""));
+    if (list) addContactRow(list, {}, { focus: true });
+    return;
+  }
 
-contactsList?.addEventListener("click", (e) => {
-  const btn = e.target.closest?.(".contact-remove");
-  if (!btn) return;
+  const removeBtn = e.target.closest?.(".contact-remove");
+  if (!removeBtn) return;
   e.preventDefault();
-  const row = btn.closest(".contact-row");
+  const row = removeBtn.closest(".contact-row");
+  const list = row?.parentElement || null;
   if (row) row.remove();
-  updateContactRemoveButtons(contactsList);
-});
-
-addAccountingContactRowBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  addContactRow(accountingContactsList, {}, { focus: true });
-});
-
-accountingContactsList?.addEventListener("click", (e) => {
-  const btn = e.target.closest?.(".contact-remove");
-  if (!btn) return;
-  e.preventDefault();
-  const row = btn.closest(".contact-row");
-  if (row) row.remove();
-  updateContactRemoveButtons(accountingContactsList);
+  updateContactRemoveButtons(list);
 });
 
 
@@ -897,6 +1096,23 @@ openCustomerDocumentsBtn?.addEventListener("click", (e) => {
 openCustomerVerificationBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   openExtrasDrawer("verification");
+});
+
+openCustomerUpdatesBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) {
+    companyMeta.textContent = "Set company first.";
+    return;
+  }
+  if (!editingCustomerId) {
+    companyMeta.textContent = "Save the customer first.";
+    return;
+  }
+  const qs = new URLSearchParams();
+  qs.set("customerId", String(editingCustomerId));
+  qs.set("status", "all");
+  if (activeCompanyId) qs.set("companyId", String(activeCompanyId));
+  window.location.href = `customer-updates.html?${qs.toString()}`;
 });
 
 closeExtrasDrawerBtn?.addEventListener("click", (e) => {
@@ -1017,8 +1233,11 @@ if (activeCompanyId) {
   companyMeta.textContent = companyName ? `${companyName} (Company #${activeCompanyId})` : `Company #${activeCompanyId}`;
   loadSales();
   loadTypes();
-  setContactRows(contactsList, []);
-  setContactRows(accountingContactsList, []);
+  contactCategoriesPromise = loadContactCategories().catch((err) => {
+    companyMeta.textContent = err?.message ? String(err.message) : "Unable to load contact categories.";
+    contactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
+    renderContactCategories(DEFAULT_CONTACT_CATEGORIES);
+  });
   setBranchMode(false);
   ensureCustomersCache().catch((err) => {
     companyMeta.textContent = err.message;
@@ -1026,9 +1245,11 @@ if (activeCompanyId) {
   if (editingCustomerId) {
     loadCustomer();
   } else {
+    contactCategoriesPromise?.then(() => setContactCategoryRows({}));
     loadCustomerExtras().catch(() => {});
   }
 } else {
   companyMeta.textContent = "Log in to continue.";
 }
+
 
