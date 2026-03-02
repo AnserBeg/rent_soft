@@ -143,7 +143,6 @@
             <div class="card-header">
               <div>
                 <h2>Availability & Utilization</h2>
-                <p class="hint">Committed availability vs. potential availability from quotes and requests.</p>
               </div>
               <div class="inline-actions header-actions shortfall-controls">
                 <label>Horizon
@@ -174,10 +173,17 @@
               </div>
             </div>
 
-            <p class="hint" id="shortfall-meta">Loading availability...</p>
-
             <div class="shortfall-layout-grid">
               <div class="shortfall-left-pane">
+                <div class="shortfall-incidents-strip">
+                  <div>
+                    <div class="shortfall-incidents-label">Number of Incidents</div>
+                    <div class="shortfall-incidents-value" id="incidents-count">--</div>
+                  </div>
+                  <div class="shortfall-incidents-actions">
+                    <button class="ghost small" type="button" id="incidents-open">Update</button>
+                  </div>
+                </div>
                 <div class="shortfall-donut-grid" id="shortfall-donut-grid" role="list"></div>
               </div>
 
@@ -235,6 +241,24 @@
             </div>
           </section>
         </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="incidents-modal" aria-hidden="true">
+    <div class="modal-content simple" role="dialog" aria-modal="true" aria-labelledby="incidents-modal-title">
+      <div class="modal-header">
+        <strong id="incidents-modal-title">Number of Incidents</strong>
+        <button class="ghost small" type="button" id="incidents-close">Close</button>
+      </div>
+      <div class="stack">
+        <label for="incidents-input">Incidents</label>
+        <input id="incidents-input" type="number" min="0" step="1" inputmode="numeric" />
+        <p class="hint" id="incidents-error"></p>
+        <div class="inline-actions" style="justify-content: flex-end;">
+          <button class="ghost" type="button" id="incidents-cancel">Cancel</button>
+          <button class="primary" type="button" id="incidents-save">Save</button>
+        </div>
       </div>
     </div>
   </div>

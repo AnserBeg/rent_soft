@@ -157,6 +157,6 @@ test("applyWorkOrderPauseToEquipment clears out-of-service record when in servic
     orderStatus: "open",
   });
 
-  assert.ok(queries.some((q) => q.includes("UPDATE equipment_out_of_service")), "expected out-of-service clear");
-  assert.ok(!queries.some((q) => q.includes("rental_order_line_inventory")), "unexpected pause query for in-service");
+  assert.ok(queries.some((q) => q.includes("DELETE FROM equipment_out_of_service")), "expected out-of-service delete");
+  assert.ok(queries.some((q) => q.includes("rental_order_line_inventory")), "expected pause query for in-service");
 });

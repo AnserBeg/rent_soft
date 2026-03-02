@@ -33,6 +33,89 @@ function parseTimestampMs(value) {
   return Number.isFinite(ms) ? ms : null;
 }
 
+function parseCacheMs(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.max(1000, Math.floor(parsed));
+}
+
+function parseCacheMax(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.max(1, Math.floor(parsed));
+}
+
+const QBO_INCOME_CACHE_TTL_MS = parseCacheMs(process.env.QBO_INCOME_CACHE_TTL_MS, 2 * 60 * 1000);
+const QBO_INCOME_CACHE_STALE_MS = parseCacheMs(process.env.QBO_INCOME_CACHE_STALE_MS, 30 * 60 * 1000);
+const QBO_INCOME_CACHE_MAX = parseCacheMax(process.env.QBO_INCOME_CACHE_MAX, 200);
+const QBO_INCOME_ACCOUNTS_CACHE_TTL_MS = parseCacheMs(
+  process.env.QBO_INCOME_ACCOUNTS_CACHE_TTL_MS,
+  10 * 60 * 1000
+);
+const QBO_INCOME_ACCOUNTS_CACHE_MAX = parseCacheMax(process.env.QBO_INCOME_ACCOUNTS_CACHE_MAX, 200);
+
+const qboIncomeCache = new Map();
+const qboIncomeInflight = new Map();
+const qboIncomeAccountsCache = new Map();
+const qboIncomeAccountsInflight = new Map();
+
+function pruneCacheMap(cache, max) {
+  if (cache.size <= max) return;
+  const removeCount = cache.size - max;
+  const keys = Array.from(cache.keys()).slice(0, removeCount);
+  keys.forEach((key) => cache.delete(key));
+}
+
+function buildIncomeCacheKey({ kind, companyId, startDate, endDate, bucket, selectedIds }) {
+  const ids = Array.isArray(selectedIds) ? selectedIds.map((v) => String(v)).sort().join(",") : "";
+  return [kind, String(companyId || ""), startDate || "", endDate || "", bucket || "", ids].join("|");
+}
+
+function readIncomeCache(key, { allowStale = false } = {}) {
+  if (!key) return null;
+  const entry = qboIncomeCache.get(key);
+  if (!entry) return null;
+  const now = Date.now();
+  if (entry.staleAt <= now) {
+    qboIncomeCache.delete(key);
+    return null;
+  }
+  if (entry.expiresAt > now) return entry.value;
+  if (allowStale && entry.staleAt > now) return entry.value;
+  return null;
+}
+
+function writeIncomeCache(key, value) {
+  if (!key) return;
+  const now = Date.now();
+  qboIncomeCache.set(key, {
+    value,
+    expiresAt: now + QBO_INCOME_CACHE_TTL_MS,
+    staleAt: now + QBO_INCOME_CACHE_STALE_MS,
+  });
+  pruneCacheMap(qboIncomeCache, QBO_INCOME_CACHE_MAX);
+}
+
+function readIncomeAccountsCache(companyId) {
+  const key = String(companyId || "");
+  if (!key) return null;
+  const entry = qboIncomeAccountsCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt > Date.now()) return entry.value;
+  qboIncomeAccountsCache.delete(key);
+  return null;
+}
+
+function writeIncomeAccountsCache(companyId, value) {
+  const key = String(companyId || "");
+  if (!key) return;
+  qboIncomeAccountsCache.set(key, {
+    value,
+    expiresAt: Date.now() + QBO_INCOME_ACCOUNTS_CACHE_TTL_MS,
+  });
+  pruneCacheMap(qboIncomeAccountsCache, QBO_INCOME_ACCOUNTS_CACHE_MAX);
+}
+
 function isTokenExpiringSoon(expiresAt, skewMs = 60 * 1000) {
   const ms = parseTimestampMs(expiresAt);
   if (!ms) return true;
@@ -64,6 +147,10 @@ function isAuthInvalidError(err) {
   if (status === 400 && (combined.includes("invalid_grant") || combined.includes("invalid_token"))) return true;
   if (combined.includes("token revoked") || combined.includes("token expired")) return true;
   return false;
+}
+
+function isQboRateLimited(err) {
+  return Number(err?.status) === 429;
 }
 
 function buildQboAuthError(reason) {
@@ -613,6 +700,26 @@ async function listQboIncomeAccounts({ companyId }) {
     startPosition += maxResults;
   }
   return accounts;
+}
+
+async function listQboIncomeAccountsCached({ companyId }) {
+  if (!companyId) return [];
+  const cached = readIncomeAccountsCache(companyId);
+  if (cached) return cached;
+  const key = String(companyId);
+  const inflight = qboIncomeAccountsInflight.get(key);
+  if (inflight) return inflight;
+  const run = (async () => {
+    const accounts = await listQboIncomeAccounts({ companyId });
+    if (Array.isArray(accounts)) writeIncomeAccountsCache(companyId, accounts);
+    return accounts;
+  })();
+  qboIncomeAccountsInflight.set(key, run);
+  try {
+    return await run;
+  } finally {
+    qboIncomeAccountsInflight.delete(key);
+  }
 }
 
 async function listQboTaxCodes({ companyId }) {
@@ -1443,7 +1550,7 @@ async function resolveSelectedAccountNames({ companyId, selectedIds }) {
   const selected = Array.isArray(selectedIds) ? selectedIds : [];
   if (!selected.length) return new Set();
   try {
-    const accounts = await listQboIncomeAccounts({ companyId });
+    const accounts = await listQboIncomeAccountsCached({ companyId });
     const selectedSet = new Set(selected.map((id) => String(id)));
     const names = new Set();
     accounts.forEach((account) => {
@@ -1463,7 +1570,7 @@ async function resolveSelectedAccountLabels({ companyId, selectedIds }) {
   if (!selected.length) return labels;
   const selectedSet = new Set(selected.map((id) => String(id)));
   try {
-    const accounts = await listQboIncomeAccounts({ companyId });
+    const accounts = await listQboIncomeAccountsCached({ companyId });
     accounts.forEach((account) => {
       if (!account?.id) return;
       const id = String(account.id);
@@ -1672,32 +1779,48 @@ async function getIncomeTotals({ companyId, startDate, endDate, debug = false })
   const settings = await getCompanySettings(companyId);
   const selected = settings.qbo_income_account_ids || [];
   if (!selected.length) return { total: 0, selectedAccounts: [] };
-  const baseQuery = `reports/ProfitAndLoss?start_date=${encodeURIComponent(startDate)}&end_date=${encodeURIComponent(
-    endDate
-  )}`;
-  const accrualQuery = `${baseQuery}&accounting_method=Accrual`;
-  let data = null;
-  let pAndLError = null;
-  try {
-    data = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
-  } catch (err) {
-    if (!isQboUnexpectedInternalError(err)) throw err;
-    try {
-      data = await qboApiRequest({ companyId, method: "GET", path: baseQuery });
-    } catch (retryErr) {
-      if (!isQboUnexpectedInternalError(retryErr)) throw retryErr;
-      pAndLError = retryErr;
-      data = null;
-    }
+  const cacheKey = buildIncomeCacheKey({
+    kind: "total",
+    companyId,
+    startDate,
+    endDate,
+    selectedIds: selected,
+  });
+  const useCache = !debug;
+  if (useCache) {
+    const cached = readIncomeCache(cacheKey);
+    if (cached) return cached;
+    const inflight = qboIncomeInflight.get(cacheKey);
+    if (inflight) return inflight;
   }
-  if (!data) {
-    const quick = await getIncomeTotalsFromQuickReports({
-      companyId,
-      selectedIds: selected,
-      startDate,
-      endDate,
-      debug,
-    });
+
+  const run = (async () => {
+    const baseQuery = `reports/ProfitAndLoss?start_date=${encodeURIComponent(
+      startDate
+    )}&end_date=${encodeURIComponent(endDate)}`;
+    const accrualQuery = `${baseQuery}&accounting_method=Accrual`;
+    let data = null;
+    let pAndLError = null;
+    try {
+      data = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
+    } catch (err) {
+      if (!isQboUnexpectedInternalError(err)) throw err;
+      try {
+        data = await qboApiRequest({ companyId, method: "GET", path: baseQuery });
+      } catch (retryErr) {
+        if (!isQboUnexpectedInternalError(retryErr)) throw retryErr;
+        pAndLError = retryErr;
+        data = null;
+      }
+    }
+    if (!data) {
+      const quick = await getIncomeTotalsFromQuickReports({
+        companyId,
+        selectedIds: selected,
+        startDate,
+        endDate,
+        debug,
+      });
       if (debug) {
         return {
           total: quick.total,
@@ -1711,26 +1834,45 @@ async function getIncomeTotals({ companyId, startDate, endDate, debug = false })
       return { total: quick.total, selectedAccounts: selected };
     }
 
-  const rows = data?.Rows?.Row || [];
-  const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
-  const total = sumReportIncomeRows(rows, selected, selectedNames);
-  const debugInfo = debug ? { pAndL: summarizeReport(data) } : null;
+    const rows = data?.Rows?.Row || [];
+    const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
+    const total = sumReportIncomeRows(rows, selected, selectedNames);
+    const debugInfo = debug ? { pAndL: summarizeReport(data) } : null;
     if (total !== 0) {
       return debug ? { total, selectedAccounts: selected, debug: debugInfo } : { total, selectedAccounts: selected };
     }
-  const quick = await getIncomeTotalsFromQuickReports({
-    companyId,
-    selectedIds: selected,
-    startDate,
-    endDate,
-    debug,
-  });
+    const quick = await getIncomeTotalsFromQuickReports({
+      companyId,
+      selectedIds: selected,
+      startDate,
+      endDate,
+      debug,
+    });
     if (debug) {
       debugInfo.quickReports = quick.debugReports;
       return { total: quick.total, selectedAccounts: selected, debug: debugInfo };
     }
     return { total: quick.total, selectedAccounts: selected };
+  })();
+
+  if (!useCache) return await run;
+  qboIncomeInflight.set(cacheKey, run);
+  try {
+    const result = await run;
+    writeIncomeCache(cacheKey, result);
+    return result;
+  } catch (err) {
+    if (isQboRateLimited(err)) {
+      const stale = readIncomeCache(cacheKey, { allowStale: true });
+      if (stale) {
+        return { ...stale, meta: { ...(stale.meta || {}), rateLimited: true, stale: true } };
+      }
+    }
+    throw err;
+  } finally {
+    qboIncomeInflight.delete(cacheKey);
   }
+}
 
 async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "month", debug = false }) {
   const settings = await getCompanySettings(companyId);
@@ -1744,34 +1886,50 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
   const bucketKey = String(bucket || "month").toLowerCase();
   const summarize =
     bucketKey === "day" ? "Day" : bucketKey === "week" ? "Week" : "Month";
-
-  const query = `reports/ProfitAndLoss?start_date=${encodeURIComponent(start)}&end_date=${encodeURIComponent(
-    end
-  )}&summarize_column_by=${encodeURIComponent(summarize)}`;
-  const accrualQuery = `${query}&accounting_method=Accrual`;
-  let data = null;
-  let pAndLError = null;
-  try {
-    data = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
-  } catch (err) {
-    if (!isQboUnexpectedInternalError(err)) throw err;
-    try {
-      data = await qboApiRequest({ companyId, method: "GET", path: query });
-    } catch (retryErr) {
-      if (!isQboUnexpectedInternalError(retryErr)) throw retryErr;
-      pAndLError = retryErr;
-      data = null;
-    }
+  const cacheKey = buildIncomeCacheKey({
+    kind: "timeseries",
+    companyId,
+    startDate: start,
+    endDate: end,
+    bucket: bucketKey,
+    selectedIds: selected,
+  });
+  const useCache = !debug;
+  if (useCache) {
+    const cached = readIncomeCache(cacheKey);
+    if (cached) return cached;
+    const inflight = qboIncomeInflight.get(cacheKey);
+    if (inflight) return inflight;
   }
-  if (!data) {
-    const quick = await getIncomeTimeSeriesFromQuickReports({
-      companyId,
-      selectedIds: selected,
-      startDate: start,
-      endDate: end,
-      bucket: bucketKey,
-      debug,
-    });
+
+  const run = (async () => {
+    const query = `reports/ProfitAndLoss?start_date=${encodeURIComponent(start)}&end_date=${encodeURIComponent(
+      end
+    )}&summarize_column_by=${encodeURIComponent(summarize)}`;
+    const accrualQuery = `${query}&accounting_method=Accrual`;
+    let data = null;
+    let pAndLError = null;
+    try {
+      data = await qboApiRequest({ companyId, method: "GET", path: accrualQuery });
+    } catch (err) {
+      if (!isQboUnexpectedInternalError(err)) throw err;
+      try {
+        data = await qboApiRequest({ companyId, method: "GET", path: query });
+      } catch (retryErr) {
+        if (!isQboUnexpectedInternalError(retryErr)) throw retryErr;
+        pAndLError = retryErr;
+        data = null;
+      }
+    }
+    if (!data) {
+      const quick = await getIncomeTimeSeriesFromQuickReports({
+        companyId,
+        selectedIds: selected,
+        startDate: start,
+        endDate: end,
+        bucket: bucketKey,
+        debug,
+      });
       if (debug) {
         return {
           rows: quick.rows,
@@ -1784,8 +1942,71 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
       }
       return { rows: quick.rows, selectedAccounts: selected };
     }
-  const columnDefs = extractReportBucketColumns(data, bucketKey, start, end);
-  if (!columnDefs.length) {
+
+    const columnDefs = extractReportBucketColumns(data, bucketKey, start, end);
+    if (!columnDefs.length) {
+      const quick = await getIncomeTimeSeriesFromQuickReports({
+        companyId,
+        selectedIds: selected,
+        startDate: start,
+        endDate: end,
+        bucket: bucketKey,
+        debug,
+      });
+      if (debug) {
+        return { rows: quick.rows, selectedAccounts: selected, debug: { quickReports: quick.debugReports } };
+      }
+      return { rows: quick.rows, selectedAccounts: selected };
+    }
+
+    const selectedSet = new Set(selected.map((v) => String(v)));
+    const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
+    const series = new Map();
+
+    walkReportRows(data?.Rows?.Row || [], (row) => {
+      const cols = Array.isArray(row?.ColData) ? row.ColData : [];
+      if (!cols.length) return;
+      const accountCell = cols.find((c) => getReportCellId(c)) || cols[0] || {};
+      const accountId = getReportCellId(accountCell) ? String(getReportCellId(accountCell)) : null;
+      const accountName = getReportCellValue(cols[0]) || getReportCellValue(accountCell);
+      const nameKeys = accountNameVariants(accountName);
+      const matches =
+        (accountId && selectedSet.has(accountId)) ||
+        nameKeys.some((nameKey) => selectedNames.has(nameKey));
+      if (!matches) return;
+      const label = accountName || accountId;
+      const key = accountId || label;
+      if (!series.has(key)) {
+        series.set(key, { key, label, values: new Map() });
+      }
+      const entry = series.get(key);
+      for (const col of columnDefs) {
+        const num = parseReportAmount(getReportCellValue(cols[col.index]));
+        if (!Number.isFinite(num)) continue;
+        const prev = entry.values.get(col.startDate) || 0;
+        entry.values.set(col.startDate, prev + num);
+      }
+    });
+
+    const rows = [];
+    for (const entry of series.values()) {
+      for (const col of columnDefs) {
+        const value = entry.values.get(col.startDate);
+        if (!Number.isFinite(value) || value === 0) continue;
+        rows.push({
+          bucket: col.startDate,
+          key: entry.key,
+          label: entry.label,
+          revenue: value,
+        });
+      }
+    }
+    if (rows.length) {
+      if (debug) {
+        return { rows, selectedAccounts: selected, debug: { pAndL: summarizeReport(data) } };
+      }
+      return { rows, selectedAccounts: selected };
+    }
     const quick = await getIncomeTimeSeriesFromQuickReports({
       companyId,
       selectedIds: selected,
@@ -1794,73 +2015,34 @@ async function getIncomeTimeSeries({ companyId, startDate, endDate, bucket = "mo
       bucket: bucketKey,
       debug,
     });
-      if (debug) {
-        return { rows: quick.rows, selectedAccounts: selected, debug: { quickReports: quick.debugReports } };
-      }
-      return { rows: quick.rows, selectedAccounts: selected };
-    }
-
-  const selectedSet = new Set(selected.map((v) => String(v)));
-  const selectedNames = await resolveSelectedAccountNames({ companyId, selectedIds: selected });
-  const series = new Map();
-
-  walkReportRows(data?.Rows?.Row || [], (row) => {
-    const cols = Array.isArray(row?.ColData) ? row.ColData : [];
-    if (!cols.length) return;
-    const accountCell = cols.find((c) => getReportCellId(c)) || cols[0] || {};
-    const accountId = getReportCellId(accountCell) ? String(getReportCellId(accountCell)) : null;
-    const accountName = getReportCellValue(cols[0]) || getReportCellValue(accountCell);
-    const nameKeys = accountNameVariants(accountName);
-    const matches =
-      (accountId && selectedSet.has(accountId)) ||
-      nameKeys.some((nameKey) => selectedNames.has(nameKey));
-    if (!matches) return;
-    const label = accountName || accountId;
-    const key = accountId || label;
-    if (!series.has(key)) {
-      series.set(key, { key, label, values: new Map() });
-    }
-    const entry = series.get(key);
-    for (const col of columnDefs) {
-      const num = parseReportAmount(getReportCellValue(cols[col.index]));
-      if (!Number.isFinite(num)) continue;
-      const prev = entry.values.get(col.startDate) || 0;
-      entry.values.set(col.startDate, prev + num);
-    }
-  });
-
-  const rows = [];
-  for (const entry of series.values()) {
-    for (const col of columnDefs) {
-      const value = entry.values.get(col.startDate);
-      if (!Number.isFinite(value) || value === 0) continue;
-      rows.push({
-        bucket: col.startDate,
-        key: entry.key,
-        label: entry.label,
-        revenue: value,
-      });
-    }
-  }
-    if (rows.length) {
-      if (debug) {
-        return { rows, selectedAccounts: selected, debug: { pAndL: summarizeReport(data) } };
-      }
-      return { rows, selectedAccounts: selected };
-    }
-  const quick = await getIncomeTimeSeriesFromQuickReports({
-    companyId,
-    selectedIds: selected,
-    startDate: start,
-    endDate: end,
-    bucket: bucketKey,
-    debug,
-  });
     if (debug) {
-      return { rows: quick.rows, selectedAccounts: selected, debug: { pAndL: summarizeReport(data), quickReports: quick.debugReports } };
+      return {
+        rows: quick.rows,
+        selectedAccounts: selected,
+        debug: { pAndL: summarizeReport(data), quickReports: quick.debugReports },
+      };
     }
     return { rows: quick.rows, selectedAccounts: selected };
+  })();
+
+  if (!useCache) return await run;
+  qboIncomeInflight.set(cacheKey, run);
+  try {
+    const result = await run;
+    writeIncomeCache(cacheKey, result);
+    return result;
+  } catch (err) {
+    if (isQboRateLimited(err)) {
+      const stale = readIncomeCache(cacheKey, { allowStale: true });
+      if (stale) {
+        return { ...stale, meta: { ...(stale.meta || {}), rateLimited: true, stale: true } };
+      }
+    }
+    throw err;
+  } finally {
+    qboIncomeInflight.delete(cacheKey);
   }
+}
 
 const PICKUP_BULK_SUFFIX = "PICKUP-ALL";
 

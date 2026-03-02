@@ -1264,6 +1264,7 @@ async function ensureTables() {
         customer_service_agreement_file_name TEXT,
         customer_service_agreement_mime TEXT,
         customer_service_agreement_size_bytes INTEGER,
+        dashboard_incidents_count INTEGER NOT NULL DEFAULT 0,
         email_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         email_smtp_provider TEXT NOT NULL DEFAULT 'custom',
         email_smtp_host TEXT,
@@ -1310,6 +1311,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_service_agreement_file_name TEXT;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_service_agreement_mime TEXT;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_service_agreement_size_bytes INTEGER;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS dashboard_incidents_count INTEGER NOT NULL DEFAULT 0;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_smtp_provider TEXT NOT NULL DEFAULT 'custom';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_smtp_host TEXT;`);
@@ -1328,6 +1330,7 @@ async function ensureTables() {
     await client.query(`UPDATE company_settings SET qbo_billing_day = 1 WHERE qbo_billing_day IS NULL;`);
     await client.query(`UPDATE company_settings SET qbo_adjustment_policy = 'credit_memo' WHERE qbo_adjustment_policy IS NULL;`);
     await client.query(`UPDATE company_settings SET qbo_income_account_ids = '[]'::jsonb WHERE qbo_income_account_ids IS NULL;`);
+    await client.query(`UPDATE company_settings SET dashboard_incidents_count = 0 WHERE dashboard_incidents_count IS NULL;`);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS qbo_connections (
@@ -5632,7 +5635,8 @@ async function getCompanySettings(companyId) {
             customer_service_agreement_url,
             customer_service_agreement_file_name,
             customer_service_agreement_mime,
-            customer_service_agreement_size_bytes
+            customer_service_agreement_size_bytes,
+            dashboard_incidents_count
        FROM company_settings
      WHERE company_id = $1
      LIMIT 1`,
@@ -5669,6 +5673,10 @@ async function getCompanySettings(companyId) {
           customer_service_agreement_size_bytes: Number.isFinite(Number(res.rows[0].customer_service_agreement_size_bytes))
             ? Number(res.rows[0].customer_service_agreement_size_bytes)
             : null,
+          dashboard_incidents_count: (() => {
+            const raw = Number(res.rows[0].dashboard_incidents_count);
+            return Number.isFinite(raw) && raw >= 0 ? Math.round(raw) : 0;
+          })(),
       };
   }
   return {
@@ -5699,6 +5707,7 @@ async function getCompanySettings(companyId) {
         customer_service_agreement_file_name: null,
         customer_service_agreement_mime: null,
         customer_service_agreement_size_bytes: null,
+        dashboard_incidents_count: 0,
     };
 }
 
@@ -5873,6 +5882,7 @@ async function upsertCompanyEmailSettings({
     customerServiceAgreementFileName = undefined,
     customerServiceAgreementMime = undefined,
     customerServiceAgreementSizeBytes = undefined,
+    dashboardIncidentsCount = undefined,
   qboEnabled = null,
   qboBillingDay = null,
   qboAdjustmentPolicy = null,
@@ -5966,6 +5976,15 @@ async function upsertCompanyEmailSettings({
     nextServiceAgreementMime = null;
     nextServiceAgreementSizeBytes = null;
   }
+  const currentIncidents = Number(current.dashboard_incidents_count);
+  const fallbackIncidents = Number.isFinite(currentIncidents) && currentIncidents >= 0 ? Math.round(currentIncidents) : 0;
+  const nextDashboardIncidents =
+    dashboardIncidentsCount === undefined || dashboardIncidentsCount === null
+      ? fallbackIncidents
+      : (() => {
+          const parsed = Number(dashboardIncidentsCount);
+          return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : fallbackIncidents;
+        })();
   const nextQboEnabled =
     qboEnabled === null || qboEnabled === undefined ? current.qbo_enabled === true : qboEnabled === true;
   const nextQboBillingDay =
@@ -5984,8 +6003,8 @@ async function upsertCompanyEmailSettings({
   const res = await pool.query(
     `
         INSERT INTO company_settings
-          (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields, customer_contact_categories, customer_document_categories, customer_terms_template, customer_esign_required, customer_service_agreement_url, customer_service_agreement_file_name, customer_service_agreement_mime, customer_service_agreement_size_bytes)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, $22, $23, $24, $25, $26, $27)
+          (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields, customer_contact_categories, customer_document_categories, customer_terms_template, customer_esign_required, customer_service_agreement_url, customer_service_agreement_file_name, customer_service_agreement_mime, customer_service_agreement_size_bytes, dashboard_incidents_count)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, $22, $23, $24, $25, $26, $27, $28)
       ON CONFLICT (company_id)
       DO UPDATE SET billing_rounding_mode = EXCLUDED.billing_rounding_mode,
                     billing_rounding_granularity = EXCLUDED.billing_rounding_granularity,
@@ -6013,6 +6032,7 @@ async function upsertCompanyEmailSettings({
                     customer_service_agreement_file_name = EXCLUDED.customer_service_agreement_file_name,
                     customer_service_agreement_mime = EXCLUDED.customer_service_agreement_mime,
                     customer_service_agreement_size_bytes = EXCLUDED.customer_service_agreement_size_bytes,
+                    dashboard_incidents_count = EXCLUDED.dashboard_incidents_count,
                     updated_at = NOW()
       RETURNING company_id,
                 billing_rounding_mode,
@@ -6040,7 +6060,8 @@ async function upsertCompanyEmailSettings({
                 customer_service_agreement_url,
                 customer_service_agreement_file_name,
                 customer_service_agreement_mime,
-                customer_service_agreement_size_bytes
+                customer_service_agreement_size_bytes,
+                dashboard_incidents_count
       `,
       [
         companyId,
@@ -6070,6 +6091,7 @@ async function upsertCompanyEmailSettings({
         nextServiceAgreementFileName,
         nextServiceAgreementMime,
         nextServiceAgreementSizeBytes,
+        nextDashboardIncidents,
       ]
     );
   return res.rows[0];
@@ -7832,7 +7854,6 @@ async function applyWorkOrderPauseToEquipment({
   if (!woNumber) throw new Error("workOrderNumber is required.");
 
   const normalizedServiceStatus = String(serviceStatus || "").trim() || "out_of_service";
-  const normalizedOrderStatus = String(orderStatus || "").trim() || "open";
   const isOutOfService = normalizedServiceStatus === "out_of_service";
 
   const startIso = startAt ? normalizeTimestamptz(startAt) : null;
@@ -7854,27 +7875,20 @@ async function applyWorkOrderPauseToEquipment({
         (company_id, equipment_id, work_order_number, start_at, end_at, created_at, updated_at)
       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
       ON CONFLICT (company_id, equipment_id, work_order_number)
-      DO UPDATE SET start_at = EXCLUDED.start_at, end_at = EXCLUDED.end_at, updated_at = NOW()
+      DO UPDATE SET end_at = EXCLUDED.end_at, updated_at = NOW()
       `,
       [cid, eid, woNumber, startIso, endIso || null]
     );
-  } else if (endIso || normalizedOrderStatus === "closed") {
+  } else {
     await pool.query(
       `
-      UPDATE equipment_out_of_service
-         SET end_at = COALESCE($4, NOW()),
-             updated_at = NOW()
+      DELETE FROM equipment_out_of_service
        WHERE company_id = $1
          AND equipment_id = $2
          AND work_order_number = $3
-         AND end_at IS NULL
       `,
-      [cid, eid, woNumber, endIso || null]
+      [cid, eid, woNumber]
     );
-  }
-
-  if (!isOutOfService) {
-    return { ok: true, updatedLineItems: 0, lineItemIds: [] };
   }
 
   const res = await pool.query(
@@ -7905,7 +7919,7 @@ async function applyWorkOrderPauseToEquipment({
     );
 
     let changed = false;
-    if (startIso) {
+    if (isOutOfService) {
       if (!existing) {
         pausePeriods.push({
           startAt: startIso,
@@ -7915,18 +7929,27 @@ async function applyWorkOrderPauseToEquipment({
         });
         changed = true;
       } else {
-        if (existing.startAt !== startIso) {
-          existing.startAt = startIso;
-          changed = true;
-        }
         if (endIso && existing.endAt !== endIso) {
           existing.endAt = endIso;
           changed = true;
         }
+        if (!endIso && existing.endAt) {
+          existing.endAt = null;
+          if (startIso && existing.startAt !== startIso) {
+            existing.startAt = startIso;
+          }
+          changed = true;
+        }
       }
-    } else if (endIso && existing && !existing.endAt) {
-      existing.endAt = endIso;
-      changed = true;
+    } else if (existing) {
+      const nextPeriods = pausePeriods.filter(
+        (p) => !(p.source === "work_order" && p.workOrderNumber === woNumber)
+      );
+      if (nextPeriods.length !== pausePeriods.length) {
+        pausePeriods.length = 0;
+        pausePeriods.push(...nextPeriods);
+        changed = true;
+      }
     }
 
     if (!changed) continue;

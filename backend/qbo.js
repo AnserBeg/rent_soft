@@ -225,6 +225,20 @@ function appendMinorVersion(url, minorVersion) {
   return next;
 }
 
+function parseRetryAfterSeconds(value) {
+  if (!value) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) {
+    const sec = Number(raw);
+    return Number.isFinite(sec) ? sec : null;
+  }
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed)) return null;
+  const delta = Math.ceil((parsed - Date.now()) / 1000);
+  return delta > 0 ? delta : 0;
+}
+
 async function qboRequest({ host, realmId, accessToken, method = "GET", path, body, minorVersion }) {
   const url = appendMinorVersion(new URL(`${host}/v3/company/${realmId}/${path}`), minorVersion);
   const headers = {
@@ -238,6 +252,7 @@ async function qboRequest({ host, realmId, accessToken, method = "GET", path, bo
   }
 
   const res = await fetch(url.toString(), { method, headers, body: payload });
+  const retryAfterSeconds = parseRetryAfterSeconds(res.headers?.get("retry-after"));
   const intuitTid =
     res.headers?.get("intuit_tid") ||
     res.headers?.get("intuit-tid") ||
@@ -266,6 +281,7 @@ async function qboRequest({ host, realmId, accessToken, method = "GET", path, bo
     err.status = res.status;
     err.payload = data;
     err.intuitTid = intuitTid;
+    err.retryAfterSeconds = retryAfterSeconds;
     err.request = { method, path, realmId, host };
     throw err;
   }
@@ -283,6 +299,7 @@ async function qboRequest({ host, realmId, accessToken, method = "GET", path, bo
     err.status = res.status;
     err.payload = data;
     err.intuitTid = intuitTid;
+    err.retryAfterSeconds = retryAfterSeconds;
     err.request = { method, path, realmId, host };
     throw err;
   }

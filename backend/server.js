@@ -6051,15 +6051,38 @@ function normalizeChangeRequestReviewStatus(value) {
       });
   }
 
-  function buildRequestedLineItemsFromSelection(existingItems, selectedItems) {
-    const base = (existingItems || []).map((li) => ({
-      lineItemId: li.id,
-      typeId: li.type_id,
-      bundleId: li.bundle_id,
-      startAt: li.start_at,
-      endAt: li.end_at,
-    }));
-    if (!selectedItems?.length) return base;
+  function normalizeLineItemBase(item) {
+    if (!item) return null;
+    return {
+      lineItemId: item.lineItemId ?? item.id ?? null,
+      typeId: item.typeId ?? item.type_id ?? null,
+      bundleId: item.bundleId ?? item.bundle_id ?? null,
+      startAt: item.startAt ?? item.start_at ?? null,
+      endAt: item.endAt ?? item.end_at ?? null,
+    };
+  }
+
+  function buildRequestedLineItemsFromSelection(
+    existingItems,
+    selectedItems,
+    { removedLineItemIds = [], removedLineItemIndexes = [] } = {}
+  ) {
+    const base = (existingItems || [])
+      .map((li) => normalizeLineItemBase(li))
+      .filter(Boolean);
+    const removeIdSet = new Set((removedLineItemIds || []).map((id) => String(id)));
+    const removeIndexSet = new Set(
+      (removedLineItemIndexes || []).map((idx) => Number(idx)).filter((idx) => Number.isFinite(idx))
+    );
+    if (!selectedItems?.length) {
+      if (!removeIdSet.size && !removeIndexSet.size) return base;
+      return base.filter((item, idx) => {
+        const id = item?.lineItemId || item?.id || null;
+        if (id && removeIdSet.has(String(id))) return false;
+        if (removeIndexSet.has(idx)) return false;
+        return true;
+      });
+    }
     const byId = new Map();
     base.forEach((item, idx) => {
       if (item.lineItemId) byId.set(String(item.lineItemId), idx);
@@ -6086,7 +6109,13 @@ function normalizeChangeRequestReviewStatus(value) {
         base.push({ ...incoming, lineItemId: null });
       }
     });
-    return base;
+    if (!removeIdSet.size && !removeIndexSet.size) return base;
+    return base.filter((item, idx) => {
+      const id = item?.lineItemId || item?.id || null;
+      if (id && removeIdSet.has(String(id))) return false;
+      if (removeIndexSet.has(idx)) return false;
+      return true;
+    });
   }
 
 function resolveOverallChangeRequestStatus({
@@ -6182,6 +6211,8 @@ function resolveOverallChangeRequestStatus({
     acceptedOrderFields = null,
     acceptedLineItemIds = null,
     acceptedLineItemIndexes = null,
+    acceptedLineItemRemoveIds = null,
+    acceptedLineItemRemoveIndexes = null,
     hasLineItemSelection = false,
   }) {
     const { orderUpdate, lineItems } = getChangeRequestSections(request);
@@ -6229,16 +6260,15 @@ function resolveOverallChangeRequestStatus({
         );
         const existingLineItems = Array.isArray(existingOrder?.lineItems) ? existingOrder.lineItems : [];
         const requestedLineItems = hasLineItemSelection
-          ? buildRequestedLineItemsFromSelection(existingLineItems, filteredLineItems)
-          : filteredLineItems.length
+          ? buildRequestedLineItemsFromSelection(existingLineItems, filteredLineItems, {
+              removedLineItemIds: acceptedLineItemRemoveIds,
+              removedLineItemIndexes: acceptedLineItemRemoveIndexes,
+            })
+          : request.scope === "new_quote" && filteredLineItems.length
             ? filteredLineItems
-            : existingLineItems.map((li) => ({
-                lineItemId: li.id,
-                typeId: li.type_id,
-                bundleId: li.bundle_id,
-                startAt: li.start_at,
-                endAt: li.end_at,
-              }));
+            : existingLineItems
+                .map((li) => normalizeLineItemBase(li))
+                .filter(Boolean);
       const mergedLineItems = mergeLineItemsWithExisting(existingLineItems, requestedLineItems);
       await updateRentalOrder({
         id: orderId,
@@ -6405,15 +6435,28 @@ app.post(
         ? normalizeAcceptedFields(req.body.acceptedOrderFields, ALLOWED_ORDER_FIELDS)
         : null;
       const hasLineItemSelection =
-        Array.isArray(req.body?.acceptedLineItemIds) || Array.isArray(req.body?.acceptedLineItemIndexes);
+        Array.isArray(req.body?.acceptedLineItemIds) ||
+        Array.isArray(req.body?.acceptedLineItemIndexes) ||
+        Array.isArray(req.body?.acceptedLineItemRemoveIds) ||
+        Array.isArray(req.body?.acceptedLineItemRemoveIndexes);
       const acceptedLineItemIds = Array.isArray(req.body?.acceptedLineItemIds)
         ? req.body.acceptedLineItemIds
         : [];
       const acceptedLineItemIndexes = Array.isArray(req.body?.acceptedLineItemIndexes)
         ? req.body.acceptedLineItemIndexes.map((idx) => Number(idx)).filter((idx) => Number.isFinite(idx))
         : [];
+      const acceptedLineItemRemoveIds = Array.isArray(req.body?.acceptedLineItemRemoveIds)
+        ? req.body.acceptedLineItemRemoveIds
+        : [];
+      const acceptedLineItemRemoveIndexes = Array.isArray(req.body?.acceptedLineItemRemoveIndexes)
+        ? req.body.acceptedLineItemRemoveIndexes.map((idx) => Number(idx)).filter((idx) => Number.isFinite(idx))
+        : [];
       const hasAnyOrderSelection =
-        (acceptedOrderFields?.length || 0) > 0 || acceptedLineItemIds.length > 0 || acceptedLineItemIndexes.length > 0;
+        (acceptedOrderFields?.length || 0) > 0 ||
+        acceptedLineItemIds.length > 0 ||
+        acceptedLineItemIndexes.length > 0 ||
+        acceptedLineItemRemoveIds.length > 0 ||
+        acceptedLineItemRemoveIndexes.length > 0;
       if ((hasOrderSelection || hasLineItemSelection) && !hasAnyOrderSelection) {
         return res.status(400).json({ error: "Select at least one order field or line item to accept." });
       }
@@ -6421,7 +6464,9 @@ app.post(
         hasLineItemSelection &&
         request.scope === "new_quote" &&
         acceptedLineItemIds.length === 0 &&
-        acceptedLineItemIndexes.length === 0
+        acceptedLineItemIndexes.length === 0 &&
+        acceptedLineItemRemoveIds.length === 0 &&
+        acceptedLineItemRemoveIndexes.length === 0
       ) {
         return res.status(400).json({ error: "At least one line item is required." });
       }
@@ -6459,6 +6504,8 @@ app.post(
         acceptedOrderFields,
         acceptedLineItemIds,
         acceptedLineItemIndexes,
+        acceptedLineItemRemoveIds,
+        acceptedLineItemRemoveIndexes,
         hasLineItemSelection,
       });
 
@@ -6647,15 +6694,28 @@ app.post(
         ? normalizeAcceptedFields(req.body.acceptedOrderFields, ALLOWED_ORDER_FIELDS)
         : null;
       const hasLineItemSelection =
-        Array.isArray(req.body?.acceptedLineItemIds) || Array.isArray(req.body?.acceptedLineItemIndexes);
+        Array.isArray(req.body?.acceptedLineItemIds) ||
+        Array.isArray(req.body?.acceptedLineItemIndexes) ||
+        Array.isArray(req.body?.acceptedLineItemRemoveIds) ||
+        Array.isArray(req.body?.acceptedLineItemRemoveIndexes);
       const acceptedLineItemIds = Array.isArray(req.body?.acceptedLineItemIds)
         ? req.body.acceptedLineItemIds
         : [];
       const acceptedLineItemIndexes = Array.isArray(req.body?.acceptedLineItemIndexes)
         ? req.body.acceptedLineItemIndexes.map((idx) => Number(idx)).filter((idx) => Number.isFinite(idx))
         : [];
+      const acceptedLineItemRemoveIds = Array.isArray(req.body?.acceptedLineItemRemoveIds)
+        ? req.body.acceptedLineItemRemoveIds
+        : [];
+      const acceptedLineItemRemoveIndexes = Array.isArray(req.body?.acceptedLineItemRemoveIndexes)
+        ? req.body.acceptedLineItemRemoveIndexes.map((idx) => Number(idx)).filter((idx) => Number.isFinite(idx))
+        : [];
       const hasAnySelection =
-        (acceptedOrderFields?.length || 0) > 0 || acceptedLineItemIds.length > 0 || acceptedLineItemIndexes.length > 0;
+        (acceptedOrderFields?.length || 0) > 0 ||
+        acceptedLineItemIds.length > 0 ||
+        acceptedLineItemIndexes.length > 0 ||
+        acceptedLineItemRemoveIds.length > 0 ||
+        acceptedLineItemRemoveIndexes.length > 0;
       if ((hasOrderSelection || hasLineItemSelection) && !hasAnySelection) {
         return res.status(400).json({ error: "Select at least one order field or line item to accept." });
       }
@@ -6663,7 +6723,9 @@ app.post(
         hasLineItemSelection &&
         request.scope === "new_quote" &&
         acceptedLineItemIds.length === 0 &&
-        acceptedLineItemIndexes.length === 0
+        acceptedLineItemIndexes.length === 0 &&
+        acceptedLineItemRemoveIds.length === 0 &&
+        acceptedLineItemRemoveIndexes.length === 0
       ) {
         return res.status(400).json({ error: "At least one line item is required." });
       }
@@ -6677,6 +6739,8 @@ app.post(
         acceptedOrderFields,
         acceptedLineItemIds,
         acceptedLineItemIndexes,
+        acceptedLineItemRemoveIds,
+        acceptedLineItemRemoveIndexes,
         hasLineItemSelection,
       });
 
@@ -6925,10 +6989,11 @@ app.put(
         customerDocumentCategories,
         customerTermsTemplate,
         customerEsignRequired,
-        customerServiceAgreementUrl,
-        customerServiceAgreementFileName,
-        customerServiceAgreementMime,
-        customerServiceAgreementSizeBytes,
+      customerServiceAgreementUrl,
+      customerServiceAgreementFileName,
+      customerServiceAgreementMime,
+      customerServiceAgreementSizeBytes,
+      dashboardIncidentsCount,
       qboEnabled,
       qboBillingDay,
       qboAdjustmentPolicy,
@@ -6959,6 +7024,7 @@ app.put(
             customerServiceAgreementFileName,
             customerServiceAgreementMime,
             customerServiceAgreementSizeBytes,
+            dashboardIncidentsCount,
       qboEnabled: qboEnabled ?? null,
       qboBillingDay: qboBillingDay ?? null,
       qboAdjustmentPolicy: qboAdjustmentPolicy ?? null,
@@ -7582,6 +7648,11 @@ app.get(
       const message = err?.message ? String(err.message) : "QBO income request failed.";
       if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
       if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      if (err?.status === 429) {
+        const payload = { error: message };
+        if (Number.isFinite(err?.retryAfterSeconds)) payload.retryAfterSeconds = err.retryAfterSeconds;
+        return res.status(429).json(payload);
+      }
       res.status(500).json({ error: message });
     }
   })
@@ -7607,6 +7678,11 @@ app.get(
       const message = err?.message ? String(err.message) : "QBO income time series request failed.";
       if (err?.code === "qbo_not_connected") return res.status(400).json({ error: message });
       if (err?.status === 401 || err?.status === 403) return res.status(401).json({ error: message });
+      if (err?.status === 429) {
+        const payload = { error: message };
+        if (Number.isFinite(err?.retryAfterSeconds)) payload.retryAfterSeconds = err.retryAfterSeconds;
+        return res.status(429).json(payload);
+      }
       res.status(500).json({ error: message });
     }
   })

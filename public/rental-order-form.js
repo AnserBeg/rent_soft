@@ -5059,6 +5059,7 @@ async function syncWorkOrderPauseForUnits(unitIds, record) {
   const ids = Array.isArray(unitIds) ? unitIds.map((id) => String(id)).filter(Boolean) : [];
   if (!ids.length) return;
   const now = new Date().toISOString();
+  const updatedStamp = record?.updatedAt || now;
   const payload = {
     companyId: activeCompanyId,
     workOrderNumber: record?.number || "",
@@ -5066,12 +5067,12 @@ async function syncWorkOrderPauseForUnits(unitIds, record) {
     orderStatus: record?.orderStatus || "open",
   };
   if (record?.serviceStatus === "out_of_service") {
-    payload.startAt = record?.createdAt || record?.updatedAt || now;
+    payload.startAt = updatedStamp;
     if (record?.orderStatus === "closed") {
-      payload.endAt = record?.closedAt || record?.updatedAt || now;
+      payload.endAt = record?.closedAt || updatedStamp || now;
     }
   } else {
-    payload.endAt = record?.closedAt || record?.updatedAt || now;
+    payload.endAt = record?.closedAt || updatedStamp || now;
   }
 
   await Promise.all(

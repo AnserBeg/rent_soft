@@ -8,6 +8,15 @@ const rangeDaysSelect = document.getElementById("range-days");
 const groupBySelect = document.getElementById("group-by");
 const todayBtn = document.getElementById("today");
 const qboIncomeTotal = document.getElementById("qbo-income-total");
+const incidentsCountEl = document.getElementById("incidents-count");
+const incidentsOpenBtn = document.getElementById("incidents-open");
+const incidentsOverlayBtn = document.getElementById("incidents-edit-btn");
+const incidentsModal = document.getElementById("incidents-modal");
+const incidentsInput = document.getElementById("incidents-input");
+const incidentsSaveBtn = document.getElementById("incidents-save");
+const incidentsCancelBtn = document.getElementById("incidents-cancel");
+const incidentsCloseBtn = document.getElementById("incidents-close");
+const incidentsError = document.getElementById("incidents-error");
 
 const statusReservation = document.getElementById("status-reservation");
 const statusRequested = document.getElementById("status-requested");
@@ -158,6 +167,7 @@ let rawEquipment = [];
 let rawAssignments = [];
 let equipmentLabelById = new Map();
 let equipmentById = new Map();
+let incidentsCount = 0;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const COL_W = 44;
@@ -176,6 +186,7 @@ let endingDays = DEFAULT_ENDING_DAYS;
 
 const BENCH_VIEW_STORAGE_KEY = "rentsoft.workbench.view";
 const BENCH_SORT_STORAGE_KEY = "rentsoft.workbench.timelineSortNearest";
+const INCIDENTS_STORAGE_KEY = "rentsoft.dashboard.incidents";
 let benchActiveView = null; // "timeline" | "stages" | null
 let benchOrdersCache = [];
 let benchOrdersCacheKey = "";
@@ -925,6 +936,142 @@ function safeStorageSet(key, value) {
   try {
     window.localStorage?.setItem?.(key, value);
   } catch (_) { }
+}
+
+function renderIncidentsCount() {
+  if (!incidentsCountEl) return;
+  incidentsCountEl.textContent = fmtCount(incidentsCount);
+}
+
+function incidentsStorageKey() {
+  return activeCompanyId ? `${INCIDENTS_STORAGE_KEY}.${activeCompanyId}` : INCIDENTS_STORAGE_KEY;
+}
+
+async function loadIncidentsCount() {
+  const stored = safeStorageGet(incidentsStorageKey());
+  const parsed = Number(stored);
+  if (Number.isFinite(parsed) && parsed >= 0) {
+    incidentsCount = Math.round(parsed);
+    renderIncidentsCount();
+  }
+
+  if (!activeCompanyId) return;
+
+  try {
+    const res = await fetch(`/api/company-settings?companyId=${encodeURIComponent(activeCompanyId)}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load incidents.");
+    const raw = data?.settings?.dashboard_incidents_count ?? data?.settings?.dashboardIncidentsCount;
+    const next = Number(raw);
+    incidentsCount = Number.isFinite(next) && next >= 0 ? Math.round(next) : 0;
+    safeStorageSet(incidentsStorageKey(), String(incidentsCount));
+    renderIncidentsCount();
+  } catch (_) {
+    renderIncidentsCount();
+  }
+}
+
+function openIncidentsModal() {
+  if (!incidentsModal || !incidentsInput) return;
+  if (incidentsError) incidentsError.textContent = "";
+  incidentsInput.value = Number.isFinite(incidentsCount) ? String(incidentsCount) : "";
+  incidentsModal.classList.add("show");
+  incidentsModal.setAttribute("aria-hidden", "false");
+  incidentsInput.focus();
+  incidentsInput.select?.();
+}
+
+function closeIncidentsModal() {
+  if (!incidentsModal) return;
+  incidentsModal.classList.remove("show");
+  incidentsModal.setAttribute("aria-hidden", "true");
+}
+
+async function saveIncidentsCount() {
+  if (!incidentsInput) return;
+  if (incidentsError) incidentsError.textContent = "";
+  const next = Number(incidentsInput.value);
+  if (!Number.isFinite(next) || next < 0) {
+    if (incidentsError) incidentsError.textContent = "Enter a non-negative number.";
+    incidentsInput.focus();
+    return;
+  }
+  incidentsCount = Math.round(next);
+  renderIncidentsCount();
+  safeStorageSet(incidentsStorageKey(), String(incidentsCount));
+
+  if (!activeCompanyId) {
+    if (incidentsError) incidentsError.textContent = "Log in to save incidents.";
+    return;
+  }
+
+  incidentsSaveBtn?.setAttribute("disabled", "disabled");
+  try {
+    const res = await fetch("/api/company-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        companyId: activeCompanyId,
+        dashboardIncidentsCount: incidentsCount,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to save incidents.");
+    const raw = data?.settings?.dashboard_incidents_count ?? data?.settings?.dashboardIncidentsCount;
+    const saved = Number(raw);
+    if (Number.isFinite(saved) && saved >= 0) {
+      incidentsCount = Math.round(saved);
+      safeStorageSet(incidentsStorageKey(), String(incidentsCount));
+      renderIncidentsCount();
+    }
+    closeIncidentsModal();
+  } catch (err) {
+    if (incidentsError) incidentsError.textContent = err?.message || "Unable to save incidents.";
+  } finally {
+    incidentsSaveBtn?.removeAttribute("disabled");
+  }
+}
+
+function initIncidentsWidget() {
+  if (!incidentsCountEl) return;
+  loadIncidentsCount().catch(() => null);
+
+  [incidentsOpenBtn, incidentsOverlayBtn]
+    .filter(Boolean)
+    .forEach((btn) =>
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        openIncidentsModal();
+      })
+    );
+
+  incidentsSaveBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    saveIncidentsCount().catch(() => null);
+  });
+
+  [incidentsCancelBtn, incidentsCloseBtn]
+    .filter(Boolean)
+    .forEach((btn) =>
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        closeIncidentsModal();
+      })
+    );
+
+  incidentsModal?.addEventListener("click", (e) => {
+    if (e.target === incidentsModal) closeIncidentsModal();
+  });
+
+  incidentsInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveIncidentsCount().catch(() => null);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeIncidentsModal();
+    }
+  });
 }
 
 function currentBenchViewPref() {
@@ -3570,6 +3717,10 @@ function init() {
 
   if (hasShortfallUI()) {
     initShortfallUI();
+  }
+
+  if (hasRevenueUI()) {
+    initIncidentsWidget();
   }
 
   rangeDays = Number(rangeDaysSelect?.value) || 30;

@@ -327,6 +327,22 @@
                 <button type="button" class="ghost small" id="clear-signature">Clear signature</button>
               </div>
             </div>
+            <div class="stack">
+              <label>Upload signature image (optional)
+                <input id="signature-upload" type="file" accept="image/png,image/jpeg,image/webp" />
+              </label>
+              <div class="signature-upload-preview" id="signature-upload-preview" style="display:none;">
+                <img
+                  id="signature-upload-image"
+                  alt="Uploaded signature preview"
+                  style="max-width:100%; max-height:180px; border:1px solid var(--border); border-radius:12px; background:#fff; padding:8px;"
+                />
+                <div class="inline-actions" style="justify-content:flex-start;">
+                  <button type="button" class="ghost small" id="clear-signature-upload">Remove upload</button>
+                </div>
+              </div>
+              <p class="hint" id="signature-upload-hint">Upload a scanned signature (PNG, JPG, or WebP) if you cannot draw on the canvas.</p>
+            </div>
           </div>
         </section>
 

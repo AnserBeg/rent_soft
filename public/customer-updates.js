@@ -343,10 +343,46 @@ function formatRichText(value) {
 }
 
 function normalizeCompareValue(value) {
+  const normalizeString = (raw) => {
+    const trimmed = String(raw ?? "").replace(/\r\n/g, "\n").trim();
+    if (!trimmed) return "";
+    const looksLikeHtml = /<\s*[a-z][\s\S]*>/i.test(trimmed);
+    if (looksLikeHtml) {
+      const cleaned = formatRichText(trimmed);
+      return cleaned.replace(/\s+/g, " ").trim();
+    }
+    return trimmed;
+  };
+
+  const normalizeArray = (arr) => {
+    const normalized = arr
+      .map((item) => normalizeCompareValue(item))
+      .filter((item) => item !== "");
+    if (!normalized.length) return "";
+    const sorted = normalized.slice().sort();
+    return JSON.stringify(sorted);
+  };
+
+  const normalizeObject = (obj) => {
+    const entries = Object.entries(obj)
+      .map(([key, val]) => [key, normalizeCompareValue(val)])
+      .filter(([, val]) => val !== "");
+    if (!entries.length) return "";
+    entries.sort(([a], [b]) => String(a).localeCompare(String(b)));
+    const normalized = {};
+    entries.forEach(([key, val]) => {
+      normalized[key] = val;
+    });
+    return JSON.stringify(normalized);
+  };
+
   if (value === null || value === undefined) return "";
-  if (Array.isArray(value)) return JSON.stringify(value);
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value).trim();
+  if (typeof value === "string") return normalizeString(value);
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (Array.isArray(value)) return normalizeArray(value);
+  if (typeof value === "object") return normalizeObject(value);
+  return normalizeString(value);
 }
 
 function isValueEqual(current, proposed) {
@@ -895,7 +931,7 @@ function renderDetail(request, currentCustomer, currentOrder) {
 
   const lineItemHasChange = (current, proposed) => {
     if (!current && !proposed) return false;
-    if (!proposed) return false;
+    if (!proposed) return true;
     if (!current) return true;
     return !isValueEqual(normalizeLineItemCompare(current), normalizeLineItemCompare(proposed));
   };
@@ -1212,17 +1248,20 @@ function renderDetail(request, currentCustomer, currentOrder) {
       const label = `Line item ${index + 1}`;
       const hasChange = lineItemHasChange(pair.current, pair.proposed);
       const key = lineItemKey(pair.proposed || pair.current, index);
-        const toggle = hasChange
-          ? createAcceptToggle({
-              section: "lineItem",
-              key,
-              disabled: !canReviewOrder,
-              meta: {
-                id: pair.proposed?.lineItemId || pair.proposed?.id || pair.current?.lineItemId || pair.current?.id || null,
-                index,
-              },
-            })
-          : null;
+      const isRemoval = !!pair.current && !pair.proposed;
+      const toggle = hasChange
+        ? createAcceptToggle({
+            section: "lineItem",
+            key,
+            checked: !isRemoval,
+            disabled: !canReviewOrder,
+            meta: {
+              id: pair.proposed?.lineItemId || pair.proposed?.id || pair.current?.lineItemId || pair.current?.id || null,
+              index,
+              remove: isRemoval,
+            },
+          })
+        : null;
       const { currentBody, proposedBody } = createTwoColBlock(label, { toggle });
       setTwoColContent(currentBody, formatLineItemDetailsHtml(pair.current), { html: true });
       setTwoColContent(proposedBody, formatLineItemDetailsHtml(pair.proposed), { html: true });
@@ -1406,9 +1445,19 @@ applyUpdateBtn?.addEventListener("click", async () => {
     const acceptedOrderFields = canReviewOrder ? Array.from(selectionState?.orderFields || []) : [];
     const acceptedLineItemIds = [];
     const acceptedLineItemIndexes = [];
+    const acceptedLineItemRemoveIds = [];
+    const acceptedLineItemRemoveIndexes = [];
     if (canReviewOrder) {
       (selectionState?.lineItemKeys || new Set()).forEach((key) => {
         const meta = selectionState?.lineItemMeta?.get(key) || null;
+        if (meta?.remove) {
+          if (meta?.id) {
+            acceptedLineItemRemoveIds.push(meta.id);
+          } else if (Number.isFinite(meta?.index)) {
+            acceptedLineItemRemoveIndexes.push(meta.index);
+          }
+          return;
+        }
         if (meta?.id) {
           acceptedLineItemIds.push(meta.id);
           return;
@@ -1441,6 +1490,12 @@ applyUpdateBtn?.addEventListener("click", async () => {
         payload.acceptedOrderFields = acceptedOrderFields;
         payload.acceptedLineItemIds = acceptedLineItemIds;
         payload.acceptedLineItemIndexes = acceptedLineItemIndexes;
+        if (acceptedLineItemRemoveIds.length) {
+          payload.acceptedLineItemRemoveIds = acceptedLineItemRemoveIds;
+        }
+        if (acceptedLineItemRemoveIndexes.length) {
+          payload.acceptedLineItemRemoveIndexes = acceptedLineItemRemoveIndexes;
+        }
       }
     }
     const result = await fetchJson(

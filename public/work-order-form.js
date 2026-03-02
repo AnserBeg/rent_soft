@@ -589,6 +589,7 @@ async function syncWorkOrderPause(record) {
   const unitIds = dedupeStringList(normalizeUnitIds(record));
   if (!unitIds.length) return;
   const now = new Date().toISOString();
+  const updatedStamp = record.updatedAt || now;
   const payload = {
     companyId: activeCompanyId,
     workOrderNumber: record.number,
@@ -597,12 +598,12 @@ async function syncWorkOrderPause(record) {
   };
 
   if (record.serviceStatus === "out_of_service") {
-    payload.startAt = record.createdAt || record.updatedAt || now;
+    payload.startAt = updatedStamp;
     if (record.orderStatus === "closed") {
-      payload.endAt = record.closedAt || record.updatedAt || now;
+      payload.endAt = record.closedAt || updatedStamp || now;
     }
   } else {
-    payload.endAt = record.closedAt || record.updatedAt || now;
+    payload.endAt = record.closedAt || updatedStamp || now;
   }
 
   const errors = [];

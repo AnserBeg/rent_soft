@@ -28,6 +28,12 @@ const signatureTitle = document.getElementById("signature-title");
 const signatureName = document.getElementById("signature-name");
 const signatureCanvas = document.getElementById("signature-canvas");
 const clearSignatureBtn = document.getElementById("clear-signature");
+const signatureUploadInput = document.getElementById("signature-upload");
+const signatureUploadPreview = document.getElementById("signature-upload-preview");
+const signatureUploadImage = document.getElementById("signature-upload-image");
+const clearSignatureUploadBtn = document.getElementById("clear-signature-upload");
+const signatureUploadHint = document.getElementById("signature-upload-hint");
+const signatureUploadHintDefault = signatureUploadHint ? signatureUploadHint.textContent : "";
 const proofActions = document.getElementById("proof-actions");
 const downloadProof = document.getElementById("download-proof");
 const submitBtn = document.getElementById("submit-link");
@@ -219,6 +225,8 @@ let types = [];
 let lineItems = [];
 let docCategoryMap = {};
 let signatureActive = false;
+let signatureDrawn = false;
+let signatureUploadDataUrl = "";
 let serviceAgreementRequired = false;
 let signatureRequired = false;
 let rentalInfoFields = null;
@@ -3013,6 +3021,33 @@ function setupSignatureCanvas() {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
+  const updateSignatureActive = () => {
+    signatureActive = signatureDrawn || !!signatureUploadDataUrl;
+  };
+
+  const clearSignatureCanvas = () => {
+    ctx.clearRect(0, 0, signatureCanvas.width, signatureCanvas.height);
+    signatureDrawn = false;
+    updateSignatureActive();
+  };
+
+  const clearSignatureUpload = () => {
+    signatureUploadDataUrl = "";
+    if (signatureUploadInput) signatureUploadInput.value = "";
+    if (signatureUploadImage) signatureUploadImage.src = "";
+    if (signatureUploadPreview) signatureUploadPreview.style.display = "none";
+    if (signatureUploadHint) signatureUploadHint.textContent = signatureUploadHintDefault;
+    updateSignatureActive();
+  };
+
+  const setSignatureUpload = (dataUrl) => {
+    signatureUploadDataUrl = dataUrl;
+    if (signatureUploadImage) signatureUploadImage.src = dataUrl;
+    if (signatureUploadPreview) signatureUploadPreview.style.display = "block";
+    if (signatureUploadHint) signatureUploadHint.textContent = "Signature image ready.";
+    updateSignatureActive();
+  };
+
   let drawing = false;
   const getPoint = (evt) => {
     const rect = signatureCanvas.getBoundingClientRect();
@@ -3026,7 +3061,9 @@ function setupSignatureCanvas() {
 
   const start = (evt) => {
     drawing = true;
-    signatureActive = true;
+    signatureDrawn = true;
+    if (signatureUploadDataUrl) clearSignatureUpload();
+    updateSignatureActive();
     const pt = getPoint(evt);
     ctx.beginPath();
     ctx.moveTo(pt.x, pt.y);
@@ -3052,8 +3089,41 @@ function setupSignatureCanvas() {
   signatureCanvas.addEventListener("touchend", end);
 
   clearSignatureBtn?.addEventListener("click", () => {
-    ctx.clearRect(0, 0, signatureCanvas.width, signatureCanvas.height);
-    signatureActive = false;
+    clearSignatureCanvas();
+  });
+
+  signatureUploadInput?.addEventListener("change", () => {
+    const file = signatureUploadInput.files && signatureUploadInput.files[0];
+    if (!file) {
+      clearSignatureUpload();
+      return;
+    }
+    if (!file.type || !file.type.startsWith("image/")) {
+      clearSignatureUpload();
+      if (signatureUploadHint) signatureUploadHint.textContent = "Please choose an image file.";
+      return;
+    }
+    if (signatureUploadHint) signatureUploadHint.textContent = `Loading ${file.name}...`;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "").trim();
+      if (!dataUrl.startsWith("data:image/")) {
+        clearSignatureUpload();
+        if (signatureUploadHint) signatureUploadHint.textContent = "Unable to read that image.";
+        return;
+      }
+      clearSignatureCanvas();
+      setSignatureUpload(dataUrl);
+    };
+    reader.onerror = () => {
+      clearSignatureUpload();
+      if (signatureUploadHint) signatureUploadHint.textContent = "Unable to read that image.";
+    };
+    reader.readAsDataURL(file);
+  });
+
+  clearSignatureUploadBtn?.addEventListener("click", () => {
+    clearSignatureUpload();
   });
 }
 
@@ -3524,7 +3594,7 @@ form?.addEventListener("submit", async (evt) => {
       throw new Error("Please confirm the service agreement.");
     }
     if (signatureRequired && (!signatureName.value.trim() || !signatureActive)) {
-      throw new Error("Please provide your typed name and drawn signature.");
+      throw new Error("Please provide your typed name and signature (drawn or uploaded).");
     }
 
     const formData = new FormData();
@@ -3534,8 +3604,13 @@ form?.addEventListener("submit", async (evt) => {
       formData.append("serviceAgreementAck", serviceAgreementAck.checked ? "true" : "false");
     }
     if (signatureSection.style.display !== "none") {
+      const signatureValue = signatureUploadDataUrl
+        ? signatureUploadDataUrl
+        : signatureDrawn
+        ? signatureCanvas.toDataURL("image/png")
+        : "";
       formData.append("signatureName", signatureName.value.trim());
-      formData.append("signatureData", signatureCanvas.toDataURL("image/png"));
+      if (signatureValue) formData.append("signatureData", signatureValue);
     }
 
     Object.keys(docCategoryMap).forEach((slug) => {

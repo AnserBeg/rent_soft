@@ -89,6 +89,7 @@ async function syncWorkOrderPause(order) {
   const unitIds = dedupeStringList(normalizeUnitIds(order));
   if (!unitIds.length) return;
   const now = new Date().toISOString();
+  const updatedStamp = order.updatedAt || now;
   const payload = {
     companyId: activeCompanyId,
     workOrderNumber: order.number,
@@ -96,12 +97,12 @@ async function syncWorkOrderPause(order) {
     orderStatus: order.orderStatus || "open",
   };
   if (order.serviceStatus === "out_of_service") {
-    payload.startAt = order.createdAt || order.updatedAt || now;
+    payload.startAt = updatedStamp;
     if (order.orderStatus === "closed") {
-      payload.endAt = order.closedAt || order.updatedAt || now;
+      payload.endAt = order.closedAt || updatedStamp || now;
     }
   } else {
-    payload.endAt = order.closedAt || order.updatedAt || now;
+    payload.endAt = order.closedAt || updatedStamp || now;
   }
   const errors = [];
   await Promise.all(
