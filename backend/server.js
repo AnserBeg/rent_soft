@@ -165,6 +165,7 @@ const {
   applyWorkOrderPauseToEquipment,
   getTypeAvailabilitySeries,
   getAvailabilityShortfallsSummary,
+  getUnassignedReservedCountsByType,
   getAvailabilityShortfallsCustomerDemand,
   getTypeAvailabilitySeriesWithProjection,
   getTypeAvailabilityShortfallDetails,
@@ -8032,6 +8033,23 @@ app.get(
       companyId,
       from,
       to,
+      locationId: locationId ? Number(locationId) : null,
+      categoryId: categoryId ? Number(categoryId) : null,
+      typeId: typeId ? Number(typeId) : null,
+    });
+    res.json(data);
+  })
+);
+
+app.get(
+  "/api/availability-shortfalls/unassigned-reservations",
+  asyncHandler(async (req, res) => {
+    const { companyId, locationId, categoryId, typeId } = req.query;
+    if (!companyId) {
+      return res.status(400).json({ error: "companyId is required." });
+    }
+    const data = await getUnassignedReservedCountsByType({
+      companyId,
       locationId: locationId ? Number(locationId) : null,
       categoryId: categoryId ? Number(categoryId) : null,
       typeId: typeId ? Number(typeId) : null,

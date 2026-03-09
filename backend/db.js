@@ -8443,6 +8443,60 @@ async function getAvailabilityShortfallsSummary({
   return { rows };
 }
 
+async function getUnassignedReservedCountsByType({
+  companyId,
+  locationId = null,
+  categoryId = null,
+  typeId = null,
+} = {}) {
+  if (!companyId) return { rows: [] };
+  const locationIdNum = locationId === null || locationId === undefined ? null : Number(locationId);
+  const categoryIdNum = categoryId === null || categoryId === undefined ? null : Number(categoryId);
+  const typeIdNum = typeId === null || typeId === undefined ? null : Number(typeId);
+
+  const params = [companyId];
+  const filters = [
+    "ro.company_id = $1",
+    "ro.status IN ('reservation','requested')",
+    "li.end_at > NOW()",
+  ];
+  if (Number.isFinite(locationIdNum)) {
+    params.push(locationIdNum);
+    filters.push(`ro.pickup_location_id = $${params.length}`);
+  }
+  if (Number.isFinite(categoryIdNum)) {
+    params.push(categoryIdNum);
+    filters.push(`et.category_id = $${params.length}`);
+  }
+  if (Number.isFinite(typeIdNum)) {
+    params.push(typeIdNum);
+    filters.push(`li.type_id = $${params.length}`);
+  }
+
+  const res = await pool.query(
+    `
+    WITH line_totals AS (
+      SELECT li.id,
+             li.type_id,
+             CASE WHEN COUNT(liv.equipment_id) > 0 THEN 0 ELSE 1 END AS unassigned_qty
+        FROM rental_order_line_items li
+        JOIN rental_orders ro ON ro.id = li.rental_order_id
+        JOIN equipment_types et ON et.id = li.type_id AND et.company_id = ro.company_id
+   LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
+       WHERE ${filters.join(" AND ")}
+       GROUP BY li.id, li.type_id
+    )
+    SELECT type_id,
+           SUM(unassigned_qty)::int AS unassigned_reserved
+      FROM line_totals
+     GROUP BY type_id
+    `,
+    params
+  );
+
+  return { rows: res.rows || [] };
+}
+
 async function getAvailabilityShortfallsCustomerDemand({
   companyId,
   from,
@@ -15612,6 +15666,7 @@ module.exports = {
   applyWorkOrderPauseToEquipment,
   getTypeAvailabilitySeries,
   getAvailabilityShortfallsSummary,
+  getUnassignedReservedCountsByType,
   getAvailabilityShortfallsCustomerDemand,
   getTypeAvailabilitySeriesWithProjection,
   getTypeAvailabilityShortfallDetails,

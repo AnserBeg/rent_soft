@@ -234,6 +234,26 @@ function loadGoogleMaps(apiKey) {
   return window.__rentsoftGoogleMapsLoading;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchJsonWithRetryAfter(url, { retries = 2, retryBaseMs = 1000 } = {}) {
+  let attempt = 0;
+  while (true) {
+    const res = await fetch(url);
+    const data = await res.json().catch(() => ({}));
+    if (res.status !== 429 || attempt >= retries) {
+      return { res, data };
+    }
+    const retryAfterSeconds = Number(data?.retryAfterSeconds);
+    const waitMs = Number.isFinite(retryAfterSeconds) ? retryAfterSeconds * 1000 : retryBaseMs;
+    const jitter = Math.floor(Math.random() * 250);
+    await sleep(Math.max(250, waitMs) + jitter);
+    attempt += 1;
+  }
+}
+
 async function getPublicConfig() {
   const res = await fetch("/api/public-config");
   const data = await res.json().catch(() => ({}));
@@ -1355,8 +1375,7 @@ async function loadRevenueTimeSeries() {
     bucket,
   });
 
-  const res = await fetch(`/api/qbo/income-timeseries?${qs.toString()}`);
-  const data = await res.json().catch(() => ({}));
+  const { res, data } = await fetchJsonWithRetryAfter(`/api/qbo/income-timeseries?${qs.toString()}`);
   if (!res.ok) throw new Error(data.error || "Unable to load revenue time series");
 
   const rows = Array.isArray(data.rows) ? data.rows : [];
@@ -1416,8 +1435,7 @@ async function loadQboIncomeTotal() {
       start,
       end,
     });
-    const res = await fetch(`/api/qbo/income?${qs.toString()}`);
-    const data = await res.json().catch(() => ({}));
+    const { res, data } = await fetchJsonWithRetryAfter(`/api/qbo/income?${qs.toString()}`);
     if (!res.ok) throw new Error(data.error || "Unable to load QBO income");
     const total = Number(data.total || 0);
     if (Number.isFinite(total)) {
@@ -2114,6 +2132,26 @@ async function loadShortfallOutOfServiceIds() {
   return buildShortfallOutOfServiceSet(orders);
 }
 
+async function loadShortfallUnassignedReservedCounts() {
+  if (!activeCompanyId) return new Map();
+  const qs = new URLSearchParams({ companyId: String(activeCompanyId) });
+  if (shortfallLocation?.value) qs.set("locationId", String(Number(shortfallLocation.value)));
+  if (shortfallCategory?.value) qs.set("categoryId", String(Number(shortfallCategory.value)));
+  if (shortfallType?.value) qs.set("typeId", String(Number(shortfallType.value)));
+
+  const res = await fetch(`/api/availability-shortfalls/unassigned-reservations?${qs.toString()}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load reservations");
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+  const map = new Map();
+  rows.forEach((row) => {
+    const typeId = row.typeId ?? row.type_id ?? null;
+    if (!typeId) return;
+    map.set(String(typeId), Number(row.unassignedReserved ?? row.unassigned_reserved ?? 0));
+  });
+  return map;
+}
+
 function shortfallEquipmentMatchesFilters(eq) {
   const eqTypeId = eq.type_id ?? eq.typeId ?? null;
   if (!eqTypeId) return false;
@@ -2170,6 +2208,22 @@ function buildShortfallCountsByType(equipment, outOfServiceIds) {
     countsByType.set(key, bucket);
   });
   return countsByType;
+}
+
+function applyUnassignedReservedCounts(counts, extraReserved) {
+  const base = counts || { out: 0, reserved: 0, available: 0, needsRepair: 0, imageUrl: null };
+  const extra = Math.max(0, Number(extraReserved) || 0);
+  if (!extra) return base;
+  const reserved = Number(base.reserved || 0);
+  const available = Number(base.available || 0);
+  const alloc = Math.min(extra, available);
+  if (!alloc) return { ...base, unassignedReserved: extra };
+  return {
+    ...base,
+    reserved: reserved + alloc,
+    available: Math.max(0, available - alloc),
+    unassignedReserved: extra,
+  };
 }
 
 function shortfallSelectedTypeName() {
@@ -2671,20 +2725,23 @@ async function loadShortfallDashboard() {
         return String(a.typeName || "").localeCompare(String(b.typeName || ""));
       });
 
-    const [equipment, outOfServiceIds] = await Promise.all([
+    const [equipment, outOfServiceIds, unassignedReservedCounts] = await Promise.all([
       loadShortfallEquipmentCache().catch(() => []),
       loadShortfallOutOfServiceIds().catch(() => new Set()),
+      loadShortfallUnassignedReservedCounts().catch(() => new Map()),
     ]);
     const countsByType = buildShortfallCountsByType(equipment, outOfServiceIds);
     shortfallSummaryRows = shortfallSummaryRows.map((row) => {
       const meta = shortfallTypeMeta.get(String(row.typeId)) || {};
-      const counts = countsByType.get(String(row.typeId)) || {
+      const baseCounts = countsByType.get(String(row.typeId)) || {
         out: 0,
         reserved: 0,
         available: 0,
         needsRepair: 0,
         imageUrl: null,
       };
+      const extraReserved = unassignedReservedCounts.get(String(row.typeId)) || 0;
+      const counts = applyUnassignedReservedCounts(baseCounts, extraReserved);
       return {
         ...row,
         counts,
