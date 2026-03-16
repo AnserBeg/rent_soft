@@ -992,6 +992,7 @@ async function ensureTables() {
         emergency_contact_instructions TEXT,
         emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
         site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
+        order_contact_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
         monthly_recurring_subtotal NUMERIC(12, 2),
         monthly_recurring_total NUMERIC(12, 2),
         show_monthly_recurring BOOLEAN NOT NULL DEFAULT FALSE,
@@ -1033,6 +1034,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS emergency_contact_instructions TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS order_contact_settings JSONB NOT NULL DEFAULT '{}'::jsonb;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS monthly_recurring_subtotal NUMERIC(12, 2);`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS monthly_recurring_total NUMERIC(12, 2);`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS show_monthly_recurring BOOLEAN NOT NULL DEFAULT FALSE;`);
@@ -2653,7 +2655,11 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
       SELECT ro.id AS order_id,
              ro.ro_number,
              ro.customer_id,
-             c.company_name AS customer_name,
+             CASE
+               WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+               THEN c.company_name || ' (' || pc.company_name || ')'
+               ELSE c.company_name
+             END AS customer_name,
              ro.site_address,
              ro.site_address_query,
              li.end_at,
@@ -2662,6 +2668,7 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
         JOIN rental_order_line_items li ON li.id = liv.line_item_id
         JOIN rental_orders ro ON ro.id = li.rental_order_id
         LEFT JOIN customers c ON c.id = ro.customer_id
+        LEFT JOIN customers pc ON pc.id = c.parent_customer_id
        WHERE liv.equipment_id = e.id
          AND ro.company_id = $1
          AND ro.status = 'ordered'
@@ -2682,7 +2689,11 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
       SELECT ro.id AS order_id,
              ro.ro_number,
              ro.customer_id,
-             c.company_name AS customer_name,
+             CASE
+               WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+               THEN c.company_name || ' (' || pc.company_name || ')'
+               ELSE c.company_name
+             END AS customer_name,
              ro.site_address,
              ro.site_address_query,
              li.start_at,
@@ -2691,6 +2702,7 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
         JOIN rental_order_line_items li ON li.id = liv.line_item_id
         JOIN rental_orders ro ON ro.id = li.rental_order_id
         LEFT JOIN customers c ON c.id = ro.customer_id
+        LEFT JOIN customers pc ON pc.id = c.parent_customer_id
        WHERE liv.equipment_id = e.id
          AND ro.company_id = $1
          AND ro.status IN ('reservation','requested')
@@ -4032,6 +4044,11 @@ async function listCustomers(companyId, { from = null, to = null, dateField = "c
   const result = await pool.query(
     `SELECT c.id,
             c.company_name,
+            CASE
+              WHEN c.parent_customer_id IS NOT NULL AND p.company_name IS NOT NULL
+              THEN c.company_name || ' (' || p.company_name || ')'
+              ELSE c.company_name
+            END AS display_name,
             c.contact_name,
             c.street_address,
             c.city,
@@ -4069,6 +4086,11 @@ async function getCustomerById({ companyId, id }) {
   const result = await pool.query(
     `SELECT c.id,
             c.company_name,
+            CASE
+              WHEN c.parent_customer_id IS NOT NULL AND p.company_name IS NOT NULL
+              THEN c.company_name || ' (' || p.company_name || ')'
+              ELSE c.company_name
+            END AS display_name,
             c.contact_name,
             c.street_address,
             c.city,
@@ -4226,6 +4248,45 @@ function normalizeOrderContacts(contacts) {
       return { name, title, email: emailValue, phone: phoneValue };
     })
     .filter(Boolean);
+}
+
+function normalizeOrderContactSettings(settings) {
+  let raw = settings;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = null;
+    }
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const normalized = {};
+  Object.entries(raw).forEach(([key, entry]) => {
+    const cleanKey = normalizeContactCategoryKey(key);
+    if (!cleanKey) return;
+    let mode = "inherit";
+    let contacts = [];
+    if (Array.isArray(entry)) {
+      mode = "override";
+      contacts = normalizeContactEntries(entry);
+    } else if (entry && typeof entry === "object") {
+      const rawMode = entry.mode ?? entry.selection ?? entry.type ?? entry.strategy;
+      const normalizedMode = String(rawMode || "").trim().toLowerCase();
+      if (["override", "custom"].includes(normalizedMode)) mode = "override";
+      else if (["subset", "select", "selection"].includes(normalizedMode)) mode = "subset";
+      else if (["inherit", "default", "customer", "profile"].includes(normalizedMode)) mode = "inherit";
+      if (mode !== "inherit") {
+        const list = entry.contacts ?? entry.list ?? entry.entries ?? entry.items ?? entry.values ?? [];
+        contacts = normalizeContactEntries(list);
+      }
+    }
+    if (mode === "inherit") {
+      normalized[cleanKey] = { mode };
+    } else {
+      normalized[cleanKey] = { mode, contacts };
+    }
+  });
+  return normalized;
 }
 
 function normalizeCoverageHours(value) {
@@ -4465,7 +4526,10 @@ async function createCustomer({
   const primaryName = normalizeContactField(primary.name) || normalizeContactField(contactName);
   const primaryEmail = normalizeContactField(primary.email) || normalizeContactField(email);
   const primaryPhone = normalizeContactField(primary.phone) || normalizeContactField(phone);
-  const finalCompanyName = parent?.company_name || companyName;
+  const finalCompanyName = normalizeContactField(companyName);
+  if (!finalCompanyName) {
+    throw new Error(isBranch ? "Branch name is required." : "Company name is required.");
+  }
   const result = await pool.query(
     `INSERT INTO customers (company_id, parent_customer_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, qbo_customer_id, contacts, accounting_contacts, contact_groups, can_charge_deposit, sales_person_id, follow_up_date, notes, is_pending)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
@@ -4531,7 +4595,10 @@ async function updateCustomer({
   const primaryName = normalizeContactField(primary.name) || normalizeContactField(contactName);
   const primaryEmail = normalizeContactField(primary.email) || normalizeContactField(email);
   const primaryPhone = normalizeContactField(primary.phone) || normalizeContactField(phone);
-  const finalCompanyName = parent?.company_name || companyName;
+  const finalCompanyName = normalizeContactField(companyName);
+  if (!finalCompanyName) {
+    throw new Error(isBranch ? "Branch name is required." : "Company name is required.");
+  }
   const result = await pool.query(
     `UPDATE customers
      SET parent_customer_id = $1,
@@ -6728,7 +6795,11 @@ async function listRentalOrders(companyId, { statuses = null, quoteOnly = false 
            ro.created_at,
            ro.updated_at,
            ro.customer_id,
-           c.company_name AS customer_name,
+           CASE
+             WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+             THEN c.company_name || ' (' || pc.company_name || ')'
+             ELSE c.company_name
+           END AS customer_name,
            ro.salesperson_id,
            sp.name AS salesperson_name,
            ro.pickup_location_id,
@@ -6780,6 +6851,7 @@ async function listRentalOrders(companyId, { statuses = null, quoteOnly = false 
            ) AS total
       FROM rental_orders ro
  LEFT JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers pc ON pc.id = c.parent_customer_id
  LEFT JOIN sales_people sp ON sp.id = ro.salesperson_id
  LEFT JOIN locations l ON l.id = ro.pickup_location_id
      WHERE ${where.join(" AND ")}
@@ -6840,7 +6912,11 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
            ro.created_at,
            ro.updated_at,
            ro.customer_id,
-           c.company_name AS customer_name,
+           CASE
+             WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+             THEN c.company_name || ' (' || pc.company_name || ')'
+             ELSE c.company_name
+           END AS customer_name,
            ro.salesperson_id,
            sp.name AS salesperson_name,
            ro.pickup_location_id,
@@ -6892,6 +6968,7 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
            ) AS total
       FROM rental_orders ro
  LEFT JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers pc ON pc.id = c.parent_customer_id
  LEFT JOIN sales_people sp ON sp.id = ro.salesperson_id
  LEFT JOIN locations l ON l.id = ro.pickup_location_id
      WHERE ${where.join(" AND ")}
@@ -6948,7 +7025,11 @@ async function listRentalOrderLineItemsForRange(
            ro.created_at AS order_created_at,
            ro.updated_at AS order_updated_at,
            ro.customer_id,
-           c.company_name AS customer_name,
+           CASE
+             WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+             THEN c.company_name || ' (' || pc.company_name || ')'
+             ELSE c.company_name
+           END AS customer_name,
            ro.salesperson_id,
            sp.name AS salesperson_name,
            ro.pickup_location_id,
@@ -6992,6 +7073,7 @@ async function listRentalOrderLineItemsForRange(
       FROM rental_order_line_items li
       JOIN rental_orders ro ON ro.id = li.rental_order_id
       JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers pc ON pc.id = c.parent_customer_id
  LEFT JOIN sales_people sp ON sp.id = ro.salesperson_id
  LEFT JOIN locations l ON l.id = ro.pickup_location_id
  LEFT JOIN equipment_types et ON et.id = li.type_id
@@ -7218,7 +7300,11 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            ro.external_contract_number,
            ro.customer_po,
            ro.site_name,
-           c.company_name AS customer_name,
+           CASE
+             WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+             THEN c.company_name || ' (' || pc.company_name || ')'
+             ELSE c.company_name
+           END AS customer_name,
            ro.pickup_location_id,
            pl.name AS pickup_location_name,
            FALSE AS is_tbd
@@ -7226,6 +7312,7 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
       JOIN rental_order_line_items li ON li.id = liv.line_item_id
       JOIN rental_orders ro ON ro.id = li.rental_order_id
       JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers pc ON pc.id = c.parent_customer_id
       JOIN equipment_types et ON et.id = li.type_id
  LEFT JOIN locations pl ON pl.id = ro.pickup_location_id
      WHERE ${where.join(" AND ")}
@@ -7247,13 +7334,18 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            ro.external_contract_number,
            ro.customer_po,
            ro.site_name,
-           c.company_name AS customer_name,
+           CASE
+             WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+             THEN c.company_name || ' (' || pc.company_name || ')'
+             ELSE c.company_name
+           END AS customer_name,
            ro.pickup_location_id,
            pl.name AS pickup_location_name,
            TRUE AS is_tbd
       FROM rental_order_line_items li
       JOIN rental_orders ro ON ro.id = li.rental_order_id
       JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers pc ON pc.id = c.parent_customer_id
       JOIN equipment_types et ON et.id = li.type_id
  LEFT JOIN locations pl ON pl.id = ro.pickup_location_id
      WHERE ${where.join(" AND ")}
@@ -7327,13 +7419,18 @@ async function rescheduleLineItemEnd({ companyId, lineItemId, endAt }) {
                ro.status,
                ro.quote_number,
                ro.ro_number,
-               c.company_name AS customer_name,
+               CASE
+                 WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+                 THEN c.company_name || ' (' || pc.company_name || ')'
+                 ELSE c.company_name
+               END AS customer_name,
                li.start_at,
                li.end_at
           FROM rental_order_line_inventory liv
           JOIN rental_order_line_items li ON li.id = liv.line_item_id
           JOIN rental_orders ro ON ro.id = li.rental_order_id
           JOIN customers c ON c.id = ro.customer_id
+     LEFT JOIN customers pc ON pc.id = c.parent_customer_id
          WHERE liv.equipment_id = $1
            AND ro.company_id = $2
            AND li.id <> $3
@@ -7401,7 +7498,11 @@ async function findPickupConflicts({ client, companyId, equipmentIds, orderId, s
              ro.status,
              ro.quote_number,
              ro.ro_number,
-             c.company_name AS customer_name,
+             CASE
+               WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+               THEN c.company_name || ' (' || pc.company_name || ')'
+               ELSE c.company_name
+             END AS customer_name,
              COALESCE(li.fulfilled_at, li.start_at) AS start_at,
              CASE
                WHEN li.fulfilled_at IS NOT NULL AND li.returned_at IS NULL THEN 'infinity'::timestamptz
@@ -7411,6 +7512,7 @@ async function findPickupConflicts({ client, companyId, equipmentIds, orderId, s
         JOIN rental_order_line_items li ON li.id = liv.line_item_id
         JOIN rental_orders ro ON ro.id = li.rental_order_id
         JOIN customers c ON c.id = ro.customer_id
+   LEFT JOIN customers pc ON pc.id = c.parent_customer_id
        WHERE liv.equipment_id = $1
          AND ro.company_id = $2
          AND ($3::int IS NULL OR ro.id <> $3)
@@ -7536,13 +7638,18 @@ async function setLineItemPickedUp({
                  ro.status,
                  ro.quote_number,
                  ro.ro_number,
-                 c.company_name AS customer_name,
+                 CASE
+                   WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+                   THEN c.company_name || ' (' || pc.company_name || ')'
+                   ELSE c.company_name
+                 END AS customer_name,
                  COALESCE(li.fulfilled_at, li.start_at) AS start_at,
                  COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at
             FROM rental_order_line_inventory liv
             JOIN rental_order_line_items li ON li.id = liv.line_item_id
             JOIN rental_orders ro ON ro.id = li.rental_order_id
             JOIN customers c ON c.id = ro.customer_id
+       LEFT JOIN customers pc ON pc.id = c.parent_customer_id
            WHERE liv.equipment_id = $1
              AND ro.company_id = $2
              AND li.id <> $3
@@ -8542,7 +8649,11 @@ async function getAvailabilityShortfallsCustomerDemand({
     WITH line_totals AS (
       SELECT li.id,
              ro.customer_id,
-             c.company_name AS customer_name,
+             CASE
+               WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+               THEN c.company_name || ' (' || pc.company_name || ')'
+               ELSE c.company_name
+             END AS customer_name,
              li.type_id,
              et.name AS type_name,
              li.start_at,
@@ -8550,10 +8661,11 @@ async function getAvailabilityShortfallsCustomerDemand({
         FROM rental_order_line_items li
         JOIN rental_orders ro ON ro.id = li.rental_order_id
         JOIN customers c ON c.id = ro.customer_id
+   LEFT JOIN customers pc ON pc.id = c.parent_customer_id
         JOIN equipment_types et ON et.id = li.type_id AND et.company_id = ro.company_id
    LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
        WHERE ${filters.join(" AND ")}
-       GROUP BY li.id, ro.customer_id, c.company_name, li.type_id, et.name, li.start_at
+       GROUP BY li.id, ro.customer_id, c.company_name, pc.company_name, li.type_id, et.name, li.start_at
     )
     SELECT customer_id,
            customer_name,
@@ -8867,7 +8979,11 @@ async function getTypeAvailabilityShortfallDetails({ companyId, typeId, date, lo
            ro.status,
            ro.quote_number,
            ro.ro_number,
-           c.company_name AS customer_name,
+           CASE
+             WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+             THEN c.company_name || ' (' || pc.company_name || ')'
+             ELSE c.company_name
+           END AS customer_name,
            ro.pickup_location_id,
            COALESCE(l.name, 'No location') AS location_name,
            COALESCE(li.fulfilled_at, li.start_at) AS start_at,
@@ -8876,10 +8992,11 @@ async function getTypeAvailabilityShortfallDetails({ companyId, typeId, date, lo
       FROM rental_order_line_items li
       JOIN rental_orders ro ON ro.id = li.rental_order_id
       JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers pc ON pc.id = c.parent_customer_id
  LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
  LEFT JOIN locations l ON l.id = ro.pickup_location_id
      WHERE ${filters.join(" AND ")}
-     GROUP BY li.id, ro.id, ro.status, ro.quote_number, ro.ro_number, c.company_name, ro.pickup_location_id, l.name,
+     GROUP BY li.id, ro.id, ro.status, ro.quote_number, ro.ro_number, c.company_name, pc.company_name, ro.pickup_location_id, l.name,
               li.fulfilled_at, li.start_at, li.returned_at, li.end_at
      ORDER BY COALESCE(li.fulfilled_at, li.start_at) ASC
     `,
@@ -9781,7 +9898,11 @@ async function getRentalOrder({ companyId, id }) {
   const headerRes = await pool.query(
     `
     SELECT ro.*,
-           c.company_name AS customer_name,
+           CASE
+             WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+             THEN c.company_name || ' (' || pc.company_name || ')'
+             ELSE c.company_name
+           END AS customer_name,
            c.contact_name AS customer_contact_name,
            c.street_address AS customer_street_address,
            c.city AS customer_city,
@@ -9810,6 +9931,7 @@ async function getRentalOrder({ companyId, id }) {
            END AS is_overdue
       FROM rental_orders ro
  LEFT JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers pc ON pc.id = c.parent_customer_id
  LEFT JOIN sales_people sp ON sp.id = ro.salesperson_id
  LEFT JOIN locations l ON l.id = ro.pickup_location_id
      WHERE ro.company_id = $1 AND ro.id = $2
@@ -9992,6 +10114,7 @@ async function createRentalOrder({
   emergencyContacts,
   emergencyContactInstructions,
   siteContacts,
+  orderContactSettings,
   lineItems = [],
   fees = [],
 }) {
@@ -10004,6 +10127,7 @@ async function createRentalOrder({
     const allowsInventory = allowsInventoryAssignment(effectiveStatus);
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
+    const orderContactSettingsValue = normalizeOrderContactSettings(orderContactSettings);
     const notificationCircumstancesValue = normalizeNotificationCircumstances(notificationCircumstances);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
     const coverageTimeZoneValue = normalizeCoverageTimeZone(coverageTimeZone, settings?.billing_timezone);
@@ -10050,8 +10174,8 @@ async function createRentalOrder({
          terms, general_notes, pickup_location_id, dropoff_address, site_name, site_address, site_access_info, site_address_lat, site_address_lng, site_address_query,
          logistics_instructions, special_instructions, critical_areas, monitoring_personnel,
          notification_circumstances, coverage_hours, coverage_timezone, coverage_stat_holidays_required,
-         emergency_contact_instructions, emergency_contacts, site_contacts, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25::jsonb,$26::jsonb,$27,$28,$29,$30::jsonb,$31::jsonb,COALESCE($32::timestamptz, NOW()),COALESCE($32::timestamptz, NOW()))
+         emergency_contact_instructions, emergency_contacts, site_contacts, order_contact_settings, created_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25::jsonb,$26::jsonb,$27,$28,$29,$30::jsonb,$31::jsonb,$32::jsonb,COALESCE($33::timestamptz, NOW()),COALESCE($33::timestamptz, NOW()))
       RETURNING id, quote_number, ro_number
       `,
       [
@@ -10086,6 +10210,7 @@ async function createRentalOrder({
         emergencyContactInstructions || null,
         JSON.stringify(emergencyContactList),
         JSON.stringify(siteContactList),
+        JSON.stringify(orderContactSettingsValue),
         createdIso,
       ]
     );
@@ -11664,6 +11789,7 @@ async function updateRentalOrder({
   emergencyContacts,
   emergencyContactInstructions,
   siteContacts,
+  orderContactSettings,
   lineItems = [],
   fees = [],
 }) {
@@ -11676,6 +11802,8 @@ async function updateRentalOrder({
       const allowsInventory = allowsInventoryAssignment(effectiveStatus);
     const emergencyContactList = normalizeOrderContacts(emergencyContacts);
     const siteContactList = normalizeOrderContacts(siteContacts);
+    const orderContactSettingsValue =
+      orderContactSettings === undefined ? null : normalizeOrderContactSettings(orderContactSettings);
     const notificationCircumstancesValue = normalizeNotificationCircumstances(notificationCircumstances);
     const coverageHoursValue = normalizeCoverageHours(coverageHours);
     const bundleCache = new Map();
@@ -11766,8 +11894,9 @@ async function updateRentalOrder({
              emergency_contact_instructions = $26,
              emergency_contacts = $27::jsonb,
              site_contacts = $28::jsonb,
+             order_contact_settings = COALESCE($29::jsonb, order_contact_settings),
              updated_at = NOW()
-       WHERE id = $29 AND company_id = $30
+       WHERE id = $30 AND company_id = $31
        RETURNING id, quote_number, ro_number
       `,
       [
@@ -11799,6 +11928,7 @@ async function updateRentalOrder({
         emergencyContactInstructions || null,
         JSON.stringify(emergencyContactList),
         JSON.stringify(siteContactList),
+        orderContactSettingsValue === null ? null : JSON.stringify(orderContactSettingsValue),
         id,
         companyId,
       ]
@@ -12703,12 +12833,17 @@ async function listCustomerChangeRequests({ companyId, status = null, customerId
            r.link_id,
            r.submitted_at,
            r.reviewed_at,
-           c.company_name AS customer_name,
+           CASE
+             WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+             THEN c.company_name || ' (' || pc.company_name || ')'
+             ELSE c.company_name
+           END AS customer_name,
            ro.quote_number,
            ro.ro_number,
            ro.status AS order_status
       FROM customer_change_requests r
       LEFT JOIN customers c ON c.id = r.customer_id
+      LEFT JOIN customers pc ON pc.id = c.parent_customer_id
       LEFT JOIN rental_orders ro ON ro.id = r.rental_order_id
      WHERE ${where.join(" AND ")}
      ORDER BY r.submitted_at DESC, r.id DESC
@@ -15261,10 +15396,15 @@ async function getRentalOrderQboContext({ companyId, orderId } = {}) {
            ro.quote_number,
            ro.status,
            ro.customer_id,
-           c.company_name AS customer_name,
+           CASE
+             WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+             THEN c.company_name || ' (' || pc.company_name || ')'
+             ELSE c.company_name
+           END AS customer_name,
            c.qbo_customer_id
       FROM rental_orders ro
       JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers pc ON pc.id = c.parent_customer_id
      WHERE ro.company_id = $1 AND ro.id = $2
      LIMIT 1
     `,

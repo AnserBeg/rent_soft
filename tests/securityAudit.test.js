@@ -66,7 +66,14 @@ test("uploads and webhooks enforce new access rules", async (t) => {
     method: "GET",
     path: "/uploads/company-1/files/any.pdf",
   });
-  assert.equal(uploadsRes.status, 401);
+  assert.equal(uploadsRes.status, 404);
+
+  const privateUploadsRes = await request({
+    port,
+    method: "GET",
+    path: "/uploads/customer-links/link-1/submission-1/any.pdf",
+  });
+  assert.equal(privateUploadsRes.status, 401);
 
   const originalToken = process.env.QBO_WEBHOOK_VERIFIER_TOKEN;
   process.env.QBO_WEBHOOK_VERIFIER_TOKEN = "";

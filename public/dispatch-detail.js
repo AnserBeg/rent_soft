@@ -2580,6 +2580,7 @@ function normalizeOrderCustomerName(order) {
     order?.customerName ||
     order?.customer_company_name ||
     order?.customerCompanyName ||
+    order?.customer?.display_name ||
     order?.customer?.company_name ||
     order?.customer?.name ||
     "--"

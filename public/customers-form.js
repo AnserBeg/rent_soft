@@ -13,6 +13,11 @@ const customerForm = document.getElementById("customer-form");
 const customerKindSelect = document.getElementById("customer-kind");
 const parentCustomerRow = document.getElementById("parent-customer-row");
 const parentCustomerSelect = document.getElementById("parent-customer-select");
+const parentCustomerSearchInput = document.getElementById("parent-customer-search");
+const parentCustomerSuggestions = document.getElementById("parent-customer-suggestions");
+const branchNameRow = document.getElementById("branch-name-row");
+const branchNameInput = customerForm?.querySelector('input[name="branchName"]');
+const companyNameRow = document.getElementById("company-name-row");
 const companyNameInput = customerForm?.querySelector('input[name="companyName"]');
 const qboCustomerIdInput = customerForm?.querySelector('input[name="qboCustomerId"]');
 const salesSelect = document.getElementById("sales-select");
@@ -262,6 +267,93 @@ function getParentCandidates() {
   return customersCache.filter((c) => !c.parent_customer_id && Number(c.id) !== Number(editingCustomerId));
 }
 
+function parentOptionLabel(customer) {
+  if (!customer) return "";
+  return customer.display_name || customer.company_name || `Customer #${customer.id}`;
+}
+
+function parentOptionSecondary(customer) {
+  if (!customer) return "";
+  const parts = [customer.contact_name, customer.email, customer.phone].filter(Boolean);
+  return parts.join(" - ");
+}
+
+function updateParentSearchValue(id) {
+  if (!parentCustomerSearchInput) return;
+  const parent = findCustomerById(id);
+  parentCustomerSearchInput.value = parent ? parentOptionLabel(parent) : "";
+}
+
+function hideParentSuggestions() {
+  if (!parentCustomerSuggestions) return;
+  parentCustomerSuggestions.hidden = true;
+  parentCustomerSuggestions.replaceChildren();
+  parentCustomerSearchInput?.setAttribute("aria-expanded", "false");
+}
+
+function renderParentSuggestions({ term = "", showAll = false } = {}) {
+  if (!parentCustomerSuggestions) return;
+  const query = String(term || "").trim().toLowerCase();
+  if (!query && !showAll) {
+    hideParentSuggestions();
+    return;
+  }
+  const candidates = getParentCandidates();
+  const filtered = query
+    ? candidates.filter((c) => {
+        const haystack = [
+          parentOptionLabel(c),
+          c.contact_name,
+          c.email,
+          c.phone,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(query);
+      })
+    : candidates;
+
+  parentCustomerSuggestions.replaceChildren();
+  if (!filtered.length) {
+    const empty = document.createElement("div");
+    empty.className = "hint";
+    empty.textContent = "No matching customers.";
+    parentCustomerSuggestions.appendChild(empty);
+  } else {
+    filtered.forEach((customer) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.dataset.customerId = String(customer.id);
+      const primary = document.createElement("div");
+      primary.className = "rs-autocomplete-primary";
+      primary.textContent = parentOptionLabel(customer);
+      btn.appendChild(primary);
+      const secondaryText = parentOptionSecondary(customer);
+      if (secondaryText) {
+        const secondary = document.createElement("div");
+        secondary.className = "rs-autocomplete-secondary";
+        secondary.textContent = secondaryText;
+        btn.appendChild(secondary);
+      }
+      parentCustomerSuggestions.appendChild(btn);
+    });
+  }
+
+  parentCustomerSuggestions.hidden = false;
+  parentCustomerSearchInput?.setAttribute("aria-expanded", "true");
+}
+
+function selectParentCustomer(value) {
+  if (!parentCustomerSelect) return;
+  parentCustomerSelect.value = value ? String(value) : "";
+  updateParentSearchValue(parentCustomerSelect.value);
+  hideParentSuggestions();
+  if (customerKindSelect?.value === "branch") {
+    applyParentDefaults(parentCustomerSelect.value);
+  }
+}
+
 function renderParentOptions() {
   if (!parentCustomerSelect) return;
   const current = parentCustomerSelect.value;
@@ -270,10 +362,11 @@ function renderParentOptions() {
   options.forEach((c) => {
     const opt = document.createElement("option");
     opt.value = c.id;
-    opt.textContent = c.company_name || `Customer #${c.id}`;
+    opt.textContent = c.display_name || c.company_name || `Customer #${c.id}`;
     parentCustomerSelect.appendChild(opt);
   });
   if (current) parentCustomerSelect.value = current;
+  updateParentSearchValue(parentCustomerSelect.value);
 }
 
 function setBranchMode(isBranch) {
@@ -282,14 +375,27 @@ function setBranchMode(isBranch) {
     parentCustomerSelect.disabled = !isBranch;
     if (!isBranch) parentCustomerSelect.value = "";
   }
-  if (companyNameInput) companyNameInput.disabled = isBranch;
+  if (parentCustomerSearchInput) parentCustomerSearchInput.disabled = !isBranch;
+  if (companyNameRow) companyNameRow.style.display = isBranch ? "none" : "block";
+  if (branchNameRow) branchNameRow.style.display = isBranch ? "block" : "none";
+  if (companyNameInput) {
+    companyNameInput.disabled = isBranch;
+    companyNameInput.required = !isBranch;
+  }
+  if (branchNameInput) {
+    branchNameInput.disabled = !isBranch;
+    branchNameInput.required = isBranch;
+  }
   if (canChargeDepositInput) canChargeDepositInput.disabled = isBranch;
+  if (!isBranch) {
+    updateParentSearchValue("");
+    hideParentSuggestions();
+  }
 }
 
 function applyParentDefaults(parentId) {
   const parent = findCustomerById(parentId);
   if (!parent) return;
-  if (companyNameInput) companyNameInput.value = parent.company_name || "";
   if (canChargeDepositInput) {
     canChargeDepositInput.checked = !!(parent.effective_can_charge_deposit ?? parent.can_charge_deposit);
   }
@@ -808,7 +914,8 @@ async function loadCustomer() {
       companyMeta.textContent = "Customer not found for this company.";
       return;
     }
-    customerForm.companyName.value = customer.company_name || "";
+    if (companyNameInput) companyNameInput.value = customer.company_name || "";
+    if (branchNameInput) branchNameInput.value = customer.company_name || "";
     const groups = buildCustomerContactGroups(customer);
     setContactCategoryRows(groups);
     customerForm.streetAddress.value = customer.street_address || "";
@@ -825,6 +932,12 @@ async function loadCustomer() {
     if (customerKindSelect) customerKindSelect.value = isBranch ? "branch" : "standalone";
     if (parentCustomerSelect) parentCustomerSelect.value = isBranch ? String(customer.parent_customer_id) : "";
     setBranchMode(isBranch);
+    updateParentSearchValue(parentCustomerSelect?.value);
+    if (isBranch) {
+      if (branchNameInput) branchNameInput.value = customer.company_name || "";
+    } else if (branchNameInput) {
+      branchNameInput.value = "";
+    }
     if (isBranch) applyParentDefaults(customer.parent_customer_id);
     await loadPricing(editingCustomerId);
     await loadCustomerExtras();
@@ -836,18 +949,69 @@ async function loadCustomer() {
 customerKindSelect?.addEventListener("change", () => {
   const isBranch = customerKindSelect.value === "branch";
   setBranchMode(isBranch);
+  if (isBranch && branchNameInput && !branchNameInput.value && companyNameInput?.value) {
+    branchNameInput.value = companyNameInput.value;
+  }
+  if (!isBranch && companyNameInput && !companyNameInput.value && branchNameInput?.value) {
+    companyNameInput.value = branchNameInput.value;
+  }
   if (!isBranch) return;
   renderParentOptions();
   if (parentCustomerSelect && !parentCustomerSelect.value) {
     const first = getParentCandidates()[0];
-    if (first) parentCustomerSelect.value = String(first.id);
+    if (first) selectParentCustomer(first.id);
   }
-  if (parentCustomerSelect) applyParentDefaults(parentCustomerSelect.value);
+  if (parentCustomerSelect?.value) applyParentDefaults(parentCustomerSelect.value);
 });
 
 parentCustomerSelect?.addEventListener("change", () => {
   if (customerKindSelect?.value !== "branch") return;
+  updateParentSearchValue(parentCustomerSelect.value);
   applyParentDefaults(parentCustomerSelect.value);
+});
+
+parentCustomerSearchInput?.addEventListener("focus", (e) => {
+  renderParentSuggestions({ term: e.target.value, showAll: true });
+});
+
+parentCustomerSearchInput?.addEventListener("input", (e) => {
+  renderParentSuggestions({ term: e.target.value });
+});
+
+parentCustomerSearchInput?.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  const term = String(e.target.value || "").trim().toLowerCase();
+  const candidates = getParentCandidates();
+  const exact = candidates.find(
+    (c) => parentOptionLabel(c).toLowerCase() === term
+  );
+  if (exact) {
+    selectParentCustomer(exact.id);
+    return;
+  }
+  const first = parentCustomerSuggestions?.querySelector?.("button[data-customer-id]");
+  if (first) {
+    selectParentCustomer(first.getAttribute("data-customer-id"));
+  }
+});
+
+parentCustomerSearchInput?.addEventListener("blur", () => {
+  window.setTimeout(() => {
+    if (parentCustomerSuggestions?.contains(document.activeElement)) return;
+    hideParentSuggestions();
+  }, 120);
+});
+
+parentCustomerSuggestions?.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+});
+
+parentCustomerSuggestions?.addEventListener("click", (e) => {
+  const button = e.target.closest("button[data-customer-id]");
+  if (!button) return;
+  e.preventDefault();
+  selectParentCustomer(button.getAttribute("data-customer-id"));
 });
 
 customerForm.addEventListener("submit", async (e) => {
@@ -874,11 +1038,17 @@ customerForm.addEventListener("submit", async (e) => {
       companyMeta.textContent = "Select a parent customer for this branch.";
       return;
     }
+    const branchName = String(branchNameInput?.value || "").trim();
+    if (!branchName) {
+      companyMeta.textContent = "Enter a branch name.";
+      return;
+    }
     payload.parentCustomerId = parentId;
-    if (companyNameInput) payload.companyName = companyNameInput.value;
+    payload.companyName = branchName;
   } else {
     payload.parentCustomerId = null;
   }
+  if (payload.branchName !== undefined) delete payload.branchName;
   if (payload.salesPersonId === "__new_sales__") {
     openSalesModal();
     return;

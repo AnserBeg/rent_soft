@@ -35,6 +35,26 @@ let pendingCustomerUpdates = new Set();
 const LIST_STATE_KEY = "rentsoft.customers.listState";
 const ALLOWED_SORT_FIELDS = new Set(["company_name", "parent_company_name", "contact_name", "email", "phone", "city", "region", "country", "postal_code", "follow_up_date", "sales"]);
 
+function getCustomerDisplayName(customer) {
+  return (
+    customer?.display_name ||
+    customer?.company_name ||
+    customer?.companyName ||
+    customer?.name ||
+    "--"
+  );
+}
+
+function getCustomerMatchName(customer) {
+  return (
+    customer?.company_name ||
+    customer?.display_name ||
+    customer?.companyName ||
+    customer?.name ||
+    ""
+  );
+}
+
 function loadListState() {
   const raw = localStorage.getItem(LIST_STATE_KEY);
   if (!raw) return;
@@ -84,7 +104,7 @@ function renderCustomers(rows) {
     div.className = "table-row";
     div.dataset.id = row.id;
     div.innerHTML = `
-      <span>${row.company_name}</span>
+      <span>${getCustomerDisplayName(row)}</span>
       <span>${row.parent_company_name || "--"}</span>
       <span>${row.contact_name || "--"}</span>
       <span>${row.email || "--"}</span>
@@ -129,7 +149,7 @@ function normalizePhone(value) {
 
 function scoreCustomerMatch(local, qbo) {
   let score = 0;
-  const localName = normalizeMatchValue(local.company_name || "");
+  const localName = normalizeMatchValue(getCustomerMatchName(local));
   const qboName = normalizeMatchValue(qbo.displayName || qbo.companyName || "");
 
   if (localName && qboName) {
@@ -172,7 +192,7 @@ function applyFilters() {
     rows = rows.filter((r) => {
       const sales = bySalesId.get(r.sales_person_id) || "";
       return [
-        r.company_name,
+        getCustomerDisplayName(r),
         r.contact_name,
         r.email,
         r.phone,
@@ -195,6 +215,8 @@ function applyFilters() {
   const sortKey = (row) => {
     const sales = bySalesId.get(row.sales_person_id) || "";
     switch (sortField) {
+      case "company_name":
+        return norm(getCustomerDisplayName(row));
       case "sales":
         return norm(sales);
       case "follow_up_date": {
@@ -286,20 +308,20 @@ function renderQboCustomersTable() {
       .sort((a, b) => b.score - a.score)
       .slice(0, 3);
 
-    const suggestedLabel = suggestions[0]?.local?.company_name || "--";
+    const suggestedLabel = suggestions[0]?.local ? getCustomerDisplayName(suggestions[0].local) : "--";
     const suggestedIds = new Set(suggestions.map((entry) => entry.local.id));
     const sortedLocals = availableLocals
       .slice()
-      .sort((a, b) => String(a.company_name || "").localeCompare(String(b.company_name || "")));
+      .sort((a, b) => String(getCustomerDisplayName(a)).localeCompare(String(getCustomerDisplayName(b))));
 
     const options = [
       `<option value=\"\">Select local customer...</option>`,
       ...suggestions.map(
-        (entry) => `<option value=\"${entry.local.id}\">${entry.local.company_name} (suggested)</option>`
+        (entry) => `<option value=\"${entry.local.id}\">${getCustomerDisplayName(entry.local)} (suggested)</option>`
       ),
       ...sortedLocals
         .filter((local) => !suggestedIds.has(local.id))
-        .map((local) => `<option value=\"${local.id}\">${local.company_name}</option>`),
+        .map((local) => `<option value=\"${local.id}\">${getCustomerDisplayName(local)}</option>`),
     ];
 
     const disabledAttr = linkedLocal ? "disabled" : "";
@@ -321,7 +343,7 @@ function renderQboCustomersTable() {
         <button class=\"ghost small\" data-action=\"link-qbo\" ${disabledAttr}>Link</button>
         <button class=\"ghost small\" data-action=\"create-local\" ${disabledAttr}>Create local</button>
       </span>
-      <span>${linkedLocal ? `Linked: ${linkedLocal.company_name}` : "Unlinked"}</span>
+      <span>${linkedLocal ? `Linked: ${getCustomerDisplayName(linkedLocal)}` : "Unlinked"}</span>
     `;
     qboCustomersTable.appendChild(row);
   });
@@ -349,7 +371,7 @@ function renderLocalQboTable() {
   const locals = customersCache.filter((local) => !local.qbo_customer_id).filter((local) => {
     if (!term) return true;
     const haystack = [
-      local.company_name,
+      getCustomerDisplayName(local),
       local.email,
       local.phone,
       local.contact_name,
@@ -403,7 +425,7 @@ function renderLocalQboTable() {
     row.className = "table-row";
     row.dataset.localId = local.id;
     row.innerHTML = `
-      <span>${local.company_name}</span>
+      <span>${getCustomerDisplayName(local)}</span>
       <span>${local.email || "--"}</span>
       <span>${local.phone || "--"}</span>
       <span>${suggestedLabel}</span>

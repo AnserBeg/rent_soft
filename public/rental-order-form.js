@@ -73,6 +73,9 @@ const addEmergencyContactRowBtn = document.getElementById("add-emergency-contact
 const emergencyContactInstructionsInput = document.getElementById("emergency-contact-instructions");
 const siteContactsList = document.getElementById("site-contacts-list");
 const addSiteContactRowBtn = document.getElementById("add-site-contact-row");
+const orderContactCategoriesContainer = document.getElementById("order-contact-categories");
+const orderContactsToggleBtn = document.getElementById("toggle-order-contacts");
+const orderContactsBody = document.getElementById("order-contacts-body");
 const fulfillmentSelects = [
   document.getElementById("fulfillment-select"),
   document.getElementById("fulfillment-select-2"),
@@ -141,6 +144,13 @@ const coverageDayLabels = {
   sat: "Sat",
   sun: "Sun",
 };
+
+const DEFAULT_CONTACT_CATEGORIES = [
+  { key: "contacts", label: "Contacts" },
+  { key: "accountingContacts", label: "Accounting contacts" },
+];
+let orderContactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
+let activeCustomerContactGroups = {};
 const coverageSlotsContainer = document.getElementById("coverage-slots");
 const addCoverageSlotBtn = document.getElementById("add-coverage-slot");
 const coverageTimeZoneSelect = document.getElementById("coverage-timezone");
@@ -1126,6 +1136,7 @@ let draft = {
   emergencyContacts: [],
   emergencyContactInstructions: "",
   siteContacts: [],
+  orderContactSettings: {},
   notificationCircumstances: [],
   lineItems: [],
   fees: [],
@@ -1136,9 +1147,13 @@ let draft = {
 
 let generalNotesImages = [];
 let generalNotesUploadsInFlight = 0;
+let orderContactsPinned = false;
+let orderContactsVisible = false;
 
 function resetDraftForNew() {
   orderPeriod = { startAt: null, endAt: null };
+  orderContactsPinned = false;
+  orderContactsVisible = false;
   draft = {
     status: "quote",
     quoteNumber: null,
@@ -1167,6 +1182,7 @@ function resetDraftForNew() {
     emergencyContacts: [],
     emergencyContactInstructions: "",
     siteContacts: [],
+    orderContactSettings: {},
     notificationCircumstances: [],
     lineItems: [],
     fees: [],
@@ -1174,6 +1190,7 @@ function resetDraftForNew() {
     pickupInvoiceMode: null,
     pickupInvoiceAt: null,
   };
+  syncOrderContactsVisibility({ visible: false });
 }
 
 function normalizeTimeValue(value) {
@@ -2741,6 +2758,274 @@ function parseContacts(raw) {
   return [];
 }
 
+function contactCategoryKeyFromLabel(label) {
+  return String(label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .map((part, idx) => (idx === 0 ? part : part.slice(0, 1).toUpperCase() + part.slice(1)))
+    .join("");
+}
+
+function normalizeContactCategories(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const normalized = [];
+  const usedKeys = new Set();
+
+  const pushEntry = (key, label) => {
+    const cleanLabel = String(label || "").trim();
+    if (!cleanLabel) return;
+    let cleanKey = String(key || "").trim();
+    if (!cleanKey) cleanKey = contactCategoryKeyFromLabel(cleanLabel);
+    if (!cleanKey || usedKeys.has(cleanKey)) return;
+    usedKeys.add(cleanKey);
+    normalized.push({ key: cleanKey, label: cleanLabel });
+  };
+
+  raw.forEach((entry) => {
+    if (!entry) return;
+    if (typeof entry === "string") {
+      pushEntry("", entry);
+      return;
+    }
+    if (typeof entry !== "object") return;
+    pushEntry(entry.key || entry.id || "", entry.label || entry.name || entry.title || "");
+  });
+
+  const byKey = new Map(normalized.map((entry) => [entry.key, entry]));
+  const baseContacts = byKey.get("contacts")?.label || DEFAULT_CONTACT_CATEGORIES[0].label;
+  const baseAccounting = byKey.get("accountingContacts")?.label || DEFAULT_CONTACT_CATEGORIES[1].label;
+  const extras = normalized.filter((entry) => entry.key !== "contacts" && entry.key !== "accountingContacts");
+  return [
+    { key: "contacts", label: baseContacts },
+    { key: "accountingContacts", label: baseAccounting },
+    ...extras,
+  ];
+}
+
+function normalizeContactGroups(value) {
+  let raw = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = null;
+    }
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const groups = {};
+  Object.entries(raw).forEach(([key, list]) => {
+    groups[key] = parseContacts(list);
+  });
+  return groups;
+}
+
+function buildCustomerContactGroups(customer) {
+  const groups = normalizeContactGroups(customer?.contact_groups || customer?.contactGroups);
+  const contactRows = parseContacts(customer?.contacts);
+  if (!contactRows.length && (customer?.contact_name || customer?.email || customer?.phone)) {
+    contactRows.push({
+      name: customer?.contact_name || "",
+      email: customer?.email || "",
+      phone: customer?.phone || "",
+    });
+  }
+  groups.contacts = contactRows;
+  groups.accountingContacts = parseContacts(customer?.accounting_contacts);
+  return groups;
+}
+
+function normalizeContactEntries(list) {
+  const raw = parseContacts(list);
+  return raw
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const name = normalizeContactValue(entry?.name || entry?.contactName || entry?.contact_name);
+      const title = normalizeContactValue(entry?.title || entry?.contactTitle || entry?.contact_title);
+      const email = normalizeContactValue(entry?.email);
+      const phone = normalizeContactValue(entry?.phone);
+      if (!name && !email && !phone) return null;
+      return { name, title, email, phone };
+    })
+    .filter(Boolean);
+}
+
+function contactEntryKey(entry) {
+  return [entry?.name, entry?.email, entry?.phone]
+    .map((v) => String(v || "").trim().toLowerCase())
+    .join("|");
+}
+
+function normalizeOrderContactMode(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "override" || raw === "custom") return "override";
+  if (raw === "subset" || raw === "select") return "subset";
+  return "inherit";
+}
+
+function normalizeOrderContactSettings(value, categories = orderContactCategoryConfig) {
+  const raw = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const normalized = {};
+  categories.forEach((category) => {
+    const entry = raw?.[category.key];
+    if (Array.isArray(entry)) {
+      normalized[category.key] = { mode: "override", contacts: normalizeContactEntries(entry) };
+      return;
+    }
+    const safeEntry = entry && typeof entry === "object" ? entry : {};
+    const mode = normalizeOrderContactMode(safeEntry?.mode || safeEntry?.selection || safeEntry?.type || safeEntry);
+    const contacts =
+      mode === "inherit"
+        ? []
+        : normalizeContactEntries(safeEntry?.contacts || safeEntry?.list || safeEntry?.items || safeEntry || []);
+    normalized[category.key] = { mode, contacts };
+  });
+  return normalized;
+}
+
+function hasOrderContactOverrides(settings, categories = orderContactCategoryConfig) {
+  const normalized = normalizeOrderContactSettings(settings, categories);
+  return Object.values(normalized).some((entry) => entry?.mode && entry.mode !== "inherit");
+}
+
+function syncOrderContactsVisibility({ pin = false, visible = null } = {}) {
+  if (!orderContactsBody || !orderContactsToggleBtn) return;
+  const hasOverrides = hasOrderContactOverrides(draft.orderContactSettings, orderContactCategoryConfig);
+  let shouldShow = hasOverrides;
+  if (orderContactsPinned) {
+    shouldShow = orderContactsVisible;
+  }
+  if (visible !== null) shouldShow = visible;
+  orderContactsBody.hidden = !shouldShow;
+  orderContactsToggleBtn.setAttribute("aria-expanded", shouldShow ? "true" : "false");
+  orderContactsToggleBtn.textContent = shouldShow
+    ? "Hide order contacts"
+    : hasOverrides
+      ? "Show order contacts (in use)"
+      : "Show order contacts";
+  orderContactsVisible = shouldShow;
+  if (pin) orderContactsPinned = true;
+}
+
+function formatContactLine(entry) {
+  return [entry?.name, entry?.title, entry?.email, entry?.phone].filter(Boolean).join(" · ") || "Contact";
+}
+
+function addOrderContactRow(list, { name = "", title = "", email = "", phone = "" } = {}, { focus = false } = {}) {
+  if (!list) return;
+  const row = document.createElement("div");
+  row.className = "contact-row";
+  row.innerHTML = `
+    <label>Contact name <input data-contact-field="name" /></label>
+    <label>Title <input data-contact-field="title" /></label>
+    <label>Email <input data-contact-field="email" type="email" /></label>
+    <label>Phone number <input data-contact-field="phone" /></label>
+    <button type="button" class="ghost small contact-remove" aria-label="Remove contact">Remove</button>
+  `;
+  const nameInput = row.querySelector('[data-contact-field="name"]');
+  const titleInput = row.querySelector('[data-contact-field="title"]');
+  const emailInput = row.querySelector('[data-contact-field="email"]');
+  const phoneInput = row.querySelector('[data-contact-field="phone"]');
+  if (nameInput) nameInput.value = name;
+  if (titleInput) titleInput.value = title;
+  if (emailInput) emailInput.value = email;
+  if (phoneInput) phoneInput.value = phone;
+  list.appendChild(row);
+  updateContactRemoveButtons(list);
+  if (focus && nameInput) nameInput.focus();
+}
+
+function setOrderContactRows(list, rows) {
+  if (!list) return;
+  list.innerHTML = "";
+  const normalized = Array.isArray(rows) && rows.length ? rows : [{ name: "", title: "", email: "", phone: "" }];
+  normalized.forEach((row) => {
+    addOrderContactRow(
+      list,
+      {
+        name: normalizeContactValue(row?.name || row?.contactName || row?.contact_name),
+        title: normalizeContactValue(row?.title || row?.contactTitle || row?.contact_title),
+        email: normalizeContactValue(row?.email),
+        phone: normalizeContactValue(row?.phone),
+      },
+      { focus: false }
+    );
+  });
+}
+
+function collectOrderContactSettings() {
+  if (!orderContactCategoriesContainer) return {};
+  const settings = {};
+  orderContactCategoryConfig.forEach((category) => {
+    const list = orderContactCategoriesContainer.querySelector(
+      `[data-order-contact-list="${category.key}"]`
+    );
+    const contacts = collectContacts(list);
+    settings[category.key] = { mode: "override", contacts: normalizeContactEntries(contacts) };
+  });
+  return settings;
+}
+
+function syncOrderContactDraft() {
+  draft.orderContactSettings = collectOrderContactSettings();
+  scheduleDraftSave();
+}
+
+function renderOrderContactCategories() {
+  if (!orderContactCategoriesContainer) return;
+  orderContactCategoriesContainer.innerHTML = "";
+
+  const customer = draft.customerId ? findCustomerById(draft.customerId) : null;
+  activeCustomerContactGroups = buildCustomerContactGroups(customer);
+  orderContactCategoryConfig = normalizeContactCategories(orderContactCategoryConfig);
+
+  const settings = normalizeOrderContactSettings(draft.orderContactSettings, orderContactCategoryConfig);
+  draft.orderContactSettings = settings;
+
+  orderContactCategoryConfig.forEach((category) => {
+    const block = document.createElement("div");
+    block.className = "contact-block";
+    block.dataset.orderContactCategory = category.key;
+
+    const header = document.createElement("div");
+    header.className = "contact-header";
+    const title = document.createElement("strong");
+    title.textContent = category.label;
+    header.appendChild(title);
+    block.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "stack";
+
+    const customerContacts = Array.isArray(activeCustomerContactGroups?.[category.key])
+      ? activeCustomerContactGroups[category.key]
+      : [];
+
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "ghost small";
+    addBtn.textContent = "+ Add contact";
+    addBtn.dataset.addOrderContact = category.key;
+    body.appendChild(addBtn);
+
+    const list = document.createElement("div");
+    list.className = "contacts-list stack";
+    list.dataset.orderContactList = category.key;
+    const configured = normalizeContactEntries(settings?.[category.key]?.contacts || []);
+    const fallback = configured.length ? configured : normalizeContactEntries(customerContacts);
+    setOrderContactRows(list, fallback);
+    body.appendChild(list);
+
+    block.appendChild(body);
+    orderContactCategoriesContainer.appendChild(block);
+  });
+
+  draft.orderContactSettings = collectOrderContactSettings();
+  syncOrderContactsVisibility();
+}
+
 function updateContactRemoveButtons(list) {
   if (!list) return;
   const rows = list.querySelectorAll(".contact-row");
@@ -2929,6 +3214,12 @@ async function loadCompanySettings() {
   }
   if (res.ok) {
     applyRentalInfoConfig(data.settings?.rental_info_fields || null);
+  }
+  if (res.ok) {
+    orderContactCategoryConfig = normalizeContactCategories(
+      data.settings?.customer_contact_categories || DEFAULT_CONTACT_CATEGORIES
+    );
+    renderOrderContactCategories();
   }
   setCoverageTimeZoneInput(draft.coverageTimeZone, { silent: true });
 }
@@ -3608,6 +3899,7 @@ function buildDraftSnapshot() {
     coverageStatHolidaysRequired: coverageStatHolidaysCheckbox?.checked === true,
     emergencyContacts: collectContacts(emergencyContactsList),
     siteContacts: collectContacts(siteContactsList),
+    orderContactSettings: collectOrderContactSettings(),
     notificationCircumstances: collectNotificationCircumstances(),
     status: normalizeOrderStatus(draft.status || "quote"),
     pickupInvoiceMode: draft.pickupInvoiceMode === "bulk" ? "bulk" : null,
@@ -4613,7 +4905,7 @@ function renderCustomerDetails() {
       </svg>
     </button>
     <div class="details-grid">
-      ${item("Company", customer.company_name)}
+      ${item("Company", customer.display_name || customer.company_name)}
       ${item("Contact", customer.contact_name)}
       ${item("Email", customer.email)}
       ${item("Phone", customer.phone)}
@@ -4637,7 +4929,13 @@ function renderCustomerDetails() {
 }
 
 function customerLabelFor(customer) {
-  return customer?.company_name || customer?.companyName || customer?.name || "";
+  return (
+    customer?.display_name ||
+    customer?.company_name ||
+    customer?.companyName ||
+    customer?.name ||
+    ""
+  );
 }
 
 function customerSecondaryFor(customer) {
@@ -6217,7 +6515,7 @@ async function loadCustomers() {
   customersCache.forEach((c) => {
     const opt = document.createElement("option");
     opt.value = c.id;
-    opt.textContent = c.company_name;
+    opt.textContent = c.display_name || c.company_name;
     customerSelect.appendChild(opt);
   });
   const addOpt = document.createElement("option");
@@ -6238,6 +6536,7 @@ async function loadCustomers() {
   } else {
     loadCustomerContactOptions(null);
   }
+  renderOrderContactCategories();
 }
 
 async function loadCustomerContactOptions(customerId) {
@@ -6406,6 +6705,7 @@ function initFormFieldsFromDraft() {
   setContactRows(emergencyContactsList, draft.emergencyContacts || [], emergencyContactOptions);
   if (emergencyContactInstructionsInput) emergencyContactInstructionsInput.value = draft.emergencyContactInstructions || "";
   setContactRows(siteContactsList, draft.siteContacts || [], siteContactOptions);
+  renderOrderContactCategories();
   setPickupPreview();
   syncTermsBadgeFromInputs();
   updateModeLabels();
@@ -6447,6 +6747,8 @@ function syncRentalInfoDraft() {
 
 async function loadOrder() {
   if (!editingOrderId) return;
+  orderContactsPinned = false;
+  orderContactsVisible = false;
   const res = await fetch(`/api/rental-orders/${editingOrderId}?companyId=${activeCompanyId}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to fetch rental order");
@@ -6493,6 +6795,7 @@ async function loadOrder() {
   draft.coverageStatHolidaysRequired = o.coverage_stat_holidays_required === true || o.coverageStatHolidaysRequired === true;
   draft.emergencyContacts = parseContacts(o.emergency_contacts || o.emergencyContacts || []);
   draft.siteContacts = parseContacts(o.site_contacts || o.siteContacts || []);
+  draft.orderContactSettings = o.order_contact_settings || o.orderContactSettings || {};
   draft.pickupInvoiceMode = null;
   draft.pickupInvoiceAt = null;
   draft.fees = (data.fees || []).map((f) => ({
@@ -6597,10 +6900,15 @@ customerSelect.addEventListener("change", (e) => {
     });
     return;
   }
+  const prevCustomerId = draft.customerId;
   draft.customerId = e.target.value ? Number(e.target.value) : null;
+  if (prevCustomerId && prevCustomerId !== draft.customerId) {
+    draft.orderContactSettings = {};
+  }
   syncCustomerSearchInput();
   renderCustomerDetails();
   loadCustomerContactOptions(draft.customerId).catch(() => { });
+  renderOrderContactCategories();
   loadCustomerPricing(draft.customerId)
     .then(() => {
       applySuggestedRatesToLineItems();
@@ -7238,6 +7546,46 @@ siteContactsList?.addEventListener("change", (e) => {
   if (entry) syncContactDraft();
 });
 
+orderContactsToggleBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  const nextVisible = orderContactsBody?.hidden !== false;
+  syncOrderContactsVisibility({ pin: true, visible: nextVisible });
+});
+
+orderContactCategoriesContainer?.addEventListener("change", (e) => {
+  if (e.target?.matches?.("[data-contact-field]")) {
+    syncOrderContactDraft();
+  }
+});
+
+orderContactCategoriesContainer?.addEventListener("click", (e) => {
+  const addBtn = e.target.closest?.("[data-add-order-contact]");
+  if (addBtn) {
+    e.preventDefault();
+    const key = addBtn.getAttribute("data-add-order-contact");
+    const list = orderContactCategoriesContainer.querySelector(
+      `[data-order-contact-list="${String(key || "")}"]`
+    );
+    if (list) addOrderContactRow(list, {}, { focus: true });
+    syncOrderContactDraft();
+    return;
+  }
+
+  const removeBtn = e.target.closest?.(".contact-remove");
+  if (!removeBtn) return;
+  const row = removeBtn.closest(".contact-row");
+  const list = row?.parentElement || null;
+  if (row) row.remove();
+  updateContactRemoveButtons(list);
+  syncOrderContactDraft();
+});
+
+orderContactCategoriesContainer?.addEventListener("input", (e) => {
+  if (e.target?.matches?.("[data-contact-field]")) {
+    syncOrderContactDraft();
+  }
+});
+
 addLineItemBtn.addEventListener("click", (e) => {
   e.preventDefault();
   const startLocal = localNowValue();
@@ -7566,6 +7914,7 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     emergencyContacts: collectContacts(emergencyContactsList),
     emergencyContactInstructions: draft.emergencyContactInstructions || null,
     siteContacts: collectContacts(siteContactsList),
+    orderContactSettings: collectOrderContactSettings(),
     notificationCircumstances: collectNotificationCircumstances(),
     status: normalizeOrderStatus(draft.status || "quote"),
     actorName,

@@ -556,7 +556,7 @@ function defaultFieldsFor(key, rows) {
   if (key === "utilizationSummary") return ["maxPotential", "activeRevenue", "reservedRevenue", "deadRevenue", "utilization", "discountImpact"];
   if (key === "utilizationDaily") return ["date", "rackTotal", "activeEffective", "reservedEffective", "discountImpact"];
   if (key === "utilizationForward") return ["bucket", "rackTotal", "activeEffective", "reservedEffective", "discountImpact"];
-  if (key === "customers") return ["company_name", "contact_name", "email", "phone", "created_at"];
+  if (key === "customers") return ["display_name", "contact_name", "email", "phone", "created_at"];
   if (key === "users") return ["name", "email", "role", "can_act_as_customer", "created_at"];
   if (key === "equipment") return ["type_name", "serial_number", "model_name", "condition", "location_name", "created_at"];
   if (key === "equipmentBundles") return ["name", "primaryTypeName", "itemCount", "dailyRate", "weeklyRate", "createdAt"];

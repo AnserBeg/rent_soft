@@ -240,6 +240,7 @@ CREATE TABLE IF NOT EXISTS rental_orders (
   emergency_contact_instructions TEXT,
   emergency_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
   site_contacts JSONB NOT NULL DEFAULT '[]'::jsonb,
+  order_contact_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
   monthly_recurring_subtotal NUMERIC(12, 2),
   monthly_recurring_total NUMERIC(12, 2),
   show_monthly_recurring BOOLEAN NOT NULL DEFAULT FALSE,

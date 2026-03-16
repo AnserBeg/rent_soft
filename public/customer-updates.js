@@ -479,6 +479,59 @@ function formatContactHtml(value) {
   return rows.length ? rows.join("<br />") : "";
 }
 
+function normalizeOrderContactMode(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "override" || raw === "custom") return "override";
+  if (raw === "subset" || raw === "select") return "subset";
+  return "inherit";
+}
+
+function normalizeOrderContactSettings(value, categories = contactCategoryConfig) {
+  let raw = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = null;
+    }
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) raw = {};
+  const normalized = {};
+  categories.forEach((category) => {
+    const entry = raw?.[category.key];
+    if (Array.isArray(entry)) {
+      normalized[category.key] = { mode: "override", contacts: normalizeArrayValue(entry) };
+      return;
+    }
+    const safeEntry = entry && typeof entry === "object" ? entry : {};
+    const mode = normalizeOrderContactMode(safeEntry?.mode || safeEntry?.selection || safeEntry?.type || safeEntry);
+    const contacts =
+      mode === "inherit"
+        ? []
+        : normalizeArrayValue(safeEntry?.contacts || safeEntry?.list || safeEntry?.items || safeEntry || []);
+    normalized[category.key] = { mode, contacts };
+  });
+  return normalized;
+}
+
+function formatOrderContactSettingsHtml(value, categories = contactCategoryConfig) {
+  const settings = normalizeOrderContactSettings(value, categories);
+  const modeLabel = (mode) => {
+    if (mode === "subset") return "Subset of customer contacts";
+    if (mode === "override") return "Custom order contacts";
+    return "Use customer contacts";
+  };
+  return categories
+    .map((category) => {
+      const entry = settings?.[category.key] || { mode: "inherit", contacts: [] };
+      const header = `<strong>${escapeHtml(category.label)}</strong>: ${escapeHtml(modeLabel(entry.mode))}`;
+      if (entry.mode === "inherit") return header;
+      const contactsHtml = formatContactHtml(entry.contacts);
+      return `${header}<br />${contactsHtml || "--"}`;
+    })
+    .join("<br /><br />");
+}
+
 function contactCategoryKeyFromLabel(label) {
   return String(label || "")
     .trim()
@@ -991,7 +1044,7 @@ function renderDetail(request, currentCustomer, currentOrder) {
     const labelMap = new Map(contactCategoryConfig.map((entry) => [entry.key, entry.label]));
     const contactsLabel = labelMap.get("contacts") || "Contacts";
     const accountingLabel = labelMap.get("accountingContacts") || "Accounting contacts";
-    pushField("Company", currentCustomer?.company_name, customer.companyName, {
+    pushField("Company", currentCustomer?.display_name || currentCustomer?.company_name, customer.companyName, {
       section: "customer",
       key: "companyName",
       hasProposed: hasCustomerKey("companyName"),
@@ -1231,6 +1284,19 @@ function renderDetail(request, currentCustomer, currentOrder) {
       compareProposed: order.siteContacts,
       hasProposed: hasOrderKey("siteContacts"),
     });
+    pushField(
+      "Order contacts",
+      formatOrderContactSettingsHtml(currentOrder?.order?.order_contact_settings),
+      formatOrderContactSettingsHtml(order.orderContactSettings),
+      {
+        html: true,
+        section: "order",
+        key: "orderContactSettings",
+        compareCurrent: normalizeOrderContactSettings(currentOrder?.order?.order_contact_settings),
+        compareProposed: normalizeOrderContactSettings(order.orderContactSettings),
+        hasProposed: hasOrderKey("orderContactSettings"),
+      }
+    );
     pushField("General notes", currentOrder?.order?.general_notes, order.generalNotes, {
       html: true,
       section: "order",

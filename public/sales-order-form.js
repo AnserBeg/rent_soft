@@ -541,7 +541,13 @@ function selectEquipmentFromSuggestion(equipmentId) {
 }
 
 function customerLabelFor(customer) {
-  return customer?.company_name || customer?.companyName || customer?.name || "";
+  return (
+    customer?.display_name ||
+    customer?.company_name ||
+    customer?.companyName ||
+    customer?.name ||
+    ""
+  );
 }
 
 function customerSecondaryFor(customer) {
@@ -688,7 +694,7 @@ function renderCustomerDetails() {
       </svg>
     </button>
     <div class="details-grid">
-      ${item("Company", customer.company_name)}
+      ${item("Company", customer.display_name || customer.company_name)}
       ${item("Contact", customer.contact_name)}
       ${item("Email", customer.email)}
       ${item("Phone", customer.phone)}
@@ -736,7 +742,7 @@ async function loadCustomers() {
   customersCache.forEach((c) => {
     const opt = document.createElement("option");
     opt.value = c.id;
-    opt.textContent = c.company_name || c.companyName || c.name || "";
+    opt.textContent = c.display_name || c.company_name || c.companyName || c.name || "";
     customerSelect.appendChild(opt);
   });
   const addOpt = document.createElement("option");

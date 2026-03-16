@@ -799,6 +799,57 @@ textarea:focus {
   align-self: end;
 }
 
+.contact-mode-select {
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.contact-mode-select select {
+  min-width: 210px;
+}
+
+.contact-preview-list {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: #f8fafc;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.contact-preview-row {
+  line-height: 1.4;
+}
+
+.contact-subset-list {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.contact-subset-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.contact-subset-row input[type="checkbox"] {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
 .coverage-block {
   display: grid;
   gap: 10px;
@@ -3329,6 +3380,35 @@ a.ghost {
 .hint.inline {
   margin: 0;
   font-size: 12px;
+}
+
+.scope-callout {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.scope-callout strong {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.scope-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.scope-ack input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  accent-color: var(--accent);
 }
 
 #customer-order-history-table .table-row {

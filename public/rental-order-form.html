@@ -150,6 +150,26 @@
           <section class="card wide">
             <div class="card-header">
               <div>
+                <p class="eyebrow" style="display:none;">Contacts</p>
+                <h2>Order contacts</h2>
+                <p class="hint" style="margin-top:6px;">
+                  These contacts apply only to this rental order. Customer profile contacts are managed on the customer record.
+                </p>
+              </div>
+              <div class="inline-actions">
+                <button class="ghost" id="toggle-order-contacts" aria-expanded="false" aria-controls="order-contacts-body">
+                  Show order contacts
+                </button>
+              </div>
+            </div>
+            <div class="stack" id="order-contacts-body" hidden>
+              <div class="stack" id="order-contact-categories"></div>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
                 <p class="eyebrow" style="display:none;">Logistics</p>
                 <h2>Pickup & drop-off</h2>
               </div>

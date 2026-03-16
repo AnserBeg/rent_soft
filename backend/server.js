@@ -1273,6 +1273,7 @@ app.get(
             emergencyContacts: order.emergency_contacts || [],
             emergencyContactInstructions: order.emergency_contact_instructions || null,
             siteContacts: order.site_contacts || [],
+            orderContactSettings: order.order_contact_settings || order.orderContactSettings || {},
             generalNotes: order.general_notes || null,
           }
         : null,
@@ -1932,6 +1933,7 @@ const ALLOWED_ORDER_FIELDS = new Set([
   "emergencyContacts",
   "emergencyContactInstructions",
   "siteContacts",
+  "orderContactSettings",
   "generalNotes",
   "generalNotesImages",
 ]);
@@ -2398,6 +2400,22 @@ function sanitizeOrderPayload(input, allowedFields) {
     out.emergencyContactInstructions = read("emergencyContactInstructions") || null;
   }
   if (allowedFields.includes("siteContacts")) out.siteContacts = parseJsonArray(src.siteContacts);
+  if (allowedFields.includes("orderContactSettings")) {
+    const raw = src.orderContactSettings ?? src.order_contact_settings ?? {};
+    const parsed =
+      typeof raw === "string"
+        ? (() => {
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return {};
+            }
+          })()
+        : raw && typeof raw === "object" && !Array.isArray(raw)
+          ? raw
+          : {};
+    out.orderContactSettings = parsed;
+  }
   return out;
 }
 
@@ -6255,10 +6273,11 @@ function resolveOverallChangeRequestStatus({
           emergencyContacts: existing.emergency_contacts || [],
           emergencyContactInstructions: existing.emergency_contact_instructions || null,
           siteContacts: existing.site_contacts || [],
-            generalNotes: existing.general_notes || null,
-          },
-          filteredOrderUpdate
-        );
+          orderContactSettings: existing.order_contact_settings || existing.orderContactSettings || {},
+          generalNotes: existing.general_notes || null,
+        },
+        filteredOrderUpdate
+      );
         const existingLineItems = Array.isArray(existingOrder?.lineItems) ? existingOrder.lineItems : [];
         const requestedLineItems = hasLineItemSelection
           ? buildRequestedLineItemsFromSelection(existingLineItems, filteredLineItems, {
@@ -6295,6 +6314,7 @@ function resolveOverallChangeRequestStatus({
         emergencyContacts: mergedOrder.emergencyContacts,
         emergencyContactInstructions: mergedOrder.emergencyContactInstructions,
         siteContacts: mergedOrder.siteContacts,
+        orderContactSettings: mergedOrder.orderContactSettings,
         generalNotes: mergedOrder.generalNotes,
         status: existing.status || "quote",
         lineItems: mergedLineItems,
@@ -6352,6 +6372,7 @@ function resolveOverallChangeRequestStatus({
           emergencyContacts: filteredOrderUpdate.emergencyContacts || [],
           emergencyContactInstructions: filteredOrderUpdate.emergencyContactInstructions || null,
           siteContacts: filteredOrderUpdate.siteContacts || [],
+          orderContactSettings: filteredOrderUpdate.orderContactSettings || null,
           generalNotes: filteredOrderUpdate.generalNotes || null,
           status: "quote",
           lineItems: filteredLineItems.map((li) => ({
@@ -8573,6 +8594,7 @@ app.post(
       emergencyContacts,
       emergencyContactInstructions,
       siteContacts,
+      orderContactSettings,
       lineItems,
       fees,
       pickupInvoiceMode,
@@ -8620,6 +8642,7 @@ app.post(
         emergencyContacts,
         emergencyContactInstructions,
         siteContacts,
+        orderContactSettings,
         lineItems,
         fees,
       });
@@ -8704,6 +8727,7 @@ app.put(
       emergencyContacts,
       emergencyContactInstructions,
       siteContacts,
+      orderContactSettings,
       lineItems,
       fees,
       pickupInvoiceMode,
@@ -8752,6 +8776,7 @@ app.put(
         emergencyContacts,
         emergencyContactInstructions,
         siteContacts,
+        orderContactSettings,
         lineItems,
         fees,
       });

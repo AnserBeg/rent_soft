@@ -107,6 +107,28 @@ function shouldRunDbTest() {
 
       const startAt = "2026-02-01T00:00:00.000Z";
       const endAt = "2026-02-02T00:00:00.000Z";
+      const orderContactSettingsInput = {
+        safetyContacts: {
+          mode: "subset",
+          contacts: [
+            { name: "Safety Lead", email: "safety@example.com", phone: "555-0303" },
+            { name: " ", email: "", phone: "" },
+          ],
+        },
+        billingContacts: [{ name: "Bill", email: "bill@example.com" }],
+        "Site Ops": { selection: "custom", entries: [{ name: "Ops", phone: "555-0404" }] },
+      };
+      const expectedOrderContactSettings = {
+        safetyContacts: {
+          mode: "subset",
+          contacts: [{ name: "Safety Lead", title: null, email: "safety@example.com", phone: "555-0303" }],
+        },
+        billingContacts: {
+          mode: "override",
+          contacts: [{ name: "Bill", title: null, email: "bill@example.com", phone: null }],
+        },
+        siteOps: { mode: "override", contacts: [{ name: "Ops", title: null, email: null, phone: "555-0404" }] },
+      };
 
       await db.updateRentalOrder({
         id: orderId,
@@ -138,6 +160,7 @@ function shouldRunDbTest() {
         emergencyContacts: [{ name: "Alice", email: "alice@example.com", phone: "555-0101" }],
         emergencyContactInstructions: "Notify safety lead before calling emergency services.",
         siteContacts: [{ name: "Bob", email: "bob@example.com", phone: "555-0202" }],
+        orderContactSettings: orderContactSettingsInput,
         lineItems: [
           {
             typeId,
@@ -179,9 +202,12 @@ function shouldRunDbTest() {
         { startDay: "mon", startTime: "08:00", endDay: "mon", endTime: "17:00" },
         { startDay: "sat", startTime: "10:00", endDay: "sat", endTime: "14:00" },
       ]);
-      assert.deepEqual(order1.emergency_contacts, [{ name: "Alice", email: "alice@example.com", phone: "555-0101" }]);
+      assert.deepEqual(order1.emergency_contacts, [
+        { name: "Alice", title: null, email: "alice@example.com", phone: "555-0101" },
+      ]);
       assert.equal(order1.emergency_contact_instructions, "Notify safety lead before calling emergency services.");
-      assert.deepEqual(order1.site_contacts, [{ name: "Bob", email: "bob@example.com", phone: "555-0202" }]);
+      assert.deepEqual(order1.site_contacts, [{ name: "Bob", title: null, email: "bob@example.com", phone: "555-0202" }]);
+      assert.deepEqual(order1.order_contact_settings, expectedOrderContactSettings);
 
       assert.equal(Array.isArray(fetched1.lineItems) ? fetched1.lineItems.length : 0, 1);
       const lineItem1 = fetched1.lineItems[0];
@@ -257,6 +283,7 @@ function shouldRunDbTest() {
       assert.equal(order2.monitoring_personnel, "Supervisor on site only");
       assert.deepEqual(order2.notification_circumstances, ["After hours"]);
       assert.deepEqual(order2.coverage_hours, [{ startDay: "mon", startTime: "08:00", endDay: "mon", endTime: "17:00" }]);
+      assert.deepEqual(order2.order_contact_settings, expectedOrderContactSettings);
 
       assert.equal(Array.isArray(fetched2.lineItems) ? fetched2.lineItems.length : 0, 1);
       const lineItem2 = fetched2.lineItems[0];

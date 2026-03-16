@@ -13,6 +13,12 @@ test("updateRentalOrderStatus handles reservation without throwing", async () =>
       if (sql.includes("SELECT quote_number, ro_number, status")) {
         return { rows: [{ quote_number: "QO-24-0001", ro_number: "RO-24-0001", status: "quote" }] };
       }
+      if (sql.includes("FROM rental_order_line_items li")) {
+        return { rows: [] };
+      }
+      if (sql.includes("UPDATE rental_orders") && sql.includes("monthly_recurring_subtotal")) {
+        return { rows: [] };
+      }
       if (sql.includes("UPDATE rental_orders")) {
         return { rows: [{ id: 1, quote_number: "QO-24-0001", ro_number: "RO-24-0001", status: "reservation" }] };
       }

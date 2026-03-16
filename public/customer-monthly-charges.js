@@ -1094,7 +1094,12 @@ async function loadMonthlyTotals() {
   customersList.forEach((customer) => {
     const id = customer.id ?? customer.customer_id ?? null;
     const name =
-      customer.company_name || customer.companyName || customer.name || customer.contact_name || "Customer";
+      customer.display_name ||
+      customer.company_name ||
+      customer.companyName ||
+      customer.name ||
+      customer.contact_name ||
+      "Customer";
     const key = id ? String(id) : name;
     if (customerMap.has(key)) return;
     customerMap.set(key, {

@@ -44,6 +44,26 @@ function normalizeMatchValue(value) {
     .trim();
 }
 
+function getCustomerDisplayName(customer) {
+  return (
+    customer?.display_name ||
+    customer?.company_name ||
+    customer?.companyName ||
+    customer?.name ||
+    "--"
+  );
+}
+
+function getCustomerMatchName(customer) {
+  return (
+    customer?.company_name ||
+    customer?.display_name ||
+    customer?.companyName ||
+    customer?.name ||
+    ""
+  );
+}
+
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -54,7 +74,7 @@ function normalizePhone(value) {
 
 function scoreCustomerMatch(local, qbo) {
   let score = 0;
-  const localName = normalizeMatchValue(local.company_name || "");
+  const localName = normalizeMatchValue(getCustomerMatchName(local));
   const qboName = normalizeMatchValue(qbo.displayName || qbo.companyName || "");
 
   if (localName && qboName) {
@@ -150,25 +170,25 @@ function renderQboCustomersTable() {
       .sort((a, b) => b.score - a.score)
       .slice(0, 3);
 
-    const suggestedLabel = suggestions[0]?.local?.company_name || "--";
+    const suggestedLabel = suggestions[0]?.local ? getCustomerDisplayName(suggestions[0].local) : "--";
     const suggestedIds = new Set(suggestions.map((entry) => entry.local.id));
     const sortedLocals = availableLocals
       .slice()
-      .sort((a, b) => String(a.company_name || "").localeCompare(String(b.company_name || "")));
+      .sort((a, b) => String(getCustomerDisplayName(a)).localeCompare(String(getCustomerDisplayName(b))));
 
     const options = [
       `<option value="">Select local customer...</option>`,
       ...suggestions.map(
-        (entry) => `<option value="${entry.local.id}">${entry.local.company_name} (suggested)</option>`
+        (entry) => `<option value="${entry.local.id}">${getCustomerDisplayName(entry.local)} (suggested)</option>`
       ),
       ...sortedLocals
         .filter((local) => !suggestedIds.has(local.id))
-        .map((local) => `<option value="${local.id}">${local.company_name}</option>`),
+        .map((local) => `<option value="${local.id}">${getCustomerDisplayName(local)}</option>`),
     ];
 
     const disabledAttr = linkedLocal ? "disabled" : "";
     const linkCell = linkedLocal
-      ? `<span>${linkedLocal.company_name}</span>`
+      ? `<span>${getCustomerDisplayName(linkedLocal)}</span>`
       : `<span><select class="qbo-link-select">${options.join("")}</select></span>`;
     const row = document.createElement("div");
     row.className = "table-row";
@@ -211,7 +231,7 @@ function renderLocalQboTable() {
   const term = normalizeMatchValue(qboLocalSearchTerm);
   const locals = customersCache.filter((local) => !local.qbo_customer_id).filter((local) => {
     if (!term) return true;
-    const haystack = [local.company_name, local.email, local.phone, local.contact_name]
+    const haystack = [getCustomerDisplayName(local), local.email, local.phone, local.contact_name]
       .filter(Boolean)
       .join(" ");
     return normalizeMatchValue(haystack).includes(term);
@@ -261,7 +281,7 @@ function renderLocalQboTable() {
     row.className = "table-row";
     row.dataset.localId = local.id;
     row.innerHTML = `
-      <span>${local.company_name}</span>
+      <span>${getCustomerDisplayName(local)}</span>
       <span>${local.email || "--"}</span>
       <span>${local.phone || "--"}</span>
       <span>${suggestedLabel}</span>

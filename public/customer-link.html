@@ -40,13 +40,21 @@
                   </svg>
                 </span>
               </div>
-              <h2>Customer &amp; sales</h2>
+              <h2>Customer profile</h2>
               <p class="hint" id="page-subtitle">Review and submit your information below.</p>
             </div>
           </div>
           <div class="stack">
             <div class="info" id="link-banner">Loading your link...</div>
             <div class="stack" id="customer-section">
+              <div class="scope-callout" id="customer-scope-callout" style="display:none;">
+                <strong>Customer profile update</strong>
+                <p class="hint">Changes here update your customer profile for future rentals.</p>
+                <label class="scope-ack">
+                  <input type="checkbox" id="customer-scope-ack" />
+                  <span>I understand these updates apply to my customer profile.</span>
+                </label>
+              </div>
               <label>Company name
                 <input id="company-name" autocomplete="organization" />
               </label>
@@ -85,6 +93,14 @@
             </div>
           </div>
           <div class="stack">
+            <div class="scope-callout" id="order-scope-callout" style="display:none;">
+              <strong>Rental order update</strong>
+              <p class="hint">Changes here apply only to <span id="order-scope-label">this order</span>.</p>
+              <label class="scope-ack">
+                <input type="checkbox" id="order-scope-ack" />
+                <span>I understand these updates apply only to this order.</span>
+              </label>
+            </div>
             <div class="two-col">
               <label>Fulfillment method
                 <select id="fulfillment-method">
@@ -100,6 +116,16 @@
               <textarea id="logistics-instructions" class="compact-textarea" rows="1"></textarea>
             </label>
           </div>
+        </section>
+
+        <section class="card wide" id="order-contact-section" style="display:none;">
+          <div class="card-header">
+            <div>
+              <h2>Order contacts</h2>
+              <p class="hint">These contacts apply only to this rental order.</p>
+            </div>
+          </div>
+          <div class="stack" id="order-contact-categories"></div>
         </section>
 
         <section class="card wide" id="line-items-section" style="display:none;">
