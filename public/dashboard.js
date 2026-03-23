@@ -8,11 +8,19 @@ const rangeDaysSelect = document.getElementById("range-days");
 const groupBySelect = document.getElementById("group-by");
 const todayBtn = document.getElementById("today");
 const qboIncomeTotal = document.getElementById("qbo-income-total");
-const incidentsCountEl = document.getElementById("incidents-count");
+const incidentsMonthAlertsEl = document.getElementById("alerts-month");
+const incidentsMonthIncidentsEl = document.getElementById("incidents-month-count");
+const incidentsMonthBreachesEl = document.getElementById("breaches-month");
+const incidentsYtdAlertsEl = document.getElementById("alerts-ytd");
+const incidentsYtdIncidentsEl = document.getElementById("incidents-ytd");
+const incidentsYtdBreachesEl = document.getElementById("breaches-ytd");
 const incidentsOpenBtn = document.getElementById("incidents-open");
 const incidentsOverlayBtn = document.getElementById("incidents-edit-btn");
 const incidentsModal = document.getElementById("incidents-modal");
-const incidentsInput = document.getElementById("incidents-input");
+const incidentsMonthInput = document.getElementById("incidents-month");
+const incidentsAlertsInput = document.getElementById("incidents-alerts-input");
+const incidentsIncidentsInput = document.getElementById("incidents-incidents-input");
+const incidentsBreachesInput = document.getElementById("incidents-breaches-input");
 const incidentsSaveBtn = document.getElementById("incidents-save");
 const incidentsCancelBtn = document.getElementById("incidents-cancel");
 const incidentsCloseBtn = document.getElementById("incidents-close");
@@ -167,7 +175,7 @@ let rawEquipment = [];
 let rawAssignments = [];
 let equipmentLabelById = new Map();
 let equipmentById = new Map();
-let incidentsCount = 0;
+let incidentMetrics = {};
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const COL_W = 44;
@@ -187,6 +195,7 @@ let endingDays = DEFAULT_ENDING_DAYS;
 const BENCH_VIEW_STORAGE_KEY = "rentsoft.workbench.view";
 const BENCH_SORT_STORAGE_KEY = "rentsoft.workbench.timelineSortNearest";
 const INCIDENTS_STORAGE_KEY = "rentsoft.dashboard.incidents";
+const INCIDENT_METRICS_STORAGE_KEY = "rentsoft.dashboard.incidentMetrics";
 let benchActiveView = null; // "timeline" | "stages" | null
 let benchOrdersCache = [];
 let benchOrdersCacheKey = "";
@@ -958,22 +967,141 @@ function safeStorageSet(key, value) {
   } catch (_) { }
 }
 
-function renderIncidentsCount() {
-  if (!incidentsCountEl) return;
-  incidentsCountEl.textContent = fmtCount(incidentsCount);
+function incidentMetricsStorageKey() {
+  return activeCompanyId ? `${INCIDENT_METRICS_STORAGE_KEY}.${activeCompanyId}` : INCIDENT_METRICS_STORAGE_KEY;
 }
 
 function incidentsStorageKey() {
   return activeCompanyId ? `${INCIDENTS_STORAGE_KEY}.${activeCompanyId}` : INCIDENTS_STORAGE_KEY;
 }
 
-async function loadIncidentsCount() {
-  const stored = safeStorageGet(incidentsStorageKey());
-  const parsed = Number(stored);
-  if (Number.isFinite(parsed) && parsed >= 0) {
-    incidentsCount = Math.round(parsed);
-    renderIncidentsCount();
+function incidentMonthKeyFromDate(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(d.getTime())) return "";
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+function normalizeIncidentMonthKey(value) {
+  const raw = String(value || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return null;
+  const [yearRaw, monthRaw] = raw.split("-");
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return null;
+  if (month < 1 || month > 12) return null;
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+}
+
+function normalizeIncidentCount(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null;
+}
+
+function normalizeIncidentEntry(entry) {
+  const raw = entry && typeof entry === "object" ? entry : {};
+  const alerts = normalizeIncidentCount(raw.alerts) ?? 0;
+  const incidents = normalizeIncidentCount(raw.incidents) ?? 0;
+  const breaches = normalizeIncidentCount(raw.breaches) ?? 0;
+  return { alerts, incidents, breaches };
+}
+
+function parseIncidentMetrics(value) {
+  if (value === null || value === undefined) return null;
+  let raw = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return null;
+    }
   }
+  if (!raw || typeof raw !== "object") return null;
+  const out = {};
+  for (const [key, entry] of Object.entries(raw)) {
+    const normalizedKey = normalizeIncidentMonthKey(key);
+    if (!normalizedKey) continue;
+    out[normalizedKey] = normalizeIncidentEntry(entry);
+  }
+  return out;
+}
+
+function currentIncidentMonthMeta() {
+  const now = new Date();
+  return {
+    key: incidentMonthKeyFromDate(now),
+    year: now.getFullYear(),
+    month: now.getMonth() + 1,
+  };
+}
+
+function incidentMetricsForMonth(key) {
+  return incidentMetrics[key] || { alerts: 0, incidents: 0, breaches: 0 };
+}
+
+function sumIncidentMetricsYearToDate(year, monthLimit) {
+  const totals = { alerts: 0, incidents: 0, breaches: 0 };
+  for (const [key, entry] of Object.entries(incidentMetrics)) {
+    const [yRaw, mRaw] = key.split("-");
+    const y = Number(yRaw);
+    const m = Number(mRaw);
+    if (y !== year || !Number.isFinite(m)) continue;
+    if (m > monthLimit) continue;
+    totals.alerts += Number(entry?.alerts || 0);
+    totals.incidents += Number(entry?.incidents || 0);
+    totals.breaches += Number(entry?.breaches || 0);
+  }
+  return totals;
+}
+
+function renderIncidentMetrics() {
+  if (
+    !incidentsMonthAlertsEl ||
+    !incidentsMonthIncidentsEl ||
+    !incidentsMonthBreachesEl ||
+    !incidentsYtdAlertsEl ||
+    !incidentsYtdIncidentsEl ||
+    !incidentsYtdBreachesEl
+  ) {
+    return;
+  }
+  const { key, year, month } = currentIncidentMonthMeta();
+  const current = incidentMetricsForMonth(key);
+  incidentsMonthAlertsEl.textContent = fmtCount(current.alerts);
+  incidentsMonthIncidentsEl.textContent = fmtCount(current.incidents);
+  incidentsMonthBreachesEl.textContent = fmtCount(current.breaches);
+
+  const ytd = sumIncidentMetricsYearToDate(year, month);
+  incidentsYtdAlertsEl.textContent = fmtCount(ytd.alerts);
+  incidentsYtdIncidentsEl.textContent = fmtCount(ytd.incidents);
+  incidentsYtdBreachesEl.textContent = fmtCount(ytd.breaches);
+}
+
+function hydrateIncidentMetricsWithLegacy(metrics, legacyCount) {
+  const next = { ...(metrics || {}) };
+  const fallback = normalizeIncidentCount(legacyCount);
+  if (fallback === null) return next;
+  const { key } = currentIncidentMonthMeta();
+  if (!next[key]) {
+    next[key] = { alerts: 0, incidents: fallback, breaches: 0 };
+  }
+  return next;
+}
+
+function extractIncidentMetrics(settings) {
+  const raw = settings?.dashboard_incident_metrics ?? settings?.dashboardIncidentMetrics;
+  const parsed = parseIncidentMetrics(raw) ?? {};
+  const legacyRaw = settings?.dashboard_incidents_count ?? settings?.dashboardIncidentsCount;
+  return hydrateIncidentMetricsWithLegacy(parsed, legacyRaw);
+}
+
+async function loadIncidentMetrics() {
+  const stored = safeStorageGet(incidentMetricsStorageKey());
+  const parsedStored = parseIncidentMetrics(stored);
+  if (parsedStored) incidentMetrics = parsedStored;
+  incidentMetrics = hydrateIncidentMetricsWithLegacy(incidentMetrics, safeStorageGet(incidentsStorageKey()));
+  renderIncidentMetrics();
 
   if (!activeCompanyId) return;
 
@@ -981,24 +1109,26 @@ async function loadIncidentsCount() {
     const res = await fetch(`/api/company-settings?companyId=${encodeURIComponent(activeCompanyId)}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to load incidents.");
-    const raw = data?.settings?.dashboard_incidents_count ?? data?.settings?.dashboardIncidentsCount;
-    const next = Number(raw);
-    incidentsCount = Number.isFinite(next) && next >= 0 ? Math.round(next) : 0;
-    safeStorageSet(incidentsStorageKey(), String(incidentsCount));
-    renderIncidentsCount();
+    incidentMetrics = extractIncidentMetrics(data?.settings);
+    safeStorageSet(incidentMetricsStorageKey(), JSON.stringify(incidentMetrics));
+    renderIncidentMetrics();
   } catch (_) {
-    renderIncidentsCount();
+    renderIncidentMetrics();
   }
 }
 
 function openIncidentsModal() {
-  if (!incidentsModal || !incidentsInput) return;
+  if (!incidentsModal || !incidentsMonthInput) return;
   if (incidentsError) incidentsError.textContent = "";
-  incidentsInput.value = Number.isFinite(incidentsCount) ? String(incidentsCount) : "";
+  const selectedKey = normalizeIncidentMonthKey(incidentsMonthInput.value) || currentIncidentMonthMeta().key;
+  incidentsMonthInput.value = selectedKey;
+  const entry = incidentMetricsForMonth(selectedKey);
+  if (incidentsAlertsInput) incidentsAlertsInput.value = String(entry.alerts ?? 0);
+  if (incidentsIncidentsInput) incidentsIncidentsInput.value = String(entry.incidents ?? 0);
+  if (incidentsBreachesInput) incidentsBreachesInput.value = String(entry.breaches ?? 0);
   incidentsModal.classList.add("show");
   incidentsModal.setAttribute("aria-hidden", "false");
-  incidentsInput.focus();
-  incidentsInput.select?.();
+  incidentsMonthInput.focus();
 }
 
 function closeIncidentsModal() {
@@ -1007,24 +1137,45 @@ function closeIncidentsModal() {
   incidentsModal.setAttribute("aria-hidden", "true");
 }
 
-async function saveIncidentsCount() {
-  if (!incidentsInput) return;
+function updateIncidentsModalFields() {
+  if (!incidentsMonthInput) return;
+  const selectedKey = normalizeIncidentMonthKey(incidentsMonthInput.value);
+  if (!selectedKey) return;
+  const entry = incidentMetricsForMonth(selectedKey);
+  if (incidentsAlertsInput) incidentsAlertsInput.value = String(entry.alerts ?? 0);
+  if (incidentsIncidentsInput) incidentsIncidentsInput.value = String(entry.incidents ?? 0);
+  if (incidentsBreachesInput) incidentsBreachesInput.value = String(entry.breaches ?? 0);
+}
+
+async function saveIncidentMetrics() {
+  if (!incidentsMonthInput || !incidentsAlertsInput || !incidentsIncidentsInput || !incidentsBreachesInput) return;
   if (incidentsError) incidentsError.textContent = "";
-  const next = Number(incidentsInput.value);
-  if (!Number.isFinite(next) || next < 0) {
-    if (incidentsError) incidentsError.textContent = "Enter a non-negative number.";
-    incidentsInput.focus();
+  const monthKey = normalizeIncidentMonthKey(incidentsMonthInput.value);
+  if (!monthKey) {
+    if (incidentsError) incidentsError.textContent = "Pick a valid month.";
+    incidentsMonthInput.focus();
     return;
   }
-  incidentsCount = Math.round(next);
-  renderIncidentsCount();
-  safeStorageSet(incidentsStorageKey(), String(incidentsCount));
+
+  const alerts = normalizeIncidentCount(incidentsAlertsInput.value);
+  const incidents = normalizeIncidentCount(incidentsIncidentsInput.value);
+  const breaches = normalizeIncidentCount(incidentsBreachesInput.value);
+  if (alerts === null || incidents === null || breaches === null) {
+    if (incidentsError) incidentsError.textContent = "Enter non-negative numbers.";
+    (alerts === null ? incidentsAlertsInput : incidents === null ? incidentsIncidentsInput : incidentsBreachesInput).focus();
+    return;
+  }
+
+  incidentMetrics = { ...incidentMetrics, [monthKey]: { alerts, incidents, breaches } };
+  safeStorageSet(incidentMetricsStorageKey(), JSON.stringify(incidentMetrics));
+  renderIncidentMetrics();
 
   if (!activeCompanyId) {
     if (incidentsError) incidentsError.textContent = "Log in to save incidents.";
     return;
   }
 
+  const currentMonthIncidents = incidentMetricsForMonth(currentIncidentMonthMeta().key).incidents;
   incidentsSaveBtn?.setAttribute("disabled", "disabled");
   try {
     const res = await fetch("/api/company-settings", {
@@ -1032,18 +1183,15 @@ async function saveIncidentsCount() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         companyId: activeCompanyId,
-        dashboardIncidentsCount: incidentsCount,
+        dashboardIncidentsCount: currentMonthIncidents,
+        dashboardIncidentMetrics: incidentMetrics,
       }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to save incidents.");
-    const raw = data?.settings?.dashboard_incidents_count ?? data?.settings?.dashboardIncidentsCount;
-    const saved = Number(raw);
-    if (Number.isFinite(saved) && saved >= 0) {
-      incidentsCount = Math.round(saved);
-      safeStorageSet(incidentsStorageKey(), String(incidentsCount));
-      renderIncidentsCount();
-    }
+    incidentMetrics = extractIncidentMetrics(data?.settings);
+    safeStorageSet(incidentMetricsStorageKey(), JSON.stringify(incidentMetrics));
+    renderIncidentMetrics();
     closeIncidentsModal();
   } catch (err) {
     if (incidentsError) incidentsError.textContent = err?.message || "Unable to save incidents.";
@@ -1053,8 +1201,8 @@ async function saveIncidentsCount() {
 }
 
 function initIncidentsWidget() {
-  if (!incidentsCountEl) return;
-  loadIncidentsCount().catch(() => null);
+  if (!incidentsMonthIncidentsEl) return;
+  loadIncidentMetrics().catch(() => null);
 
   [incidentsOpenBtn, incidentsOverlayBtn]
     .filter(Boolean)
@@ -1065,9 +1213,13 @@ function initIncidentsWidget() {
       })
     );
 
+  incidentsMonthInput?.addEventListener("change", () => {
+    updateIncidentsModalFields();
+  });
+
   incidentsSaveBtn?.addEventListener("click", (e) => {
     e.preventDefault();
-    saveIncidentsCount().catch(() => null);
+    saveIncidentMetrics().catch(() => null);
   });
 
   [incidentsCancelBtn, incidentsCloseBtn]
@@ -1083,15 +1235,19 @@ function initIncidentsWidget() {
     if (e.target === incidentsModal) closeIncidentsModal();
   });
 
-  incidentsInput?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      saveIncidentsCount().catch(() => null);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      closeIncidentsModal();
-    }
-  });
+  [incidentsMonthInput, incidentsAlertsInput, incidentsIncidentsInput, incidentsBreachesInput]
+    .filter(Boolean)
+    .forEach((input) =>
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          saveIncidentMetrics().catch(() => null);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          closeIncidentsModal();
+        }
+      })
+    );
 }
 
 function currentBenchViewPref() {
@@ -2327,12 +2483,14 @@ function renderShortfallSummaryChart() {
       img.alt = row.typeName || "Equipment image";
       img.loading = "lazy";
       center.appendChild(img);
-    } else {
-      center.textContent = row.typeName || "";
     }
     donut.appendChild(center);
 
-    body.append(donut);
+    const name = document.createElement("div");
+    name.className = "shortfall-donut-name";
+    name.textContent = row.typeName || (row.typeId ? `Type ${row.typeId}` : "Equipment type");
+
+    body.append(donut, name);
     // card.append(header, body);
     card.append(body);
 
@@ -2434,7 +2592,7 @@ function renderShortfallDetailChart() {
     const faded = `rgba(${c.r}, ${c.g}, ${c.b}, 0.45)`;
     const locationLabel = loc.locationName || "Location";
     const committedLabel = splitEnabled ? `${locationLabel} (committed)` : "Committed";
-    const incomingLabel = splitEnabled ? `${locationLabel} (with purchases)` : "Available w/ purchases";
+    const incomingLabel = splitEnabled ? `${locationLabel} (with PO)` : "Available w/ PO";
     const potentialLabel = splitEnabled ? `${locationLabel} (potential)` : "Potential (quotes + requests)";
 
     datasets.push({

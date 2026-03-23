@@ -3039,7 +3039,17 @@ a.ghost {
 .shortfall-donut-body {
   display: grid;
   place-items: center;
+  gap: 8px;
   padding: 4px 0 8px;
+}
+
+.shortfall-donut-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  text-align: center;
+  max-width: 180px;
+  line-height: 1.3;
 }
 
 .shortfall-donut {
@@ -6172,10 +6182,15 @@ body.drawer-open {
   background: #fff;
   padding: 12px 14px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.shortfall-incidents-metrics {
+  flex: 1;
+  min-width: 0;
 }
 
 .shortfall-incidents-label {
@@ -6186,11 +6201,46 @@ body.drawer-open {
   font-weight: 700;
 }
 
+.shortfall-incidents-table {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.shortfall-incidents-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.6fr) repeat(3, minmax(80px, 1fr));
+  gap: 8px;
+  align-items: center;
+}
+
+.shortfall-incidents-head {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.shortfall-incidents-cell {
+  min-width: 0;
+}
+
+.shortfall-incidents-row-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
 .shortfall-incidents-value {
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 800;
   color: var(--text);
-  margin-top: 4px;
+}
+
+.shortfall-incidents-row.is-muted .shortfall-incidents-value {
+  color: var(--text);
 }
 
 .shortfall-incidents-actions {

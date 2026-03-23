@@ -25,6 +25,7 @@ const {
   listUsers,
   getUser,
   updateUserRoleModes,
+  deleteUser,
   authenticateUser,
   createCompanyUserSession,
   getCompanyUserByToken,
@@ -5140,6 +5141,34 @@ app.put(
   })
 );
 
+app.delete(
+  "/api/users/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.body || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+
+    const target = await getUser({ companyId, userId: id });
+    if (!target) return res.status(404).json({ error: "User not found." });
+
+    const role = target?.role ? String(target.role).trim().toLowerCase() : "";
+    if (role === "owner") {
+      const ownerRes = await pool.query(
+        `SELECT COUNT(*)::int AS count FROM users WHERE company_id = $1 AND LOWER(role) = 'owner'`,
+        [companyId]
+      );
+      const ownerCount = Number(ownerRes.rows?.[0]?.count || 0);
+      if (ownerCount <= 1) {
+        return res.status(400).json({ error: "You must keep at least one owner account." });
+      }
+    }
+
+    const deleted = await deleteUser({ companyId, userId: id });
+    if (!deleted) return res.status(404).json({ error: "User not found." });
+    res.status(204).end();
+  })
+);
+
 app.get(
   "/api/locations",
   asyncHandler(async (req, res) => {
@@ -7016,6 +7045,7 @@ app.put(
       customerServiceAgreementMime,
       customerServiceAgreementSizeBytes,
       dashboardIncidentsCount,
+      dashboardIncidentMetrics,
       qboEnabled,
       qboBillingDay,
       qboAdjustmentPolicy,
@@ -7047,6 +7077,7 @@ app.put(
             customerServiceAgreementMime,
             customerServiceAgreementSizeBytes,
             dashboardIncidentsCount,
+            dashboardIncidentMetrics,
       qboEnabled: qboEnabled ?? null,
       qboBillingDay: qboBillingDay ?? null,
       qboAdjustmentPolicy: qboAdjustmentPolicy ?? null,

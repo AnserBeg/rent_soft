@@ -1267,6 +1267,7 @@ async function ensureTables() {
         customer_service_agreement_mime TEXT,
         customer_service_agreement_size_bytes INTEGER,
         dashboard_incidents_count INTEGER NOT NULL DEFAULT 0,
+        dashboard_incident_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
         email_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         email_smtp_provider TEXT NOT NULL DEFAULT 'custom',
         email_smtp_host TEXT,
@@ -1314,6 +1315,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_service_agreement_mime TEXT;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_service_agreement_size_bytes INTEGER;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS dashboard_incidents_count INTEGER NOT NULL DEFAULT 0;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS dashboard_incident_metrics JSONB NOT NULL DEFAULT '{}'::jsonb;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_smtp_provider TEXT NOT NULL DEFAULT 'custom';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS email_smtp_host TEXT;`);
@@ -1333,6 +1335,7 @@ async function ensureTables() {
     await client.query(`UPDATE company_settings SET qbo_adjustment_policy = 'credit_memo' WHERE qbo_adjustment_policy IS NULL;`);
     await client.query(`UPDATE company_settings SET qbo_income_account_ids = '[]'::jsonb WHERE qbo_income_account_ids IS NULL;`);
     await client.query(`UPDATE company_settings SET dashboard_incidents_count = 0 WHERE dashboard_incidents_count IS NULL;`);
+    await client.query(`UPDATE company_settings SET dashboard_incident_metrics = '{}'::jsonb WHERE dashboard_incident_metrics IS NULL;`);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS qbo_connections (
@@ -5703,7 +5706,8 @@ async function getCompanySettings(companyId) {
             customer_service_agreement_file_name,
             customer_service_agreement_mime,
             customer_service_agreement_size_bytes,
-            dashboard_incidents_count
+            dashboard_incidents_count,
+            dashboard_incident_metrics
        FROM company_settings
      WHERE company_id = $1
      LIMIT 1`,
@@ -5744,6 +5748,7 @@ async function getCompanySettings(companyId) {
             const raw = Number(res.rows[0].dashboard_incidents_count);
             return Number.isFinite(raw) && raw >= 0 ? Math.round(raw) : 0;
           })(),
+          dashboard_incident_metrics: normalizeDashboardIncidentMetrics(res.rows[0].dashboard_incident_metrics),
       };
   }
   return {
@@ -5775,6 +5780,7 @@ async function getCompanySettings(companyId) {
         customer_service_agreement_mime: null,
         customer_service_agreement_size_bytes: null,
         dashboard_incidents_count: 0,
+        dashboard_incident_metrics: {},
     };
 }
 
@@ -5950,6 +5956,7 @@ async function upsertCompanyEmailSettings({
     customerServiceAgreementMime = undefined,
     customerServiceAgreementSizeBytes = undefined,
     dashboardIncidentsCount = undefined,
+    dashboardIncidentMetrics = undefined,
   qboEnabled = null,
   qboBillingDay = null,
   qboAdjustmentPolicy = null,
@@ -6052,6 +6059,22 @@ async function upsertCompanyEmailSettings({
           const parsed = Number(dashboardIncidentsCount);
           return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : fallbackIncidents;
         })();
+  const currentIncidentMetrics = normalizeDashboardIncidentMetrics(current.dashboard_incident_metrics);
+  const parsedIncidentMetrics = (() => {
+    if (dashboardIncidentMetrics === undefined || dashboardIncidentMetrics === null) return null;
+    let rawMetrics = dashboardIncidentMetrics;
+    if (typeof rawMetrics === "string") {
+      try {
+        rawMetrics = JSON.parse(rawMetrics);
+      } catch {
+        return null;
+      }
+    }
+    if (!rawMetrics || typeof rawMetrics !== "object") return null;
+    return normalizeDashboardIncidentMetrics(rawMetrics);
+  })();
+  const nextDashboardIncidentMetrics =
+    parsedIncidentMetrics === null ? currentIncidentMetrics : parsedIncidentMetrics;
   const nextQboEnabled =
     qboEnabled === null || qboEnabled === undefined ? current.qbo_enabled === true : qboEnabled === true;
   const nextQboBillingDay =
@@ -6070,8 +6093,8 @@ async function upsertCompanyEmailSettings({
   const res = await pool.query(
     `
         INSERT INTO company_settings
-          (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields, customer_contact_categories, customer_document_categories, customer_terms_template, customer_esign_required, customer_service_agreement_url, customer_service_agreement_file_name, customer_service_agreement_mime, customer_service_agreement_size_bytes, dashboard_incidents_count)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, $22, $23, $24, $25, $26, $27, $28)
+          (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields, customer_contact_categories, customer_document_categories, customer_terms_template, customer_esign_required, customer_service_agreement_url, customer_service_agreement_file_name, customer_service_agreement_mime, customer_service_agreement_size_bytes, dashboard_incidents_count, dashboard_incident_metrics)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, $22, $23, $24, $25, $26, $27, $28, $29::jsonb)
       ON CONFLICT (company_id)
       DO UPDATE SET billing_rounding_mode = EXCLUDED.billing_rounding_mode,
                     billing_rounding_granularity = EXCLUDED.billing_rounding_granularity,
@@ -6100,6 +6123,7 @@ async function upsertCompanyEmailSettings({
                     customer_service_agreement_mime = EXCLUDED.customer_service_agreement_mime,
                     customer_service_agreement_size_bytes = EXCLUDED.customer_service_agreement_size_bytes,
                     dashboard_incidents_count = EXCLUDED.dashboard_incidents_count,
+                    dashboard_incident_metrics = EXCLUDED.dashboard_incident_metrics,
                     updated_at = NOW()
       RETURNING company_id,
                 billing_rounding_mode,
@@ -6128,7 +6152,8 @@ async function upsertCompanyEmailSettings({
                 customer_service_agreement_file_name,
                 customer_service_agreement_mime,
                 customer_service_agreement_size_bytes,
-                dashboard_incidents_count
+                dashboard_incidents_count,
+                dashboard_incident_metrics
       `,
       [
         companyId,
@@ -6159,9 +6184,54 @@ async function upsertCompanyEmailSettings({
         nextServiceAgreementMime,
         nextServiceAgreementSizeBytes,
         nextDashboardIncidents,
+        JSON.stringify(nextDashboardIncidentMetrics),
       ]
     );
   return res.rows[0];
+}
+
+function normalizeDashboardIncidentMetrics(value) {
+  if (value === null || value === undefined) return {};
+  let raw = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return {};
+    }
+  }
+  if (!raw || typeof raw !== "object") return {};
+  const out = {};
+  for (const [key, entry] of Object.entries(raw)) {
+    const normalizedKey = normalizeDashboardIncidentMonthKey(key);
+    if (!normalizedKey) continue;
+    out[normalizedKey] = normalizeDashboardIncidentEntry(entry);
+  }
+  return out;
+}
+
+function normalizeDashboardIncidentMonthKey(value) {
+  const raw = String(value || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(raw)) return null;
+  const [yearRaw, monthRaw] = raw.split("-");
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return null;
+  if (month < 1 || month > 12) return null;
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+}
+
+function normalizeDashboardIncidentEntry(entry) {
+  const raw = entry && typeof entry === "object" ? entry : {};
+  const alerts = normalizeDashboardIncidentCount(raw.alerts);
+  const incidents = normalizeDashboardIncidentCount(raw.incidents);
+  const breaches = normalizeDashboardIncidentCount(raw.breaches);
+  return { alerts, incidents, breaches };
+}
+
+function normalizeDashboardIncidentCount(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : 0;
 }
 
 function normalizeStorefrontCustomerRequirements(value) {
@@ -8665,7 +8735,7 @@ async function getAvailabilityShortfallsCustomerDemand({
         JOIN equipment_types et ON et.id = li.type_id AND et.company_id = ro.company_id
    LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
        WHERE ${filters.join(" AND ")}
-       GROUP BY li.id, ro.customer_id, c.company_name, pc.company_name, li.type_id, et.name, li.start_at
+       GROUP BY li.id, ro.customer_id, c.company_name, c.parent_customer_id, pc.company_name, li.type_id, et.name, li.start_at
     )
     SELECT customer_id,
            customer_name,
@@ -12631,6 +12701,18 @@ async function createCustomerShareLink({
   return res.rows?.[0] || null;
 }
 
+async function deleteUser({ companyId, userId } = {}) {
+  const cid = Number(companyId);
+  const uid = Number(userId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(uid) || uid <= 0) throw new Error("userId is required.");
+  const res = await pool.query(
+    `DELETE FROM users WHERE id = $1 AND company_id = $2 RETURNING id, role`,
+    [uid, cid]
+  );
+  return res.rows?.[0] || null;
+}
+
 async function getCustomerShareLinkByHash(tokenHash) {
   const token = String(tokenHash || "").trim();
   if (!token) return null;
@@ -15646,6 +15728,7 @@ module.exports = {
   listUsers,
   getUser,
   updateUserRoleModes,
+  deleteUser,
   authenticateUser,
   createCompanyUserSession,
   getCompanyUserByToken,
