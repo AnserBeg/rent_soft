@@ -3,6 +3,7 @@
   const COMPANY_KEY = "rentSoft.companyId";
   const CUSTOMER_TOKEN_KEY = "rentSoft.customerAccountToken";
   const CUSTOMER_KEY = "rentSoft.customerAccount";
+  const MAP_PROVIDER_KEY = "rentSoft.mapProvider";
 
   function normalizeCompanyId(value) {
     const n = Number(value);
@@ -39,6 +40,31 @@
 
   function getCustomerToken() {
     return localStorage.getItem(CUSTOMER_TOKEN_KEY);
+  }
+
+  function normalizeMapProvider(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    return raw === "leaflet" ? "leaflet" : "google";
+  }
+
+  function getMapProvider() {
+    const stored = localStorage.getItem(MAP_PROVIDER_KEY);
+    return normalizeMapProvider(stored || "google");
+  }
+
+  function setMapProvider(provider) {
+    const normalized = normalizeMapProvider(provider);
+    localStorage.setItem(MAP_PROVIDER_KEY, normalized);
+    try {
+      window.dispatchEvent(new CustomEvent("rentsoft:map-provider", { detail: { provider: normalized } }));
+    } catch {
+      // ignore
+    }
+    return normalized;
+  }
+
+  function isLeafletPreferred() {
+    return getMapProvider() === "leaflet";
   }
 
   function clearCustomerSession() {
@@ -203,6 +229,9 @@
     clearSession,
     getCompanyId,
     setCompanyId,
+    getMapProvider,
+    setMapProvider,
+    isLeafletPreferred,
     logout,
     requireAuth,
     refreshSession,

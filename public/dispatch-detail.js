@@ -67,6 +67,7 @@ let siteAddressPicker = {
     autocomplete: null,
     autocompleteService: null,
     placesService: null,
+    sessionToken: null,
     debounceTimer: null,
     searchSeq: 0,
     pickSeq: 0,
@@ -671,6 +672,7 @@ function closeSiteAddressPickerModal() {
     clearTimeout(siteAddressPicker.google.debounceTimer);
     siteAddressPicker.google.debounceTimer = null;
   }
+  clearSiteAddressPlacesSessionToken();
   siteAddressPicker.google.searchSeq = (siteAddressPicker.google.searchSeq || 0) + 1;
   siteAddressPicker.google.pickSeq = (siteAddressPicker.google.pickSeq || 0) + 1;
   if (siteAddressPicker.leaflet.debounceTimer) {
@@ -1189,6 +1191,23 @@ function applyGoogleSiteAddressStyle(style) {
   map.setMapTypeId(normalized === "satellite" ? "satellite" : "roadmap");
 }
 
+function getPreferredMapProvider() {
+  return window.RentSoft?.getMapProvider?.() === "leaflet" ? "leaflet" : "google";
+}
+
+function getSiteAddressPlacesSessionToken() {
+  const Token = window.google?.maps?.places?.AutocompleteSessionToken;
+  if (!Token) return null;
+  if (!siteAddressPicker.google.sessionToken) {
+    siteAddressPicker.google.sessionToken = new Token();
+  }
+  return siteAddressPicker.google.sessionToken;
+}
+
+function clearSiteAddressPlacesSessionToken() {
+  siteAddressPicker.google.sessionToken = null;
+}
+
 function setSiteAddressPickerMapStyle(style) {
   const normalized = normalizeMapStyle(style ?? siteAddressPicker.mapStyle);
   siteAddressPicker.mapStyle = normalized;
@@ -1451,7 +1470,11 @@ function initGoogleSiteAddressPicker(center) {
       const requestPredictions = (input) =>
         new Promise((resolve, reject) => {
           siteAddressPicker.google.autocompleteService.getPlacePredictions(
-            { input: String(input || ""), locationBias: map.getBounds?.() || undefined },
+            {
+              input: String(input || ""),
+              locationBias: map.getBounds?.() || undefined,
+              sessionToken: getSiteAddressPlacesSessionToken() || undefined,
+            },
             (preds, status) => {
               if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) return resolve([]);
               if (status !== window.google.maps.places.PlacesServiceStatus.OK) {
@@ -1464,7 +1487,11 @@ function initGoogleSiteAddressPicker(center) {
       const fetchPlaceDetails = (placeId, label) =>
         new Promise((resolve, reject) => {
           siteAddressPicker.google.placesService.getDetails(
-            { placeId, fields: ["geometry", "formatted_address", "name"] },
+            {
+              placeId,
+              fields: ["geometry", "formatted_address", "name"],
+              sessionToken: siteAddressPicker.google.sessionToken || undefined,
+            },
             (place, status) => {
               if (status !== window.google.maps.places.PlacesServiceStatus.OK || !place?.geometry?.location) {
                 return reject(new Error(`Places error: ${status}`));
@@ -1474,6 +1501,7 @@ function initGoogleSiteAddressPicker(center) {
                 lng: place.geometry.location.lng(),
                 label: place.formatted_address || label || place.name || "Pinned location",
               };
+              clearSiteAddressPlacesSessionToken();
               resolve(details);
             }
           );
@@ -1483,6 +1511,7 @@ function initGoogleSiteAddressPicker(center) {
         const q = String(siteAddressPickerSearch.value || "").trim();
         if (!q) {
           hideSiteAddressSuggestions();
+          clearSiteAddressPlacesSessionToken();
           return;
         }
         if (siteAddressPicker.google.debounceTimer) clearTimeout(siteAddressPicker.google.debounceTimer);
@@ -1529,6 +1558,7 @@ function initGoogleSiteAddressPicker(center) {
             });
           } catch (err) {
             hideSiteAddressSuggestions();
+            clearSiteAddressPlacesSessionToken();
             if (siteAddressPickerMeta) siteAddressPickerMeta.textContent = err?.message || String(err);
           }
         }, 250);
@@ -1573,6 +1603,27 @@ async function openSiteAddressPicker() {
     center = await getUserGeolocation();
   } catch {
     // ignore
+  }
+
+  const provider = getPreferredMapProvider();
+  if (provider === "leaflet") {
+    resetSiteAddressPickerMapContainer();
+    siteAddressPicker.mode = "leaflet";
+    if (!window.L) {
+      if (siteAddressPickerMeta) {
+        siteAddressPickerMeta.textContent = "Leaflet is not available. Refresh or switch back to Google Maps.";
+      }
+      return;
+    }
+    initLeafletSiteAddressPicker(center);
+    if (siteAddressPickerMeta) {
+      siteAddressPickerMeta.textContent = "Search (OpenStreetMap) or click to drop a pin.";
+    }
+    hydrateUnitMarkerDataFromEquipment();
+    renderUnitMarkersFromData();
+    updateUnitPinActions();
+    applySiteAddressPickerExistingSelection();
+    return;
   }
 
   const config = await getPublicConfig().catch(() => ({}));

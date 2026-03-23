@@ -125,6 +125,7 @@ let currentLocationPicker = {
     autocomplete: null,
     autocompleteService: null,
     placesService: null,
+    sessionToken: null,
     debounceTimer: null,
     searchSeq: 0,
     pickSeq: 0,
@@ -1201,6 +1202,7 @@ function closeCurrentLocationPickerModal() {
     clearTimeout(currentLocationPicker.google.debounceTimer);
     currentLocationPicker.google.debounceTimer = null;
   }
+  clearGooglePlacesSessionToken();
   currentLocationPicker.google.searchSeq = (currentLocationPicker.google.searchSeq || 0) + 1;
   currentLocationPicker.google.pickSeq = (currentLocationPicker.google.pickSeq || 0) + 1;
   if (currentLocationPicker.leaflet.debounceTimer) {
@@ -1335,6 +1337,23 @@ function applyGooglePickerStyle(style) {
   const normalized = normalizeMapStyle(style ?? currentLocationPicker.mapStyle);
   currentLocationPicker.mapStyle = normalized;
   map.setMapTypeId(normalized === "satellite" ? "satellite" : "roadmap");
+}
+
+function getPreferredMapProvider() {
+  return window.RentSoft?.getMapProvider?.() === "leaflet" ? "leaflet" : "google";
+}
+
+function getGooglePlacesSessionToken() {
+  const Token = window.google?.maps?.places?.AutocompleteSessionToken;
+  if (!Token) return null;
+  if (!currentLocationPicker.google.sessionToken) {
+    currentLocationPicker.google.sessionToken = new Token();
+  }
+  return currentLocationPicker.google.sessionToken;
+}
+
+function clearGooglePlacesSessionToken() {
+  currentLocationPicker.google.sessionToken = null;
 }
 
 function setCurrentLocationPickerMapStyle(style) {
@@ -1553,13 +1572,18 @@ function initGooglePicker(center) {
       const fetchPlaceDetails = (placeId, label) =>
         new Promise((resolve, reject) => {
           currentLocationPicker.google.placesService.getDetails(
-            { placeId, fields: ["geometry", "formatted_address", "name"] },
+            {
+              placeId,
+              fields: ["geometry", "formatted_address", "name"],
+              sessionToken: currentLocationPicker.google.sessionToken || undefined,
+            },
             (place, status) => {
               if (status !== window.google.maps.places.PlacesServiceStatus.OK || !place?.geometry?.location) {
                 return reject(new Error(`Places details failed: ${status || "Unknown"}`));
               }
               const lat = place.geometry.location.lat();
               const lng = place.geometry.location.lng();
+              clearGooglePlacesSessionToken();
               resolve({ lat, lng, label: place.formatted_address || place.name || label || "Pinned location" });
             }
           );
@@ -1568,7 +1592,11 @@ function initGooglePicker(center) {
       const requestPredictions = (input) =>
         new Promise((resolve, reject) => {
           currentLocationPicker.google.autocompleteService.getPlacePredictions(
-            { input: String(input || ""), locationBias: map.getBounds?.() || undefined },
+            {
+              input: String(input || ""),
+              locationBias: map.getBounds?.() || undefined,
+              sessionToken: getGooglePlacesSessionToken() || undefined,
+            },
             (predictions, status) => {
               if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) return resolve([]);
               if (status !== window.google.maps.places.PlacesServiceStatus.OK) {
@@ -1583,6 +1611,7 @@ function initGooglePicker(center) {
         const q = String(currentLocationPickerSearch.value || "").trim();
         if (!q) {
           hidePickerSuggestions();
+          clearGooglePlacesSessionToken();
           return;
         }
         if (currentLocationPicker.google.debounceTimer) clearTimeout(currentLocationPicker.google.debounceTimer);
@@ -1630,6 +1659,7 @@ function initGooglePicker(center) {
             });
           } catch (err) {
             hidePickerSuggestions();
+            clearGooglePlacesSessionToken();
             if (currentLocationPickerMeta) currentLocationPickerMeta.textContent = err?.message || String(err);
           }
         }, 250);
@@ -1757,6 +1787,32 @@ async function openCurrentLocationPicker() {
     } catch {
       // ignore
     }
+  }
+
+  const provider = getPreferredMapProvider();
+  if (provider === "leaflet") {
+    resetPickerMapContainer();
+    currentLocationPicker.mode = "leaflet";
+    if (!window.L) {
+      if (currentLocationPickerMeta) {
+        currentLocationPickerMeta.textContent = "Leaflet is not available. Refresh or switch back to Google Maps.";
+      }
+      return;
+    }
+    initLeafletPicker(center);
+    if (currentLocationPickerMeta) {
+      currentLocationPickerMeta.textContent = "Search (OpenStreetMap) or click to drop a pin.";
+    }
+    if (prefill) {
+      const keepExisting = prefill.source === "current" && Number.isFinite(prefill.id);
+      setPickerSelected(prefill.lat, prefill.lng, {
+        provider: "existing_location",
+        existingLocationId: keepExisting ? prefill.id : null,
+        existingLocationName: keepExisting ? prefill.name : null,
+      });
+      setPickerMarker(prefill.lat, prefill.lng);
+    }
+    return;
   }
 
   const config = await getPublicConfig().catch(() => ({}));

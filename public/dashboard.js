@@ -117,6 +117,10 @@ let shortfallMapMarkers = [];
 let shortfallMapInfoWindow = null;
 let shortfallMapMode = "units";
 let shortfallMapStyle = "street";
+let shortfallLeafletMap = null;
+let shortfallLeafletMarkers = [];
+let shortfallLeafletPopup = null;
+let shortfallLeafletLayers = null;
 let shortfallLocationsCache = [];
 let shortfallLocationsCompanyId = null;
 
@@ -202,6 +206,14 @@ let benchOrdersCacheKey = "";
 
 function isGoogleMapsReady() {
   return typeof window.google?.maps?.Map === "function";
+}
+
+function getPreferredMapProvider() {
+  return window.RentSoft?.getMapProvider?.() === "leaflet" ? "leaflet" : "google";
+}
+
+function isLeafletProvider() {
+  return getPreferredMapProvider() === "leaflet";
 }
 
 function waitForGoogleMapsReady({ timeoutMs = 4000, intervalMs = 50 } = {}) {
@@ -306,14 +318,50 @@ function jitterLatLng(lat, lng, seed) {
   return [lat + dLat, lng + dLng];
 }
 
+const MAP_TILE_SOURCES = {
+  street: {
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: {
+      maxZoom: 19,
+      attribution: "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a>",
+    },
+  },
+  satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri",
+    },
+  },
+};
+
 function normalizeMapStyle(value) {
   return value === "satellite" ? "satellite" : "street";
+}
+
+function applyLeafletShortfallMapStyle(style) {
+  const map = shortfallLeafletMap;
+  if (!map || !window.L) return;
+  const normalized = normalizeMapStyle(style ?? shortfallMapStyle);
+  if (!shortfallLeafletLayers) shortfallLeafletLayers = {};
+  if (!shortfallLeafletLayers[normalized]) {
+    const cfg = MAP_TILE_SOURCES[normalized];
+    shortfallLeafletLayers[normalized] = window.L.tileLayer(cfg.url, cfg.options);
+  }
+  Object.values(shortfallLeafletLayers).forEach((layer) => {
+    if (map.hasLayer(layer)) map.removeLayer(layer);
+  });
+  shortfallLeafletLayers[normalized].addTo(map);
 }
 
 function applyShortfallMapStyle(nextStyle) {
   shortfallMapStyle = normalizeMapStyle(nextStyle ?? shortfallMapStyle);
   if (shortfallMapStyleSelect && shortfallMapStyleSelect.value !== shortfallMapStyle) {
     shortfallMapStyleSelect.value = shortfallMapStyle;
+  }
+  if (isLeafletProvider()) {
+    applyLeafletShortfallMapStyle(shortfallMapStyle);
+    return;
   }
   if (!shortfallMap || !isGoogleMapsReady()) return;
   shortfallMap.setMapTypeId(shortfallMapStyle === "satellite" ? "satellite" : "roadmap");
@@ -337,9 +385,15 @@ async function loadShortfallLocationsForMap() {
 function clearShortfallMapMarkers() {
   shortfallMapMarkers.forEach((m) => m.setMap(null));
   shortfallMapMarkers = [];
+  shortfallLeafletMarkers.forEach((m) => m.remove());
+  shortfallLeafletMarkers = [];
 }
 
 function renderShortfallUnitsMap(rows) {
+  if (isLeafletProvider()) {
+    renderShortfallUnitsMapLeaflet(rows);
+    return;
+  }
   if (!shortfallMap || !isGoogleMapsReady()) return;
 
   const coordSource = (eq) => {
@@ -423,6 +477,10 @@ function renderShortfallUnitsMap(rows) {
 }
 
 function renderShortfallLocationsMap(rows) {
+  if (isLeafletProvider()) {
+    renderShortfallLocationsMapLeaflet(rows);
+    return;
+  }
   if (!shortfallMap || !isGoogleMapsReady()) return;
   const hasCoord = (loc) => toCoord(loc?.latitude) !== null && toCoord(loc?.longitude) !== null;
   const mapped = rows.filter(hasCoord);
@@ -465,7 +523,134 @@ function renderShortfallLocationsMap(rows) {
   }
 }
 
+function renderShortfallUnitsMapLeaflet(rows) {
+  if (!shortfallLeafletMap || !window.L) return;
+
+  const coordSource = (eq) => {
+    const cLat = toCoord(eq?.current_location_latitude);
+    const cLng = toCoord(eq?.current_location_longitude);
+    if (cLat !== null && cLng !== null) return { lat: cLat, lng: cLng, source: "current" };
+    const bLat = toCoord(eq?.location_latitude);
+    const bLng = toCoord(eq?.location_longitude);
+    if (bLat !== null && bLng !== null) return { lat: bLat, lng: bLng, source: "base" };
+    return null;
+  };
+
+  const mapped = rows.filter((eq) => Boolean(coordSource(eq)));
+  const bounds = [];
+
+  const statusColors = {
+    notRented: { stroke: "#6b7280", fill: "rgba(107, 114, 128, 0.30)" },
+    rented: { stroke: "#16a34a", fill: "rgba(22, 163, 74, 0.30)" },
+    overdue: { stroke: "#ef4444", fill: "rgba(239, 68, 68, 0.30)" },
+  };
+
+  mapped.forEach((eq) => {
+    const src = coordSource(eq);
+    if (!src) return;
+    const [jLat, jLng] = jitterLatLng(src.lat, src.lng, Number(eq.id) || 1);
+    bounds.push([jLat, jLng]);
+
+    const title = escapeHtml(`${eq.type || eq.type_name || "Unit"} - ${eq.model_name || "--"}`);
+    const serial = escapeHtml(eq.serial_number || "--");
+    const baseLocation = escapeHtml(eq.location || eq.location_name || "--");
+    const currentLocation = escapeHtml(eq.current_location || "--");
+    const status = escapeHtml(eq.availability_status || "Unknown");
+    const href = `equipment.html?equipmentId=${encodeURIComponent(eq.id)}`;
+    const locLine = src.source === "current" ? `Current: ${currentLocation}` : `Base: ${baseLocation}`;
+
+    const isOverdue = eq?.is_overdue === true;
+    const availability = String(eq.availability_status || "");
+    const isRented = availability.toLowerCase().includes("rent") || availability.toLowerCase().includes("out");
+    const palette = isOverdue ? statusColors.overdue : (isRented ? statusColors.rented : statusColors.notRented);
+
+    const marker = window.L.circleMarker([jLat, jLng], {
+      radius: 8,
+      color: palette.stroke,
+      fillColor: palette.fill,
+      fillOpacity: 1,
+      weight: 2,
+    });
+
+    marker.bindPopup(
+      `<div style="display:grid; gap:6px;">
+        <div style="font-weight:800;">${title}</div>
+        <div class="hint">Serial: ${serial}</div>
+        <div class="hint">${locLine}</div>
+        ${src.source === "current" ? `<div class="hint">Base: ${baseLocation}</div>` : `<div class="hint">Current: ${currentLocation}</div>`}
+        <div class="hint">Status: ${isOverdue ? "Overdue" : status}</div>
+        <div><a href="${href}">Open in Stock</a></div>
+      </div>`
+    );
+
+    marker.addTo(shortfallLeafletMap);
+    shortfallLeafletMarkers.push(marker);
+  });
+
+  if (bounds.length) {
+    const latLngBounds = window.L.latLngBounds(bounds);
+    shortfallLeafletMap.fitBounds(latLngBounds, { padding: [120, 120] });
+    setTimeout(() => {
+      const z = shortfallLeafletMap.getZoom();
+      if (Number.isFinite(z)) shortfallLeafletMap.setZoom(Math.max(z - 2, 2));
+    }, 0);
+  } else {
+    shortfallLeafletMap.setView([20, 0], 2);
+  }
+}
+
+function renderShortfallLocationsMapLeaflet(rows) {
+  if (!shortfallLeafletMap || !window.L) return;
+  const hasCoord = (loc) => toCoord(loc?.latitude) !== null && toCoord(loc?.longitude) !== null;
+  const mapped = rows.filter(hasCoord);
+  const bounds = [];
+
+  mapped.forEach((loc) => {
+    const lat = toCoord(loc?.latitude);
+    const lng = toCoord(loc?.longitude);
+    if (lat === null || lng === null) return;
+    bounds.push([lat, lng]);
+    const name = escapeHtml(loc.name || `#${loc.id}`);
+    const address = escapeHtml(formatAddress(loc) || "--");
+    const href = `location.html?id=${encodeURIComponent(loc.id)}`;
+    const marker = window.L.marker([lat, lng]);
+    marker.bindPopup(
+      `<div style="display:grid; gap:6px;">
+        <div style="font-weight:800;">${name}</div>
+        <div class="hint">${address}</div>
+        <div><a href="${href}">Open</a></div>
+      </div>`
+    );
+    marker.addTo(shortfallLeafletMap);
+    shortfallLeafletMarkers.push(marker);
+  });
+
+  if (bounds.length) {
+    const latLngBounds = window.L.latLngBounds(bounds);
+    shortfallLeafletMap.fitBounds(latLngBounds, { padding: [120, 120] });
+    setTimeout(() => {
+      const z = shortfallLeafletMap.getZoom();
+      if (Number.isFinite(z)) shortfallLeafletMap.setZoom(Math.max(z - 2, 2));
+    }, 0);
+  } else {
+    shortfallLeafletMap.setView([20, 0], 2);
+  }
+}
+
 async function refreshShortfallMap() {
+  if (isLeafletProvider()) {
+    if (!shortfallLeafletMap || !window.L) return;
+    clearShortfallMapMarkers();
+    if (shortfallMapMode === "locations") {
+      await loadShortfallLocationsForMap();
+      renderShortfallLocationsMapLeaflet(shortfallLocationsCache);
+    } else {
+      const equipment = await loadShortfallEquipmentCache().catch(() => []);
+      renderShortfallUnitsMapLeaflet(Array.isArray(equipment) ? equipment : []);
+    }
+    setTimeout(() => shortfallLeafletMap.invalidateSize?.(), 50);
+    return;
+  }
   if (!shortfallMap || !isGoogleMapsReady()) return;
   clearShortfallMapMarkers();
   if (shortfallMapMode === "locations") {
@@ -480,6 +665,23 @@ async function refreshShortfallMap() {
 
 async function ensureShortfallMapFallback() {
   if (!shortfallMapFallback) return false;
+  if (isLeafletProvider()) {
+    if (shortfallLeafletMap) return true;
+    if (shortfallMapLoadError) return false;
+    try {
+      if (!window.L) throw new Error("Leaflet is not available.");
+      shortfallLeafletMap = window.L.map(shortfallMapFallback, { scrollWheelZoom: true });
+      shortfallLeafletPopup = window.L.popup();
+      applyLeafletShortfallMapStyle(shortfallMapStyle);
+      shortfallLeafletMap.setView([20, 0], 2);
+      refreshShortfallMap().catch(() => null);
+      setTimeout(() => shortfallLeafletMap.invalidateSize?.(), 50);
+      return true;
+    } catch (err) {
+      shortfallMapLoadError = err;
+      return false;
+    }
+  }
   if (shortfallMap) return true;
   if (shortfallMapLoadError) return false;
 

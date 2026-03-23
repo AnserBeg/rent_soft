@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Aiven Rental - Location</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="vendor/leaflet.css" />
   <script src="vendor/chart.umd.js"></script>
 </head>
 <body class="no-top-headers">
@@ -131,6 +132,9 @@
               <div class="stack">
                 <label>Search address <input id="loc-address-search" placeholder="Start typing an address..." autocomplete="off" /></label>
                 <div id="loc-address-suggestions" class="rs-autocomplete" hidden></div>
+                <div class="inline-actions">
+                  <button class="ghost small" id="loc-geocode" type="button">Geocode address</button>
+                </div>
                 <label>Map view
                   <select id="loc-map-style">
                     <option value="street">Street</option>
@@ -160,6 +164,7 @@
     </div>
   </div>
 
+  <script src="vendor/leaflet.js"></script>
   <script src="session.js"></script>
   <script src="location.js"></script>
 </body>

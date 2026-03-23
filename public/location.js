@@ -18,6 +18,7 @@ const countryInput = document.getElementById("loc-country");
 const isBaseCheckbox = document.getElementById("loc-is-base");
 const addressSearchInput = document.getElementById("loc-address-search");
 const addressSuggestions = document.getElementById("loc-address-suggestions");
+const geocodeBtn = document.getElementById("loc-geocode");
 const mapStyleSelect = document.getElementById("loc-map-style");
 const mapEl = document.getElementById("loc-map");
 const saveBtn = document.getElementById("save-location");
@@ -30,6 +31,9 @@ let typeStockRows = [];
 
 let googleMap = null;
 let googleMarker = null;
+let leafletMap = null;
+let leafletMarker = null;
+let leafletLayers = null;
 let mapStyle = "street";
 let googleAutocompleteService = null;
 let googlePlacesService = null;
@@ -37,6 +41,7 @@ let googleGeocoder = null;
 let googleMapsApiKey = "";
 let googleMapsLoadError = null;
 let selectedCoords = null; // { lat, lng, provider, query }
+let googlePlacesSessionToken = null;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -58,6 +63,14 @@ function toCoord(value) {
 
 function isGoogleMapsReady() {
   return typeof window.google?.maps?.Map === "function";
+}
+
+function getPreferredMapProvider() {
+  return window.RentSoft?.getMapProvider?.() === "leaflet" ? "leaflet" : "google";
+}
+
+function isLeafletProvider() {
+  return getPreferredMapProvider() === "leaflet";
 }
 
 function waitForGoogleMapsReady({ timeoutMs = 4000, intervalMs = 50 } = {}) {
@@ -106,8 +119,40 @@ async function getPublicConfig() {
   return data || {};
 }
 
+const MAP_TILE_SOURCES = {
+  street: {
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    options: {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    },
+  },
+  satellite: {
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      maxZoom: 19,
+      attribution: "Tiles &copy; Esri",
+    },
+  },
+};
+
 function normalizeMapStyle(value) {
   return value === "satellite" ? "satellite" : "street";
+}
+
+function applyLeafletMapStyle(style) {
+  const map = leafletMap;
+  if (!map || !window.L) return;
+  const normalized = normalizeMapStyle(style ?? mapStyle);
+  if (!leafletLayers) leafletLayers = {};
+  if (!leafletLayers[normalized]) {
+    const cfg = MAP_TILE_SOURCES[normalized];
+    leafletLayers[normalized] = window.L.tileLayer(cfg.url, cfg.options);
+  }
+  Object.values(leafletLayers).forEach((layer) => {
+    if (map.hasLayer(layer)) map.removeLayer(layer);
+  });
+  leafletLayers[normalized].addTo(map);
 }
 
 function applyMapStyle(nextStyle) {
@@ -115,12 +160,45 @@ function applyMapStyle(nextStyle) {
   if (mapStyleSelect && mapStyleSelect.value !== mapStyle) {
     mapStyleSelect.value = mapStyle;
   }
+  if (isLeafletProvider()) {
+    applyLeafletMapStyle(mapStyle);
+    return;
+  }
   if (!googleMap || !isGoogleMapsReady()) return;
   googleMap.setMapTypeId(mapStyle === "satellite" ? "satellite" : "roadmap");
 }
 
 function ensureMap() {
   if (!mapEl) return;
+  if (isLeafletProvider()) {
+    if (!window.L) {
+      if (formMeta) formMeta.textContent = "Leaflet is not available. Refresh or switch back to Google Maps.";
+      return;
+    }
+    if (leafletMap) {
+      setTimeout(() => leafletMap.invalidateSize?.(), 50);
+      return;
+    }
+    leafletMap = window.L.map(mapEl, { scrollWheelZoom: true });
+    applyLeafletMapStyle(mapStyle);
+    leafletMap.setView([20, 0], 2);
+    leafletMap.on("click", (e) => {
+      const lat = e?.latlng?.lat;
+      const lng = e?.latlng?.lng;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      setMapPoint(lat, lng, 17);
+      const query = String(addressSearchInput?.value || "").trim();
+      selectedCoords = {
+        lat,
+        lng,
+        provider: "manual_pin",
+        query: query || `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+      };
+      if (formMeta) formMeta.textContent = `Pinned: ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+    });
+    setTimeout(() => leafletMap.invalidateSize?.(), 50);
+    return;
+  }
   if (googleMap) {
     setTimeout(() => window.google?.maps?.event?.trigger?.(googleMap, "resize"), 50);
     return;
@@ -161,8 +239,18 @@ if (mapStyleSelect) {
 }
 
 function setMapPoint(lat, lng, zoom = 17) {
-  if (!googleMap || !isGoogleMapsReady()) return;
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+  if (isLeafletProvider()) {
+    if (!leafletMap || !window.L) return;
+    if (!leafletMarker) {
+      leafletMarker = window.L.marker([lat, lng]).addTo(leafletMap);
+    } else {
+      leafletMarker.setLatLng([lat, lng]);
+    }
+    leafletMap.setView([lat, lng], zoom);
+    return;
+  }
+  if (!googleMap || !isGoogleMapsReady()) return;
   if (!googleMarker) {
     googleMarker = new window.google.maps.Marker({ position: { lat, lng }, map: googleMap });
   } else {
@@ -239,14 +327,26 @@ function parseAddressComponents(components) {
   return { street, city, region, country };
 }
 
+function getPlacesSessionToken() {
+  const Token = window.google?.maps?.places?.AutocompleteSessionToken;
+  if (!Token) return null;
+  if (!googlePlacesSessionToken) googlePlacesSessionToken = new Token();
+  return googlePlacesSessionToken;
+}
+
+function clearPlacesSessionToken() {
+  googlePlacesSessionToken = null;
+}
+
 function requestPlacePredictions(input, map) {
   if (!googleAutocompleteService || !window.google?.maps?.places) {
     return Promise.reject(new Error("Google Places library not available."));
   }
   const locationBias = map?.getBounds?.() || undefined;
+  const sessionToken = getPlacesSessionToken();
   return new Promise((resolve, reject) => {
     googleAutocompleteService.getPlacePredictions(
-      { input: String(input || ""), locationBias },
+      { input: String(input || ""), locationBias, sessionToken: sessionToken || undefined },
       (predictions, status) => {
         if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) return resolve([]);
         if (status !== window.google.maps.places.PlacesServiceStatus.OK) {
@@ -264,13 +364,18 @@ function fetchPlaceDetails(placeId, label) {
   }
   return new Promise((resolve, reject) => {
     googlePlacesService.getDetails(
-      { placeId, fields: ["geometry", "formatted_address", "name", "address_component"] },
+      {
+        placeId,
+        fields: ["geometry", "formatted_address", "name", "address_component"],
+        sessionToken: googlePlacesSessionToken || undefined,
+      },
       (place, status) => {
         if (status !== window.google.maps.places.PlacesServiceStatus.OK || !place?.geometry?.location) {
           return reject(new Error(`Places details failed: ${status || "Unknown"}`));
         }
         const lat = place.geometry.location.lat();
         const lng = place.geometry.location.lng();
+        clearPlacesSessionToken();
         resolve({
           lat,
           lng,
@@ -283,6 +388,21 @@ function fetchPlaceDetails(placeId, label) {
 }
 
 function geocodeAddress(query) {
+  if (isLeafletProvider()) {
+    return fetch(`/api/geocode/search?q=${encodeURIComponent(String(query || ""))}&limit=1`)
+      .then((res) => res.json().catch(() => ({})).then((data) => ({ res, data })))
+      .then(({ res, data }) => {
+        if (!res.ok) throw new Error(data.error || "Unable to geocode");
+        const first = Array.isArray(data.results) ? data.results[0] : null;
+        if (!first) throw new Error("Geocode returned no location.");
+        return {
+          lat: Number(first.latitude),
+          lng: Number(first.longitude),
+          label: first.label || String(query || ""),
+          components: [],
+        };
+      });
+  }
   if (!googleGeocoder) return Promise.reject(new Error("Google Geocoder not available."));
   return new Promise((resolve, reject) => {
     googleGeocoder.geocode({ address: String(query || "") }, (results, status) => {
@@ -313,6 +433,17 @@ function buildAddressQuery() {
 async function searchGeocode(query, limit = 6) {
   const q = String(query || "").trim();
   if (!q) return [];
+  if (isLeafletProvider()) {
+    const res = await fetch(`/api/geocode/search?q=${encodeURIComponent(q)}&limit=${encodeURIComponent(String(limit))}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to search address");
+    return (data.results || []).map((r) => ({
+      description: r.label,
+      place_id: null,
+      __rs_lat: r.latitude,
+      __rs_lng: r.longitude,
+    }));
+  }
   const results = await requestPlacePredictions(q, googleMap);
   return results.slice(0, limit);
 }
@@ -394,13 +525,18 @@ async function init() {
   if (companyMeta) companyMeta.textContent = companyName ? `${companyName} (Company #${companyId})` : `Company #${companyId}`;
 
   try {
-    const config = await getPublicConfig().catch(() => ({}));
-    googleMapsApiKey = config?.googleMapsApiKey ? String(config.googleMapsApiKey) : "";
-    const hasGoogle = isGoogleMapsReady();
-    if (!googleMapsApiKey && !hasGoogle) {
-      throw new Error("Google Maps API key is required. Set GOOGLE_MAPS_API_KEY to use the map picker.");
+    const provider = getPreferredMapProvider();
+    if (provider === "google") {
+      const config = await getPublicConfig().catch(() => ({}));
+      googleMapsApiKey = config?.googleMapsApiKey ? String(config.googleMapsApiKey) : "";
+      const hasGoogle = isGoogleMapsReady();
+      if (!googleMapsApiKey && !hasGoogle) {
+        throw new Error("Google Maps API key is required. Set GOOGLE_MAPS_API_KEY to use the map picker.");
+      }
+      if (!hasGoogle) await loadGoogleMaps(googleMapsApiKey);
+    } else if (!window.L) {
+      throw new Error("Leaflet is not available. Refresh or switch back to Google Maps.");
     }
-    if (!hasGoogle) await loadGoogleMaps(googleMapsApiKey);
   } catch (err) {
     googleMapsLoadError = err;
     if (formMeta) formMeta.textContent = err?.message || String(err);
@@ -450,6 +586,7 @@ async function init() {
     const q = String(addressSearchInput.value || "").trim();
     if (!q || q.length < 3) {
       hideSuggestions();
+      clearPlacesSessionToken();
       return;
     }
     if (addressState.debounceTimer) clearTimeout(addressState.debounceTimer);
@@ -467,6 +604,23 @@ async function init() {
         renderSuggestions(results, async (picked) => {
           hideSuggestions();
           const placeId = picked?.place_id;
+          if (!placeId && picked?.__rs_lat !== undefined) {
+            const lat = Number(picked?.__rs_lat);
+            const lng = Number(picked?.__rs_lng);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+            const label = String(picked?.description || "").trim();
+            if (addressSearchInput) addressSearchInput.value = label;
+            ensureMap();
+            setMapPoint(lat, lng, 17);
+            selectedCoords = {
+              lat,
+              lng,
+              provider: "nominatim",
+              query: label || `${lat.toFixed(6)}, ${lng.toFixed(6)}`,
+            };
+            if (formMeta) formMeta.textContent = "Address selected (not saved yet).";
+            return;
+          }
           if (!placeId) return;
           try {
             const details = await fetchPlaceDetails(placeId, picked?.description || "");
@@ -492,6 +646,7 @@ async function init() {
       } catch (err) {
         if (err?.name === "AbortError") return;
         hideSuggestions();
+        clearPlacesSessionToken();
         if (formMeta) formMeta.textContent = err?.message || String(err);
       }
     }, 450);
@@ -499,29 +654,37 @@ async function init() {
 
   addressSearchInput?.addEventListener("blur", () => setTimeout(() => hideSuggestions(), 150));
 
-  [streetInput, cityInput, regionInput, countryInput].filter(Boolean).forEach((el) => {
-    el.addEventListener("input", () => {
-      if (addressState.previewTimer) clearTimeout(addressState.previewTimer);
-      addressState.previewTimer = setTimeout(async () => {
-        const query = buildAddressQuery();
-        if (!query || query.length < 6) return;
-        try {
-          const details = await geocodeAddress(query);
-          if (!Number.isFinite(details?.lat) || !Number.isFinite(details?.lng)) return;
-          ensureMap();
-          setMapPoint(details.lat, details.lng, 15);
-          selectedCoords = {
-            lat: details.lat,
-            lng: details.lng,
-            provider: "google_geocode",
-            query: details.label || query,
-          };
-          if (addressSearchInput && details.label) addressSearchInput.value = details.label;
-        } catch {
-          // ignore preview failures; user can still save and/or use search box.
-        }
-      }, 800);
-    });
+  geocodeBtn?.addEventListener("click", async () => {
+    if (formMeta) formMeta.textContent = "";
+    const fromSearch = String(addressSearchInput?.value || "").trim();
+    const query = fromSearch || buildAddressQuery();
+    if (!query || query.length < 6) {
+      if (formMeta) formMeta.textContent = "Enter an address to geocode.";
+      return;
+    }
+    try {
+      const details = await geocodeAddress(query);
+      if (!Number.isFinite(details?.lat) || !Number.isFinite(details?.lng)) {
+        throw new Error("Geocode returned no coordinates.");
+      }
+      const parts = parseAddressComponents(details.components);
+      if (streetInput && parts.street) streetInput.value = parts.street;
+      if (cityInput && parts.city) cityInput.value = parts.city;
+      if (regionInput && parts.region) regionInput.value = parts.region;
+      if (countryInput && parts.country) countryInput.value = parts.country;
+      if (addressSearchInput && details.label) addressSearchInput.value = details.label;
+      ensureMap();
+      setMapPoint(details.lat, details.lng, 15);
+      selectedCoords = {
+        lat: details.lat,
+        lng: details.lng,
+        provider: "google_geocode",
+        query: details.label || query,
+      };
+      if (formMeta) formMeta.textContent = "Geocoded (not saved yet).";
+    } catch (err) {
+      if (formMeta) formMeta.textContent = err?.message || String(err);
+    }
   });
 
   async function loadTypeStockChart() {

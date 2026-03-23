@@ -271,6 +271,7 @@ let sideAddressPicker = {
     marker: null,
     autocompleteService: null,
     placesService: null,
+    sessionToken: null,
     debounceTimer: null,
     searchSeq: 0,
     pickSeq: 0,
@@ -720,6 +721,23 @@ function applyGoogleSideAddressStyle(style) {
   map.setMapTypeId(normalized === "satellite" ? "satellite" : "roadmap");
 }
 
+function getPreferredMapProvider() {
+  return window.RentSoft?.getMapProvider?.() === "leaflet" ? "leaflet" : "google";
+}
+
+function getSideAddressPlacesSessionToken() {
+  const Token = window.google?.maps?.places?.AutocompleteSessionToken;
+  if (!Token) return null;
+  if (!sideAddressPicker.google.sessionToken) {
+    sideAddressPicker.google.sessionToken = new Token();
+  }
+  return sideAddressPicker.google.sessionToken;
+}
+
+function clearSideAddressPlacesSessionToken() {
+  sideAddressPicker.google.sessionToken = null;
+}
+
 function setSideAddressPickerMapStyle(style) {
   const normalized = normalizeMapStyle(style ?? sideAddressPicker.mapStyle);
   sideAddressPicker.mapStyle = normalized;
@@ -757,6 +775,7 @@ function closeSideAddressPickerModal() {
     clearTimeout(sideAddressPicker.google.debounceTimer);
     sideAddressPicker.google.debounceTimer = null;
   }
+  clearSideAddressPlacesSessionToken();
   sideAddressPicker.google.searchSeq = (sideAddressPicker.google.searchSeq || 0) + 1;
   sideAddressPicker.google.pickSeq = (sideAddressPicker.google.pickSeq || 0) + 1;
   sideAddressPicker.geocodeSeq = (sideAddressPicker.geocodeSeq || 0) + 1;
@@ -1147,7 +1166,11 @@ function initGoogleSideAddressPicker(center) {
       const requestPredictions = (input) =>
         new Promise((resolve, reject) => {
           sideAddressPicker.google.autocompleteService.getPlacePredictions(
-            { input: String(input || ""), locationBias: map.getBounds?.() || undefined },
+            {
+              input: String(input || ""),
+              locationBias: map.getBounds?.() || undefined,
+              sessionToken: getSideAddressPlacesSessionToken() || undefined,
+            },
             (preds, status) => {
               if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) return resolve([]);
               if (status !== window.google.maps.places.PlacesServiceStatus.OK) {
@@ -1160,7 +1183,11 @@ function initGoogleSideAddressPicker(center) {
       const fetchPlaceDetails = (placeId, label) =>
         new Promise((resolve, reject) => {
           sideAddressPicker.google.placesService.getDetails(
-            { placeId, fields: ["geometry", "formatted_address", "name"] },
+            {
+              placeId,
+              fields: ["geometry", "formatted_address", "name"],
+              sessionToken: sideAddressPicker.google.sessionToken || undefined,
+            },
             (place, status) => {
               if (status !== window.google.maps.places.PlacesServiceStatus.OK || !place?.geometry?.location) {
                 return reject(new Error(`Places error: ${status}`));
@@ -1170,6 +1197,7 @@ function initGoogleSideAddressPicker(center) {
                 lng: place.geometry.location.lng(),
                 label: place.formatted_address || label || place.name || "Pinned location",
               };
+              clearSideAddressPlacesSessionToken();
               resolve(details);
             }
           );
@@ -1179,6 +1207,7 @@ function initGoogleSideAddressPicker(center) {
         const q = String(sideAddressPickerSearch.value || "").trim();
         if (!q) {
           hideSideAddressSuggestions();
+          clearSideAddressPlacesSessionToken();
           return;
         }
         if (sideAddressPicker.google.debounceTimer) clearTimeout(sideAddressPicker.google.debounceTimer);
@@ -1225,6 +1254,7 @@ function initGoogleSideAddressPicker(center) {
             });
           } catch (err) {
             hideSideAddressSuggestions();
+            clearSideAddressPlacesSessionToken();
             if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = err?.message || String(err);
           }
         }, 250);
@@ -1259,6 +1289,16 @@ async function openSideAddressPicker() {
     center = await getUserGeolocation();
   } catch {
     // ignore
+  }
+
+  const provider = getPreferredMapProvider();
+  if (provider === "leaflet") {
+    resetSideAddressPickerMapContainer();
+    if (sideAddressPickerMeta) {
+      sideAddressPickerMeta.textContent =
+        "Leaflet mode is enabled. Enter the address manually or switch back to Google Maps for the picker.";
+    }
+    return;
   }
 
   const config = await getPublicConfig().catch(() => ({}));

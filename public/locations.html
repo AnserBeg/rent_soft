@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Aiven Rental - Locations</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="vendor/leaflet.css" />
 </head>
 <body>
   <div class="app-shell">
@@ -143,6 +144,9 @@
           <label>Region <input name="region" /></label>
         </div>
         <label>Country <input name="country" /></label>
+        <div class="inline-actions">
+          <button class="ghost small" id="add-location-geocode" type="button">Geocode address</button>
+        </div>
         <div class="map-picker" id="add-location-map" aria-label="Location preview map"></div>
         <div class="inline-actions" style="justify-content:flex-end;">
           <button class="primary" type="submit" id="add-location-submit">Save</button>
@@ -152,6 +156,7 @@
     </div>
   </div>
 
+  <script src="vendor/leaflet.js"></script>
   <script src="session.js"></script>
   <script src="locations.js"></script>
   <script src="table-export.js"></script>

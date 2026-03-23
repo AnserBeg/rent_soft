@@ -4,6 +4,8 @@ const logoutBtn = document.getElementById("logout-button");
 const canActAsCustomerToggle = document.getElementById("can-act-as-customer");
 const saveCustomerModeBtn = document.getElementById("save-customer-mode");
 const customerModeHint = document.getElementById("customer-mode-hint");
+const mapProviderStatus = document.getElementById("map-provider-status");
+const mapProviderToggle = document.getElementById("map-provider-toggle");
 
 
 const storefrontRequirementsContainer = document.getElementById("storefront-requirements");
@@ -144,6 +146,22 @@ const DEFAULT_CONTACT_CATEGORIES = [
   { key: "contacts", label: "Contacts", locked: true },
   { key: "accountingContacts", label: "Accounting contacts", locked: true },
 ];
+
+function updateMapProviderUi() {
+  const provider = window.RentSoft?.getMapProvider?.() === "leaflet" ? "leaflet" : "google";
+  if (mapProviderStatus) {
+    mapProviderStatus.textContent =
+      provider === "leaflet"
+        ? "Currently using Leaflet (OpenStreetMap)."
+        : "Currently using Google Maps.";
+  }
+  if (mapProviderToggle) {
+    mapProviderToggle.textContent =
+      provider === "leaflet"
+        ? "Switch to Google Maps"
+        : "Switch to Leaflet";
+  }
+}
 
 function normalizeRentalInfoFields(value) {
   let raw = value;
@@ -1539,6 +1557,18 @@ testEmailSettingsBtn?.addEventListener("click", async (e) => {
   }
 });
 
+mapProviderToggle?.addEventListener("click", (e) => {
+  e.preventDefault();
+  const current = window.RentSoft?.getMapProvider?.() === "leaflet" ? "leaflet" : "google";
+  const next = current === "leaflet" ? "google" : "leaflet";
+  window.RentSoft?.setMapProvider?.(next);
+  updateMapProviderUi();
+  if (mapProviderStatus) {
+    mapProviderStatus.textContent = `Switched to ${next === "leaflet" ? "Leaflet" : "Google Maps"}. Reloading...`;
+  }
+  setTimeout(() => window.location.reload(), 300);
+});
+
 if (activeCompanyId) {
   const session = window.RentSoft?.getSession?.();
   const companyName = session?.company?.name ? String(session.company.name) : null;
@@ -1558,4 +1588,6 @@ if (activeCompanyId) {
 if (logoutBtn) {
   window.RentSoft?.mountLogoutButton?.({ buttonId: "logout-button", redirectTo: "index.html" });
 }
+
+updateMapProviderUi();
 

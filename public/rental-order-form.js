@@ -1083,6 +1083,7 @@ let sideAddressPicker = {
     autocomplete: null,
     autocompleteService: null,
     placesService: null,
+    sessionToken: null,
     debounceTimer: null,
     searchSeq: 0,
     pickSeq: 0,
@@ -1594,6 +1595,7 @@ function closeSideAddressPickerModal() {
     clearTimeout(sideAddressPicker.google.debounceTimer);
     sideAddressPicker.google.debounceTimer = null;
   }
+  clearSideAddressPlacesSessionToken();
   sideAddressPicker.google.searchSeq = (sideAddressPicker.google.searchSeq || 0) + 1;
   sideAddressPicker.google.pickSeq = (sideAddressPicker.google.pickSeq || 0) + 1;
   sideAddressPicker.geocodeSeq = (sideAddressPicker.geocodeSeq || 0) + 1;
@@ -1608,19 +1610,70 @@ function closeSideAddressPickerModal() {
   clearSideAddressUnitSelection();
 }
 
+function syncSideAddressPickerMarker(lat, lng, { zoom = 17 } = {}) {
+  const nextLat = toFiniteCoordinate(lat);
+  const nextLng = toFiniteCoordinate(lng);
+  if (!Number.isFinite(nextLat) || !Number.isFinite(nextLng)) return false;
+
+  if (sideAddressPicker.mode === "google" && sideAddressPicker.google.map && window.google?.maps) {
+    const map = sideAddressPicker.google.map;
+    if (!sideAddressPicker.google.marker) {
+      sideAddressPicker.google.marker = new window.google.maps.Marker({
+        position: { lat: nextLat, lng: nextLng },
+        map,
+        draggable: true,
+      });
+      sideAddressPicker.google.marker.addListener("dragend", (evt) => {
+        const dLat = evt?.latLng?.lat?.();
+        const dLng = evt?.latLng?.lng?.();
+        if (!Number.isFinite(dLat) || !Number.isFinite(dLng)) return;
+        setSideAddressSelected(dLat, dLng, { provider: "manual_pin" });
+      });
+    } else {
+      sideAddressPicker.google.marker.setPosition({ lat: nextLat, lng: nextLng });
+    }
+    map.setCenter({ lat: nextLat, lng: nextLng });
+    if (Number.isFinite(zoom)) map.setZoom(zoom);
+    return true;
+  }
+
+  if (sideAddressPicker.mode === "leaflet" && sideAddressPicker.leaflet.map && window.L) {
+    const map = sideAddressPicker.leaflet.map;
+    if (!sideAddressPicker.leaflet.marker) {
+      sideAddressPicker.leaflet.marker = window.L.marker([nextLat, nextLng], { draggable: true }).addTo(map);
+      sideAddressPicker.leaflet.marker.on("dragend", () => {
+        const ll = sideAddressPicker.leaflet.marker?.getLatLng?.();
+        if (!ll || !Number.isFinite(ll.lat) || !Number.isFinite(ll.lng)) return;
+        setSideAddressSelected(ll.lat, ll.lng, { provider: "manual_pin" });
+      });
+    } else {
+      sideAddressPicker.leaflet.marker.setLatLng([nextLat, nextLng]);
+    }
+    map.setView([nextLat, nextLng], Number.isFinite(zoom) ? zoom : 17);
+    return true;
+  }
+
+  return false;
+}
+
 function setSideAddressSelected(lat, lng, { provider, query } = {}) {
+  const nextLat = toFiniteCoordinate(lat);
+  const nextLng = toFiniteCoordinate(lng);
+  if (!Number.isFinite(nextLat) || !Number.isFinite(nextLng)) return false;
   sideAddressPicker.selected = {
-    lat: Number(lat),
-    lng: Number(lng),
+    lat: nextLat,
+    lng: nextLng,
     provider: provider || "manual",
     query: query || null,
   };
   if (sideAddressPickerMeta) {
-    sideAddressPickerMeta.textContent = `Selected: ${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`;
+    sideAddressPickerMeta.textContent = `Selected: ${nextLat.toFixed(6)}, ${nextLng.toFixed(6)}`;
   }
   if (sideAddressPickerInput && query) {
     sideAddressPickerInput.value = String(query);
   }
+  syncSideAddressPickerMarker(nextLat, nextLng);
+  return true;
 }
 
 function getSelectedSideAddressUnitId() {
@@ -2037,6 +2090,23 @@ function applyGoogleSideAddressStyle(style) {
   map.setMapTypeId(normalized === "satellite" ? "satellite" : "roadmap");
 }
 
+function getPreferredMapProvider() {
+  return window.RentSoft?.getMapProvider?.() === "leaflet" ? "leaflet" : "google";
+}
+
+function getSideAddressPlacesSessionToken() {
+  const Token = window.google?.maps?.places?.AutocompleteSessionToken;
+  if (!Token) return null;
+  if (!sideAddressPicker.google.sessionToken) {
+    sideAddressPicker.google.sessionToken = new Token();
+  }
+  return sideAddressPicker.google.sessionToken;
+}
+
+function clearSideAddressPlacesSessionToken() {
+  sideAddressPicker.google.sessionToken = null;
+}
+
 function setSideAddressPickerMapStyle(style) {
   const normalized = normalizeMapStyle(style ?? sideAddressPicker.mapStyle);
   sideAddressPicker.mapStyle = normalized;
@@ -2328,8 +2398,8 @@ function initLeafletSideAddressPicker(center) {
           }));
           renderSideAddressSuggestions(results, (picked) => {
             const label = picked?.description || "";
-            const lat = Number(picked?.__rs_lat);
-            const lng = Number(picked?.__rs_lng);
+            const lat = toFiniteCoordinate(picked?.__rs_lat);
+            const lng = toFiniteCoordinate(picked?.__rs_lng);
             hideSideAddressSuggestions();
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
             if (sideAddressPickerInput) sideAddressPickerInput.value = label || "";
@@ -2402,7 +2472,11 @@ function initGoogleSideAddressPicker(center) {
       const requestPredictions = (input) =>
         new Promise((resolve, reject) => {
           sideAddressPicker.google.autocompleteService.getPlacePredictions(
-            { input: String(input || ""), locationBias: map.getBounds?.() || undefined },
+            {
+              input: String(input || ""),
+              locationBias: map.getBounds?.() || undefined,
+              sessionToken: getSideAddressPlacesSessionToken() || undefined,
+            },
             (preds, status) => {
               if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) return resolve([]);
               if (status !== window.google.maps.places.PlacesServiceStatus.OK) {
@@ -2415,7 +2489,11 @@ function initGoogleSideAddressPicker(center) {
       const fetchPlaceDetails = (placeId, label) =>
         new Promise((resolve, reject) => {
           sideAddressPicker.google.placesService.getDetails(
-            { placeId, fields: ["geometry", "formatted_address", "name"] },
+            {
+              placeId,
+              fields: ["geometry", "formatted_address", "name"],
+              sessionToken: sideAddressPicker.google.sessionToken || undefined,
+            },
             (place, status) => {
               if (status !== window.google.maps.places.PlacesServiceStatus.OK || !place?.geometry?.location) {
                 return reject(new Error(`Places error: ${status}`));
@@ -2425,6 +2503,7 @@ function initGoogleSideAddressPicker(center) {
                 lng: place.geometry.location.lng(),
                 label: place.formatted_address || label || place.name || "Pinned location",
               };
+              clearSideAddressPlacesSessionToken();
               resolve(details);
             }
           );
@@ -2434,6 +2513,7 @@ function initGoogleSideAddressPicker(center) {
         const q = String(sideAddressPickerSearch.value || "").trim();
         if (!q) {
           hideSideAddressSuggestions();
+          clearSideAddressPlacesSessionToken();
           return;
         }
         if (sideAddressPicker.google.debounceTimer) clearTimeout(sideAddressPicker.google.debounceTimer);
@@ -2480,6 +2560,7 @@ function initGoogleSideAddressPicker(center) {
             });
           } catch (err) {
             hideSideAddressSuggestions();
+            clearSideAddressPlacesSessionToken();
             if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = err?.message || String(err);
           }
         }, 250);
@@ -2526,6 +2607,29 @@ async function openSideAddressPicker() {
     center = await getUserGeolocation();
   } catch {
     // ignore
+  }
+
+  const provider = getPreferredMapProvider();
+  if (provider === "leaflet") {
+    resetSideAddressPickerMapContainer();
+    sideAddressPicker.mode = "leaflet";
+    if (!window.L) {
+      if (sideAddressPickerMeta) {
+        sideAddressPickerMeta.textContent = "Leaflet is not available. Refresh or switch back to Google Maps.";
+      }
+      return;
+    }
+    initLeafletSideAddressPicker(center);
+    if (sideAddressPickerMeta) {
+      sideAddressPickerMeta.textContent = "Search (OpenStreetMap) or click to drop a pin.";
+    }
+    hydrateSideAddressUnitMarkerData();
+    renderSideAddressUnitMarkersFromData();
+    updateSideAddressUnitPinActions();
+    if (!applySideAddressPickerDraftSelection()) {
+      await applySideAddressPickerTextSelection();
+    }
+    return;
   }
 
   const config = await getPublicConfig().catch(() => ({}));
