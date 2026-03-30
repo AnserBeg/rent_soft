@@ -3981,6 +3981,21 @@ a.ghost {
   white-space: nowrap;
 }
 
+#dev-companies-table .table-row {
+  grid-template-columns: 44px minmax(180px, 1.6fr) minmax(180px, 1.4fr) minmax(160px, 1.2fr) repeat(5, minmax(90px, 0.6fr)) minmax(120px, 0.8fr);
+}
+
+#dev-companies-table .table-checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#dev-companies-table .table-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
 #equipment-table .status-cell {
   display: flex;
   align-items: center;
@@ -4074,7 +4089,13 @@ a.ghost {
 }
 
 #rental-quotes-table .table-row {
-  grid-template-columns: 1fr 1fr 1.6fr 1.1fr 1.1fr 1.1fr 0.8fr 0.9fr 1fr auto 0.8fr auto;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) minmax(220px, 1.8fr) minmax(140px, 1.1fr) minmax(160px, 1.2fr) minmax(160px, 1.2fr) minmax(150px, 1fr) minmax(120px, 1fr) minmax(170px, 1fr) minmax(110px, 0.8fr) minmax(110px, 0.8fr);
+}
+
+#rental-quotes-table .table-header span:nth-child(9),
+#rental-quotes-table .table-header span:nth-child(11) {
+  justify-self: end;
+  text-align: right;
 }
 
 #customer-monthly-table>.table-row {

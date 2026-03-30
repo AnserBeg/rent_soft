@@ -17,7 +17,7 @@ let sortDir = "desc";
 let searchTerm = "";
 let pendingQuoteUpdates = new Set();
 const LIST_STATE_KEY = "rentsoft.rental-quotes.listState";
-const ALLOWED_SORT_FIELDS = new Set(["quote", "status", "customer", "sales", "start_at", "end_at", "equipment_count", "fee_total", "ro_number", "created_at"]);
+const ALLOWED_SORT_FIELDS = new Set(["quote", "status", "customer", "sales", "start_at", "end_at", "monthly_recurring_total", "ro_number", "created_at"]);
 
 function loadListState() {
   const raw = localStorage.getItem(LIST_STATE_KEY);
@@ -57,6 +57,13 @@ function fmtMoney(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return "--";
   return `$${n.toFixed(2)}`;
+}
+
+function getMonthlyRecurringTotal(row) {
+  const raw = row?.monthly_recurring_total ?? row?.monthlyRecurringTotal ?? null;
+  if (raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
 }
 
 function fmtDateTime(v) {
@@ -195,10 +202,8 @@ function applyFilters() {
       case "start_at":
       case "end_at":
         return dateKey(row[sortField]);
-      case "equipment_count":
-        return numKey(row.equipment_count);
-      case "fee_total":
-        return numKey(row.fee_total);
+      case "monthly_recurring_total":
+        return numKey(getMonthlyRecurringTotal(row));
       case "ro_number":
         return norm(row.ro_number);
       case "created_at":
@@ -229,8 +234,7 @@ function renderQuotes(rows) {
       <span class="sort ${sortField === "sales" ? "active" : ""}" data-sort="sales">Sales ${indicator("sales")}</span>
       <span class="sort ${sortField === "start_at" ? "active" : ""}" data-sort="start_at">Start ${indicator("start_at")}</span>
       <span class="sort ${sortField === "end_at" ? "active" : ""}" data-sort="end_at">End ${indicator("end_at")}</span>
-      <span class="sort ${sortField === "equipment_count" ? "active" : ""}" data-sort="equipment_count">Equipment ${indicator("equipment_count")}</span>
-      <span class="sort ${sortField === "fee_total" ? "active" : ""}" data-sort="fee_total">Fees ${indicator("fee_total")}</span>
+      <span class="sort ${sortField === "monthly_recurring_total" ? "active" : ""}" data-sort="monthly_recurring_total">Monthly recurring ${indicator("monthly_recurring_total")}</span>
       <span class="sort ${sortField === "ro_number" ? "active" : ""}" data-sort="ro_number">RO # ${indicator("ro_number")}</span>
       <span>Actions</span>
       <span>Updates</span>
@@ -250,8 +254,7 @@ function renderQuotes(rows) {
       <span>${row.salesperson_name || "--"}</span>
       <span>${fmtDateTime(row.start_at)}</span>
       <span>${fmtDateTime(row.end_at)}</span>
-      <span>${row.equipment_count || 0}</span>
-      <span>${fmtMoney(row.fee_total)}</span>
+      <span>${fmtMoney(getMonthlyRecurringTotal(row))}</span>
       <span>${roNumber || "--"}</span>
       <span style="justify-self:end;">
         <div class="inline-actions" style="justify-content:flex-end; gap:8px;">

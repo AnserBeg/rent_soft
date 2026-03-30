@@ -1,0 +1,71 @@
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Developer Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="no-top-headers">
+  <div class="app-shell">
+    <div class="layout">
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <div class="topbar-brand" aria-label="Aiven Rental developer portal">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Developer <span class="topbar-title-accent">Portal</span></span>
+            </div>
+            <div class="topbar-actions">
+              <a class="ghost" href="admin-import.html">Admin import</a>
+              <button class="ghost" id="dev-refresh" type="button">Refresh</button>
+              <button class="ghost danger" id="dev-logout" type="button">Log out</button>
+            </div>
+          </div>
+        </header>
+
+        <header class="hero">
+          <div>
+            <h1>Developer dashboard</h1>
+            <p class="lede">Monitor companies and activity across the platform.</p>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Summary</h2>
+                <p class="hint" style="margin:6px 0 0;" id="dev-summary-meta">Loading company metrics...</p>
+              </div>
+            </div>
+            <div class="ar-metrics" id="dev-summary-grid"></div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Companies</h2>
+                <p class="hint" style="margin:6px 0 0;">All registered companies with key counts.</p>
+              </div>
+            </div>
+            <div class="table-shell">
+              <div class="table-head">
+                <p id="dev-companies-count">Companies</p>
+                <div class="inline">
+                  <span class="hint" id="dev-selected-count">0 selected</span>
+                  <button class="ghost danger" id="dev-delete-selected" type="button" disabled>Delete selected</button>
+                  <input id="dev-search" class="search-input" placeholder="Search companies..." />
+                </div>
+              </div>
+              <div class="table" id="dev-companies-table"></div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="dev-session.js"></script>
+  <script src="dev-dashboard.js"></script>
+</body>
+</html>

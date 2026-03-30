@@ -2144,6 +2144,79 @@ async function updateCompanyProfile({
   };
 }
 
+async function listAllCompaniesForDev() {
+  const result = await pool.query(
+    `
+    SELECT c.id,
+           c.name,
+           c.contact_email,
+           c.website,
+           c.phone,
+           c.created_at,
+           c.updated_at,
+           (SELECT COUNT(*) FROM users u WHERE u.company_id = c.id) AS users_count,
+           (SELECT COUNT(*) FROM equipment_types et WHERE et.company_id = c.id) AS types_count,
+           (SELECT COUNT(*) FROM equipment e WHERE e.company_id = c.id) AS equipment_count,
+           (SELECT COUNT(*) FROM customers cu WHERE cu.company_id = c.id) AS customers_count,
+           (SELECT COUNT(*) FROM rental_orders ro WHERE ro.company_id = c.id) AS orders_count
+      FROM companies c
+     ORDER BY c.created_at DESC
+    `
+  );
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    name: row.name,
+    email: row.contact_email,
+    website: row.website,
+    phone: row.phone,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+    usersCount: Number(row.users_count || 0),
+    typesCount: Number(row.types_count || 0),
+    equipmentCount: Number(row.equipment_count || 0),
+    customersCount: Number(row.customers_count || 0),
+    ordersCount: Number(row.orders_count || 0),
+  }));
+}
+
+async function deleteCompaniesForDev({ companyIds } = {}) {
+  const ids = Array.isArray(companyIds)
+    ? companyIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+    : [];
+  if (!ids.length) throw new Error("companyIds are required.");
+  const result = await pool.query(`DELETE FROM companies WHERE id = ANY($1::int[]) RETURNING id`, [ids]);
+  return result.rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id) && id > 0);
+}
+
+async function getCompanyOwnerUserId(companyId) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) return null;
+  const result = await pool.query(
+    `SELECT id
+       FROM users
+      WHERE company_id = $1 AND LOWER(role) = 'owner'
+      ORDER BY id ASC
+      LIMIT 1`,
+    [cid]
+  );
+  return result.rows[0]?.id ? Number(result.rows[0].id) : null;
+}
+
+async function createOwnerForCompanyForDev({ companyId, ownerName = "Developer Owner" }) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const unique = crypto.randomUUID();
+  const email = `dev-owner+${cid}-${unique}@example.invalid`;
+  const password = `Dev-${unique}`;
+  const result = await pool.query(
+    `INSERT INTO users (company_id, name, email, role, password_hash, can_act_as_customer)
+     VALUES ($1, $2, $3, 'owner', $4, TRUE)
+     RETURNING id, name, email, role`,
+    [cid, ownerName, email, hashPassword(password)]
+  );
+  return result.rows[0] || null;
+}
+
 async function listLocations(companyId, { scope, from = null, to = null, dateField = "created_at" } = {}) {
   const normalizedScope = String(scope || "").trim().toLowerCase();
   const includeAll = normalizedScope === "all";
@@ -4781,6 +4854,7 @@ async function upsertEquipmentTypeFromImport({
   name,
   categoryId,
   imageUrl,
+  documents,
   description,
   terms,
   dailyRate,
@@ -4789,12 +4863,17 @@ async function upsertEquipmentTypeFromImport({
 }) {
   const trimmedName = String(name ?? "").trim();
   if (!trimmedName) return null;
+  const docs = normalizeTypeDocuments(documents);
   const result = await pool.query(
-    `INSERT INTO equipment_types (company_id, name, category_id, image_url, description, terms, daily_rate, weekly_rate, monthly_rate)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO equipment_types (company_id, name, category_id, image_url, documents, description, terms, daily_rate, weekly_rate, monthly_rate)
+     VALUES ($1, $2, $3, $4, COALESCE($5, '[]'::jsonb), $6, $7, $8, $9, $10)
      ON CONFLICT (company_id, name)
      DO UPDATE SET category_id = COALESCE(EXCLUDED.category_id, equipment_types.category_id),
                    image_url = COALESCE(EXCLUDED.image_url, equipment_types.image_url),
+                   documents = CASE
+                     WHEN EXCLUDED.documents IS NULL OR EXCLUDED.documents = '[]'::jsonb THEN equipment_types.documents
+                     ELSE EXCLUDED.documents
+                   END,
                    description = COALESCE(EXCLUDED.description, equipment_types.description),
                    terms = COALESCE(EXCLUDED.terms, equipment_types.terms),
                    daily_rate = COALESCE(EXCLUDED.daily_rate, equipment_types.daily_rate),
@@ -4806,6 +4885,7 @@ async function upsertEquipmentTypeFromImport({
       trimmedName,
       categoryId || null,
       imageUrl || null,
+      docs.length ? JSON.stringify(docs) : null,
       description || null,
       terms || null,
       dailyRate === undefined ? null : dailyRate,
@@ -4953,6 +5033,357 @@ async function importInventoryFromText({ companyId, text }) {
         ]
       );
       stats.equipmentCreated += 1;
+    }
+
+    await pool.query("COMMIT");
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    throw err;
+  }
+
+  return stats;
+}
+
+async function importCompanyEquipmentFromText({ text }) {
+  if (!text) {
+    return {
+      companiesCreated: 0,
+      companiesMatched: 0,
+      typesCreated: 0,
+      typesUpdated: 0,
+      rowsSkipped: 0,
+      errors: [],
+    };
+  }
+
+  const firstLine = text.split(/\r?\n/, 1)[0] || "";
+  const delimiter = firstLine.includes("\t") ? "\t" : ",";
+  const rawRows = parseDelimitedRows(text, delimiter).filter((r) => r.some((c) => String(c ?? "").trim() !== ""));
+  if (rawRows.length < 2) {
+    return {
+      companiesCreated: 0,
+      companiesMatched: 0,
+      typesCreated: 0,
+      typesUpdated: 0,
+      rowsSkipped: 0,
+      errors: [],
+    };
+  }
+
+  const normalizeHeader = (value) =>
+    String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[_-]+/g, " ")
+      .replace(/[^\w\s]+/g, "")
+      .replace(/\s+/g, " ");
+
+  const header = rawRows[0].map((h) => normalizeHeader(h));
+  const headerLength = header.length;
+  const indexByName = new Map();
+  header.forEach((name, idx) => {
+    if (name) indexByName.set(name, idx);
+  });
+
+  const indexForAliases = (aliases) => {
+    for (const name of aliases) {
+      const idx = indexByName.get(name);
+      if (idx !== undefined) return idx;
+    }
+    return null;
+  };
+
+  const normalizeAliases = (aliases) => aliases.map((alias) => normalizeHeader(alias)).filter(Boolean);
+  const getValue = (row, aliases) => {
+    for (const name of aliases) {
+      const idx = indexByName.get(name);
+      if (idx === undefined) continue;
+      return String(row[idx] ?? "").trim();
+    }
+    return "";
+  };
+
+  const COMPANY_NAME_FIELDS = normalizeAliases(["company", "company name", "vendor", "provider", "business"]);
+  const COMPANY_EMAIL_FIELDS = normalizeAliases(["company email", "contact email", "email"]);
+  const COMPANY_WEBSITE_FIELDS = normalizeAliases(["company website", "website", "company url", "company site"]);
+  const COMPANY_PHONE_FIELDS = normalizeAliases(["company phone", "phone", "phone number"]);
+
+  const TYPE_NAME_FIELDS = normalizeAliases([
+    "equipment type",
+    "equipment",
+    "item",
+    "item name",
+    "product",
+    "name",
+  ]);
+  const CATEGORY_FIELDS = normalizeAliases(["category", "equipment category", "type category"]);
+  const DESCRIPTION_FIELDS = normalizeAliases(["description", "details", "summary"]);
+  const DIMENSIONS_FIELDS = normalizeAliases(["dimensions", "dimension", "size"]);
+  const TERMS_FIELDS = normalizeAliases(["terms", "contract terms", "rental terms"]);
+  const NOTES_FIELDS = normalizeAliases(["notes", "note"]);
+  const IMAGE_FIELDS = normalizeAliases(["image url", "photo url", "image", "photo"]);
+  const LISTING_FIELDS = normalizeAliases([
+    "listing url",
+    "item url",
+    "product url",
+    "page url",
+    "link",
+    "url",
+  ]);
+  const PRICE_FIELDS = normalizeAliases(["price", "base rate", "rate"]);
+  const DURATION_FIELDS = normalizeAliases(["duration", "term", "rental length"]);
+  const DAILY_RATE_FIELDS = normalizeAliases(["daily rate", "daily"]);
+  const WEEKLY_RATE_FIELDS = normalizeAliases(["weekly rate", "weekly"]);
+  const MONTHLY_RATE_FIELDS = normalizeAliases(["monthly rate", "monthly"]);
+
+  const mergeableIndexes = new Set();
+  for (const name of [...DESCRIPTION_FIELDS, ...DIMENSIONS_FIELDS, ...NOTES_FIELDS, ...TERMS_FIELDS]) {
+    const idx = indexByName.get(name);
+    if (idx !== undefined) mergeableIndexes.add(idx);
+  }
+  const imageIndex = indexForAliases(IMAGE_FIELDS);
+  const listingIndex = indexForAliases(LISTING_FIELDS);
+
+  const looksLikeUrl = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return false;
+    if (/^https?:\/\//i.test(raw)) return true;
+    return /^[^\s]+\.[^\s]+/.test(raw);
+  };
+
+  const scoreRow = (row) => {
+    let score = 0;
+    if (imageIndex !== null) {
+      const value = row[imageIndex];
+      if (looksLikeUrl(value)) score += 2;
+      else if (String(value || "").trim()) score -= 1;
+    }
+    if (listingIndex !== null) {
+      const value = row[listingIndex];
+      if (looksLikeUrl(value)) score += 1;
+      else if (String(value || "").trim()) score -= 1;
+    }
+    return score;
+  };
+
+  const repairRows = (rows) => {
+    if (!headerLength) return rows;
+    const fixed = [rows[0]];
+    for (let i = 1; i < rows.length; i += 1) {
+      let row = rows[i];
+      if (!Array.isArray(row)) continue;
+
+      while (row.length < headerLength && i + 1 < rows.length) {
+        const next = rows[i + 1];
+        if (!next || !next.length) {
+          i += 1;
+          continue;
+        }
+        if (!row.length) {
+          row = next;
+          i += 1;
+          continue;
+        }
+        const prefix = row[row.length - 1] ? `${row[row.length - 1]}\n${next[0]}` : next[0];
+        row = row.slice(0, -1).concat([prefix], next.slice(1));
+        i += 1;
+      }
+
+      if (row.length > headerLength) {
+        const extra = row.length - headerLength;
+        const candidates = mergeableIndexes.size ? Array.from(mergeableIndexes) : [headerLength - 1];
+        let best = null;
+        for (const idx of candidates) {
+          if (idx < 0 || idx >= row.length) continue;
+          if (idx + extra >= row.length) continue;
+          const mergedValue = row.slice(idx, idx + extra + 1).join(delimiter);
+          const normalized = row.slice(0, idx).concat([mergedValue], row.slice(idx + extra + 1));
+          if (normalized.length !== headerLength) continue;
+          const score = scoreRow(normalized);
+          if (!best || score > best.score) best = { row: normalized, score };
+        }
+        if (best) {
+          row = best.row;
+        } else {
+          row = row
+            .slice(0, headerLength - 1)
+            .concat([row.slice(headerLength - 1).join(delimiter)]);
+        }
+      }
+
+      if (row.length < headerLength) {
+        row = row.concat(Array.from({ length: headerLength - row.length }, () => ""));
+      }
+
+      fixed.push(row);
+    }
+    return fixed;
+  };
+
+  const rows = repairRows(rawRows);
+
+  const existingCompanies = await pool.query(
+    `SELECT id, name, contact_email, website, phone FROM companies ORDER BY id`
+  );
+  const companyByKey = new Map(
+    existingCompanies.rows.map((row) => [normalizeCustomerMatchKey(row.name), row])
+  );
+
+  const typeIdByCompany = new Map();
+  const ensureTypeMap = async (companyId) => {
+    if (typeIdByCompany.has(companyId)) return typeIdByCompany.get(companyId);
+    const existingTypes = await pool.query(
+      `SELECT id, name FROM equipment_types WHERE company_id = $1`,
+      [companyId]
+    );
+    const map = new Map(
+      existingTypes.rows.map((t) => [normalizeCustomerMatchKey(t.name), t.id])
+    );
+    typeIdByCompany.set(companyId, map);
+    return map;
+  };
+
+  const normalizeUrl = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    if (/^https?:\/\//i.test(raw)) return raw;
+    return `https://${raw}`;
+  };
+
+  const extractDomain = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+      const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+      return url.hostname.replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  };
+
+  const buildPlaceholderEmail = (companyName, website) => {
+    const domain = extractDomain(website);
+    if (domain) return `imported@${domain}`;
+    const slug = String(companyName || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return `imported+${slug || "company"}@example.invalid`;
+  };
+
+  const stats = {
+    companiesCreated: 0,
+    companiesMatched: 0,
+    typesCreated: 0,
+    typesUpdated: 0,
+    rowsSkipped: 0,
+    errors: [],
+  };
+
+  await pool.query("BEGIN");
+  try {
+    for (let i = 1; i < rows.length; i += 1) {
+      const row = rows[i];
+
+      const companyName = getValue(row, COMPANY_NAME_FIELDS);
+      const typeName = getValue(row, TYPE_NAME_FIELDS);
+      if (!companyName || !typeName) {
+        stats.rowsSkipped += 1;
+        stats.errors.push({
+          row: i + 1,
+          error: `Missing ${!companyName ? "company" : "equipment type"} name.`,
+        });
+        continue;
+      }
+
+      const companyKey = normalizeCustomerMatchKey(companyName);
+      let company = companyByKey.get(companyKey) || null;
+      const listingUrl = normalizeUrl(getValue(row, LISTING_FIELDS));
+      const companyWebsite = normalizeUrl(getValue(row, COMPANY_WEBSITE_FIELDS)) || listingUrl;
+      const companyPhone = getValue(row, COMPANY_PHONE_FIELDS) || null;
+      const companyEmailRaw = normalizeEmail(getValue(row, COMPANY_EMAIL_FIELDS));
+      if (!company) {
+        const contactEmail = companyEmailRaw || buildPlaceholderEmail(companyName, companyWebsite);
+        const insert = await pool.query(
+          `INSERT INTO companies (name, contact_email, website, phone)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, name, contact_email, website, phone`,
+          [companyName.trim(), contactEmail, companyWebsite, companyPhone]
+        );
+        company = insert.rows[0];
+        companyByKey.set(companyKey, company);
+        stats.companiesCreated += 1;
+        await pool.query(
+          `INSERT INTO locations (company_id, name) VALUES ($1, $2)`,
+          [company.id, "Main"]
+        );
+      } else {
+        stats.companiesMatched += 1;
+        if ((companyWebsite && !company.website) || (companyPhone && !company.phone)) {
+          const updated = await pool.query(
+            `UPDATE companies
+               SET website = COALESCE($2, website),
+                   phone = COALESCE($3, phone),
+                   updated_at = NOW()
+             WHERE id = $1
+             RETURNING id, name, contact_email, website, phone`,
+            [company.id, companyWebsite, companyPhone]
+          );
+          if (updated.rows[0]) company = updated.rows[0];
+          companyByKey.set(companyKey, company);
+        }
+      }
+
+      const descriptionParts = [];
+      const baseDescription = getValue(row, DESCRIPTION_FIELDS);
+      if (baseDescription) descriptionParts.push(baseDescription);
+      const dimensions = getValue(row, DIMENSIONS_FIELDS);
+      if (dimensions) descriptionParts.push(`Dimensions: ${dimensions}`);
+      const notes = getValue(row, NOTES_FIELDS);
+      if (notes) descriptionParts.push(notes);
+      const description = descriptionParts.length ? descriptionParts.join("\n") : null;
+
+      const terms = getValue(row, TERMS_FIELDS) || null;
+      const imageUrl = normalizeUrl(getValue(row, IMAGE_FIELDS)) || null;
+      const documents = listingUrl ? [{ url: listingUrl, fileName: "Listing" }] : [];
+
+      let dailyRate = parseMoney(getValue(row, DAILY_RATE_FIELDS));
+      let weeklyRate = parseMoney(getValue(row, WEEKLY_RATE_FIELDS));
+      let monthlyRate = parseMoney(getValue(row, MONTHLY_RATE_FIELDS));
+      const hasExplicitRate = [dailyRate, weeklyRate, monthlyRate].some((rate) => rate !== null);
+      if (!hasExplicitRate) {
+        const baseRate = parseMoney(getValue(row, PRICE_FIELDS));
+        const duration = getValue(row, DURATION_FIELDS);
+        const picked = pickRateBucket({ duration, baseRate });
+        dailyRate = picked.dailyRate;
+        weeklyRate = picked.weeklyRate;
+        monthlyRate = picked.monthlyRate;
+      }
+
+      const categoryName = getValue(row, CATEGORY_FIELDS);
+      const categoryId = await getOrCreateCategoryId({ companyId: company.id, name: categoryName });
+
+      const typeMap = await ensureTypeMap(company.id);
+      const typeKey = normalizeCustomerMatchKey(typeName);
+      const existed = typeMap.has(typeKey);
+      const typeId = await upsertEquipmentTypeFromImport({
+        companyId: company.id,
+        name: typeName,
+        categoryId,
+        imageUrl,
+        documents,
+        description,
+        terms,
+        dailyRate,
+        weeklyRate,
+        monthlyRate,
+      });
+      if (typeId) {
+        typeMap.set(typeKey, typeId);
+        if (existed) stats.typesUpdated += 1;
+        else stats.typesCreated += 1;
+      }
     }
 
     await pool.query("COMMIT");
@@ -9034,8 +9465,7 @@ async function getTypeAvailabilityShortfallDetails({ companyId, typeId, date, lo
     "ro.company_id = $1",
     "li.type_id = $2",
     "ro.status IN ('quote','requested','reservation','ordered')",
-    "tstzrange(COALESCE(li.fulfilled_at, li.start_at), COALESCE(li.returned_at, GREATEST(li.end_at, NOW())), '[)')",
-    "&& tstzrange($3::timestamptz, $4::timestamptz, '[)')",
+    "tstzrange(COALESCE(li.fulfilled_at, li.start_at), COALESCE(li.returned_at, GREATEST(li.end_at, NOW())), '[)') && tstzrange($3::timestamptz, $4::timestamptz, '[)')",
   ];
   if (Number.isFinite(locationIdNum)) {
     params.push(locationIdNum);
@@ -9066,8 +9496,8 @@ async function getTypeAvailabilityShortfallDetails({ companyId, typeId, date, lo
  LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
  LEFT JOIN locations l ON l.id = ro.pickup_location_id
      WHERE ${filters.join(" AND ")}
-     GROUP BY li.id, ro.id, ro.status, ro.quote_number, ro.ro_number, c.company_name, pc.company_name, ro.pickup_location_id, l.name,
-              li.fulfilled_at, li.start_at, li.returned_at, li.end_at
+     GROUP BY li.id, ro.id, ro.status, ro.quote_number, ro.ro_number, c.company_name, c.parent_customer_id, pc.company_name,
+              ro.pickup_location_id, l.name, li.fulfilled_at, li.start_at, li.returned_at, li.end_at
      ORDER BY COALESCE(li.fulfilled_at, li.start_at) ASC
     `,
     params
@@ -13378,7 +13808,7 @@ async function listStorefrontListings({
   const safeOffset = Math.max(0, Number(offset) || 0);
 
   const params = [];
-  const where = ["stock.total_units > 0"];
+  const where = ["TRUE", "regexp_replace(lower(et.name), '[\\s-]+', '', 'g') <> 'rerent'"];
 
   for (const token of equipmentTokens) {
     params.push(token);
@@ -13484,9 +13914,9 @@ async function listStorefrontListings({
         c.region AS company_region,
         c.country AS company_country,
         c.postal_code AS company_postal_code,
-        stock.total_units,
+        COALESCE(stock.total_units, 0) AS total_units,
         COALESCE(reserved.reserved_units, 0) AS reserved_units,
-        GREATEST(stock.total_units - COALESCE(reserved.reserved_units, 0), 0) AS available_units,
+        GREATEST(COALESCE(stock.total_units, 0) - COALESCE(reserved.reserved_units, 0), 0) AS available_units,
         COALESCE(stock.locations, '[]'::jsonb) AS locations
       FROM equipment_types et
       JOIN companies c ON c.id = et.company_id
@@ -13593,6 +14023,7 @@ async function listStorefrontSaleListings({
     "e.id IS NOT NULL",
     "(e.serial_number IS NULL OR e.serial_number NOT ILIKE 'UNALLOCATED-%')",
     "(e.condition IS NULL OR e.condition NOT IN ('Lost','Unusable'))",
+    "regexp_replace(lower(et.name), '[\\s-]+', '', 'g') <> 'rerent'",
   ];
 
   for (const token of equipmentTokens) {
@@ -15735,6 +16166,10 @@ module.exports = {
   revokeCompanyUserSession,
   getCompanyProfile,
   updateCompanyProfile,
+  listAllCompaniesForDev,
+  deleteCompaniesForDev,
+  getCompanyOwnerUserId,
+  createOwnerForCompanyForDev,
   listLocations,
   getLocation,
   createLocation,
@@ -15794,6 +16229,7 @@ module.exports = {
   updateWorkOrder,
   deleteWorkOrder,
   importInventoryFromText,
+  importCompanyEquipmentFromText,
   importCustomerPricingFromInventoryText,
   importCustomersFromText,
   importRentalOrdersFromLegacyExports,

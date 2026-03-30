@@ -113,8 +113,12 @@
     const session = getSession();
     if (session) return;
 
-    const returnTo = window.location.pathname + window.location.search;
-    window.location.href = `login.html?returnTo=${encodeURIComponent(returnTo)}`;
+    // Try to hydrate from server session (including dev impersonation) before redirecting.
+    refreshSession().finally(() => {
+      if (getSession()) return;
+      const returnTo = window.location.pathname + window.location.search;
+      window.location.href = `login.html?returnTo=${encodeURIComponent(returnTo)}`;
+    });
   }
 
   async function refreshSession() {

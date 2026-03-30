@@ -152,6 +152,7 @@
                     <option value="30">30 days</option>
                     <option value="60">60 days</option>
                     <option value="90" selected>90 days</option>
+                    <option value="180">180 days</option>
                   </select>
                 </label>
                 <label>Location
@@ -211,10 +212,16 @@
                   <div class="chart-card">
                     <div class="chart-head">
                       <div>
-                        <div class="chart-title">Availability trend</div>
+                        <div class="chart-title" id="shortfall-trend-title">Availability trend</div>
                         <p class="hint" id="shortfall-trend-hint">Select a type to view the trend.</p>
                       </div>
                       <div class="chart-actions nowrap shortfall-map-actions">
+                        <label>Trend
+                          <select id="shortfall-trend-mode">
+                            <option value="availability" selected>Availability</option>
+                            <option value="demand">Demand</option>
+                          </select>
+                        </label>
                         <div class="map-legend shortfall-map-legend" aria-label="Map legend">
                           <span class="legend-item"><span class="legend-swatch rented"></span>Rented out</span>
                           <span class="legend-item"><span class="legend-swatch overdue"></span>Overdue</span>

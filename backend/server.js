@@ -32,6 +32,10 @@ const {
   revokeCompanyUserSession,
   getCompanyProfile,
   updateCompanyProfile,
+  listAllCompaniesForDev,
+  deleteCompaniesForDev,
+  getCompanyOwnerUserId,
+  createOwnerForCompanyForDev,
   listLocations,
   getLocation,
   createLocation,
@@ -90,6 +94,7 @@ const {
   deleteWorkOrder,
   importCustomersFromText,
   importInventoryFromText,
+  importCompanyEquipmentFromText,
   importCustomerPricingFromInventoryText,
   importRentalOrdersFromLegacyExports,
   importRentalOrdersFromFutureInventoryReport,
@@ -675,6 +680,101 @@ const loginLimiter = rateLimit({
   handler: buildRateLimitHandler("Too many login attempts, please try again later."),
 });
 
+const DEV_PORTAL_PASSWORD = String(process.env.DEV_PORTAL_PASSWORD || "");
+const DEV_PORTAL_SESSION_TTL_MS = parseRateLimitMs(
+  process.env.DEV_PORTAL_SESSION_TTL_MS,
+  1000 * 60 * 60 * 24 * 7
+);
+const devSessionStore = new Map();
+const devImpersonationStore = new Map();
+
+function hashDevToken(token) {
+  return crypto.createHash("sha256").update(String(token || "")).digest("hex");
+}
+
+function safeEqual(a, b) {
+  const left = Buffer.from(String(a || ""));
+  const right = Buffer.from(String(b || ""));
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function pruneDevSessions(now = Date.now()) {
+  for (const [key, entry] of devSessionStore.entries()) {
+    if (!entry?.expiresAt || entry.expiresAt <= now) {
+      devSessionStore.delete(key);
+    }
+  }
+}
+
+function pruneDevImpersonations(now = Date.now()) {
+  for (const [key, entry] of devImpersonationStore.entries()) {
+    if (!entry?.expiresAt || entry.expiresAt <= now) {
+      devImpersonationStore.delete(key);
+    }
+  }
+}
+
+function createDevImpersonationToken({ companyId }) {
+  const token = crypto.randomUUID();
+  const expiresAt = Date.now() + 1000 * 60 * 5;
+  devImpersonationStore.set(token, { companyId, expiresAt });
+  pruneDevImpersonations();
+  return { token, expiresAt };
+}
+
+function consumeDevImpersonationToken(token) {
+  const raw = String(token || "").trim();
+  if (!raw) return null;
+  const entry = devImpersonationStore.get(raw);
+  devImpersonationStore.delete(raw);
+  if (!entry?.expiresAt || entry.expiresAt <= Date.now()) return null;
+  return entry;
+}
+
+function createDevSession() {
+  const token = crypto.randomUUID();
+  const tokenHash = hashDevToken(token);
+  const expiresAt = Date.now() + DEV_PORTAL_SESSION_TTL_MS;
+  devSessionStore.set(tokenHash, { expiresAt });
+  pruneDevSessions();
+  return { token, expiresAt };
+}
+
+function getDevSession(token) {
+  const raw = String(token || "").trim();
+  if (!raw) return null;
+  const tokenHash = hashDevToken(raw);
+  const entry = devSessionStore.get(tokenHash);
+  if (!entry) return null;
+  if (!entry.expiresAt || entry.expiresAt <= Date.now()) {
+    devSessionStore.delete(tokenHash);
+    return null;
+  }
+  return entry;
+}
+
+function revokeDevSession(token) {
+  const raw = String(token || "").trim();
+  if (!raw) return 0;
+  const tokenHash = hashDevToken(raw);
+  return devSessionStore.delete(tokenHash) ? 1 : 0;
+}
+
+function getDevToken(req) {
+  const authHeader = String(req.headers.authorization || "").trim();
+  if (!authHeader.toLowerCase().startsWith("bearer ")) return "";
+  return authHeader.slice(7).trim();
+}
+
+function requireDevAuth(req, res, next) {
+  const token = getDevToken(req);
+  const session = getDevSession(token);
+  if (!session) return res.status(401).json({ error: "Developer login required." });
+  req.devAuth = { token, expiresAt: session.expiresAt };
+  return next();
+}
+
 const customerLinkLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 120,
@@ -790,7 +890,7 @@ function buildCspHeaderValue(value) {
     "base-uri 'self'",
     "object-src 'none'",
     "frame-ancestors 'self'",
-    "img-src 'self' data: blob: https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.googleapis.com https://*.gstatic.com",
+    "img-src 'self' data: blob: https: https://*.tile.openstreetmap.org https://server.arcgisonline.com https://*.googleapis.com https://*.gstatic.com",
     "font-src 'self' https://fonts.gstatic.com https://*.gstatic.com",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://esm.sh https://cdn.esm.sh https://maps.googleapis.com https://maps.gstatic.com https://*.googleapis.com https://*.gstatic.com",
@@ -3723,6 +3823,8 @@ app.use("/api", (req, res, next) => {
     apiPath.startsWith("/api/customers") ||
     apiPath.startsWith("/api/storefront") ||
     apiPath.startsWith("/api/public") ||
+    apiPath.startsWith("/api/dev") ||
+    apiPath.startsWith("/api/admin") ||
     apiPath === "/api/qbo/callback" ||
     apiPath === "/api/qbo/webhooks";
   if (publicPath) return next();
@@ -3752,6 +3854,8 @@ app.use(
     if (apiPath.startsWith("/api/customers")) return next();
     if (apiPath.startsWith("/api/storefront")) return next();
     if (apiPath.startsWith("/api/public")) return next();
+    if (apiPath.startsWith("/api/dev")) return next();
+    if (apiPath.startsWith("/api/admin")) return next();
     if (apiPath === "/api/qbo/callback") return next();
     if (apiPath === "/api/qbo/webhooks") return next();
 
@@ -3831,6 +3935,102 @@ app.get(
       company: req.auth?.company || null,
       expiresAt: req.auth?.expiresAt || null,
     });
+  })
+);
+
+app.post(
+  "/api/dev/login",
+  loginLimiter,
+  asyncHandler(async (req, res) => {
+    const configured = String(DEV_PORTAL_PASSWORD || "").trim();
+    if (!configured) {
+      return res.status(500).json({ error: "Developer password not configured." });
+    }
+    const password = String(req.body?.password || "");
+    if (!safeEqual(password, configured)) {
+      return res.status(401).json({ error: "Invalid developer password." });
+    }
+    const session = createDevSession();
+    res.json({ token: session.token, expiresAt: new Date(session.expiresAt).toISOString() });
+  })
+);
+
+app.post(
+  "/api/dev/logout",
+  requireDevAuth,
+  asyncHandler(async (req, res) => {
+    const token = req.devAuth?.token || "";
+    revokeDevSession(token);
+    res.json({ ok: true });
+  })
+);
+
+app.get(
+  "/api/dev/me",
+  requireDevAuth,
+  asyncHandler(async (req, res) => {
+    res.json({ ok: true, expiresAt: new Date(req.devAuth.expiresAt).toISOString() });
+  })
+);
+
+app.get(
+  "/api/dev/companies",
+  requireDevAuth,
+  asyncHandler(async (req, res) => {
+    const companies = await listAllCompaniesForDev();
+    res.json({ companies });
+  })
+);
+
+app.post(
+  "/api/dev/companies/delete",
+  requireDevAuth,
+  asyncHandler(async (req, res) => {
+    const rawIds = req.body?.companyIds;
+    const ids = Array.isArray(rawIds)
+      ? Array.from(
+          new Set(rawIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))
+        )
+      : [];
+    if (!ids.length) return res.status(400).json({ error: "companyIds are required." });
+    const deletedIds = await deleteCompaniesForDev({ companyIds: ids });
+    await Promise.all(deletedIds.map((companyId) => removeCompanyUploads(companyId)));
+    res.json({ deletedIds });
+  })
+);
+
+app.post(
+  "/api/dev/impersonate-link",
+  requireDevAuth,
+  asyncHandler(async (req, res) => {
+    const companyId = Number(req.body?.companyId);
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    let ownerId = await getCompanyOwnerUserId(companyId);
+    if (!ownerId) {
+      const created = await createOwnerForCompanyForDev({ companyId });
+      ownerId = created?.id ? Number(created.id) : null;
+      if (!ownerId) {
+        return res.status(404).json({ error: "Unable to create an owner user for this company." });
+      }
+    }
+    const token = createDevImpersonationToken({ companyId });
+    res.json({ url: `/dev/impersonate/${encodeURIComponent(token.token)}` });
+  })
+);
+
+app.get(
+  "/dev/impersonate/:token",
+  asyncHandler(async (req, res) => {
+    const token = req.params?.token;
+    const entry = consumeDevImpersonationToken(token);
+    if (!entry?.companyId) return res.status(404).send("Invalid or expired link.");
+
+    const ownerId = await getCompanyOwnerUserId(entry.companyId);
+    if (!ownerId) return res.status(404).send("Owner user not found for this company.");
+
+    const session = await createCompanyUserSession({ userId: ownerId, companyId: entry.companyId });
+    setCompanySessionCookie(res, session.token, 1000 * 60 * 60 * 24 * 30);
+    res.redirect("/dashboard.html");
   })
 );
 
@@ -4643,6 +4843,21 @@ function safeUploadPath(...parts) {
   const rel = path.relative(uploadRoot, full);
   if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
   return full;
+}
+
+async function removeCompanyUploads(companyId) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) return;
+  const targets = [safeUploadPath(`company-${cid}`), safeUploadPath("storefront", `company-${cid}`)].filter(Boolean);
+  await Promise.all(
+    targets.map(async (dir) => {
+      try {
+        await fs.promises.rm(dir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup failures
+      }
+    })
+  );
 }
 
 const imageUpload = multer({
@@ -5810,6 +6025,23 @@ app.post(
 
     const text = req.file.buffer.toString("utf8");
     const result = await importInventoryFromText({ companyId, text });
+    res.status(201).json(result);
+  })
+);
+
+app.post(
+  "/api/admin/company-equipment/import",
+  requireDevAuth,
+  (req, res, next) => {
+    importUpload.single("file")(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || "Upload failed." });
+      next();
+    });
+  },
+  asyncHandler(async (req, res) => {
+    if (!req.file?.buffer) return res.status(400).json({ error: "file is required." });
+    const text = req.file.buffer.toString("utf8");
+    const result = await importCompanyEquipmentFromText({ text });
     res.status(201).json(result);
   })
 );

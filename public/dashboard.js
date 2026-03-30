@@ -79,7 +79,9 @@ const shortfallType = document.getElementById("shortfall-type");
 const shortfallSplitToggle = document.getElementById("shortfall-split-location");
 const shortfallDonutGrid = document.getElementById("shortfall-donut-grid");
 const shortfallTrendWrap = document.getElementById("shortfall-trend-wrap");
+const shortfallTrendTitle = document.getElementById("shortfall-trend-title");
 const shortfallTrendHint = document.getElementById("shortfall-trend-hint");
+const shortfallTrendModeSelect = document.getElementById("shortfall-trend-mode");
 const shortfallDetailCanvas = document.getElementById("shortfall-detail-chart");
 const shortfallMapFallback = document.getElementById("shortfall-map-fallback");
 const shortfallMapModeSelect = document.getElementById("shortfall-map-mode");
@@ -100,6 +102,7 @@ let shortfallSeriesMeta = [];
 let shortfallSelectedTypeId = null;
 let shortfallHoverKey = "";
 let shortfallDetailsCache = new Map();
+let shortfallTrendMode = "availability";
 let shortfallLoadSeq = 0;
 let shortfallTypeMeta = new Map();
 let shortfallExcludedTypeIds = new Set();
@@ -2310,10 +2313,42 @@ function setShortfallMeta(message) {
   if (shortfallMeta) shortfallMeta.textContent = message ? String(message) : "";
 }
 
+function normalizeShortfallTrendMode(value) {
+  return String(value || "").trim().toLowerCase() === "demand" ? "demand" : "availability";
+}
+
+function shortfallTrendLabel() {
+  return shortfallTrendMode === "demand" ? "Demand" : "Availability";
+}
+
+function shortfallTrendUnavailableMessage() {
+  return `${shortfallTrendLabel()} trend unavailable. Showing map instead.`;
+}
+
+function shortfallTrendSelectPrompt() {
+  return `Select a type to view the ${shortfallTrendLabel().toLowerCase()} trend.`;
+}
+
+function shortfallDetailsEmptyMessage() {
+  return shortfallTrendMode === "demand"
+    ? "Hover a point to see contributing orders."
+    : "Hover a negative point to see contributing orders.";
+}
+
+function applyShortfallTrendMode(nextMode) {
+  shortfallTrendMode = normalizeShortfallTrendMode(nextMode);
+  if (shortfallTrendModeSelect && shortfallTrendModeSelect.value !== shortfallTrendMode) {
+    shortfallTrendModeSelect.value = shortfallTrendMode;
+  }
+  if (shortfallTrendTitle) shortfallTrendTitle.textContent = `${shortfallTrendLabel()} trend`;
+  updateShortfallTrendVisibility();
+  renderShortfallDetailChart();
+}
+
 function renderShortfallDetailsEmpty(message) {
   if (shortfallDetailsBody) shortfallDetailsBody.replaceChildren();
   if (shortfallDetailsMeta) {
-    shortfallDetailsMeta.textContent = message || "Hover a negative point to see contributing orders.";
+    shortfallDetailsMeta.textContent = message || shortfallDetailsEmptyMessage();
   }
 }
 
@@ -2599,15 +2634,15 @@ function updateShortfallTrendVisibility() {
   if (shortfallTrendHint) {
     if (!hasSelection) {
       shortfallTrendHint.textContent = showingMapFallback
-        ? "Availability trend unavailable. Showing map instead."
-        : "Select a type to view the trend.";
+        ? shortfallTrendUnavailableMessage()
+        : shortfallTrendSelectPrompt();
       return;
     }
     if (shortfallMapFallback && !shortfallMapFallback.hidden) {
-      shortfallTrendHint.textContent = "Availability trend unavailable. Showing map instead.";
+      shortfallTrendHint.textContent = shortfallTrendUnavailableMessage();
       return;
     }
-    shortfallTrendHint.textContent = `Showing trend for ${shortfallSelectedTypeName()}.`;
+    shortfallTrendHint.textContent = `Showing ${shortfallTrendLabel().toLowerCase()} trend for ${shortfallSelectedTypeName()}.`;
   }
 }
 
@@ -2753,7 +2788,7 @@ function renderShortfallSummaryChart() {
 function renderShortfallDetailChart() {
   if (!shortfallDetailCanvas) return;
   if (typeof Chart === "undefined") {
-    showShortfallMapFallback("Availability trend unavailable. Showing map instead.");
+    showShortfallMapFallback(shortfallTrendUnavailableMessage());
     renderShortfallDetailsEmpty("Select a type to view shortfall details.");
     updateShortfallTrendVisibility();
     return;
@@ -2767,7 +2802,7 @@ function renderShortfallDetailChart() {
     const ctx = shortfallDetailCanvas.getContext("2d");
     ctx?.clearRect(0, 0, shortfallDetailCanvas.width, shortfallDetailCanvas.height);
     renderShortfallDetailsEmpty("Select a type to view shortfall details.");
-    showShortfallMapFallback("Availability trend unavailable. Showing map instead.");
+    showShortfallMapFallback(shortfallTrendUnavailableMessage());
     updateShortfallTrendVisibility();
     return;
   }
@@ -2787,19 +2822,39 @@ function renderShortfallDetailChart() {
   const labels = dates.map((d) => String(d).slice(5));
   const splitEnabled = Boolean(shortfallSplitToggle?.checked && !shortfallLocation?.value);
   const datasets = [];
+  const isDemand = shortfallTrendMode === "demand";
+  const toNumberSeries = (values) => (Array.isArray(values) ? values.map((v) => Number(v || 0)) : []);
 
   series.forEach((loc, idx) => {
     const c = seriesColor(idx);
     const base = `rgba(${c.r}, ${c.g}, ${c.b}, 0.85)`;
     const faded = `rgba(${c.r}, ${c.g}, ${c.b}, 0.45)`;
     const locationLabel = loc.locationName || "Location";
-    const committedLabel = splitEnabled ? `${locationLabel} (committed)` : "Committed";
+    const total = Number(loc.total || 0);
+    const committedValues = toNumberSeries(loc.committedValues);
+    const potentialValues = toNumberSeries(loc.potentialValues);
+    const incomingValues = toNumberSeries(loc.availableWithIncomingValues);
+    const committedDemand = committedValues.map((value) => total - value);
+    const potentialDemand = potentialValues.map((value) => total - value);
+    const committedLabel = isDemand
+      ? splitEnabled
+        ? `${locationLabel} (out)`
+        : "Out"
+      : splitEnabled
+        ? `${locationLabel} (committed)`
+        : "Committed";
     const incomingLabel = splitEnabled ? `${locationLabel} (with PO)` : "Available w/ PO";
-    const potentialLabel = splitEnabled ? `${locationLabel} (potential)` : "Potential (quotes + requests)";
+    const potentialLabel = isDemand
+      ? splitEnabled
+        ? `${locationLabel} (quotes + requests)`
+        : "Out (quotes + requests)"
+      : splitEnabled
+        ? `${locationLabel} (potential)`
+        : "Potential (quotes + requests)";
 
     datasets.push({
       label: committedLabel,
-      data: Array.isArray(loc.committedValues) ? loc.committedValues : [],
+      data: isDemand ? committedDemand : committedValues,
       borderColor: base,
       backgroundColor: "transparent",
       tension: 0.25,
@@ -2811,21 +2866,23 @@ function renderShortfallDetailChart() {
     });
     shortfallSeriesMeta.push({ seriesIndex: idx, kind: "committed" });
 
-    datasets.push({
-      label: incomingLabel,
-      data: Array.isArray(loc.availableWithIncomingValues) ? loc.availableWithIncomingValues : [],
-      borderColor: "rgba(34, 197, 94, 0.85)",
-      backgroundColor: "transparent",
-      tension: 0.25,
-      borderWidth: 2,
-      pointRadius: 0,
-      borderDash: [3, 5],
-    });
-    shortfallSeriesMeta.push({ seriesIndex: idx, kind: "incoming" });
+    if (!isDemand) {
+      datasets.push({
+        label: incomingLabel,
+        data: incomingValues,
+        borderColor: "rgba(34, 197, 94, 0.85)",
+        backgroundColor: "transparent",
+        tension: 0.25,
+        borderWidth: 2,
+        pointRadius: 0,
+        borderDash: [3, 5],
+      });
+      shortfallSeriesMeta.push({ seriesIndex: idx, kind: "incoming" });
+    }
 
     datasets.push({
       label: potentialLabel,
-      data: Array.isArray(loc.potentialValues) ? loc.potentialValues : [],
+      data: isDemand ? potentialDemand : potentialValues,
       borderColor: faded,
       backgroundColor: "transparent",
       tension: 0.25,
@@ -2838,7 +2895,7 @@ function renderShortfallDetailChart() {
 
   const ctx = shortfallDetailCanvas.getContext("2d");
   if (!ctx) {
-    showShortfallMapFallback("Availability trend unavailable. Showing map instead.");
+    showShortfallMapFallback(shortfallTrendUnavailableMessage());
     return;
   }
 
@@ -2873,7 +2930,7 @@ function renderShortfallDetailChart() {
       },
     });
   } catch (err) {
-    showShortfallMapFallback("Availability trend unavailable. Showing map instead.");
+    showShortfallMapFallback(shortfallTrendUnavailableMessage());
     return;
   }
 
@@ -2985,7 +3042,8 @@ function handleShortfallHover(active) {
 
   const committedValue = Number(series.committedValues?.[point.index] ?? 0);
   const potentialValue = Number(series.potentialValues?.[point.index] ?? 0);
-  if (committedValue >= 0 && potentialValue >= 0) {
+  const isShortfall = committedValue < 0 || potentialValue < 0;
+  if (!isShortfall && shortfallTrendMode !== "demand") {
     renderShortfallDetailsEmpty();
     return;
   }
@@ -3039,7 +3097,7 @@ async function loadShortfallSeries() {
 async function loadShortfallDashboard() {
   if (!hasShortfallUI() || !activeCompanyId) return;
   if (typeof Chart === "undefined") {
-    showShortfallMapFallback("Availability trend unavailable. Showing map instead.");
+    showShortfallMapFallback(shortfallTrendUnavailableMessage());
   }
 
   const seq = (shortfallLoadSeq += 1);
@@ -3143,6 +3201,13 @@ function initShortfallUI() {
   if (!hasShortfallUI()) return;
   renderShortfallDetailsEmpty();
   syncShortfallSplitToggle();
+
+  if (shortfallTrendModeSelect) {
+    applyShortfallTrendMode(shortfallTrendModeSelect.value);
+    shortfallTrendModeSelect.addEventListener("change", () => applyShortfallTrendMode(shortfallTrendModeSelect.value));
+  } else {
+    applyShortfallTrendMode(shortfallTrendMode);
+  }
 
   if (shortfallMapStyleSelect) {
     applyShortfallMapStyle(shortfallMapStyleSelect.value);
