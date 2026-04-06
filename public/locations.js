@@ -64,6 +64,9 @@ let mapMarkers = [];
 let mapInfoWindow = null;
 let mapStyle = "street";
 let droppedPinMarker = null;
+let leafletMap = null;
+let leafletLayers = null;
+let droppedLeafletPin = null;
 
 let addGoogleMap = null;
 let addGoogleMarker = null;
@@ -80,6 +83,17 @@ let addPlacesSessionToken = null;
 
 let googleMapsApiKey = "";
 let googleMapsLoadError = null;
+
+function getAddPlacesSessionToken() {
+  const Token = window.google?.maps?.places?.AutocompleteSessionToken;
+  if (!Token) return null;
+  if (!addPlacesSessionToken) addPlacesSessionToken = new Token();
+  return addPlacesSessionToken;
+}
+
+function clearAddPlacesSessionToken() {
+  addPlacesSessionToken = null;
+}
 
 function escapeHtml(s) {
   return String(s || "")

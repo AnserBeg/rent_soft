@@ -16,6 +16,7 @@ dotenv.config();
 
 const { mimeFromExtension, readImageAsInlinePart, generateDamageReportMarkdown } = require("./aiDamageReport");
 const { editImageBufferWithGemini, writeCompanyUpload } = require("./aiImageEdit");
+const { ensureDemoCompany } = require("./demoSeed");
 
 const {
   pool,
@@ -10323,6 +10324,16 @@ app.use((err, req, res, next) => {
 async function start() {
   await initQboDiscovery();
   await ensureTables();
+  try {
+    const demoResult = await ensureDemoCompany();
+    if (demoResult?.skipped) {
+      console.log("Demo company already exists; skipping seed.");
+    } else if (demoResult?.companyId) {
+      console.log(`Demo company seeded (ID ${demoResult.companyId}).`);
+    }
+  } catch (err) {
+    console.error("Demo seed failed:", err?.message || err);
+  }
   app.listen(PORT, () => {
     console.log(`API running on http://localhost:${PORT}`);
   });
