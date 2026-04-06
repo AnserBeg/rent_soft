@@ -187,11 +187,10 @@ function requestPlacePredictions(service, input, map) {
   if (!service || !window.google?.maps?.places) {
     return Promise.reject(new Error("Google Places library not available."));
   }
-  const locationBias = map?.getBounds?.() || undefined;
   const sessionToken = getAddPlacesSessionToken();
   return new Promise((resolve, reject) => {
     service.getPlacePredictions(
-      { input: String(input || ""), locationBias, sessionToken: sessionToken || undefined },
+      { input: String(input || ""), sessionToken: sessionToken || undefined },
       (predictions, status) => {
         if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) return resolve([]);
         if (status !== window.google.maps.places.PlacesServiceStatus.OK) {
@@ -200,6 +199,34 @@ function requestPlacePredictions(service, input, map) {
         resolve(predictions || []);
       }
     );
+  });
+}
+
+function searchGooglePlaceText(service, query, limit = 6) {
+  if (!service || !window.google?.maps?.places) {
+    return Promise.reject(new Error("Google Places library not available."));
+  }
+  const q = String(query || "").trim();
+  if (!q) return Promise.resolve([]);
+  return new Promise((resolve, reject) => {
+    service.textSearch({ query: q }, (results, status) => {
+      if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) return resolve([]);
+      if (status !== window.google.maps.places.PlacesServiceStatus.OK) {
+        return reject(new Error(`Places text search failed: ${status || "Unknown"}`));
+      }
+      const rows = (results || []).slice(0, limit).map((r) => {
+        const name = r?.name || "";
+        const address = r?.formatted_address || "";
+        const main = name || address || q;
+        const secondary = name && address ? address : "";
+        return {
+          place_id: r?.place_id || null,
+          description: address || name || q,
+          structured_formatting: { main_text: main, secondary_text: secondary },
+        };
+      });
+      resolve(rows);
+    });
   });
 }
 
@@ -513,6 +540,12 @@ async function searchGeocode(query, limit = 6) {
       __rs_lat: r.latitude,
       __rs_lng: r.longitude,
     }));
+  }
+  try {
+    const textResults = await searchGooglePlaceText(addPlacesService, q, limit);
+    if (textResults.length) return textResults;
+  } catch {
+    // Fall back to autocomplete predictions.
   }
   const preds = await requestPlacePredictions(addAutocompleteService, q, addGoogleMap);
   return preds.slice(0, limit);

@@ -2303,7 +2303,7 @@ function initUtilizationUI() {
 }
 
 function shortfallRangeFromInputs() {
-  const days = Math.max(1, Math.min(180, Number(shortfallDaysSelect?.value) || 30));
+  const days = Math.max(1, Math.min(360, Number(shortfallDaysSelect?.value) || 30));
   const start = startOfLocalDay(new Date());
   const end = new Date(start.getTime() + days * DAY_MS);
   return { start, end, days, from: start.toISOString(), to: end.toISOString() };
@@ -3991,6 +3991,7 @@ function renderShortfallDemandTable(rows, range) {
 
   const typeMap = new Map();
   const customerMap = new Map();
+  const totalsByType = new Map();
 
   cleanRows.forEach((row) => {
     const typeId = row.typeId ?? row.type_id ?? null;
@@ -4018,6 +4019,7 @@ function renderShortfallDemandTable(rows, range) {
     const typeKey = String(typeId);
     if (!cust.byType.has(typeKey)) cust.byType.set(typeKey, []);
     cust.byType.get(typeKey).push({ date: startDate, qty });
+    totalsByType.set(typeKey, (totalsByType.get(typeKey) || 0) + qty);
   });
 
   const types = Array.from(typeMap.entries())
@@ -4101,6 +4103,27 @@ function renderShortfallDemandTable(rows, range) {
 
     shortfallDemandTable.appendChild(row);
   });
+
+  if (types.length) {
+    const totalsRow = document.createElement("div");
+    totalsRow.className = "table-row shortfall-demand-row shortfall-demand-total";
+    totalsRow.style.gridTemplateColumns = gridTemplate;
+
+    const totalLabel = document.createElement("div");
+    totalLabel.className = "shortfall-demand-customer";
+    totalLabel.textContent = "Total going out";
+    totalsRow.appendChild(totalLabel);
+
+    types.forEach((t) => {
+      const cell = document.createElement("div");
+      cell.className = "shortfall-demand-cell shortfall-demand-total-cell";
+      const total = totalsByType.get(String(t.id)) || 0;
+      cell.textContent = fmtCount(total);
+      totalsRow.appendChild(cell);
+    });
+
+    shortfallDemandTable.appendChild(totalsRow);
+  }
 
   setShortfallDemandCount(customers.length);
   setShortfallDemandMeta("");

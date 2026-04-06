@@ -3279,6 +3279,22 @@ a.ghost {
   overflow: hidden;
 }
 
+.shortfall-demand-total {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  background: rgba(248, 250, 252, 0.85);
+}
+
+.shortfall-demand-total .shortfall-demand-customer {
+  font-weight: 800;
+  color: var(--text);
+}
+
+.shortfall-demand-total-cell {
+  font-weight: 700;
+  color: var(--text);
+}
+
 .shortfall-demand-customer {
   font-weight: 700;
   color: var(--text);
