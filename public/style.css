@@ -1424,6 +1424,34 @@ button:active {
   font-size: 13px;
 }
 
+.pill.tracking-pill {
+  font-weight: 700;
+}
+
+.pill.tracking-overdue {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.08);
+  color: rgba(153, 27, 27, 1);
+}
+
+.pill.tracking-due-soon {
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.10);
+  color: rgba(146, 64, 14, 1);
+}
+
+.pill.tracking-missing {
+  border-color: rgba(100, 116, 139, 0.55);
+  background: rgba(100, 116, 139, 0.10);
+  color: rgba(30, 41, 59, 1);
+}
+
+.pill.tracking-ok {
+  border-color: rgba(34, 197, 94, 0.55);
+  background: rgba(34, 197, 94, 0.10);
+  color: rgba(20, 83, 45, 1);
+}
+
 .filter-pill {
   border: 1px solid var(--border);
   padding: 6px 12px;
@@ -2302,6 +2330,58 @@ a.ghost {
 
 .bench-stage-table .table-row {
   grid-template-columns: 1fr 2fr 1.1fr 1.1fr;
+}
+
+.bench-picklist-table .table-row {
+  grid-template-columns: minmax(120px, 0.7fr) minmax(180px, 1.1fr) minmax(240px, 1.4fr) minmax(260px, 1.5fr) minmax(260px, 1.5fr) minmax(260px, 1.6fr);
+  align-items: start;
+}
+
+.bench-picklist-table .table-row .bench-picklist-equipment,
+.bench-picklist-table .table-row .bench-picklist-returns,
+.bench-picklist-table .table-row .bench-picklist-instructions {
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.bench-picklist-equipment ul,
+.bench-picklist-returns ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.bench-picklist-equipment li,
+.bench-picklist-returns li {
+  margin: 0;
+  padding: 0;
+}
+
+.bench-picklist-unit-lines {
+  margin-top: 2px;
+}
+
+.bench-picklist-unit-line {
+  margin: 0;
+  padding: 0;
+}
+
+.bench-picklist-unit-serial {
+  font-weight: 600;
+}
+
+.bench-picklist-unit-sep {
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.bench-picklist-unit-model,
+.bench-picklist-unit-notes {
+  color: var(--muted);
+}
+
+.bench-picklist-table .table-row .bench-picklist-instructions {
+  white-space: pre-wrap;
 }
 
 .bench-stage-empty {
@@ -4070,11 +4150,61 @@ a.ghost {
 }
 
 #equipment-table .table-row {
-  grid-template-columns: 1.6fr 1.2fr 1fr 1.2fr 1.1fr 1fr 1fr;
+  grid-template-columns: var(--equipment-table-grid, 1.6fr 1.2fr 1fr 1.2fr 1.1fr 1fr 1fr);
 }
 
 #types-table .table-row {
   grid-template-columns: 64px 2fr 1.2fr 1fr 1fr 1fr 0.8fr;
+}
+
+#type-tracking-fields-table .table-row {
+  grid-template-columns: 1.4fr 1fr 0.8fr 0.9fr 0.6fr auto;
+}
+
+#equipment-meter-readings-table .table-row {
+  grid-template-columns: 1.2fr 0.8fr 1.6fr;
+}
+
+#equipment-tracking-events-table .table-row {
+  grid-template-columns: 1.2fr 1.2fr 1fr 1.6fr;
+}
+
+.card.inset {
+  border-style: dashed;
+  background: #fbfcff;
+}
+
+.card-header.compact {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.pill-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tracking-field-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.3fr) minmax(220px, 2fr) auto auto;
+  gap: 10px;
+  align-items: end;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.tracking-field-row .hint {
+  margin: 0;
+}
+
+.tracking-field-row .tracking-field-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 #invoices-table .table-row {
@@ -4818,6 +4948,7 @@ a.ghost {
 
 #equipment-extras-drawer {
   z-index: 121;
+  width: min(920px, 96vw);
 }
 
 .drawer.open {

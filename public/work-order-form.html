@@ -122,6 +122,12 @@
             <input type="hidden" id="order-status" value="open" />
             <p class="hint" id="service-hint" style="margin: 10px 0 0;"></p>
             <p class="hint" id="unit-meta" style="margin: 10px 0 0;"></p>
+            <p class="hint" id="work-order-source-hint" style="margin: 4px 0 0;"></p>
+            <label id="tracking-update-wrap" style="display:none; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff; margin-top:12px;">
+              <input id="tracking-update-on-complete" type="checkbox" />
+              <span>When completing, update tracking field</span>
+            </label>
+            <p class="hint" id="tracking-update-hint" style="display:none; margin: 6px 0 0;"></p>
             <div class="stack workorder-summary" style="margin-top:12px;">
               <label>Issues
                 <textarea id="work-issues" class="notes-area" placeholder="Add any issues or concerns..."></textarea>

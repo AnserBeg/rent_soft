@@ -181,6 +181,8 @@
                     data-view="timeline">Timeline</button>
                   <button class="view-toggle-btn" id="bench-view-stages-btn" type="button"
                     data-view="stages">Stages</button>
+                  <button class="view-toggle-btn" id="bench-view-picklist-btn" type="button"
+                    data-view="picklist">Pick/Return</button>
                 </div>
                 <button class="ghost small bench-hot-filter" id="bench-ending-72h" type="button"
                   title="Show items ending in the next 72 hours">Ending &lt;72h</button>
@@ -253,6 +255,16 @@
                   </div>
                   <div class="table bench-stage-table" id="bench-stage-closed-table"></div>
                 </div>
+              </div>
+            </div>
+
+            <div id="bench-view-picklist" style="display:none;">
+              <div class="table-shell bench-picklist-shell">
+                <div class="table-head">
+                  <div><strong>Pick/Return</strong> <span class="hint" id="bench-picklist-count"></span></div>
+                  <div class="hint">Equipment going out / coming back for the selected date range.</div>
+                </div>
+                <div class="table bench-picklist-table" id="bench-picklist-table"></div>
               </div>
             </div>
           </section>

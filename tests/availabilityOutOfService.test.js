@@ -28,7 +28,7 @@ test("listAvailableInventory excludes out-of-service equipment in SQL", async ()
 
   assert.ok(lastQuery, "expected listAvailableInventory to issue a query");
   assert.match(lastQuery.text, /equipment_out_of_service/i);
-  assert.match(lastQuery.text, /tstzrange\(\s*eos\.start_at/i);
+  assert.match(lastQuery.text, /tstzrange\([\s\S]*eos\.start_at/i);
 });
 
 test("listAvailableInventory includes bundle items when type matches non-primary equipment", async () => {

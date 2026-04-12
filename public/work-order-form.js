@@ -27,6 +27,10 @@ const deleteBtn = document.getElementById("delete-work-order");
 const markCompleteBtn = document.getElementById("mark-complete");
 const markClosedBtn = document.getElementById("mark-closed");
 const markOpenBtn = document.getElementById("mark-open");
+const workOrderSourceHint = document.getElementById("work-order-source-hint");
+const trackingUpdateWrap = document.getElementById("tracking-update-wrap");
+const trackingUpdateOnComplete = document.getElementById("tracking-update-on-complete");
+const trackingUpdateHint = document.getElementById("tracking-update-hint");
 
 const params = new URLSearchParams(window.location.search);
 const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
@@ -34,6 +38,7 @@ const workOrderId = params.get("id");
 const initialUnitId = params.get("unitId");
 const initialSummary = params.get("summary");
 const initialSource = params.get("source");
+const initialSourceMeta = params.get("sourceMeta");
 
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let partsCache = [];
@@ -43,6 +48,7 @@ let editingWorkOrder = null;
 let pendingUnitId = initialUnitId ? String(initialUnitId) : null;
 let pendingSummary = initialSummary ? String(initialSummary) : null;
 let pendingSource = initialSource ? String(initialSource) : null;
+let pendingSourceMeta = initialSourceMeta ? String(initialSourceMeta) : null;
 
 function keyForParts(companyId) {
   return `rentSoft.parts.${companyId}`;
@@ -54,6 +60,45 @@ function safeJsonParse(value, fallback) {
     return parsed ?? fallback;
   } catch {
     return fallback;
+  }
+}
+
+function normalizeSourceMeta(value) {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  if (typeof value !== "string") return null;
+  const parsed = safeJsonParse(value, null);
+  if (!parsed || typeof parsed !== "object") return null;
+  if (!Object.keys(parsed).length) return null;
+  return parsed;
+}
+
+function effectiveSourceMeta() {
+  return normalizeSourceMeta(editingWorkOrder?.sourceMeta) || normalizeSourceMeta(pendingSourceMeta) || null;
+}
+
+function renderSourceMetaHint() {
+  const meta = effectiveSourceMeta();
+  if (!workOrderSourceHint) return;
+  if (!meta) {
+    workOrderSourceHint.textContent = "";
+    if (trackingUpdateWrap) trackingUpdateWrap.style.display = "none";
+    if (trackingUpdateHint) trackingUpdateHint.style.display = "none";
+    return;
+  }
+
+  const label = meta.trackingFieldLabel || meta.trackingFieldKey || meta.trackingFieldId || "";
+  const equipmentId = meta.equipmentId || meta.unitId || null;
+  const parts = [];
+  if (label) parts.push(`From tracking: ${label}`);
+  if (equipmentId) parts.push(`Unit #${equipmentId}`);
+  workOrderSourceHint.textContent = parts.join(" · ");
+
+  const showUpdate = !!(meta.equipmentId && meta.trackingFieldId);
+  if (trackingUpdateWrap) trackingUpdateWrap.style.display = showUpdate ? "flex" : "none";
+  if (trackingUpdateHint) {
+    trackingUpdateHint.style.display = showUpdate ? "block" : "none";
+    trackingUpdateHint.textContent = showUpdate ? "This will log a tracking entry when the work order is completed." : "";
   }
 }
 
@@ -668,6 +713,7 @@ function applyWorkOrderToForm(order) {
   updateTotals();
   updateServiceHint();
   syncStatusActions();
+  renderSourceMetaHint();
 }
 
 async function loadEquipment() {
@@ -740,7 +786,7 @@ function initForm() {
 async function saveWorkOrder() {
   if (!activeCompanyId) {
     setSaveStatus("Log in to continue.");
-    return false;
+    return null;
   }
 
   const date = workDateInput?.value || "";
@@ -754,11 +800,11 @@ async function saveWorkOrder() {
 
   if (!date) {
     setSaveStatus("Please select a date.");
-    return false;
+    return null;
   }
   if (!unitIds.length) {
     setSaveStatus("Please select at least one unit.");
-    return false;
+    return null;
   }
 
   const parts = collectParts();
@@ -796,6 +842,7 @@ async function saveWorkOrder() {
     sourceOrderId: editingWorkOrder?.sourceOrderId || null,
     sourceOrderNumber: editingWorkOrder?.sourceOrderNumber || null,
     sourceLineItemId: editingWorkOrder?.sourceLineItemId || null,
+    sourceMeta: normalizeSourceMeta(editingWorkOrder?.sourceMeta) || normalizeSourceMeta(pendingSourceMeta) || null,
     completedAt,
     closedAt,
   };
@@ -809,7 +856,7 @@ async function saveWorkOrder() {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     setSaveStatus(data.error || "Unable to save work order.");
-    return false;
+    return null;
   }
 
   const record = data.workOrder;
@@ -837,7 +884,8 @@ async function saveWorkOrder() {
   updateTotals();
   updateServiceHint();
   syncStatusActions();
-  return true;
+  renderSourceMetaHint();
+  return record;
 }
 
 saveBtn?.addEventListener("click", async () => {
@@ -963,11 +1011,61 @@ returnInspectionToggle?.addEventListener("change", () => {
   }
   updateServiceHint();
 });
-markCompleteBtn?.addEventListener("click", () => {
+
+async function applyTrackingUpdateFromWorkOrder(record) {
+  if (!record || !activeCompanyId) return;
+  if (!(trackingUpdateOnComplete?.checked === true)) return;
+  const meta = normalizeSourceMeta(record.sourceMeta) || effectiveSourceMeta();
+  if (!meta?.equipmentId || !meta?.trackingFieldId) return;
+
+  const dataType = String(meta.trackingDataType || "").trim();
+  let value = null;
+  if (dataType === "date") {
+    value = workDateInput?.value || null;
+  } else if (dataType === "datetime") {
+    const base = workDateInput?.value ? `${workDateInput.value}T00:00:00` : "";
+    const ms = base ? Date.parse(base) : NaN;
+    value = Number.isFinite(ms) ? new Date(ms).toISOString() : new Date().toISOString();
+  } else if (dataType === "number") {
+    const res = await fetch(
+      `/api/equipment/${encodeURIComponent(String(meta.equipmentId))}/tracking?companyId=${encodeURIComponent(String(activeCompanyId))}&eventsLimit=1&readingsLimit=1`
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load meter reading.");
+    const latest = data?.tracking?.latestMeterHours;
+    const n = Number(latest);
+    if (!Number.isFinite(n)) throw new Error("No meter reading available to apply.");
+    value = n;
+  } else {
+    value = workDateInput?.value || null;
+  }
+
+  const res = await fetch(`/api/equipment/${encodeURIComponent(String(meta.equipmentId))}/tracking/events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyId: activeCompanyId,
+      fieldId: Number(meta.trackingFieldId),
+      value,
+      note: `From work order ${record.number || record.workOrderNumber || record.id}`,
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Unable to update tracking.");
+  }
+}
+
+markCompleteBtn?.addEventListener("click", async () => {
   if (orderStatusInput) orderStatusInput.value = "completed";
   updateServiceHint();
   syncStatusActions();
-  saveWorkOrder();
+  const record = await saveWorkOrder();
+  try {
+    await applyTrackingUpdateFromWorkOrder(record);
+  } catch (err) {
+    setSaveStatus(`Work order saved, but tracking update failed: ${err?.message || String(err)}`);
+  }
 });
 markClosedBtn?.addEventListener("click", () => {
   if (orderStatusInput) orderStatusInput.value = "closed";
@@ -986,6 +1084,7 @@ if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
   companyMeta.textContent = "";
   initForm();
+  renderSourceMetaHint();
   fetchWorkOrders()
     .then(() => updateServiceHint())
     .catch((err) => {

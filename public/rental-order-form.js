@@ -9212,7 +9212,9 @@ createOrderLinkBtn?.addEventListener("click", async () => {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to create link.");
-    const url = `${window.location.origin}${data.url || ""}`;
+    const rawUrl = String(data.url || "").trim();
+    const normalizedUrl = rawUrl.startsWith("http://") || rawUrl.startsWith("https://") ? rawUrl : rawUrl.replace(/^\/+/, "");
+    const url = normalizedUrl ? new URL(normalizedUrl, window.location.href).toString() : "";
     if (orderLinkOutput) orderLinkOutput.value = url;
     if (orderLinkHint) orderLinkHint.textContent = "Link generated.";
   } catch (err) {
@@ -9252,4 +9254,3 @@ document.addEventListener("click", (e) => {
 });
 
 init();
-

@@ -202,6 +202,7 @@ CREATE TABLE IF NOT EXISTS work_orders (
   source_order_id TEXT,
   source_order_number TEXT,
   source_line_item_id TEXT,
+  source_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
   completed_at TIMESTAMPTZ,
   closed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -214,6 +215,91 @@ CREATE INDEX IF NOT EXISTS work_orders_company_status_idx ON work_orders (compan
 CREATE INDEX IF NOT EXISTS work_orders_company_service_idx ON work_orders (company_id, service_status);
 CREATE INDEX IF NOT EXISTS work_orders_updated_idx ON work_orders (company_id, updated_at);
 CREATE INDEX IF NOT EXISTS work_orders_unit_ids_idx ON work_orders USING GIN (unit_ids);
+
+-- Equipment tracking (custom fields + meters)
+CREATE TABLE IF NOT EXISTS equipment_type_tracking_fields (
+  id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  equipment_type_id INTEGER NOT NULL REFERENCES equipment_types(id) ON DELETE CASCADE,
+  field_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  data_type TEXT NOT NULL,
+  unit TEXT,
+  required BOOLEAN NOT NULL DEFAULT FALSE,
+  options JSONB NOT NULL DEFAULT '[]'::jsonb,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  show_on_assets_table BOOLEAN NOT NULL DEFAULT FALSE,
+  table_column_label TEXT,
+  table_column_mode TEXT NOT NULL DEFAULT 'value',
+  rule JSONB NOT NULL DEFAULT '{}'::jsonb,
+  archived_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(company_id, equipment_type_id, field_key)
+);
+
+CREATE INDEX IF NOT EXISTS equipment_type_tracking_fields_company_type_idx
+  ON equipment_type_tracking_fields(company_id, equipment_type_id);
+
+CREATE INDEX IF NOT EXISTS equipment_type_tracking_fields_company_table_idx
+  ON equipment_type_tracking_fields(company_id, show_on_assets_table)
+  WHERE archived_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS equipment_tracking_field_values (
+  id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+  field_id INTEGER NOT NULL REFERENCES equipment_type_tracking_fields(id) ON DELETE CASCADE,
+  value_text TEXT,
+  value_number NUMERIC(14, 4),
+  value_bool BOOLEAN,
+  value_date DATE,
+  value_timestamptz TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(company_id, equipment_id, field_id)
+);
+
+CREATE INDEX IF NOT EXISTS equipment_tracking_field_values_company_equipment_idx
+  ON equipment_tracking_field_values(company_id, equipment_id);
+
+CREATE INDEX IF NOT EXISTS equipment_tracking_field_values_company_field_idx
+  ON equipment_tracking_field_values(company_id, field_id);
+
+CREATE TABLE IF NOT EXISTS equipment_tracking_field_events (
+  id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+  field_id INTEGER NOT NULL REFERENCES equipment_type_tracking_fields(id) ON DELETE CASCADE,
+  value_text TEXT,
+  value_number NUMERIC(14, 4),
+  value_bool BOOLEAN,
+  value_date DATE,
+  value_timestamptz TIMESTAMPTZ,
+  note TEXT,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS equipment_tracking_field_events_company_equipment_idx
+  ON equipment_tracking_field_events(company_id, equipment_id, occurred_at DESC);
+
+CREATE INDEX IF NOT EXISTS equipment_tracking_field_events_company_field_idx
+  ON equipment_tracking_field_events(company_id, field_id, occurred_at DESC);
+
+CREATE TABLE IF NOT EXISTS equipment_meter_readings (
+  id SERIAL PRIMARY KEY,
+  company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+  meter_type TEXT NOT NULL DEFAULT 'hours',
+  reading NUMERIC(14, 4) NOT NULL,
+  read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  note TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS equipment_meter_readings_company_equipment_idx
+  ON equipment_meter_readings(company_id, equipment_id, read_at DESC);
 
 -- Rental Orders (RO)
 CREATE TABLE IF NOT EXISTS rental_orders (

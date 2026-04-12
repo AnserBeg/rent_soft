@@ -14,7 +14,10 @@ const orderScopeLabel = document.getElementById("order-scope-label");
 const orderContactSection = document.getElementById("order-contact-section");
 const lineItemsSection = document.getElementById("line-items-section");
 const rentalInfoSection = document.getElementById("rental-info-section");
-const lineItemsEl = document.getElementById("line-items");
+const lineItemsEl =
+  document.getElementById("line-items") ||
+  document.querySelector("#line-items-section > .stack") ||
+  null;
 const addLineItemBtn = document.getElementById("add-line-item");
 const documentsSection = document.getElementById("documents-section");
 const documentUploads = document.getElementById("document-uploads");
@@ -103,7 +106,6 @@ const FALLBACK_TIME_ZONES = [
   "Asia/Tokyo",
   "Australia/Sydney",
 ];
-const coverageTimeZoneLabelCache = new Map();
 
 function normalizeCoverageTimeZone(value) {
   const raw = String(value || "").trim();
@@ -137,18 +139,7 @@ function supportedTimeZones() {
 }
 
 function timeZoneLabel(zone) {
-  if (coverageTimeZoneLabelCache.has(zone)) return coverageTimeZoneLabelCache.get(zone);
-  let label = zone;
-  try {
-    const fmt = new Intl.DateTimeFormat("en-US", { timeZone: zone, timeZoneName: "short" });
-    const parts = fmt.formatToParts(new Date());
-    const tzName = parts.find((part) => part.type === "timeZoneName")?.value;
-    if (tzName) label = `${zone} (${tzName})`;
-  } catch {
-    // ignore
-  }
-  coverageTimeZoneLabelCache.set(zone, label);
-  return label;
+  return String(zone || "").trim();
 }
 
 function ensureCoverageTimeZoneOptions() {
@@ -156,13 +147,15 @@ function ensureCoverageTimeZoneOptions() {
   if (coverageTimeZoneSelect.dataset.ready === "true") return;
   const zones = Array.from(new Set(supportedTimeZones().map((z) => String(z).trim()).filter(Boolean)));
   if (!zones.includes("UTC")) zones.unshift("UTC");
-  coverageTimeZoneSelect.innerHTML = "";
+  const fragment = document.createDocumentFragment();
   zones.forEach((zone) => {
     const option = document.createElement("option");
     option.value = zone;
-    option.textContent = timeZoneLabel(zone);
-    coverageTimeZoneSelect.appendChild(option);
+    option.textContent = zone;
+    fragment.appendChild(option);
   });
+  coverageTimeZoneSelect.innerHTML = "";
+  coverageTimeZoneSelect.appendChild(fragment);
   coverageTimeZoneSelect.dataset.ready = "true";
 }
 
@@ -476,7 +469,7 @@ function normalizeContactGroups(value) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
   const groups = {};
   Object.entries(raw).forEach(([key, list]) => {
-    groups[key] = Array.isArray(list) ? list : [];
+    groups[key] = parseContacts(list);
   });
   return groups;
 }
@@ -520,6 +513,19 @@ function collectContactCategoryPayload() {
     else contactGroups[category.key] = rows;
   });
   return { contacts, accountingContacts, contactGroups };
+}
+
+function parseContacts(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
 function normalizeContactEntries(list) {
@@ -748,7 +754,7 @@ function setSideAddressPickerMapStyle(style) {
 }
 
 async function getPublicConfig() {
-  const res = await fetch("/api/public-config");
+  const res = await fetch("api/public-config");
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to load config");
   return data || {};
@@ -977,7 +983,7 @@ function handleSideAddressMapClick(lat, lng, { provider } = {}) {
 
 async function saveCustomerLinkUnitPin({ unitId, latitude, longitude, provider, query, label }) {
   if (!token) throw new Error("Missing link token.");
-  const res = await fetch(`/api/public/customer-links/${encodeURIComponent(token)}/unit-pins`, {
+  const res = await fetch(`api/public/customer-links/${encodeURIComponent(token)}/unit-pins`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -2227,7 +2233,7 @@ function sanitizeRichText(html) {
 function setGeneralNotesHtml(value) {
   const raw = String(value || "");
   const looksLikeHtml = /<\s*[a-z][\s\S]*>/i.test(raw);
-  const html = looksLikeHtml ? raw : escapeHtml(raw).replaceAll("\n", "<br />");
+  const html = looksLikeHtml ? raw : escapeHtml(raw).replace(/\n/g, "<br />");
   const cleaned = sanitizeRichText(html);
   if (generalNotesEditor) generalNotesEditor.innerHTML = cleaned;
   if (generalNotesInput) generalNotesInput.value = cleaned;
@@ -2236,7 +2242,7 @@ function setGeneralNotesHtml(value) {
 function getGeneralNotesHtml() {
   const raw = generalNotesEditor ? generalNotesEditor.innerHTML : String(generalNotesInput?.value || "");
   const looksLikeHtml = /<\s*[a-z][\s\S]*>/i.test(raw);
-  const html = looksLikeHtml ? raw : escapeHtml(raw).replaceAll("\n", "<br />");
+  const html = looksLikeHtml ? raw : escapeHtml(raw).replace(/\n/g, "<br />");
   const cleaned = sanitizeRichText(html);
   if (generalNotesInput) generalNotesInput.value = cleaned;
   return cleaned;
@@ -2395,7 +2401,7 @@ async function uploadImage({ companyId, file }) {
   const body = new FormData();
   body.append("companyId", String(companyId));
   body.append("image", prepared);
-  const res = await fetch("/api/uploads/image", { method: "POST", body });
+  const res = await fetch("api/uploads/image", { method: "POST", body });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to upload image.");
   if (!data.url) throw new Error("Upload did not return an image url.");
@@ -2404,7 +2410,7 @@ async function uploadImage({ companyId, file }) {
 
 async function deleteImage({ companyId, url }) {
   if (!companyId || !url) return;
-  await fetch("/api/uploads/image", {
+  await fetch("api/uploads/image", {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ companyId, url }),
@@ -2880,7 +2886,9 @@ function ensureLineItem() {
     lineItems.push({
       lineItemId: null,
       typeId: null,
+      typeName: null,
       bundleId: null,
+      bundleName: null,
       unitDescription: "",
       startLocal: "",
       endLocal: "",
@@ -2912,17 +2920,39 @@ function isRerentLineItem(li) {
   return !!String(li.unitDescription || "").trim();
 }
 
-function buildTypeOptions(selectedId) {
+function getTypeNameById(typeId) {
+  if (typeId === null || typeId === undefined || typeId === "") return "";
+  const match = types.find((t) => String(t?.id) === String(typeId));
+  return match?.name ? String(match.name) : "";
+}
+
+function buildTypeOptions(selectedId, selectedName) {
   const opts = ['<option value="">Select equipment</option>'];
+  const selectedKey = selectedId === null || selectedId === undefined ? "" : String(selectedId);
+  let selectedFound = false;
   types.filter((t) => !isRerentType(t)).forEach((t) => {
-    const sel = String(selectedId || "") === String(t.id) ? "selected" : "";
-    opts.push(`<option value="${t.id}" ${sel}>${t.name}</option>`);
+    const idKey = String(t?.id ?? "");
+    const sel = selectedKey && selectedKey === idKey ? "selected" : "";
+    if (sel) selectedFound = true;
+    opts.push(`<option value="${escapeHtml(idKey)}" ${sel}>${escapeHtml(t?.name || "")}</option>`);
   });
+  if (selectedKey && !selectedFound) {
+    const fallbackLabel = String(selectedName || getTypeNameById(selectedKey) || `Type #${selectedKey}`).trim();
+    opts.splice(
+      1,
+      0,
+      `<option value="${escapeHtml(selectedKey)}" selected>${escapeHtml(fallbackLabel)} (unavailable)</option>`
+    );
+  }
   return opts.join("");
 }
 
 function renderLineItems() {
   closeActiveTimePicker();
+  if (!lineItemsEl) {
+    console.error("Customer link: missing line items container (#line-items).");
+    return;
+  }
   lineItemsEl.innerHTML = "";
   lineItems.forEach((li, idx) => {
     const div = document.createElement("div");
@@ -2931,6 +2961,13 @@ function renderLineItems() {
     const typeDisabled = li.bundleId ? "disabled" : "";
     const isRerent = isRerentLineItem(li);
     const unitDescription = escapeHtml(String(li.unitDescription || ""));
+    const displayName = isRerent
+      ? String(li.unitDescription || "").trim() ||
+        getTypeNameById(li.typeId) ||
+        String(li.typeName || "").trim() ||
+        "Rerent item"
+      : String(li.bundleName || "").trim() || getTypeNameById(li.typeId) || String(li.typeName || "").trim();
+    const displayHtml = displayName ? `<span class="hint">${escapeHtml(displayName)}</span>` : "";
     const typeFieldHtml = isRerent
       ? `
           <label>Unit
@@ -2939,7 +2976,7 @@ function renderLineItems() {
         `
       : `
           <label>Equipment type
-            <select data-field="typeId" ${typeDisabled}>${buildTypeOptions(li.typeId)}</select>
+            <select data-field="typeId" ${typeDisabled}>${buildTypeOptions(li.typeId, li.typeName)}</select>
           </label>
         `;
     const pricingFields = [];
@@ -2972,7 +3009,10 @@ function renderLineItems() {
       : "";
     div.innerHTML = `
       <div class="line-item-header">
-        <strong>Line item ${idx + 1}</strong>
+        <div class="stack" style="gap:2px;">
+          <strong>Line item ${idx + 1}</strong>
+          ${displayHtml}
+        </div>
         <button type="button" class="ghost danger small" data-action="remove">Remove</button>
       </div>
       <div class="stack">
@@ -2994,6 +3034,7 @@ function renderLineItems() {
 }
 
 function renderDocuments(categories) {
+  if (!documentUploads || !documentsSection) return;
   documentUploads.innerHTML = "";
   docCategoryMap = {};
   categories.forEach((cat) => {
@@ -3051,7 +3092,7 @@ async function loadLink() {
     return;
   }
   try {
-    const res = await fetch(`/api/public/customer-links/${encodeURIComponent(token)}`);
+    const res = await fetch(`api/public/customer-links/${encodeURIComponent(token)}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const errorMessage = data.error || "Unable to load link.";
@@ -3065,7 +3106,7 @@ async function loadLink() {
     if (data.link?.singleUse && data.link?.usedAt) {
       showUsedLinkMessage({
         proofAvailable: !!data.proofAvailable,
-        proofUrl: `/api/public/customer-links/${encodeURIComponent(token)}/proof`,
+        proofUrl: `api/public/customer-links/${encodeURIComponent(token)}/proof`,
       });
       return;
     }
@@ -3093,7 +3134,7 @@ async function loadLink() {
     countryInput.value = customer.country || "";
 
     const order = data.order || null;
-    const showOrder = !!order || data.link?.scope === "new_quote" || data.link?.scope === "order_update";
+    const showOrder = !!order || scope === "new_quote" || scope === "order_update";
     if (customerPoField) customerPoField.style.display = showOrder ? "grid" : "none";
     if (orderSection) orderSection.style.display = showOrder ? "block" : "none";
     if (orderContactSection) orderContactSection.style.display = showOrder ? "block" : "none";
@@ -3112,9 +3153,9 @@ async function loadLink() {
       orderScopeLabel.textContent = orderLabel ? `order ${orderLabel}` : "this order";
     }
     if (showOrder) {
-      customerPoInput.value = order?.customerPo || "";
+      if (customerPoInput) customerPoInput.value = order?.customerPo || "";
       const fulfillmentMethod = order?.fulfillmentMethod === "dropoff" ? "dropoff" : "pickup";
-      fulfillmentSelect.value = fulfillmentMethod;
+      if (fulfillmentSelect) fulfillmentSelect.value = fulfillmentMethod;
       pickupAddress = formatPickupAddress(order);
       originalDropoffAddress = order?.dropoffAddress || "";
       lastDropoffAddress = originalDropoffAddress;
@@ -3161,9 +3202,11 @@ async function loadLink() {
     types = Array.isArray(data.types) ? data.types : [];
     lineItems = Array.isArray(data.lineItems)
       ? data.lineItems.map((li) => ({
-          lineItemId: li.lineItemId || null,
-          typeId: li.typeId || null,
-          bundleId: li.bundleId || null,
+          lineItemId: li.lineItemId ?? null,
+          typeId: li.typeId ?? null,
+          typeName: li.typeName ?? null,
+          bundleId: li.bundleId ?? null,
+          bundleName: li.bundleName ?? null,
           unitDescription: li.unitDescription || "",
           startLocal: toLocalInputValue(li.startAt),
           endLocal: toLocalInputValue(li.endAt),
@@ -3184,8 +3227,8 @@ async function loadLink() {
     renderDocuments(categories);
 
     if (data.link?.termsText) {
-      termsSection.style.display = "block";
-      termsText.textContent = data.link.termsText;
+      if (termsSection) termsSection.style.display = "block";
+      if (termsText) termsText.textContent = data.link.termsText;
     }
 
     serviceAgreementRequired = false;
@@ -3358,7 +3401,9 @@ addLineItemBtn?.addEventListener("click", () => {
   lineItems.push({
     lineItemId: null,
     typeId: null,
+    typeName: null,
     bundleId: null,
+    bundleName: null,
     unitDescription: "",
     startLocal: "",
     endLocal: "",
@@ -3381,7 +3426,9 @@ lineItemsEl?.addEventListener("change", (evt) => {
   if (!li) return;
   if (field === "typeId") {
     li.typeId = evt.target.value ? Number(evt.target.value) : null;
+    li.typeName = null;
     li.bundleId = null;
+    li.bundleName = null;
     li.rateBasis = null;
     li.rateAmount = null;
     li.billableUnits = null;
@@ -3893,7 +3940,7 @@ form?.addEventListener("submit", async (evt) => {
       });
     });
 
-    const res = await fetch(`/api/public/customer-links/${encodeURIComponent(token)}/submit`, {
+    const res = await fetch(`api/public/customer-links/${encodeURIComponent(token)}/submit`, {
       method: "POST",
       body: formData,
     });
@@ -3904,7 +3951,8 @@ form?.addEventListener("submit", async (evt) => {
     linkBanner.textContent = "Thank you! Your submission has been received.";
     linkHint.textContent = "Your update is pending review. This link is now closed.";
     proofActions.style.display = "flex";
-    downloadProof.href = data.proofUrl || `/api/public/customer-links/${encodeURIComponent(token)}/proof`;
+    const fallbackProof = `api/public/customer-links/${encodeURIComponent(token)}/proof`;
+    downloadProof.href = data.proofUrl ? String(data.proofUrl).replace(/^\//, "") : fallbackProof;
     setFormDisabled(true);
   } catch (err) {
     linkHint.textContent = err?.message ? String(err.message) : "Unable to submit update.";

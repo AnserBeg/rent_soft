@@ -150,8 +150,12 @@ const benchSortNearest = document.getElementById("bench-sort-nearest");
 const benchViewToggle = document.getElementById("bench-view-toggle");
 const benchViewTimelineBtn = document.getElementById("bench-view-timeline-btn");
 const benchViewStagesBtn = document.getElementById("bench-view-stages-btn");
+const benchViewPicklistBtn = document.getElementById("bench-view-picklist-btn");
 const benchViewTimeline = document.getElementById("bench-view-timeline");
 const benchViewStages = document.getElementById("bench-view-stages");
+const benchViewPicklist = document.getElementById("bench-view-picklist");
+const benchPicklistTable = document.getElementById("bench-picklist-table");
+const benchPicklistCount = document.getElementById("bench-picklist-count");
 
 const benchStageRequestedTable = document.getElementById("bench-stage-requested-table");
 const benchStageQuoteTable = document.getElementById("bench-stage-quote-table");
@@ -203,9 +207,11 @@ const BENCH_VIEW_STORAGE_KEY = "rentsoft.workbench.view";
 const BENCH_SORT_STORAGE_KEY = "rentsoft.workbench.timelineSortNearest";
 const INCIDENTS_STORAGE_KEY = "rentsoft.dashboard.incidents";
 const INCIDENT_METRICS_STORAGE_KEY = "rentsoft.dashboard.incidentMetrics";
-let benchActiveView = null; // "timeline" | "stages" | null
+let benchActiveView = null; // "timeline" | "stages" | "picklist" | null
 let benchOrdersCache = [];
 let benchOrdersCacheKey = "";
+let benchPicklistCache = [];
+let benchPicklistCacheKey = "";
 
 function isGoogleMapsReady() {
   return typeof window.google?.maps?.Map === "function";
@@ -763,6 +769,9 @@ function hasBenchStagesUI() {
     benchViewStages &&
     benchViewTimelineBtn &&
     benchViewStagesBtn &&
+    benchViewPicklistBtn &&
+    benchViewPicklist &&
+    benchPicklistTable &&
     benchStageRequestedTable &&
     benchStageQuoteTable &&
     benchStageReservationTable &&
@@ -1457,7 +1466,9 @@ function initIncidentsWidget() {
 
 function currentBenchViewPref() {
   const v = String(safeStorageGet(BENCH_VIEW_STORAGE_KEY) || "").toLowerCase();
-  return v === "stages" ? "stages" : "timeline";
+  if (v === "stages") return "stages";
+  if (v === "picklist") return "picklist";
+  return "timeline";
 }
 
 function currentBenchSortPref() {
@@ -1469,19 +1480,25 @@ function currentBenchSortPref() {
 
 function setBenchView(view, { persist = true, load = true } = {}) {
   if (!hasBenchStagesUI()) return;
-  const next = view === "stages" ? "stages" : "timeline";
+  const next = view === "stages" ? "stages" : view === "picklist" ? "picklist" : "timeline";
   benchActiveView = next;
   if (persist) safeStorageSet(BENCH_VIEW_STORAGE_KEY, next);
 
   if (benchViewTimeline) benchViewTimeline.style.display = next === "timeline" ? "" : "none";
   if (benchViewStages) benchViewStages.style.display = next === "stages" ? "" : "none";
+  if (benchViewPicklist) benchViewPicklist.style.display = next === "picklist" ? "" : "none";
   benchViewTimelineBtn?.classList.toggle("active", next === "timeline");
   benchViewStagesBtn?.classList.toggle("active", next === "stages");
+  benchViewPicklistBtn?.classList.toggle("active", next === "picklist");
 
   if (next !== "timeline") hideTooltip();
 
   if (load && next === "stages") {
     loadBenchStages();
+  }
+
+  if (load && next === "picklist") {
+    loadBenchPicklist();
   }
 }
 
@@ -1702,7 +1719,7 @@ async function loadBenchStages() {
 
   [benchStageRequestedTable, benchStageQuoteTable, benchStageReservationTable, benchStageOrderedTable, benchStageReceivedTable, benchStageClosedTable]
     .filter(Boolean)
-    .forEach((el) => (el.innerHTML = `<div class="bench-stage-empty">Loadingƒ?İ</div>`));
+    .forEach((el) => (el.innerHTML = `<div class="bench-stage-empty">Loading...</div>`));
 
   const statusesParam = statuses.length ? `&statuses=${encodeURIComponent(statuses.join(","))}` : "";
   try {
@@ -1716,6 +1733,301 @@ async function loadBenchStages() {
     renderBenchStages();
   } catch (err) {
     companyMeta.textContent = err.message;
+  }
+}
+
+function formatPicklistDate(value) {
+  if (!value) return "--";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "--";
+  const now = new Date();
+  const opts = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString("en-US", opts);
+}
+
+function picklistEquipmentList(itemsRaw) {
+  const items = typeof itemsRaw === "string" ? JSON.parse(itemsRaw) : itemsRaw;
+  if (!Array.isArray(items) || !items.length) return `<span class="hint">--</span>`;
+  const li = items
+    .map((it) => {
+      const typeName = it?.typeName ?? it?.type_name ?? "--";
+
+      const unitDetailsRaw = it?.units ?? it?.unitDetails ?? it?.unit_details ?? [];
+      const unitDetails = typeof unitDetailsRaw === "string" ? JSON.parse(unitDetailsRaw) : unitDetailsRaw;
+      if (Array.isArray(unitDetails) && unitDetails.length) {
+        const lines = unitDetails
+          .map((u) => {
+            const serial = String(u?.serialNumber ?? u?.serial_number ?? u?.serial ?? "").trim();
+            const modelName = String(u?.modelName ?? u?.model_name ?? "").trim();
+            const notes = String(u?.notes ?? u?.note ?? "").trim();
+            const parts = [];
+            if (serial) parts.push(`<span class="bench-picklist-unit-serial">${escapeHtml(serial)}</span>`);
+            if (modelName)
+              parts.push(
+                `<span class="bench-picklist-unit-model"><span class="hint">Model:</span> ${escapeHtml(modelName)}</span>`
+              );
+            if (notes)
+              parts.push(
+                `<span class="bench-picklist-unit-notes"><span class="hint">Note:</span> ${escapeHtml(notes)}</span>`
+              );
+            const label = parts.length ? parts.join(` <span class="bench-picklist-unit-sep">•</span> `) : `<span class="hint">TBD</span>`;
+            return `<div class="bench-picklist-unit-line">${label}</div>`;
+          })
+          .join("");
+        return `<li><strong>${escapeHtml(typeName)}</strong>: <div class="bench-picklist-unit-lines">${lines}</div></li>`;
+      }
+
+      const unitsRaw = it?.unitNumbers ?? it?.unit_numbers ?? [];
+      const units = typeof unitsRaw === "string" ? JSON.parse(unitsRaw) : unitsRaw;
+      const unitLabels = Array.isArray(units) ? units.filter(Boolean).map((u) => String(u)) : [];
+      const unitsLabel = unitLabels.length ? escapeHtml(unitLabels.join(", ")) : `<span class="hint">TBD</span>`;
+      return `<li><strong>${escapeHtml(typeName)}</strong>: ${unitsLabel}</li>`;
+    })
+    .join("");
+  return `<ul>${li}</ul>`;
+}
+
+function picklistDeliveryAddress(row) {
+  const site = String(row?.site_address ?? row?.siteAddress ?? "").trim();
+  if (site) return site;
+  const dropoff = String(row?.dropoff_address ?? row?.dropoffAddress ?? "").trim();
+  if (dropoff) return dropoff;
+  return "";
+}
+
+function picklistInstructions(row) {
+  const parts = [];
+  const access = String(row?.site_access_info ?? row?.siteAccessInfo ?? "").trim();
+  const logistics = String(row?.logistics_instructions ?? row?.logisticsInstructions ?? "").trim();
+  const special = String(row?.special_instructions ?? row?.specialInstructions ?? "").trim();
+  if (access) parts.push(`Access: ${access}`);
+  if (logistics) parts.push(`Logistics: ${logistics}`);
+  if (special) parts.push(`Special: ${special}`);
+  return parts.join("\n");
+}
+
+function picklistHaystack(row) {
+  const outRaw = row?.equipment_out ?? row?.equipmentOut ?? [];
+  const outEq = typeof outRaw === "string" ? JSON.parse(outRaw) : outRaw;
+  const inRaw = row?.equipment_in ?? row?.equipmentIn ?? [];
+  const inEq = typeof inRaw === "string" ? JSON.parse(inRaw) : inRaw;
+  const eqText = (arr) =>
+    Array.isArray(arr)
+      ? arr
+          .map((it) => {
+            const typeName = it?.typeName ?? it?.type_name ?? "";
+            const unitDetailsRaw = it?.units ?? it?.unitDetails ?? it?.unit_details ?? null;
+            const unitDetails = typeof unitDetailsRaw === "string" ? JSON.parse(unitDetailsRaw) : unitDetailsRaw;
+            if (Array.isArray(unitDetails) && unitDetails.length) {
+              const serials = unitDetails
+                .map((u) => String(u?.serialNumber ?? u?.serial_number ?? u?.serial ?? "").trim())
+                .filter(Boolean)
+                .join(" ");
+              const models = unitDetails
+                .map((u) => String(u?.modelName ?? u?.model_name ?? "").trim())
+                .filter(Boolean)
+                .join(" ");
+              const notes = unitDetails
+                .map((u) => String(u?.notes ?? u?.note ?? "").trim())
+                .filter(Boolean)
+                .join(" ");
+              return `${typeName} ${serials} ${models} ${notes}`.trim();
+            }
+
+            const units = it?.unitNumbers ?? it?.unit_numbers ?? [];
+            const unitList = Array.isArray(units) ? units.join(" ") : "";
+            return `${typeName} ${unitList}`.trim();
+          })
+          .filter(Boolean)
+          .join(" ")
+      : "";
+
+  return [
+    docNumber(row),
+    row?.status,
+    row?.customer_name,
+    poOrLegacy(row),
+    row?.pickup_location_name,
+    row?.start_at,
+    row?.end_at,
+    picklistDeliveryAddress(row),
+    row?.site_name,
+    row?.site_access_info,
+    row?.logistics_instructions,
+    row?.special_instructions,
+    eqText(outEq),
+    eqText(inEq),
+  ]
+    .filter((p) => p !== null && p !== undefined)
+    .map((p) => String(p))
+    .join(" ")
+    .toLowerCase();
+}
+
+function matchesPicklistTokens(row, tokens) {
+  if (!tokens || !tokens.length) return true;
+  const hay = picklistHaystack(row);
+  return tokens.every((t) => hay.includes(t));
+}
+
+function explodePicklistOrdersToRows(orders, { fromMs = null, toMs = null } = {}) {
+
+  const rows = [];
+  (orders || []).forEach((order) => {
+    const raw = order?.equipment_out ?? order?.equipmentOut ?? [];
+    const items = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(items) || !items.length) return;
+
+    const byDay = new Map(); // key => { out: [], in: [] }
+    const ensureBucket = (key) => {
+      if (!byDay.has(key)) byDay.set(key, { out: [], in: [] });
+      return byDay.get(key);
+    };
+
+    items.forEach((it) => {
+      const outAt = it?.fulfilledAt ?? it?.fulfilled_at ?? it?.startAt ?? it?.start_at ?? null;
+      const outDt = outAt ? new Date(outAt) : null;
+      const outKey = outDt && !Number.isNaN(outDt.getTime()) ? toLocalDateInputValue(outDt) : null;
+      if (outKey) ensureBucket(outKey).out.push(it);
+
+      const inAt = it?.returnedAt ?? it?.returned_at ?? it?.endAt ?? it?.end_at ?? null;
+      const inDt = inAt ? new Date(inAt) : null;
+      const inKey = inDt && !Number.isNaN(inDt.getTime()) ? toLocalDateInputValue(inDt) : null;
+      if (inKey) ensureBucket(inKey).in.push(it);
+    });
+
+    const sortItems = (arr) =>
+      [...(arr || [])].sort((a, b) => {
+        const tnA = String(a?.typeName ?? a?.type_name ?? "");
+        const tnB = String(b?.typeName ?? b?.type_name ?? "");
+        if (tnA !== tnB) return tnA.localeCompare(tnB);
+        return String(a?.lineItemId ?? a?.line_item_id ?? "").localeCompare(
+          String(b?.lineItemId ?? b?.line_item_id ?? "")
+        );
+      });
+
+    Array.from(byDay.entries()).forEach(([key, bucket]) => {
+      const dayAt = `${key}T00:00:00`;
+      const dayMs = Date.parse(dayAt);
+      if (Number.isFinite(fromMs) && Number.isFinite(dayMs) && dayMs < fromMs) return;
+      if (Number.isFinite(toMs) && Number.isFinite(dayMs) && dayMs >= toMs) return;
+
+      rows.push({
+        ...order,
+        start_at: dayAt,
+        end_at: dayAt,
+        equipment_out: sortItems(bucket.out),
+        equipment_in: sortItems(bucket.in),
+      });
+    });
+  });
+
+  return rows;
+}
+
+function isPicklistRowEmpty(row) {
+  const outItems = row?.equipment_out ?? row?.equipmentOut ?? [];
+  const inItems = row?.equipment_in ?? row?.equipmentIn ?? [];
+  const out = typeof outItems === "string" ? JSON.parse(outItems) : outItems;
+  const inn = typeof inItems === "string" ? JSON.parse(inItems) : inItems;
+  const outCount = Array.isArray(out) ? out.length : 0;
+  const inCount = Array.isArray(inn) ? inn.length : 0;
+  return outCount + inCount === 0;
+}
+
+function renderBenchPicklist() {
+  if (!hasBenchStagesUI()) return;
+  if (!benchPicklistTable) return;
+
+  const tokens = currentSearchTokens();
+  const filtered = (benchPicklistCache || [])
+    .filter((r) => !isRejectedStatus(r.status))
+    .filter((r) => !isPicklistRowEmpty(r))
+    .filter((r) => matchesPicklistTokens(r, tokens));
+
+  setStageCount(benchPicklistCount, filtered.length);
+
+  const sorted = [...filtered].sort((a, b) => {
+    const ams = parseDateMs(a.start_at) ?? Number.POSITIVE_INFINITY;
+    const bms = parseDateMs(b.start_at) ?? Number.POSITIVE_INFINITY;
+    if (ams !== bms) return ams - bms;
+    return docNumber(a).localeCompare(docNumber(b));
+  });
+
+  if (!sorted.length) {
+    benchPicklistTable.innerHTML = `<div class="bench-stage-empty">No items.</div>`;
+    return;
+  }
+
+  benchPicklistTable.innerHTML = `
+    <div class="table-row table-header">
+      <span>Date</span>
+      <span>Customer</span>
+      <span>Delivery address</span>
+      <span>Equipment out</span>
+      <span>Equipment back</span>
+      <span>Pickup / dropoff instructions</span>
+    </div>`;
+
+  sorted.forEach((row) => {
+    const div = document.createElement("div");
+    div.className = "table-row";
+    div.dataset.id = String(row.id || "");
+
+    const customerLabel = row.customer_name || "--";
+    const address = picklistDeliveryAddress(row) || "--";
+    const instructions = picklistInstructions(row);
+    const doc = docNumber(row);
+
+    div.innerHTML = `
+      <span>${escapeHtml(formatPicklistDate(row.start_at))}</span>
+      <div>
+        <div>${escapeHtml(customerLabel)}</div>
+        <div class="hint">${escapeHtml(doc)}</div>
+      </div>
+      <div>${escapeHtml(address)}</div>
+      <div class="bench-picklist-equipment">${picklistEquipmentList(row?.equipment_out ?? row?.equipmentOut ?? [])}</div>
+      <div class="bench-picklist-returns">${picklistEquipmentList(row?.equipment_in ?? row?.equipmentIn ?? [])}</div>
+      <div class="bench-picklist-instructions">${escapeHtml(instructions || "--").replaceAll("\n", "<br/>")}</div>
+    `;
+
+    benchPicklistTable.appendChild(div);
+  });
+}
+
+async function loadBenchPicklist() {
+  if (!hasBenchStagesUI()) return;
+  if (!activeCompanyId) return;
+  if (!benchPicklistTable) return;
+
+  const statuses = selectedStatuses();
+  const from = rangeStartDate.toISOString();
+  const to = new Date(rangeStartDate.getTime() + rangeDays * DAY_MS).toISOString();
+  const fromMs = rangeStartDate.getTime();
+  const toMs = rangeStartDate.getTime() + rangeDays * DAY_MS;
+  const statusesKey = [...statuses].sort().join(",");
+  const nextKey = `${activeCompanyId}|${from}|${to}|${statusesKey}`;
+
+  if (nextKey === benchPicklistCacheKey && Array.isArray(benchPicklistCache)) {
+    renderBenchPicklist();
+    return;
+  }
+
+  benchPicklistTable.innerHTML = `<div class="bench-stage-empty">Loading...</div>`;
+
+  const statusesParam = statuses.length ? `&statuses=${encodeURIComponent(statuses.join(","))}` : "";
+  try {
+    const res = await fetch(
+      `/api/rental-orders/pick-list?companyId=${activeCompanyId}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${statusesParam}`
+    );
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load pick list view.");
+    benchPicklistCache = explodePicklistOrdersToRows(data.orders || [], { fromMs, toMs });
+    benchPicklistCacheKey = nextKey;
+    renderBenchPicklist();
+  } catch (err) {
+    benchPicklistTable.innerHTML = `<div class="bench-stage-empty">${escapeHtml(err.message || "Unable to load pick list.")}</div>`;
   }
 }
 
@@ -4249,6 +4561,7 @@ function init() {
     companyMeta.textContent = `Using company #${activeCompanyId}`;
     if (hasTimelineUI()) {
       if (hasBenchStagesUI() && benchActiveView === "stages") loadBenchStages();
+      else if (hasBenchStagesUI() && benchActiveView === "picklist") loadBenchPicklist();
       else loadTimeline();
     } else if (hasRevenueUI() || hasUtilizationUI() || hasShortfallUI()) {
       const tasks = [];
@@ -4267,6 +4580,7 @@ rangeStartInput?.addEventListener("change", () => {
   if (dt) rangeStartDate = startOfLocalDay(dt);
   if (hasTimelineUI()) {
     if (hasBenchStagesUI() && benchActiveView === "stages") loadBenchStages();
+    else if (hasBenchStagesUI() && benchActiveView === "picklist") loadBenchPicklist();
     else loadTimeline();
   } else if (hasRevenueUI()) {
     loadRevenueDashboard().catch((err) => (companyMeta.textContent = err.message));
@@ -4277,6 +4591,7 @@ rangeDaysSelect?.addEventListener("change", () => {
   rangeDays = Number(rangeDaysSelect.value) || 30;
   if (hasTimelineUI()) {
     if (hasBenchStagesUI() && benchActiveView === "stages") loadBenchStages();
+    else if (hasBenchStagesUI() && benchActiveView === "picklist") loadBenchPicklist();
     else loadTimeline();
   } else if (hasRevenueUI()) {
     loadRevenueDashboard().catch((err) => (companyMeta.textContent = err.message));
@@ -4299,6 +4614,7 @@ todayBtn?.addEventListener("click", () => {
   if (rangeStartInput) rangeStartInput.value = toLocalDateInputValue(rangeStartDate);
   if (hasTimelineUI()) {
     if (hasBenchStagesUI() && benchActiveView === "stages") loadBenchStages();
+    else if (hasBenchStagesUI() && benchActiveView === "picklist") loadBenchPicklist();
     else loadTimeline();
   } else if (hasRevenueUI()) {
     loadRevenueDashboard().catch((err) => (companyMeta.textContent = err.message));
@@ -4313,6 +4629,7 @@ todayBtn?.addEventListener("click", () => {
     el.addEventListener("change", () => {
       if (!hasTimelineUI()) return;
       if (hasBenchStagesUI() && benchActiveView === "stages") loadBenchStages();
+      else if (hasBenchStagesUI() && benchActiveView === "picklist") loadBenchPicklist();
       else loadTimeline();
     })
   );
@@ -4320,6 +4637,10 @@ todayBtn?.addEventListener("click", () => {
 benchSearchInput?.addEventListener("input", () => {
   if (hasBenchStagesUI() && benchActiveView === "stages") {
     renderBenchStages();
+    return;
+  }
+  if (hasBenchStagesUI() && benchActiveView === "picklist") {
+    renderBenchPicklist();
     return;
   }
   renderTimeline();
@@ -4356,6 +4677,13 @@ benchViewStages?.addEventListener("click", (e) => {
   if (id) openOrderFromWorkbench(id);
 });
 
+benchViewPicklist?.addEventListener("click", (e) => {
+  const row = e.target?.closest?.(".table-row");
+  if (!row || row.classList.contains("table-header")) return;
+  const id = row?.dataset?.id;
+  if (id) openOrderFromWorkbench(id);
+});
+
 benchNewRoBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   if (!activeCompanyId) {
@@ -4369,7 +4697,7 @@ benchNewRoBtn?.addEventListener("click", (e) => {
 
 function setEnding72Active(active) {
   if (!benchEnding72Btn) return;
-  if (hasBenchStagesUI() && benchActiveView === "stages") setBenchView("timeline");
+  if (hasBenchStagesUI() && benchActiveView && benchActiveView !== "timeline") setBenchView("timeline");
   if (active) {
     focusEndingOnly = true;
     endingDays = ENDING_72H_DAYS;

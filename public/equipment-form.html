@@ -185,9 +185,10 @@
             <div class="extras-strip-left">
               <span class="extras-label">Extras</span>
             </div>
-            <div class="extras-actions">
+          <div class="extras-actions">
               <button class="ghost small" id="open-equipment-location-history" type="button">Location history</button>
               <button class="ghost small" id="open-equipment-work-orders" type="button">Work orders</button>
+              <button class="ghost small" id="open-equipment-tracking" type="button">Tracking</button>
             </div>
           </div>
         </main>
@@ -236,6 +237,7 @@
     <div class="drawer-tabs">
       <button class="drawer-tab" type="button" data-tab="location-history">Location history</button>
       <button class="drawer-tab" type="button" data-tab="work-orders">Work orders</button>
+      <button class="drawer-tab" type="button" data-tab="tracking">Tracking</button>
     </div>
     <div class="drawer-body">
       <div class="drawer-panel" data-panel="location-history">
@@ -248,6 +250,63 @@
         <div class="stack">
           <p class="hint" id="equipment-work-orders-meta" style="margin:0;"></p>
           <div class="table" id="equipment-work-orders-table"></div>
+        </div>
+      </div>
+      <div class="drawer-panel" data-panel="tracking" style="display:none;">
+        <div class="stack">
+          <div class="pill-row">
+            <span class="pill" id="equipment-tracking-status">--</span>
+            <span class="hint" id="equipment-tracking-needs-summary"></span>
+          </div>
+          <div class="stack" id="equipment-tracking-needs"></div>
+
+          <div class="card inset">
+            <div class="card-header compact">
+              <div>
+                <h4 style="margin:0;">Hours meter</h4>
+                <p class="hint" id="equipment-meter-meta" style="margin:6px 0 0;">Track hours of operation (manual readings).</p>
+              </div>
+            </div>
+            <div class="three-col">
+              <label>Reading (hours)
+                <input id="equipment-meter-reading" type="number" min="0" step="0.1" />
+              </label>
+              <label>Read at
+                <input id="equipment-meter-read-at" type="datetime-local" />
+              </label>
+              <label>Note
+                <input id="equipment-meter-note" type="text" placeholder="Optional" />
+              </label>
+            </div>
+            <div class="inline-actions" style="justify-content:flex-start;">
+              <button class="ghost small" id="equipment-meter-add" type="button">Add reading</button>
+            </div>
+            <div class="table" id="equipment-meter-readings-table"></div>
+          </div>
+
+          <div class="card inset">
+            <div class="card-header compact">
+              <div>
+                <h4 style="margin:0;">Tracking fields</h4>
+                <p class="hint" style="margin:6px 0 0;">Custom fields configured per equipment type.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary small" id="equipment-tracking-save" type="button">Save values</button>
+              </div>
+            </div>
+            <p class="hint" id="equipment-tracking-save-status" style="margin:0 0 10px;"></p>
+            <div class="stack" id="equipment-tracking-fields"></div>
+          </div>
+
+          <div class="card inset">
+            <div class="card-header compact">
+              <div>
+                <h4 style="margin:0;">History</h4>
+                <p class="hint" style="margin:6px 0 0;">Recent tracking updates.</p>
+              </div>
+            </div>
+            <div class="table" id="equipment-tracking-events-table"></div>
+          </div>
         </div>
       </div>
     </div>

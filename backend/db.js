@@ -1,6 +1,18 @@
 const { Pool } = require("pg");
 const crypto = require("crypto");
 
+const {
+  TRACKING_DATA_TYPES,
+  TRACKING_RULE_TYPES,
+  normalizeTrackingRule,
+  normalizeTrackingFieldDefinition,
+  normalizeDateOnly: normalizeTrackingDateOnly,
+  normalizeDatetime: normalizeTrackingDatetime,
+  formatTrackingValueForDisplay,
+  computeEquipmentTrackingSummary,
+  computeTrackingStatusForField,
+} = require("./equipmentTracking");
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
@@ -747,6 +759,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS source_order_id TEXT;`);
     await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS source_order_number TEXT;`);
     await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS source_line_item_id TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS source_meta JSONB NOT NULL DEFAULT '{}'::jsonb;`);
     await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;`);
     await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;`);
     await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
@@ -755,6 +768,97 @@ async function ensureTables() {
     await client.query(`CREATE INDEX IF NOT EXISTS work_orders_company_service_idx ON work_orders (company_id, service_status);`);
     await client.query(`CREATE INDEX IF NOT EXISTS work_orders_updated_idx ON work_orders (company_id, updated_at);`);
     await client.query(`CREATE INDEX IF NOT EXISTS work_orders_unit_ids_idx ON work_orders USING GIN (unit_ids);`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS equipment_type_tracking_fields (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        equipment_type_id INTEGER NOT NULL REFERENCES equipment_types(id) ON DELETE CASCADE,
+        field_key TEXT NOT NULL,
+        label TEXT NOT NULL,
+        data_type TEXT NOT NULL,
+        unit TEXT,
+        required BOOLEAN NOT NULL DEFAULT FALSE,
+        options JSONB NOT NULL DEFAULT '[]'::jsonb,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        show_on_assets_table BOOLEAN NOT NULL DEFAULT FALSE,
+        table_column_label TEXT,
+        table_column_mode TEXT NOT NULL DEFAULT 'value',
+        rule JSONB NOT NULL DEFAULT '{}'::jsonb,
+        archived_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(company_id, equipment_type_id, field_key)
+      );
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS equipment_type_tracking_fields_company_type_idx ON equipment_type_tracking_fields (company_id, equipment_type_id);`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS equipment_type_tracking_fields_company_table_idx ON equipment_type_tracking_fields (company_id, show_on_assets_table) WHERE archived_at IS NULL;`
+    );
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS equipment_tracking_field_values (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+        field_id INTEGER NOT NULL REFERENCES equipment_type_tracking_fields(id) ON DELETE CASCADE,
+        value_text TEXT,
+        value_number NUMERIC(14, 4),
+        value_bool BOOLEAN,
+        value_date DATE,
+        value_timestamptz TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(company_id, equipment_id, field_id)
+      );
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS equipment_tracking_field_values_company_equipment_idx ON equipment_tracking_field_values (company_id, equipment_id);`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS equipment_tracking_field_values_company_field_idx ON equipment_tracking_field_values (company_id, field_id);`
+    );
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS equipment_tracking_field_events (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+        field_id INTEGER NOT NULL REFERENCES equipment_type_tracking_fields(id) ON DELETE CASCADE,
+        value_text TEXT,
+        value_number NUMERIC(14, 4),
+        value_bool BOOLEAN,
+        value_date DATE,
+        value_timestamptz TIMESTAMPTZ,
+        note TEXT,
+        occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS equipment_tracking_field_events_company_equipment_idx ON equipment_tracking_field_events (company_id, equipment_id, occurred_at DESC);`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS equipment_tracking_field_events_company_field_idx ON equipment_tracking_field_events (company_id, field_id, occurred_at DESC);`
+    );
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS equipment_meter_readings (
+        id SERIAL PRIMARY KEY,
+        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+        meter_type TEXT NOT NULL DEFAULT 'hours',
+        reading NUMERIC(14, 4) NOT NULL,
+        read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        note TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS equipment_meter_readings_company_equipment_idx ON equipment_meter_readings (company_id, equipment_id, read_at DESC);`
+    );
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS equipment_bundles (
@@ -2640,6 +2744,340 @@ async function deleteType({ id, companyId }) {
   await pool.query(`DELETE FROM equipment_types WHERE id = $1 AND company_id = $2`, [id, companyId]);
 }
 
+function normalizeEquipmentTrackingFieldKey(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  let key = raw.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!key) return null;
+  if (!/^[a-z]/.test(key)) key = `f_${key}`;
+  if (key.length > 64) key = key.slice(0, 64);
+  return key;
+}
+
+function normalizeEquipmentTrackingTableColumnMode(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "next_due" || raw === "due" || raw === "next") return "next_due";
+  return "value";
+}
+
+function normalizeEquipmentTrackingFieldOptions(dataType, value) {
+  if (String(dataType || "") !== "select") return [];
+  const input = coerceJsonArray(value);
+  const out = [];
+  for (const item of input) {
+    if (!item) continue;
+    if (typeof item === "string") {
+      const v = String(item).trim();
+      if (!v) continue;
+      out.push({ value: v, label: v });
+      continue;
+    }
+    if (typeof item !== "object") continue;
+    const v = String(item.value || "").trim();
+    if (!v) continue;
+    const label = String(item.label || item.name || v).trim() || v;
+    out.push({ value: v, label });
+  }
+  const deduped = [];
+  const seen = new Set();
+  for (const item of out) {
+    const k = String(item.value).toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
+function assertTrackingRuleMatchesField(def) {
+  if (!def) return;
+  const rule = normalizeTrackingRule(def.rule);
+  if (!rule.enabled || rule.ruleType === "none") return;
+
+  const type = String(def.dataType || def.data_type || "").trim();
+  if (rule.ruleType === "time_interval" || rule.ruleType === "manual_due_date") {
+    if (!(type === "date" || type === "datetime")) {
+      throw new Error(`Rule type "${rule.ruleType}" requires a date/datetime field.`);
+    }
+    if (rule.ruleType === "time_interval" && !rule.intervalDays) {
+      throw new Error("Time interval rules require intervalDays.");
+    }
+    return;
+  }
+
+  if (rule.ruleType === "meter_interval") {
+    if (type !== "number") {
+      throw new Error(`Rule type "${rule.ruleType}" requires a number field.`);
+    }
+    if (!rule.intervalHours) {
+      throw new Error("Meter interval rules require intervalHours.");
+    }
+    return;
+  }
+
+  throw new Error("Unknown tracking rule type.");
+}
+
+function parseEquipmentTrackingValueForColumns(dataType, value) {
+  const type = String(dataType || "").trim();
+  if (type === "date") {
+    const d = normalizeTrackingDateOnly(value);
+    return { value_date: d, value_timestamptz: null, value_number: null, value_bool: null, value_text: null };
+  }
+  if (type === "datetime") {
+    const iso = normalizeTrackingDatetime(value);
+    return { value_date: null, value_timestamptz: iso, value_number: null, value_bool: null, value_text: null };
+  }
+  if (type === "number") {
+    const n = Number(value);
+    return {
+      value_date: null,
+      value_timestamptz: null,
+      value_number: Number.isFinite(n) ? n : null,
+      value_bool: null,
+      value_text: null,
+    };
+  }
+  if (type === "boolean") {
+    const b = value === true || String(value).toLowerCase() === "true";
+    return { value_date: null, value_timestamptz: null, value_number: null, value_bool: b, value_text: null };
+  }
+  if (type === "select") {
+    const s = value === null || value === undefined ? "" : String(value).trim();
+    return { value_date: null, value_timestamptz: null, value_number: null, value_bool: null, value_text: s || null };
+  }
+  const t = value === null || value === undefined ? "" : String(value).trim();
+  return { value_date: null, value_timestamptz: null, value_number: null, value_bool: null, value_text: t || null };
+}
+
+function rawEquipmentTrackingValueFromRow(row) {
+  if (!row) return null;
+  if (row.value_date) return row.value_date instanceof Date ? row.value_date.toISOString().slice(0, 10) : String(row.value_date).slice(0, 10);
+  if (row.value_timestamptz) return row.value_timestamptz instanceof Date ? row.value_timestamptz.toISOString() : String(row.value_timestamptz);
+  if (row.value_number !== null && row.value_number !== undefined) return Number(row.value_number);
+  if (row.value_bool !== null && row.value_bool !== undefined) return row.value_bool === true;
+  if (row.value_text !== null && row.value_text !== undefined) return String(row.value_text);
+  return null;
+}
+
+function formatTrackingTableCellValue({ def, rawValue, latestMeterHours }) {
+  if (!def) return "--";
+  const mode = normalizeEquipmentTrackingTableColumnMode(def.tableColumnMode ?? def.table_column_mode);
+  if (mode === "next_due") {
+    const status = computeTrackingStatusForField({
+      def: normalizeTrackingFieldDefinition(def) || def,
+      rawValue,
+      latestMeterHours,
+      now: new Date(),
+    });
+    if (!status || status.dueAt === null || status.dueAt === undefined) return "--";
+    if (typeof status.dueAt === "number") return `${status.dueAt}h`;
+    return String(status.dueAt);
+  }
+  return formatTrackingValueForDisplay(normalizeTrackingFieldDefinition(def) || def, rawValue);
+}
+
+async function listEquipmentTypeTrackingFields({ companyId, equipmentTypeId, includeArchived = false }) {
+  const cid = Number(companyId);
+  const tid = Number(equipmentTypeId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(tid) || tid <= 0) throw new Error("equipmentTypeId is required.");
+
+  const where = ["company_id = $1", "equipment_type_id = $2"];
+  const params = [cid, tid];
+  if (!includeArchived) where.push("archived_at IS NULL");
+
+  const res = await pool.query(
+    `
+    SELECT id, company_id, equipment_type_id, field_key, label, data_type, unit, required,
+           options, sort_order, show_on_assets_table, table_column_label, table_column_mode, rule,
+           archived_at, created_at, updated_at
+      FROM equipment_type_tracking_fields
+     WHERE ${where.join(" AND ")}
+     ORDER BY sort_order ASC, label ASC, id ASC
+    `,
+    params
+  );
+
+  return (res.rows || []).map((row) => ({
+    id: Number(row.id),
+    companyId: Number(row.company_id),
+    equipmentTypeId: Number(row.equipment_type_id),
+    fieldKey: row.field_key,
+    label: row.label,
+    dataType: row.data_type,
+    unit: row.unit || null,
+    required: row.required === true,
+    options: coerceJsonArray(row.options),
+    sortOrder: Number(row.sort_order) || 0,
+    showOnAssetsTable: row.show_on_assets_table === true,
+    tableColumnLabel: row.table_column_label || null,
+    tableColumnMode: row.table_column_mode || "value",
+    rule: coerceJsonObject(row.rule),
+    archivedAt: row.archived_at || null,
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+  }));
+}
+
+async function createEquipmentTypeTrackingField(payload = {}) {
+  const cid = Number(payload.companyId);
+  const tid = Number(payload.equipmentTypeId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(tid) || tid <= 0) throw new Error("equipmentTypeId is required.");
+
+  const fieldKey = normalizeEquipmentTrackingFieldKey(payload.fieldKey || payload.key);
+  const label = String(payload.label || "").trim();
+  const dataType = String(payload.dataType || "").trim();
+  if (!fieldKey) throw new Error("fieldKey is required.");
+  if (!label) throw new Error("label is required.");
+  if (!TRACKING_DATA_TYPES.has(dataType)) throw new Error("Invalid dataType.");
+
+  const unit = payload.unit ? String(payload.unit).trim() : null;
+  const required = payload.required === true;
+  const options = normalizeEquipmentTrackingFieldOptions(dataType, payload.options);
+  const sortOrder = Number.isFinite(Number(payload.sortOrder)) ? Number(payload.sortOrder) : 0;
+  const showOnAssetsTable = payload.showOnAssetsTable === true;
+  const tableColumnLabel = payload.tableColumnLabel ? String(payload.tableColumnLabel).trim() : null;
+  const tableColumnMode = normalizeEquipmentTrackingTableColumnMode(payload.tableColumnMode);
+  const rule = normalizeTrackingRule(payload.rule);
+
+  assertTrackingRuleMatchesField({ dataType, rule });
+
+  const res = await pool.query(
+    `
+    INSERT INTO equipment_type_tracking_fields
+      (company_id, equipment_type_id, field_key, label, data_type, unit, required, options, sort_order,
+       show_on_assets_table, table_column_label, table_column_mode, rule, updated_at)
+    VALUES
+      ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+    RETURNING id, company_id, equipment_type_id, field_key, label, data_type, unit, required, options,
+              sort_order, show_on_assets_table, table_column_label, table_column_mode, rule,
+              archived_at, created_at, updated_at
+    `,
+    [
+      cid,
+      tid,
+      fieldKey,
+      label,
+      dataType,
+      unit,
+      required,
+      JSON.stringify(options),
+      sortOrder,
+      showOnAssetsTable,
+      tableColumnLabel,
+      tableColumnMode,
+      JSON.stringify(rule),
+    ]
+  );
+  return (await listEquipmentTypeTrackingFields({ companyId: cid, equipmentTypeId: tid, includeArchived: true })).find(
+    (f) => String(f.id) === String(res.rows?.[0]?.id)
+  );
+}
+
+async function updateEquipmentTypeTrackingField(payload = {}) {
+  const cid = Number(payload.companyId);
+  const tid = Number(payload.equipmentTypeId);
+  const fid = Number(payload.id);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(tid) || tid <= 0) throw new Error("equipmentTypeId is required.");
+  if (!Number.isFinite(fid) || fid <= 0) throw new Error("id is required.");
+
+  const existingRes = await pool.query(
+    `SELECT id, company_id, equipment_type_id, field_key, label, data_type, unit, required, options, sort_order,
+            show_on_assets_table, table_column_label, table_column_mode, rule, archived_at
+       FROM equipment_type_tracking_fields
+      WHERE company_id = $1 AND equipment_type_id = $2 AND id = $3
+      LIMIT 1`,
+    [cid, tid, fid]
+  );
+  const existing = existingRes.rows?.[0];
+  if (!existing) return null;
+
+  const fieldKey = payload.fieldKey || payload.key ? normalizeEquipmentTrackingFieldKey(payload.fieldKey || payload.key) : existing.field_key;
+  const label = payload.label !== undefined ? String(payload.label || "").trim() : existing.label;
+  const dataType = payload.dataType ? String(payload.dataType).trim() : existing.data_type;
+  if (!fieldKey) throw new Error("fieldKey is required.");
+  if (!label) throw new Error("label is required.");
+  if (!TRACKING_DATA_TYPES.has(dataType)) throw new Error("Invalid dataType.");
+
+  const unit = payload.unit !== undefined ? (payload.unit ? String(payload.unit).trim() : null) : existing.unit;
+  const required = payload.required !== undefined ? payload.required === true : existing.required === true;
+  const options =
+    payload.options !== undefined ? normalizeEquipmentTrackingFieldOptions(dataType, payload.options) : coerceJsonArray(existing.options);
+  const sortOrder = payload.sortOrder !== undefined && Number.isFinite(Number(payload.sortOrder)) ? Number(payload.sortOrder) : Number(existing.sort_order) || 0;
+  const showOnAssetsTable = payload.showOnAssetsTable !== undefined ? payload.showOnAssetsTable === true : existing.show_on_assets_table === true;
+  const tableColumnLabel =
+    payload.tableColumnLabel !== undefined ? (payload.tableColumnLabel ? String(payload.tableColumnLabel).trim() : null) : existing.table_column_label;
+  const tableColumnMode =
+    payload.tableColumnMode !== undefined ? normalizeEquipmentTrackingTableColumnMode(payload.tableColumnMode) : existing.table_column_mode || "value";
+  const rule = payload.rule !== undefined ? normalizeTrackingRule(payload.rule) : normalizeTrackingRule(existing.rule);
+
+  assertTrackingRuleMatchesField({ dataType, rule });
+
+  const res = await pool.query(
+    `
+    UPDATE equipment_type_tracking_fields
+       SET field_key = $1,
+           label = $2,
+           data_type = $3,
+           unit = $4,
+           required = $5,
+           options = $6,
+           sort_order = $7,
+           show_on_assets_table = $8,
+           table_column_label = $9,
+           table_column_mode = $10,
+           rule = $11,
+           updated_at = NOW()
+     WHERE company_id = $12 AND equipment_type_id = $13 AND id = $14
+     RETURNING id
+    `,
+    [
+      fieldKey,
+      label,
+      dataType,
+      unit,
+      required,
+      JSON.stringify(options),
+      sortOrder,
+      showOnAssetsTable,
+      tableColumnLabel,
+      tableColumnMode,
+      JSON.stringify(rule),
+      cid,
+      tid,
+      fid,
+    ]
+  );
+  if (!res.rows?.[0]) return null;
+  return (await listEquipmentTypeTrackingFields({ companyId: cid, equipmentTypeId: tid, includeArchived: true })).find(
+    (f) => String(f.id) === String(fid)
+  );
+}
+
+async function archiveEquipmentTypeTrackingField({ companyId, equipmentTypeId, id }) {
+  const cid = Number(companyId);
+  const tid = Number(equipmentTypeId);
+  const fid = Number(id);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(tid) || tid <= 0) throw new Error("equipmentTypeId is required.");
+  if (!Number.isFinite(fid) || fid <= 0) throw new Error("id is required.");
+  const res = await pool.query(
+    `
+    UPDATE equipment_type_tracking_fields
+       SET archived_at = COALESCE(archived_at, NOW()),
+           show_on_assets_table = FALSE,
+           updated_at = NOW()
+     WHERE company_id = $1 AND equipment_type_id = $2 AND id = $3
+     RETURNING id
+    `,
+    [cid, tid, fid]
+  );
+  return !!res.rows?.[0];
+}
+
 async function listEquipment(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
   const fromIso = from ? normalizeTimestamptz(from) : null;
   const toIso = to ? normalizeTimestamptz(to) : null;
@@ -2988,6 +3426,362 @@ async function purgeEquipmentForCompany({ companyId }) {
 function normalizeEquipmentIds(input) {
   const ids = Array.isArray(input) ? input.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : [];
   return Array.from(new Set(ids));
+}
+
+async function listEquipmentTrackingTableColumns({ companyId, equipmentTypeIds = null }) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  const typeIds = Array.isArray(equipmentTypeIds)
+    ? equipmentTypeIds.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0)
+    : [];
+
+  const params = [cid];
+  const where = ["company_id = $1", "archived_at IS NULL", "show_on_assets_table = TRUE"];
+  if (typeIds.length) {
+    params.push(typeIds);
+    where.push(`equipment_type_id = ANY($${params.length}::int[])`);
+  }
+
+  const res = await pool.query(
+    `
+    SELECT id, equipment_type_id, field_key, label, data_type, unit, sort_order,
+           table_column_label, table_column_mode, rule
+      FROM equipment_type_tracking_fields
+     WHERE ${where.join(" AND ")}
+     ORDER BY sort_order ASC, label ASC, id ASC
+    `,
+    params
+  );
+
+  return (res.rows || []).map((row) => ({
+    id: Number(row.id),
+    equipmentTypeId: Number(row.equipment_type_id),
+    fieldKey: row.field_key,
+    label: row.label,
+    dataType: row.data_type,
+    unit: row.unit || null,
+    sortOrder: Number(row.sort_order) || 0,
+    tableColumnLabel: row.table_column_label || null,
+    tableColumnMode: row.table_column_mode || "value",
+    rule: coerceJsonObject(row.rule),
+  }));
+}
+
+async function getEquipmentById({ companyId, equipmentId }) {
+  const cid = Number(companyId);
+  const eid = Number(equipmentId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(eid) || eid <= 0) throw new Error("equipmentId is required.");
+  const res = await pool.query(
+    `
+    SELECT id, company_id, type_id, type, model_name, serial_number
+      FROM equipment
+     WHERE company_id = $1 AND id = $2
+     LIMIT 1
+    `,
+    [cid, eid]
+  );
+  return res.rows?.[0] || null;
+}
+
+async function getEquipmentTrackingSummary({ companyId, equipmentId, eventsLimit = 50, readingsLimit = 50 }) {
+  const cid = Number(companyId);
+  const eid = Number(equipmentId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(eid) || eid <= 0) throw new Error("equipmentId is required.");
+
+  const equipment = await getEquipmentById({ companyId: cid, equipmentId: eid });
+  if (!equipment) return null;
+  const typeId = Number(equipment.type_id);
+
+  const [fields, valuesRes, meterRes, eventsRes, readingsRes] = await Promise.all([
+    listEquipmentTypeTrackingFields({ companyId: cid, equipmentTypeId: typeId }),
+    pool.query(
+      `
+      SELECT field_id, value_text, value_number, value_bool, value_date, value_timestamptz, updated_at
+        FROM equipment_tracking_field_values
+       WHERE company_id = $1 AND equipment_id = $2
+      `,
+      [cid, eid]
+    ),
+    pool.query(
+      `
+      SELECT reading, read_at
+        FROM equipment_meter_readings
+       WHERE company_id = $1 AND equipment_id = $2 AND meter_type = 'hours'
+       ORDER BY read_at DESC, id DESC
+       LIMIT 1
+      `,
+      [cid, eid]
+    ),
+    pool.query(
+      `
+      SELECT id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, note, occurred_at, created_at
+        FROM equipment_tracking_field_events
+       WHERE company_id = $1 AND equipment_id = $2
+       ORDER BY occurred_at DESC, id DESC
+       LIMIT $3
+      `,
+      [cid, eid, Math.min(Math.max(Number(eventsLimit) || 50, 1), 250)]
+    ),
+    pool.query(
+      `
+      SELECT id, meter_type, reading, read_at, note, created_at
+        FROM equipment_meter_readings
+       WHERE company_id = $1 AND equipment_id = $2 AND meter_type = 'hours'
+       ORDER BY read_at DESC, id DESC
+       LIMIT $3
+      `,
+      [cid, eid, Math.min(Math.max(Number(readingsLimit) || 50, 1), 250)]
+    ),
+  ]);
+
+  const valuesByFieldId = {};
+  for (const row of valuesRes.rows || []) {
+    const fid = Number(row.field_id);
+    if (!Number.isFinite(fid)) continue;
+    valuesByFieldId[String(fid)] = rawEquipmentTrackingValueFromRow(row);
+  }
+
+  const latestMeterHours = meterRes.rows?.[0]?.reading !== undefined ? Number(meterRes.rows[0].reading) : null;
+  const summary = computeEquipmentTrackingSummary({
+    definitions: fields,
+    valuesByFieldId,
+    latestMeterHours: Number.isFinite(latestMeterHours) ? latestMeterHours : null,
+  });
+
+  const normalizedEvents = (eventsRes.rows || []).map((row) => ({
+    id: Number(row.id),
+    fieldId: Number(row.field_id),
+    value: rawEquipmentTrackingValueFromRow(row),
+    note: row.note || "",
+    occurredAt: row.occurred_at || null,
+    createdAt: row.created_at || null,
+  }));
+
+  const normalizedReadings = (readingsRes.rows || []).map((row) => ({
+    id: Number(row.id),
+    meterType: row.meter_type || "hours",
+    reading: Number(row.reading),
+    readAt: row.read_at || null,
+    note: row.note || "",
+    createdAt: row.created_at || null,
+  }));
+
+  return {
+    equipment: {
+      id: Number(equipment.id),
+      typeId: Number.isFinite(typeId) ? typeId : null,
+      type: equipment.type || null,
+      modelName: equipment.model_name || null,
+      serialNumber: equipment.serial_number || null,
+    },
+    fields,
+    valuesByFieldId,
+    latestMeterHours: Number.isFinite(latestMeterHours) ? latestMeterHours : null,
+    summary,
+    events: normalizedEvents,
+    meterReadings: normalizedReadings,
+  };
+}
+
+async function upsertEquipmentTrackingValues({ companyId, equipmentId, values }) {
+  const cid = Number(companyId);
+  const eid = Number(equipmentId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(eid) || eid <= 0) throw new Error("equipmentId is required.");
+  const list = Array.isArray(values) ? values : [];
+  if (!list.length) return { updated: 0 };
+
+  const fieldIds = Array.from(
+    new Set(
+      list
+        .map((v) => Number(v?.fieldId ?? v?.id))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    )
+  );
+  if (!fieldIds.length) return { updated: 0 };
+
+  const equipment = await getEquipmentById({ companyId: cid, equipmentId: eid });
+  if (!equipment) throw new Error("Equipment not found.");
+  const typeId = Number(equipment.type_id);
+
+  const defsRes = await pool.query(
+    `
+    SELECT id, data_type
+      FROM equipment_type_tracking_fields
+     WHERE company_id = $1
+       AND equipment_type_id = $2
+       AND archived_at IS NULL
+       AND id = ANY($3::int[])
+    `,
+    [cid, typeId, fieldIds]
+  );
+  const defsById = new Map((defsRes.rows || []).map((r) => [String(r.id), String(r.data_type)]));
+
+  let updated = 0;
+  await pool.query("BEGIN");
+  try {
+    for (const item of list) {
+      const fieldId = Number(item?.fieldId ?? item?.id);
+      if (!Number.isFinite(fieldId) || fieldId <= 0) continue;
+      const dataType = defsById.get(String(fieldId));
+      if (!dataType) continue;
+      const parsed = parseEquipmentTrackingValueForColumns(dataType, item?.value);
+
+      const res = await pool.query(
+        `
+        INSERT INTO equipment_tracking_field_values
+          (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, updated_at)
+        VALUES
+          ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+        ON CONFLICT (company_id, equipment_id, field_id) DO UPDATE
+          SET value_text = EXCLUDED.value_text,
+              value_number = EXCLUDED.value_number,
+              value_bool = EXCLUDED.value_bool,
+              value_date = EXCLUDED.value_date,
+              value_timestamptz = EXCLUDED.value_timestamptz,
+              updated_at = NOW()
+        `,
+        [
+          cid,
+          eid,
+          fieldId,
+          parsed.value_text,
+          parsed.value_number,
+          parsed.value_bool,
+          parsed.value_date,
+          parsed.value_timestamptz,
+        ]
+      );
+      updated += res.rowCount ? 1 : 0;
+    }
+    await pool.query("COMMIT");
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    throw err;
+  }
+
+  return { updated };
+}
+
+async function createEquipmentTrackingEvent({ companyId, equipmentId, fieldId, value, note = "", occurredAt = null }) {
+  const cid = Number(companyId);
+  const eid = Number(equipmentId);
+  const fid = Number(fieldId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(eid) || eid <= 0) throw new Error("equipmentId is required.");
+  if (!Number.isFinite(fid) || fid <= 0) throw new Error("fieldId is required.");
+
+  const equipment = await getEquipmentById({ companyId: cid, equipmentId: eid });
+  if (!equipment) throw new Error("Equipment not found.");
+  const typeId = Number(equipment.type_id);
+
+  const defRes = await pool.query(
+    `
+    SELECT id, data_type
+      FROM equipment_type_tracking_fields
+     WHERE company_id = $1 AND equipment_type_id = $2 AND archived_at IS NULL AND id = $3
+     LIMIT 1
+    `,
+    [cid, typeId, fid]
+  );
+  const dataType = defRes.rows?.[0]?.data_type ? String(defRes.rows[0].data_type) : null;
+  if (!dataType) throw new Error("Field not found.");
+
+  const parsed = parseEquipmentTrackingValueForColumns(dataType, value);
+  const occurred = occurredAt ? normalizeTimestamptz(occurredAt) : new Date().toISOString();
+  const cleanNote = String(note || "").trim() || null;
+
+  await pool.query("BEGIN");
+  try {
+    await pool.query(
+      `
+      INSERT INTO equipment_tracking_field_events
+        (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, note, occurred_at)
+      VALUES
+        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `,
+      [
+        cid,
+        eid,
+        fid,
+        parsed.value_text,
+        parsed.value_number,
+        parsed.value_bool,
+        parsed.value_date,
+        parsed.value_timestamptz,
+        cleanNote,
+        occurred,
+      ]
+    );
+
+    await pool.query(
+      `
+      INSERT INTO equipment_tracking_field_values
+        (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, updated_at)
+      VALUES
+        ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+      ON CONFLICT (company_id, equipment_id, field_id) DO UPDATE
+        SET value_text = EXCLUDED.value_text,
+            value_number = EXCLUDED.value_number,
+            value_bool = EXCLUDED.value_bool,
+            value_date = EXCLUDED.value_date,
+            value_timestamptz = EXCLUDED.value_timestamptz,
+            updated_at = NOW()
+      `,
+      [
+        cid,
+        eid,
+        fid,
+        parsed.value_text,
+        parsed.value_number,
+        parsed.value_bool,
+        parsed.value_date,
+        parsed.value_timestamptz,
+      ]
+    );
+
+    await pool.query("COMMIT");
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    throw err;
+  }
+
+  return { ok: true };
+}
+
+async function createEquipmentMeterReading({ companyId, equipmentId, reading, readAt = null, note = "", meterType = "hours" }) {
+  const cid = Number(companyId);
+  const eid = Number(equipmentId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!Number.isFinite(eid) || eid <= 0) throw new Error("equipmentId is required.");
+  const r = Number(reading);
+  if (!Number.isFinite(r)) throw new Error("reading is required.");
+  const when = readAt ? normalizeTimestamptz(readAt) : new Date().toISOString();
+  const cleanNote = String(note || "").trim() || null;
+  const mt = String(meterType || "hours").trim().toLowerCase() || "hours";
+
+  const res = await pool.query(
+    `
+    INSERT INTO equipment_meter_readings
+      (company_id, equipment_id, meter_type, reading, read_at, note)
+    VALUES
+      ($1,$2,$3,$4,$5,$6)
+    RETURNING id, meter_type, reading, read_at, note, created_at
+    `,
+    [cid, eid, mt, r, when, cleanNote]
+  );
+  const row = res.rows?.[0];
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    meterType: row.meter_type || "hours",
+    reading: Number(row.reading),
+    readAt: row.read_at || null,
+    note: row.note || "",
+    createdAt: row.created_at || null,
+  };
 }
 
 async function listEquipmentBundles(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
@@ -3790,6 +4584,7 @@ function formatWorkOrderRow(row) {
       ? Number(unitIds[0])
       : null;
   const primaryUnitLabel = row.unit_label || unitLabels[0] || "";
+  const sourceMeta = coerceJsonObject(row.source_meta);
 
   return {
     id: Number(row.id),
@@ -3811,6 +4606,7 @@ function formatWorkOrderRow(row) {
     sourceOrderId: row.source_order_id || null,
     sourceOrderNumber: row.source_order_number || null,
     sourceLineItemId: row.source_line_item_id || null,
+    sourceMeta,
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null,
     completedAt: row.completed_at || null,
@@ -3876,7 +4672,7 @@ async function listWorkOrders({
     `
     SELECT id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
            work_summary, issues, order_status, service_status, return_inspection, parts, labor,
-           source, source_order_id, source_order_number, source_line_item_id,
+           source, source_order_id, source_order_number, source_line_item_id, source_meta,
            created_at, updated_at, completed_at, closed_at
       FROM work_orders
      WHERE ${filters.join(" AND ")}
@@ -3897,7 +4693,7 @@ async function getWorkOrder({ companyId, id }) {
     `
     SELECT id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
            work_summary, issues, order_status, service_status, return_inspection, parts, labor,
-           source, source_order_id, source_order_number, source_line_item_id,
+           source, source_order_id, source_order_number, source_line_item_id, source_meta,
            created_at, updated_at, completed_at, closed_at
       FROM work_orders
      WHERE company_id = $1 AND id = $2
@@ -3936,6 +4732,7 @@ async function createWorkOrder(payload = {}) {
   const sourceOrderId = payload.sourceOrderId ? String(payload.sourceOrderId).trim() : null;
   const sourceOrderNumber = payload.sourceOrderNumber ? String(payload.sourceOrderNumber).trim() : null;
   const sourceLineItemId = payload.sourceLineItemId ? String(payload.sourceLineItemId).trim() : null;
+  const sourceMeta = coerceJsonObject(payload.sourceMeta);
 
   const nowIso = new Date().toISOString();
   let completedAt = normalizeTimestamptz(payload.completedAt);
@@ -3958,12 +4755,13 @@ async function createWorkOrder(payload = {}) {
     INSERT INTO work_orders
       (company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
        work_summary, issues, order_status, service_status, return_inspection, parts, labor,
-       source, source_order_id, source_order_number, source_line_item_id, completed_at, closed_at, updated_at)
+       source, source_order_id, source_order_number, source_line_item_id, source_meta,
+       completed_at, closed_at, updated_at)
     VALUES
-      ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW())
+      ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW())
     RETURNING id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
               work_summary, issues, order_status, service_status, return_inspection, parts, labor,
-              source, source_order_id, source_order_number, source_line_item_id,
+              source, source_order_id, source_order_number, source_line_item_id, source_meta,
               created_at, updated_at, completed_at, closed_at
     `,
     [
@@ -3985,6 +4783,7 @@ async function createWorkOrder(payload = {}) {
       sourceOrderId,
       sourceOrderNumber,
       sourceLineItemId,
+      JSON.stringify(sourceMeta || {}),
       completedAt,
       closedAt,
     ]
@@ -4026,6 +4825,7 @@ async function updateWorkOrder(payload = {}) {
   const sourceOrderId = merged.sourceOrderId ? String(merged.sourceOrderId).trim() : null;
   const sourceOrderNumber = merged.sourceOrderNumber ? String(merged.sourceOrderNumber).trim() : null;
   const sourceLineItemId = merged.sourceLineItemId ? String(merged.sourceLineItemId).trim() : null;
+  const sourceMeta = coerceJsonObject(merged.sourceMeta);
 
   const nowIso = new Date().toISOString();
   let completedAt = normalizeTimestamptz(merged.completedAt);
@@ -4059,13 +4859,14 @@ async function updateWorkOrder(payload = {}) {
            source_order_id = $15,
            source_order_number = $16,
            source_line_item_id = $17,
-           completed_at = $18,
-           closed_at = $19,
+           source_meta = $18,
+           completed_at = $19,
+           closed_at = $20,
            updated_at = NOW()
-     WHERE id = $20 AND company_id = $21
+     WHERE id = $21 AND company_id = $22
      RETURNING id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
                work_summary, issues, order_status, service_status, return_inspection, parts, labor,
-               source, source_order_id, source_order_number, source_line_item_id,
+               source, source_order_id, source_order_number, source_line_item_id, source_meta,
                created_at, updated_at, completed_at, closed_at
     `,
     [
@@ -4086,6 +4887,7 @@ async function updateWorkOrder(payload = {}) {
       sourceOrderId,
       sourceOrderNumber,
       sourceLineItemId,
+      JSON.stringify(sourceMeta || {}),
       completedAt,
       closedAt,
       wid,
@@ -5799,6 +6601,18 @@ function coerceJsonArray(value) {
   }
 }
 
+function coerceJsonObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    return {};
+  } catch {
+    return {};
+  }
+}
+
 function normalizeBillingRoundingMode(value) {
   const v = String(value || "").toLowerCase();
   if (v === "prorate" || v === "none") return "none";
@@ -7477,6 +8291,271 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
     `,
     params
   );
+  const rows = result.rows || [];
+  if (!rows.length) return rows;
+
+  const equipmentIds = rows.map((r) => Number(r.id)).filter((v) => Number.isFinite(v));
+  const typeIds = Array.from(new Set(rows.map((r) => Number(r.type_id)).filter((v) => Number.isFinite(v) && v > 0)));
+  if (!equipmentIds.length || !typeIds.length) return rows;
+
+  const [defsRes, valuesRes, metersRes] = await Promise.all([
+    pool.query(
+      `
+      SELECT id, equipment_type_id, field_key, label, data_type, unit, required, options, sort_order,
+             show_on_assets_table, table_column_label, table_column_mode, rule
+        FROM equipment_type_tracking_fields
+       WHERE company_id = $1
+         AND archived_at IS NULL
+         AND equipment_type_id = ANY($2::int[])
+       ORDER BY sort_order ASC, label ASC, id ASC
+      `,
+      [companyId, typeIds]
+    ),
+    pool.query(
+      `
+      SELECT equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, updated_at
+        FROM equipment_tracking_field_values
+       WHERE company_id = $1
+         AND equipment_id = ANY($2::int[])
+      `,
+      [companyId, equipmentIds]
+    ),
+    pool.query(
+      `
+      SELECT DISTINCT ON (equipment_id)
+             equipment_id, reading, read_at
+        FROM equipment_meter_readings
+       WHERE company_id = $1
+         AND meter_type = 'hours'
+         AND equipment_id = ANY($2::int[])
+       ORDER BY equipment_id, read_at DESC, id DESC
+      `,
+      [companyId, equipmentIds]
+    ),
+  ]);
+
+  const defsByType = new Map();
+  for (const row of defsRes.rows || []) {
+    const tid = Number(row.equipment_type_id);
+    if (!Number.isFinite(tid)) continue;
+    const list = defsByType.get(String(tid)) || [];
+    list.push({
+      id: Number(row.id),
+      equipmentTypeId: tid,
+      fieldKey: row.field_key,
+      label: row.label,
+      dataType: row.data_type,
+      unit: row.unit || null,
+      required: row.required === true,
+      options: coerceJsonArray(row.options),
+      sortOrder: Number(row.sort_order) || 0,
+      showOnAssetsTable: row.show_on_assets_table === true,
+      tableColumnLabel: row.table_column_label || null,
+      tableColumnMode: row.table_column_mode || "value",
+      rule: coerceJsonObject(row.rule),
+    });
+    defsByType.set(String(tid), list);
+  }
+
+  const valuesByEquipmentId = new Map();
+  for (const row of valuesRes.rows || []) {
+    const eid = Number(row.equipment_id);
+    const fid = Number(row.field_id);
+    if (!Number.isFinite(eid) || !Number.isFinite(fid)) continue;
+    const map = valuesByEquipmentId.get(String(eid)) || {};
+    map[String(fid)] = rawEquipmentTrackingValueFromRow(row);
+    valuesByEquipmentId.set(String(eid), map);
+  }
+
+  const meterByEquipmentId = new Map();
+  for (const row of metersRes.rows || []) {
+    const eid = Number(row.equipment_id);
+    if (!Number.isFinite(eid)) continue;
+    const reading = Number(row.reading);
+    meterByEquipmentId.set(String(eid), Number.isFinite(reading) ? reading : null);
+  }
+
+  for (const row of rows) {
+    const eid = Number(row.id);
+    if (!Number.isFinite(eid)) continue;
+    const tid = Number(row.type_id);
+    const defs = defsByType.get(String(tid)) || [];
+    const valuesByFieldId = valuesByEquipmentId.get(String(eid)) || {};
+    const latestMeterHours = meterByEquipmentId.has(String(eid)) ? meterByEquipmentId.get(String(eid)) : null;
+
+    const summary = computeEquipmentTrackingSummary({
+      definitions: defs,
+      valuesByFieldId,
+      latestMeterHours,
+    });
+
+    row.tracking_status_key = summary.overallStatusKey;
+    row.tracking_status = summary.overallStatusLabel;
+    row.tracking_needs = summary.needs;
+    row.tracking_needs_summary = summary.needs.join("; ");
+    row.meter_hours = latestMeterHours;
+
+    const tableValues = {};
+    for (const def of defs) {
+      if (def.showOnAssetsTable !== true) continue;
+      const rawValue = valuesByFieldId[String(def.id)];
+      tableValues[String(def.id)] = formatTrackingTableCellValue({ def, rawValue, latestMeterHours });
+    }
+    row.tracking_table_values = tableValues;
+  }
+
+  return rows;
+}
+
+async function listRentalOrderPickListForRange(companyId, { from, to, statuses = null } = {}) {
+  const fromIso = normalizeTimestamptz(from);
+  const toIso = normalizeTimestamptz(to);
+  if (!fromIso || !toIso) return [];
+
+  const normalizedStatuses = Array.isArray(statuses)
+    ? statuses.map((s) => normalizeRentalOrderStatus(s)).filter(Boolean)
+    : typeof statuses === "string"
+      ? statuses
+          .split(",")
+          .map((s) => normalizeRentalOrderStatus(s))
+          .filter(Boolean)
+      : null;
+  const useStatuses = normalizedStatuses && normalizedStatuses.length ? normalizedStatuses : null;
+
+  const params = [companyId, fromIso, toIso];
+  const where = [
+    "ro.company_id = $1",
+    `(SELECT MIN(li.start_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) < $3::timestamptz`,
+    `(SELECT MAX(li.end_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) > $2::timestamptz`,
+  ];
+  if (useStatuses) {
+    params.push(useStatuses);
+    where.push(`ro.status = ANY($${params.length}::text[])`);
+  }
+
+  const result = await pool.query(
+    `
+    WITH line_units AS (
+      SELECT li.rental_order_id,
+             li.id AS line_item_id,
+             li.start_at,
+             li.end_at,
+             li.fulfilled_at,
+             li.returned_at,
+             et.name AS type_name,
+             COALESCE(
+               jsonb_agg(
+                 CASE
+                   WHEN e.serial_number IS NOT NULL AND e.serial_number <> '' THEN e.serial_number
+                   WHEN e.id IS NOT NULL THEN ('#' || e.id::text)
+                   ELSE NULL
+                 END
+                  ORDER BY e.serial_number NULLS LAST, e.id
+                ) FILTER (WHERE e.id IS NOT NULL),
+                '[]'::jsonb
+              ) AS unit_numbers
+             ,
+             COALESCE(
+               jsonb_agg(
+                 jsonb_build_object(
+                   'equipmentId', e.id,
+                   'serialNumber',
+                   CASE
+                     WHEN e.serial_number IS NOT NULL AND e.serial_number <> '' THEN e.serial_number
+                     WHEN e.id IS NOT NULL THEN ('#' || e.id::text)
+                     ELSE NULL
+                   END,
+                   'modelName', e.model_name,
+                   'notes', e.notes
+                 )
+                 ORDER BY e.serial_number NULLS LAST, e.id
+               ) FILTER (WHERE e.id IS NOT NULL),
+               '[]'::jsonb
+             ) AS units
+        FROM rental_order_line_items li
+        JOIN equipment_types et ON et.id = li.type_id
+   LEFT JOIN rental_order_line_inventory liv ON liv.line_item_id = li.id
+   LEFT JOIN equipment e ON e.id = liv.equipment_id
+        GROUP BY li.rental_order_id, li.id, li.start_at, li.end_at, li.fulfilled_at, li.returned_at, et.name
+     )
+    SELECT ro.id,
+           ro.status,
+           ro.quote_number,
+           ro.ro_number,
+           ro.external_contract_number,
+           ro.customer_po,
+           ro.fulfillment_method,
+           ro.site_name,
+           ro.site_address,
+           ro.dropoff_address,
+           ro.site_access_info,
+           ro.logistics_instructions,
+           ro.special_instructions,
+           ro.customer_id,
+           CASE
+             WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+             THEN c.company_name || ' (' || pc.company_name || ')'
+             ELSE c.company_name
+           END AS customer_name,
+           ro.pickup_location_id,
+           l.name AS pickup_location_name,
+           l.street_address AS pickup_street_address,
+           l.city AS pickup_city,
+           l.region AS pickup_region,
+           l.country AS pickup_country,
+           (SELECT MIN(li.start_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) AS start_at,
+           (SELECT MAX(li.end_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) AS end_at,
+           COALESCE(
+             jsonb_agg(
+                jsonb_build_object(
+                  'lineItemId', lu.line_item_id,
+                  'startAt', lu.start_at,
+                  'endAt', lu.end_at,
+                  'fulfilledAt', lu.fulfilled_at,
+                  'returnedAt', lu.returned_at,
+                  'typeName', lu.type_name,
+                  'unitNumbers', lu.unit_numbers,
+                  'units', lu.units
+                )
+                ORDER BY lu.line_item_id
+              ) FILTER (WHERE lu.line_item_id IS NOT NULL),
+              '[]'::jsonb
+            ) AS equipment_out
+      FROM rental_orders ro
+ LEFT JOIN customers c ON c.id = ro.customer_id
+ LEFT JOIN customers pc ON pc.id = c.parent_customer_id
+ LEFT JOIN locations l ON l.id = ro.pickup_location_id
+ LEFT JOIN line_units lu ON lu.rental_order_id = ro.id
+     WHERE ${where.join(" AND ")}
+     GROUP BY ro.id,
+              ro.status,
+              ro.quote_number,
+              ro.ro_number,
+              ro.external_contract_number,
+              ro.customer_po,
+              ro.fulfillment_method,
+              ro.site_name,
+              ro.site_address,
+              ro.dropoff_address,
+              ro.site_access_info,
+              ro.logistics_instructions,
+              ro.special_instructions,
+              ro.customer_id,
+              c.company_name,
+              c.parent_customer_id,
+              pc.company_name,
+              ro.pickup_location_id,
+              l.name,
+              l.street_address,
+              l.city,
+              l.region,
+              l.country,
+              ro.created_at
+     ORDER BY start_at ASC NULLS LAST, ro.created_at DESC
+    `,
+    params
+  );
+
   return result.rows;
 }
 
@@ -13494,6 +14573,7 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
   const start = normalizeTimestamptz(startAt);
   const end = normalizeTimestamptz(endAt);
   if (!start || !end) return [];
+  if (Date.parse(start) > Date.parse(end)) return [];
 
   const params = [companyId, typeId, start, end];
   let excludeSql = "";
@@ -13571,8 +14651,14 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
               AND ro.status IN ('requested', 'reservation', 'ordered')
               ${excludeSql}
               AND tstzrange(
-                COALESCE(li.fulfilled_at, li.start_at),
-                COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
+                LEAST(
+                  COALESCE(li.fulfilled_at, li.start_at),
+                  COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+                ),
+                GREATEST(
+                  COALESCE(li.fulfilled_at, li.start_at),
+                  COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+                ),
                 '[)'
               ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
          )
@@ -13586,8 +14672,8 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
             WHERE bi2.bundle_id = ebi.bundle_id
               AND eos.company_id = $1
               AND tstzrange(
-                eos.start_at,
-                COALESCE(eos.end_at, 'infinity'::timestamptz),
+                LEAST(eos.start_at, COALESCE(eos.end_at, 'infinity'::timestamptz)),
+                GREATEST(eos.start_at, COALESCE(eos.end_at, 'infinity'::timestamptz)),
                 '[)'
               ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
          )
@@ -13602,8 +14688,14 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
              AND ro.status IN ('requested', 'reservation', 'ordered')
              ${excludeSql}
              AND tstzrange(
-               COALESCE(li.fulfilled_at, li.start_at),
-               COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
+               LEAST(
+                 COALESCE(li.fulfilled_at, li.start_at),
+                 COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+               ),
+               GREATEST(
+                 COALESCE(li.fulfilled_at, li.start_at),
+                 COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+               ),
                '[)'
              ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
         )
@@ -13613,8 +14705,8 @@ async function listAvailableInventory({ companyId, typeId, startAt, endAt, exclu
           WHERE eos.company_id = $1
             AND eos.equipment_id = e.id
             AND tstzrange(
-              eos.start_at,
-              COALESCE(eos.end_at, 'infinity'::timestamptz),
+              LEAST(eos.start_at, COALESCE(eos.end_at, 'infinity'::timestamptz)),
+              GREATEST(eos.start_at, COALESCE(eos.end_at, 'infinity'::timestamptz)),
               '[)'
             ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
         )
@@ -13629,6 +14721,7 @@ async function getBundleAvailability({ companyId, bundleId, startAt, endAt, excl
   const start = normalizeTimestamptz(startAt);
   const end = normalizeTimestamptz(endAt);
   if (!start || !end) return { available: false, items: [] };
+  if (Date.parse(start) > Date.parse(end)) return { available: false, items: [] };
 
   const itemsRes = await pool.query(
     `
@@ -13672,8 +14765,14 @@ async function getBundleAvailability({ companyId, bundleId, startAt, endAt, excl
        AND ro.status IN ('requested', 'reservation', 'ordered')
        ${excludeSql}
        AND tstzrange(
-         COALESCE(li.fulfilled_at, li.start_at),
-         COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
+         LEAST(
+           COALESCE(li.fulfilled_at, li.start_at),
+           COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+         ),
+         GREATEST(
+           COALESCE(li.fulfilled_at, li.start_at),
+           COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+         ),
          '[)'
        ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
     `,
@@ -13689,8 +14788,8 @@ async function getBundleAvailability({ companyId, bundleId, startAt, endAt, excl
      WHERE eos.company_id = $1
        AND eos.equipment_id = ANY($2::int[])
        AND tstzrange(
-         eos.start_at,
-         COALESCE(eos.end_at, 'infinity'::timestamptz),
+         LEAST(eos.start_at, COALESCE(eos.end_at, 'infinity'::timestamptz)),
+         GREATEST(eos.start_at, COALESCE(eos.end_at, 'infinity'::timestamptz)),
          '[)'
        ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
     `,
@@ -13704,6 +14803,9 @@ async function getTypeDemandAvailability({ companyId, typeId, startAt, endAt, ex
   const start = normalizeTimestamptz(startAt);
   const end = normalizeTimestamptz(endAt);
   if (!start || !end) return { totalUnits: 0, demandUnits: 0, capacityUnits: 0 };
+  if (Date.parse(start) > Date.parse(end)) {
+    return { totalUnits: 0, demandUnits: 0, capacityUnits: 0 };
+  }
 
   const params = [companyId, typeId, start, end];
   let excludeSql = "";
@@ -13728,8 +14830,14 @@ async function getTypeDemandAvailability({ companyId, typeId, startAt, endAt, ex
        AND ro.status IN ('quote','requested','reservation','ordered')
        ${excludeSql}
        AND tstzrange(
-         COALESCE(li.fulfilled_at, li.start_at),
-         COALESCE(li.returned_at, GREATEST(li.end_at, NOW())),
+         LEAST(
+           COALESCE(li.fulfilled_at, li.start_at),
+           COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+         ),
+         GREATEST(
+           COALESCE(li.fulfilled_at, li.start_at),
+           COALESCE(li.returned_at, GREATEST(li.end_at, NOW()))
+         ),
          '[)'
        ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
      GROUP BY li.id
@@ -13752,8 +14860,8 @@ async function getTypeDemandAvailability({ companyId, typeId, startAt, endAt, ex
           WHERE eos.company_id = $1
             AND eos.equipment_id = equipment.id
             AND tstzrange(
-              eos.start_at,
-              COALESCE(eos.end_at, 'infinity'::timestamptz),
+              LEAST(eos.start_at, COALESCE(eos.end_at, 'infinity'::timestamptz)),
+              GREATEST(eos.start_at, COALESCE(eos.end_at, 'infinity'::timestamptz)),
               '[)'
             ) && tstzrange($3::timestamptz, $4::timestamptz, '[)')
        )
@@ -16183,12 +17291,21 @@ module.exports = {
   cleanupNonBaseLocationIfUnused,
   listEquipmentCurrentLocationHistory,
   listEquipment,
+  listEquipmentTrackingTableColumns,
   setEquipmentCurrentLocationForIds,
   setEquipmentCurrentLocationToBaseForIds,
   createEquipment,
   updateEquipment,
   deleteEquipment,
   purgeEquipmentForCompany,
+  listEquipmentTypeTrackingFields,
+  createEquipmentTypeTrackingField,
+  updateEquipmentTypeTrackingField,
+  archiveEquipmentTypeTrackingField,
+  getEquipmentTrackingSummary,
+  upsertEquipmentTrackingValues,
+  createEquipmentTrackingEvent,
+  createEquipmentMeterReading,
   listEquipmentBundles,
   getEquipmentBundle,
   createEquipmentBundle,
@@ -16249,6 +17366,7 @@ module.exports = {
   upsertCompanyEmailSettings,
   listRentalOrders,
   listRentalOrdersForRange,
+  listRentalOrderPickListForRange,
   listRentalOrderLineItemsForRange,
   getLineItemRevenueSummary,
   listRentalOrderContacts,

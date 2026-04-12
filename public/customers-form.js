@@ -1368,7 +1368,9 @@ createCustomerLinkBtn?.addEventListener("click", async () => {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to create link.");
-    const url = `${window.location.origin}${data.url || ""}`;
+    const rawUrl = String(data.url || "").trim();
+    const normalizedUrl = rawUrl.startsWith("http://") || rawUrl.startsWith("https://") ? rawUrl : rawUrl.replace(/^\/+/, "");
+    const url = normalizedUrl ? new URL(normalizedUrl, window.location.href).toString() : "";
     if (customerLinkOutput) customerLinkOutput.value = url;
     if (customerLinkHint) customerLinkHint.textContent = "Link generated.";
   } catch (err) {
