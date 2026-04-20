@@ -149,14 +149,16 @@
                   <label>Weekly rate <input name="weeklyRate" type="number" min="0" step="0.01" /></label>
                   <label>Monthly rate <input name="monthlyRate" type="number" min="0" step="0.01" /></label>
                 </div>
-                <label>QBO Item
-                  <select name="qboItemId" id="qbo-item-select">
-                    <option value="">Select a QBO item</option>
-                  </select>
-                </label>
-                <p class="hint" id="qbo-item-hint">Connect QuickBooks Online to load items.</p>
-                <div class="inline-actions" style="justify-content:flex-start;">
-                  <button type="button" class="ghost small" id="qbo-item-refresh">Load QBO items</button>
+                <div class="stack" id="qbo-item-section">
+                  <label>QBO Item
+                    <select name="qboItemId" id="qbo-item-select">
+                      <option value="">Select a QBO item</option>
+                    </select>
+                  </label>
+                  <p class="hint" id="qbo-item-hint">Connect QuickBooks Online to load items.</p>
+                  <div class="inline-actions" style="justify-content:flex-start;">
+                    <button type="button" class="ghost small" id="qbo-item-refresh">Load QBO items</button>
+                  </div>
                 </div>
 
                 <div class="card inset">
@@ -277,38 +279,34 @@
           <textarea name="optionsText" rows="5" placeholder="diesel|Diesel&#10;gas|Gas"></textarea>
         </details>
 
-        <details open>
-          <summary class="hint">Assets table column</summary>
-          <div class="two-col" style="margin-top:10px;">
-            <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
-              <input type="checkbox" name="showOnAssetsTable" />
-              <span>Show on Assets table</span>
-            </label>
+         <details open>
+           <summary class="hint">Assets table column</summary>
+           <div class="two-col" style="margin-top:10px;">
             <label>Column label
               <input name="tableColumnLabel" placeholder="Last fueled" />
             </label>
-          </div>
-          <label>Column value
-            <select name="tableColumnMode">
-              <option value="value" selected>Current value</option>
-              <option value="next_due">Next due (from rule)</option>
-            </select>
-          </label>
-        </details>
+           </div>
+             <label>Column value
+               <select name="tableColumnMode">
+                <option value="none" selected>None</option>
+                <option value="value">Current value</option>
+                <option value="value_and_previous">Current value + Previous</option>
+                <option value="value_and_next_due">Current value + Next due</option>
+                <option value="next_due">Next due (from rule)</option>
+               </select>
+             </label>
+         </details>
 
-        <details>
-          <summary class="hint">Due rule</summary>
-          <div class="two-col" style="margin-top:10px;">
-            <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
-              <input type="checkbox" name="ruleEnabled" />
-              <span>Enable due rule</span>
-            </label>
+         <details>
+           <summary class="hint">Due rule</summary>
+           <div class="two-col" style="margin-top:10px;">
             <label>Rule type
               <select name="ruleType">
                 <option value="none" selected>None</option>
                 <option value="time_interval">Time interval (from this date)</option>
                 <option value="meter_interval">Meter interval (from this number)</option>
-                <option value="manual_due_date">Manual due date (this date is the due date)</option>
+                <option value="manual_due_date">Current value becomes due date</option>
+                <option value="manual_due_date_separate">Manual due date (separate due date)</option>
               </select>
             </label>
           </div>

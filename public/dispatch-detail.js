@@ -88,6 +88,7 @@ let siteAddressPicker = {
 };
 let siteAddressInputBound = false;
 let rentalInfoFields = null;
+let assetDirectionsEnabled = false;
 let guardNotesState = [];
 let guardNotesPendingImages = [];
 let guardNotesUploadsInFlight = 0;
@@ -250,6 +251,7 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   siteName: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  directions: { enabled: false, required: false },
   monitoringPersonnel: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -647,12 +649,14 @@ async function getPublicConfig() {
 
 async function loadCompanySettings() {
   rentalInfoFields = normalizeRentalInfoFields(null);
+  assetDirectionsEnabled = false;
   applyRentalInfoConfig();
   if (!activeCompanyId) return;
   const res = await fetch(`/api/company-settings?companyId=${activeCompanyId}`);
   const data = await res.json().catch(() => ({}));
   if (res.ok) {
     rentalInfoFields = normalizeRentalInfoFields(data.settings?.rental_info_fields || null);
+    assetDirectionsEnabled = data.settings?.asset_directions_enabled === true;
     applyRentalInfoConfig();
   }
 }
@@ -696,8 +700,9 @@ function setSiteAddressSelected(lat, lng, { provider, query } = {}) {
   if (siteAddressPickerMeta) {
     siteAddressPickerMeta.textContent = `Selected: ${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`;
   }
-  if (siteAddressPickerInput && query) {
-    siteAddressPickerInput.value = String(query);
+  if (query) {
+    if (siteAddressPickerSearch) siteAddressPickerSearch.value = String(query);
+    if (siteAddressPickerInput) siteAddressPickerInput.value = String(query);
   }
 }
 
@@ -995,7 +1000,7 @@ async function createLocationForUnitPin({ name, latitude, longitude, provider, q
   return data;
 }
 
-async function setUnitCurrentLocation({ unitId, locationId }) {
+async function setUnitCurrentLocation({ unitId, locationId, directions } = {}) {
   const res = await fetch("/api/equipment/current-location", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1003,11 +1008,20 @@ async function setUnitCurrentLocation({ unitId, locationId }) {
       companyId: activeCompanyId,
       equipmentIds: [Number(unitId)],
       currentLocationId: Number(locationId),
+      ...(assetDirectionsEnabled ? { directions } : {}),
     }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to update current location.");
   return data;
+}
+
+function promptAssetDirectionsForLocation({ suggested = "" } = {}) {
+  const defaultValue = String(suggested || "");
+  const response = window.prompt("Directions for this asset's current location (optional):", defaultValue);
+  const finalValue = response === null ? defaultValue : String(response);
+  const trimmed = finalValue.trim();
+  return trimmed || null;
 }
 
 function buildUnitPinLocationName({ unitId, label }) {
@@ -1050,7 +1064,9 @@ async function saveUnitPinForSelectedUnit() {
       provider: sel.provider,
       query: sel.query,
     });
-    await setUnitCurrentLocation({ unitId, locationId: location.id });
+    const orderDirections = String(currentOrderDetail?.order?.directions || "").trim();
+    const directions = assetDirectionsEnabled ? promptAssetDirectionsForLocation({ suggested: orderDirections }) : undefined;
+    await setUnitCurrentLocation({ unitId, locationId: location.id, directions });
     siteAddressPicker.unitMarkerData.set(String(unitId), {
       lat: sel.lat,
       lng: sel.lng,
@@ -1061,6 +1077,7 @@ async function saveUnitPinForSelectedUnit() {
       eq.current_location = location.name || eq.current_location || null;
       eq.current_location_latitude = sel.lat;
       eq.current_location_longitude = sel.lng;
+      if (assetDirectionsEnabled) eq.directions = directions || null;
     }
     siteAddressPicker.unitSelected = null;
     updateUnitPinMeta(`Saved pin for ${label}.`);
@@ -1143,6 +1160,12 @@ function bindSiteAddressSearchMirror() {
       siteAddressPickerSearch.dispatchEvent(new Event("input", { bubbles: true }));
     }
   });
+}
+
+function getSiteAddressPickerManualText() {
+  const fromSearch = String(siteAddressPickerSearch?.value || "").trim();
+  if (fromSearch) return fromSearch;
+  return String(siteAddressPickerInput?.value || "").trim();
 }
 
 const MAP_TILE_SOURCES = {
@@ -1400,8 +1423,8 @@ function initLeafletSiteAddressPicker(center) {
             const lng = Number(picked?.__rs_lng);
             hideSiteAddressSuggestions();
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-            if (siteAddressPickerInput) siteAddressPickerInput.value = label || "";
             if (siteAddressPickerSearch) siteAddressPickerSearch.value = label || "";
+            if (siteAddressPickerInput) siteAddressPickerInput.value = label || "";
             if (!siteAddressPicker.leaflet.marker) {
               siteAddressPicker.leaflet.marker = window.L.marker([lat, lng], { draggable: true }).addTo(map);
               siteAddressPicker.leaflet.marker.on("dragend", () => {
@@ -1532,8 +1555,8 @@ function initGoogleSiteAddressPicker(center) {
                 siteAddressPicker.google.pickSeq = pickSeq;
                 const details = await fetchPlaceDetails(placeId, label);
                 if (pickSeq !== siteAddressPicker.google.pickSeq) return;
-                if (siteAddressPickerInput) siteAddressPickerInput.value = details.label;
                 if (siteAddressPickerSearch) siteAddressPickerSearch.value = details.label;
+                if (siteAddressPickerInput) siteAddressPickerInput.value = details.label;
                 if (!siteAddressPicker.google.marker) {
                   siteAddressPicker.google.marker = new window.google.maps.Marker({
                     position: { lat: details.lat, lng: details.lng },
@@ -1593,9 +1616,11 @@ async function openSiteAddressPicker() {
   }
   syncSiteAddressUnitSelect();
 
-  if (siteAddressPickerInput && currentOrderDetail?.order) {
-    const existing = currentOrderDetail.order.site_address || currentOrderDetail.order.siteAddress || "";
-    if (existing && !String(siteAddressPickerInput.value || "").trim()) siteAddressPickerInput.value = String(existing);
+  const existingAddress = currentOrderDetail?.order
+    ? String(currentOrderDetail.order.site_address || currentOrderDetail.order.siteAddress || "").trim()
+    : "";
+  if (existingAddress && siteAddressPickerSearch && !String(siteAddressPickerSearch.value || "").trim()) {
+    siteAddressPickerSearch.value = existingAddress;
   }
 
   let center = { lat: 20, lng: 0 };
@@ -1670,7 +1695,7 @@ async function saveSiteAddressFromPicker() {
     if (siteAddressPickerMeta) siteAddressPickerMeta.textContent = "No rental order selected.";
     return;
   }
-  const manual = String(siteAddressPickerInput?.value || "").trim();
+  const manual = getSiteAddressPickerManualText();
   const fallbackQuery = siteAddressPicker.selected?.query ? String(siteAddressPicker.selected.query) : "";
   const fallbackCoords = siteAddressPicker.selected
     ? `${Number(siteAddressPicker.selected.lat).toFixed(6)}, ${Number(siteAddressPicker.selected.lng).toFixed(6)}`
@@ -1752,6 +1777,7 @@ function renderOrderDetail(row, detail) {
   const siteAddress = order.site_address || order.siteAddress || "--";
   const siteAccessInfo = order.site_access_info || order.siteAccessInfo || "--";
   const criticalAreas = order.critical_areas || order.criticalAreas || "--";
+  const directions = order.directions || "--";
   const monitoringPersonnel = order.monitoring_personnel || order.monitoringPersonnel || "--";
   const generalNotes = order.general_notes || order.generalNotes || "";
   const emergencyContactInstructions =
@@ -1793,6 +1819,9 @@ function renderOrderDetail(row, detail) {
   }
   if (isRentalInfoEnabled("criticalAreas")) {
     lineDetailItems.push(detailItem("Critical Assets and Locations on Site", criticalAreas || "--"));
+  }
+  if (isRentalInfoEnabled("directions")) {
+    lineDetailItems.push(detailItem("Directions", directions || "--"));
   }
   if (isRentalInfoEnabled("monitoringPersonnel")) {
     lineDetailItems.push(detailItem("Personnel/contractors expected on site during monitoring hours", monitoringPersonnel || "--"));

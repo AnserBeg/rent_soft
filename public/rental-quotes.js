@@ -5,6 +5,8 @@ const companyMeta = document.getElementById("company-meta");
 const newQuoteBtn = document.getElementById("new-quote");
 const quotesTable = document.getElementById("rental-quotes-table");
 const searchInput = document.getElementById("search");
+const quotedMonthlyValue = document.getElementById("quoted-monthly-recurring");
+const quotedTotalValue = document.getElementById("quoted-total");
 
 const filterActive = document.getElementById("filter-active");
 const filterRejected = document.getElementById("filter-rejected");
@@ -66,11 +68,32 @@ function getMonthlyRecurringTotal(row) {
   return Number.isFinite(n) ? n : null;
 }
 
+function getOrderTotal(row) {
+  const raw = row?.total ?? row?.order_total ?? row?.orderTotal ?? null;
+  if (raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 function fmtDateTime(v) {
   if (!v) return "--";
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return "--";
   return d.toLocaleString();
+}
+
+function isCurrentlyQuoted(row) {
+  const raw = String(row?.status || "").trim().toLowerCase();
+  return raw === "quote" || raw === "draft";
+}
+
+function updateQuotedSummary() {
+  if (!quotedMonthlyValue && !quotedTotalValue) return;
+  const rows = (quotesCache || []).filter(isCurrentlyQuoted);
+  const monthlyRecurringSum = rows.reduce((acc, row) => acc + (getMonthlyRecurringTotal(row) || 0), 0);
+  const totalSum = rows.reduce((acc, row) => acc + (getOrderTotal(row) || 0), 0);
+  if (quotedMonthlyValue) quotedMonthlyValue.textContent = fmtMoney(monthlyRecurringSum);
+  if (quotedTotalValue) quotedTotalValue.textContent = fmtMoney(totalSum);
 }
 
 function statusLabel(status) {
@@ -222,6 +245,7 @@ function applyFilters() {
 }
 
 function renderQuotes(rows) {
+  updateQuotedSummary();
   const indicator = (field) => {
     if (sortField !== field) return "";
     return sortDir === "asc" ? "^" : "v";

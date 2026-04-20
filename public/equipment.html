@@ -102,6 +102,7 @@
                     <button type="button" class="view-toggle-btn" id="equipment-view-cards"
                       data-view="cards">Cards</button>
                   </div>
+                  <button type="button" class="ghost" id="open-equipment-columns">Columns</button>
                   <input id="search" class="search-input" />
                 </div>
               </div>
@@ -154,6 +155,17 @@
         <label>Images (optional) <input name="imageFiles" type="file" accept="image/*" multiple /></label>
         <input name="imageUrls" type="hidden" />
         <input name="imageUrl" type="hidden" />
+        <input name="cardImageUrl" type="hidden" />
+        <div class="equipment-image-viewer" id="equipment-image-viewer" hidden>
+          <div class="equipment-image-viewer-toolbar">
+            <div class="equipment-image-viewer-actions">
+              <button type="button" class="ghost small" id="equipment-image-prev">Prev</button>
+              <button type="button" class="ghost small" id="equipment-image-next">Next</button>
+            </div>
+          </div>
+          <img id="equipment-image-viewer-img" alt="" loading="lazy" referrerpolicy="no-referrer" />
+          <div class="hint" id="equipment-image-viewer-hint"></div>
+        </div>
         <div class="image-tools">
           <div class="thumb-row" id="equipment-images"></div>
           <button type="button" class="ghost small danger" id="remove-equipment-image" style="display:none;">Clear
@@ -184,7 +196,8 @@
         </div>
         <div class="two-col">
           <label>Condition
-            <select name="condition" required>
+            <select name="condition">
+              <option value="">Not set</option>
               <option>New</option>
               <option>Normal Wear & Tear</option>
               <option>Damaged but Usable</option>
@@ -213,6 +226,9 @@
             map</button>
           <button type="button" class="ghost small danger" id="clear-current-location">Clear current location</button>
         </div>
+        <label id="equipment-directions-wrap" style="display:none;">Directions
+          <textarea name="directions" id="equipment-directions" placeholder="Entrance details, gate codes, approach route, staging area, etc."></textarea>
+        </label>
         <details id="equipment-location-history" style="margin-top:6px;" hidden>
           <summary class="hint">Location history</summary>
           <p class="hint" id="equipment-location-history-meta" style="margin-top:8px;"></p>
@@ -298,9 +314,32 @@
     </div>
   </div>
 
+  <div class="modal" id="equipment-columns-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Table columns</h3>
+        <button class="ghost small" id="close-equipment-columns" type="button">Close</button>
+      </div>
+      <div class="stack">
+        <p class="hint" id="equipment-columns-meta" style="margin:0;"></p>
+        <label class="hint" style="margin:0;">Filter
+          <input id="equipment-columns-search" class="search-input" placeholder="Type to filter columns..." />
+        </label>
+        <div class="checklist" id="equipment-columns-list" aria-label="Assets table columns"></div>
+        <div class="inline-actions" style="justify-content:space-between;">
+          <button class="ghost small" id="equipment-columns-show-all" type="button">Show all</button>
+          <button class="ghost small" id="equipment-columns-hide-all" type="button">Hide all</button>
+          <button class="ghost small" id="equipment-columns-reset" type="button">Reset</button>
+          <button class="ghost small" id="equipment-columns-reset-widths" type="button">Reset widths</button>
+          <button class="primary" id="equipment-columns-done" type="button">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="vendor/leaflet.js"></script>
   <script src="session.js"></script>
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=4"></script>       
   <script src="table-export.js"></script>
 </body>
 

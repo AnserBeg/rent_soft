@@ -676,23 +676,28 @@ async function ensureTables() {
         type TEXT NOT NULL,
         model_name TEXT NOT NULL,
         serial_number TEXT NOT NULL,
-        condition TEXT NOT NULL,
+        condition TEXT,
         manufacturer TEXT,
         image_url TEXT,
         image_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
+        card_image_url TEXT,
         location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
         current_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
         purchase_price NUMERIC(12, 2),
         type_id INTEGER REFERENCES equipment_types(id) ON DELETE SET NULL,
         notes TEXT,
+        directions TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
     await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS image_urls JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS image_url TEXT;`);
+    await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS card_image_url TEXT;`);
     await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS type_id INTEGER REFERENCES equipment_types(id) ON DELETE SET NULL;`);
     await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS notes TEXT;`);
     await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS current_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE equipment ADD COLUMN IF NOT EXISTS directions TEXT;`);
+    await client.query(`ALTER TABLE equipment ALTER COLUMN condition DROP NOT NULL;`);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS equipment_out_of_service (
@@ -720,6 +725,21 @@ async function ensureTables() {
         company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
         work_order_number TEXT NOT NULL,
         work_date DATE NOT NULL,
+        rental_order_id INTEGER,
+        rental_order_number TEXT,
+        customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+        customer_name TEXT,
+        category TEXT,
+        contact TEXT,
+        site_name TEXT,
+        site_address TEXT,
+        site_access_code TEXT,
+        due_date DATE,
+        is_recurring BOOLEAN NOT NULL DEFAULT FALSE,
+        recurrence_frequency TEXT,
+        recurrence_interval INTEGER,
+        recurrence_parent_id INTEGER REFERENCES work_orders(id) ON DELETE SET NULL,
+        recurrence_last_generated DATE,
         unit_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
         unit_labels JSONB NOT NULL DEFAULT '[]'::jsonb,
         unit_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
@@ -744,6 +764,21 @@ async function ensureTables() {
     `);
     await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS work_order_number TEXT NOT NULL DEFAULT '';`);
     await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS work_date DATE NOT NULL DEFAULT CURRENT_DATE;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS rental_order_id INTEGER;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS rental_order_number TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS customer_name TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS category TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS contact TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS site_name TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS site_address TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS site_access_code TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS due_date DATE;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS is_recurring BOOLEAN NOT NULL DEFAULT FALSE;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS recurrence_frequency TEXT;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS recurrence_interval INTEGER;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS recurrence_parent_id INTEGER REFERENCES work_orders(id) ON DELETE SET NULL;`);
+    await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS recurrence_last_generated DATE;`);
     await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS unit_ids JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS unit_labels JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE work_orders ADD COLUMN IF NOT EXISTS unit_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL;`);
@@ -768,6 +803,8 @@ async function ensureTables() {
     await client.query(`CREATE INDEX IF NOT EXISTS work_orders_company_service_idx ON work_orders (company_id, service_status);`);
     await client.query(`CREATE INDEX IF NOT EXISTS work_orders_updated_idx ON work_orders (company_id, updated_at);`);
     await client.query(`CREATE INDEX IF NOT EXISTS work_orders_unit_ids_idx ON work_orders USING GIN (unit_ids);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS work_orders_company_due_idx ON work_orders (company_id, due_date);`);
+    await client.query(`CREATE INDEX IF NOT EXISTS work_orders_company_recurring_idx ON work_orders (company_id, is_recurring, due_date);`);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS equipment_type_tracking_fields (
@@ -809,11 +846,15 @@ async function ensureTables() {
         value_bool BOOLEAN,
         value_date DATE,
         value_timestamptz TIMESTAMPTZ,
+        due_date DATE,
+        due_timestamptz TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(company_id, equipment_id, field_id)
       );
     `);
+    await client.query(`ALTER TABLE equipment_tracking_field_values ADD COLUMN IF NOT EXISTS due_date DATE;`);
+    await client.query(`ALTER TABLE equipment_tracking_field_values ADD COLUMN IF NOT EXISTS due_timestamptz TIMESTAMPTZ;`);
     await client.query(
       `CREATE INDEX IF NOT EXISTS equipment_tracking_field_values_company_equipment_idx ON equipment_tracking_field_values (company_id, equipment_id);`
     );
@@ -832,11 +873,15 @@ async function ensureTables() {
         value_bool BOOLEAN,
         value_date DATE,
         value_timestamptz TIMESTAMPTZ,
+        due_date DATE,
+        due_timestamptz TIMESTAMPTZ,
         note TEXT,
         occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+    await client.query(`ALTER TABLE equipment_tracking_field_events ADD COLUMN IF NOT EXISTS due_date DATE;`);
+    await client.query(`ALTER TABLE equipment_tracking_field_events ADD COLUMN IF NOT EXISTS due_timestamptz TIMESTAMPTZ;`);
     await client.query(
       `CREATE INDEX IF NOT EXISTS equipment_tracking_field_events_company_equipment_idx ON equipment_tracking_field_events (company_id, equipment_id, occurred_at DESC);`
     );
@@ -1088,6 +1133,7 @@ async function ensureTables() {
         logistics_instructions TEXT,
         special_instructions TEXT,
         critical_areas TEXT,
+        directions TEXT,
         monitoring_personnel TEXT,
         notification_circumstances JSONB NOT NULL DEFAULT '[]'::jsonb,
         coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -1128,6 +1174,7 @@ async function ensureTables() {
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS logistics_instructions TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS special_instructions TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS critical_areas TEXT;`);
+    await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS directions TEXT;`);
     await client.query(`ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS monitoring_personnel TEXT;`);
     await client.query(
       `ALTER TABLE rental_orders ADD COLUMN IF NOT EXISTS notification_circumstances JSONB NOT NULL DEFAULT '[]'::jsonb;`
@@ -1208,6 +1255,9 @@ async function ensureTables() {
     `);
     await client.query(`ALTER TABLE rental_order_fees ADD COLUMN IF NOT EXISTS fee_date DATE;`);
     await client.query(`CREATE INDEX IF NOT EXISTS rental_order_fees_order_id_idx ON rental_order_fees (rental_order_id);`);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS rental_order_fees_order_id_fee_date_idx ON rental_order_fees (rental_order_id, fee_date);`
+    );
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS rental_order_notes (
@@ -1349,11 +1399,13 @@ async function ensureTables() {
         monthly_proration_method TEXT NOT NULL DEFAULT 'hours',
         billing_timezone TEXT NOT NULL DEFAULT 'UTC',
         logo_url TEXT,
+        asset_directions_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         qbo_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         qbo_billing_day INTEGER NOT NULL DEFAULT 1,
         qbo_adjustment_policy TEXT NOT NULL DEFAULT 'credit_memo',
         qbo_income_account_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
         qbo_default_tax_code TEXT,
+        hide_qbo_sections_when_disconnected BOOLEAN NOT NULL DEFAULT FALSE,
         tax_enabled BOOLEAN NOT NULL DEFAULT FALSE,
         default_tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0,
         tax_registration_number TEXT,
@@ -1361,7 +1413,9 @@ async function ensureTables() {
           auto_apply_customer_credit BOOLEAN NOT NULL DEFAULT TRUE,
           auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE,
           required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
-          rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"siteAccessInfo":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"monitoringPersonnel":{"enabled":true,"required":false},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"emergencyContactInstructions":{"enabled":true,"required":false},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
+          rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"siteAccessInfo":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"directions":{"enabled":false,"required":false},"monitoringPersonnel":{"enabled":true,"required":false},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"emergencyContactInstructions":{"enabled":true,"required":false},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
+          assets_table_columns JSONB,
+        order_contacts_enabled BOOLEAN NOT NULL DEFAULT TRUE,
         customer_contact_categories JSONB NOT NULL DEFAULT '[{"key":"contacts","label":"Contacts"},{"key":"accountingContacts","label":"Accounting contacts"}]'::jsonb,
         customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
         customer_terms_template TEXT,
@@ -1393,11 +1447,13 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS monthly_proration_method TEXT NOT NULL DEFAULT 'hours';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS billing_timezone TEXT NOT NULL DEFAULT 'UTC';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS logo_url TEXT;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS asset_directions_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_billing_day INTEGER NOT NULL DEFAULT 1;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_adjustment_policy TEXT NOT NULL DEFAULT 'credit_memo';`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_income_account_ids JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS qbo_default_tax_code TEXT;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS hide_qbo_sections_when_disconnected BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS tax_enabled BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS default_tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS tax_registration_number TEXT;`);
@@ -1406,8 +1462,10 @@ async function ensureTables() {
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(
-      `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"siteAccessInfo":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"monitoringPersonnel":{"enabled":true,"required":false},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"emergencyContactInstructions":{"enabled":true,"required":false},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb;`
+      `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"siteAccessInfo":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"directions":{"enabled":false,"required":false},"monitoringPersonnel":{"enabled":true,"required":false},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"emergencyContactInstructions":{"enabled":true,"required":false},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb;`
     );
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS assets_table_columns JSONB;`);
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS order_contacts_enabled BOOLEAN NOT NULL DEFAULT TRUE;`);
     await client.query(
       `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_contact_categories JSONB NOT NULL DEFAULT '[{"key":"contacts","label":"Contacts"},{"key":"accountingContacts","label":"Accounting contacts"}]'::jsonb;`
     );
@@ -1438,8 +1496,16 @@ async function ensureTables() {
     await client.query(`UPDATE company_settings SET qbo_billing_day = 1 WHERE qbo_billing_day IS NULL;`);
     await client.query(`UPDATE company_settings SET qbo_adjustment_policy = 'credit_memo' WHERE qbo_adjustment_policy IS NULL;`);
     await client.query(`UPDATE company_settings SET qbo_income_account_ids = '[]'::jsonb WHERE qbo_income_account_ids IS NULL;`);
+    await client.query(`UPDATE company_settings SET hide_qbo_sections_when_disconnected = FALSE WHERE hide_qbo_sections_when_disconnected IS NULL;`);
+    await client.query(`UPDATE company_settings SET order_contacts_enabled = TRUE WHERE order_contacts_enabled IS NULL;`);
     await client.query(`UPDATE company_settings SET dashboard_incidents_count = 0 WHERE dashboard_incidents_count IS NULL;`);
     await client.query(`UPDATE company_settings SET dashboard_incident_metrics = '{}'::jsonb WHERE dashboard_incident_metrics IS NULL;`);
+    await client.query(`UPDATE company_settings SET asset_directions_enabled = FALSE WHERE asset_directions_enabled IS NULL;`);
+    await client.query(`
+      UPDATE company_settings
+         SET rental_info_fields = jsonb_set(rental_info_fields, '{directions}', '{"enabled":false,"required":false}'::jsonb, true)
+       WHERE asset_directions_enabled = FALSE
+    `);
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS qbo_connections (
@@ -1832,7 +1898,9 @@ async function getCompanySettingsForClient(client, companyId) {
             tax_inclusive_pricing,
               auto_apply_customer_credit,
               auto_work_order_on_return,
-              rental_info_fields
+              assets_table_columns,
+              rental_info_fields,
+              order_contacts_enabled
      FROM company_settings
      WHERE company_id = $1
      LIMIT 1`,
@@ -1852,7 +1920,9 @@ async function getCompanySettingsForClient(client, companyId) {
       tax_inclusive_pricing: res.rows[0].tax_inclusive_pricing === true,
         auto_apply_customer_credit: res.rows[0].auto_apply_customer_credit === true,
         auto_work_order_on_return: res.rows[0].auto_work_order_on_return === true,
+        assets_table_columns: normalizeAssetsTableColumns(res.rows[0].assets_table_columns),
         rental_info_fields: normalizeRentalInfoFields(res.rows[0].rental_info_fields),
+        order_contacts_enabled: res.rows[0].order_contacts_enabled !== false,
     };
   }
   return {
@@ -1868,7 +1938,9 @@ async function getCompanySettingsForClient(client, companyId) {
     tax_inclusive_pricing: false,
       auto_apply_customer_credit: true,
       auto_work_order_on_return: false,
+      assets_table_columns: null,
       rental_info_fields: normalizeRentalInfoFields(null),
+      order_contacts_enabled: true,
   };
 }
 
@@ -2416,7 +2488,7 @@ async function deleteLocation({ companyId, id }) {
 
 async function getEquipmentLocationIds({ companyId, equipmentId }) {
   const res = await pool.query(
-    `SELECT id, location_id, current_location_id
+    `SELECT id, location_id, current_location_id, directions
      FROM equipment
      WHERE company_id = $1 AND id = $2
      LIMIT 1`,
@@ -2428,6 +2500,7 @@ async function getEquipmentLocationIds({ companyId, equipmentId }) {
     id: Number(row.id),
     location_id: row.location_id === null ? null : Number(row.location_id),
     current_location_id: row.current_location_id === null ? null : Number(row.current_location_id),
+    directions: row.directions || null,
   };
 }
 
@@ -2756,7 +2829,28 @@ function normalizeEquipmentTrackingFieldKey(value) {
 
 function normalizeEquipmentTrackingTableColumnMode(value) {
   const raw = String(value || "").trim().toLowerCase();
+  if (raw === "none" || raw === "hidden" || raw === "hide" || raw === "off" || raw === "disabled") return "none";
   if (raw === "next_due" || raw === "due" || raw === "next") return "next_due";
+  if (
+    raw === "value_and_previous" ||
+    raw === "value_previous" ||
+    raw === "current_and_previous" ||
+    raw === "current_previous" ||
+    raw === "value+previous" ||
+    raw === "prev" ||
+    raw === "previous"
+  ) {
+    return "value_and_previous";
+  }
+  if (
+    raw === "value_and_next_due" ||
+    raw === "value_next_due" ||
+    raw === "value+next" ||
+    raw === "both" ||
+    raw === "combined"
+  ) {
+    return "value_and_next_due";
+  }
   return "value";
 }
 
@@ -2795,7 +2889,7 @@ function assertTrackingRuleMatchesField(def) {
   if (!rule.enabled || rule.ruleType === "none") return;
 
   const type = String(def.dataType || def.data_type || "").trim();
-  if (rule.ruleType === "time_interval" || rule.ruleType === "manual_due_date") {
+  if (rule.ruleType === "time_interval" || rule.ruleType === "manual_due_date" || rule.ruleType === "manual_due_date_separate") {
     if (!(type === "date" || type === "datetime")) {
       throw new Error(`Rule type "${rule.ruleType}" requires a date/datetime field.`);
     }
@@ -2850,6 +2944,19 @@ function parseEquipmentTrackingValueForColumns(dataType, value) {
   return { value_date: null, value_timestamptz: null, value_number: null, value_bool: null, value_text: t || null };
 }
 
+function parseEquipmentTrackingDueForColumns(dataType, value) {
+  const type = String(dataType || "").trim();
+  if (type === "date") {
+    const d = normalizeTrackingDateOnly(value);
+    return { due_date: d, due_timestamptz: null };
+  }
+  if (type === "datetime") {
+    const iso = normalizeTrackingDatetime(value);
+    return { due_date: null, due_timestamptz: iso };
+  }
+  return { due_date: null, due_timestamptz: null };
+}
+
 function rawEquipmentTrackingValueFromRow(row) {
   if (!row) return null;
   if (row.value_date) return row.value_date instanceof Date ? row.value_date.toISOString().slice(0, 10) : String(row.value_date).slice(0, 10);
@@ -2860,19 +2967,51 @@ function rawEquipmentTrackingValueFromRow(row) {
   return null;
 }
 
-function formatTrackingTableCellValue({ def, rawValue, latestMeterHours }) {
+function rawEquipmentTrackingDueFromRow(row) {
+  if (!row) return null;
+  if (row.due_date) return row.due_date instanceof Date ? row.due_date.toISOString().slice(0, 10) : String(row.due_date).slice(0, 10);
+  if (row.due_timestamptz) return row.due_timestamptz instanceof Date ? row.due_timestamptz.toISOString() : String(row.due_timestamptz);
+  return null;
+}
+
+function formatTrackingTableCellValue({ def, rawValue, rawDueValue = null, previousRawValue, latestMeterHours }) {
   if (!def) return "--";
   const mode = normalizeEquipmentTrackingTableColumnMode(def.tableColumnMode ?? def.table_column_mode);
+  if (mode === "none") return "--";
   if (mode === "next_due") {
     const status = computeTrackingStatusForField({
       def: normalizeTrackingFieldDefinition(def) || def,
       rawValue,
+      rawDueValue,
       latestMeterHours,
       now: new Date(),
     });
     if (!status || status.dueAt === null || status.dueAt === undefined) return "--";
     if (typeof status.dueAt === "number") return `${status.dueAt}h`;
     return String(status.dueAt);
+  }
+  if (mode === "value_and_previous") {
+    const normalizedDef = normalizeTrackingFieldDefinition(def) || def;
+    const valueLabel = formatTrackingValueForDisplay(normalizedDef, rawValue);
+    const prevLabel = formatTrackingValueForDisplay(normalizedDef, previousRawValue);
+    if (!prevLabel || prevLabel === "--") return valueLabel;
+    if (!valueLabel || valueLabel === "--") return `Prev: ${prevLabel}`;
+    return `${valueLabel} Â· Prev: ${prevLabel}`;
+  }
+  if (mode === "value_and_next_due") {
+    const valueLabel = formatTrackingValueForDisplay(normalizeTrackingFieldDefinition(def) || def, rawValue);
+    const status = computeTrackingStatusForField({
+      def: normalizeTrackingFieldDefinition(def) || def,
+      rawValue,
+      rawDueValue,
+      latestMeterHours,
+      now: new Date(),
+    });
+    if (!status || status.dueAt === null || status.dueAt === undefined) return valueLabel;
+    const dueLabel = typeof status.dueAt === "number" ? `${status.dueAt}h` : String(status.dueAt);
+    if (!dueLabel || dueLabel === "--") return valueLabel;
+    if (!valueLabel || valueLabel === "--") return `Next: ${dueLabel}`;
+    return `${valueLabel} · Next: ${dueLabel}`;
   }
   return formatTrackingValueForDisplay(normalizeTrackingFieldDefinition(def) || def, rawValue);
 }
@@ -2937,9 +3076,9 @@ async function createEquipmentTypeTrackingField(payload = {}) {
   const required = payload.required === true;
   const options = normalizeEquipmentTrackingFieldOptions(dataType, payload.options);
   const sortOrder = Number.isFinite(Number(payload.sortOrder)) ? Number(payload.sortOrder) : 0;
-  const showOnAssetsTable = payload.showOnAssetsTable === true;
   const tableColumnLabel = payload.tableColumnLabel ? String(payload.tableColumnLabel).trim() : null;
   const tableColumnMode = normalizeEquipmentTrackingTableColumnMode(payload.tableColumnMode);
+  const showOnAssetsTable = payload.showOnAssetsTable === true && tableColumnMode !== "none";
   const rule = normalizeTrackingRule(payload.rule);
 
   assertTrackingRuleMatchesField({ dataType, rule });
@@ -3007,11 +3146,12 @@ async function updateEquipmentTypeTrackingField(payload = {}) {
   const options =
     payload.options !== undefined ? normalizeEquipmentTrackingFieldOptions(dataType, payload.options) : coerceJsonArray(existing.options);
   const sortOrder = payload.sortOrder !== undefined && Number.isFinite(Number(payload.sortOrder)) ? Number(payload.sortOrder) : Number(existing.sort_order) || 0;
-  const showOnAssetsTable = payload.showOnAssetsTable !== undefined ? payload.showOnAssetsTable === true : existing.show_on_assets_table === true;
   const tableColumnLabel =
     payload.tableColumnLabel !== undefined ? (payload.tableColumnLabel ? String(payload.tableColumnLabel).trim() : null) : existing.table_column_label;
   const tableColumnMode =
     payload.tableColumnMode !== undefined ? normalizeEquipmentTrackingTableColumnMode(payload.tableColumnMode) : existing.table_column_mode || "value";
+  const showOnAssetsTable =
+    payload.showOnAssetsTable !== undefined ? payload.showOnAssetsTable === true && tableColumnMode !== "none" : existing.show_on_assets_table === true;
   const rule = payload.rule !== undefined ? normalizeTrackingRule(payload.rule) : normalizeTrackingRule(existing.rule);
 
   assertTrackingRuleMatchesField({ dataType, rule });
@@ -3097,11 +3237,12 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
     SELECT e.id,
            COALESCE(et.name, e.type) AS type,
            e.model_name, e.serial_number, e.condition, e.manufacturer,
-           COALESCE(NULLIF(e.image_urls, '[]'::jsonb)->>0, e.image_url, NULLIF(et.image_urls, '[]'::jsonb)->>0, et.image_url) AS image_url,
+           COALESCE(e.card_image_url, NULLIF(et.image_urls, '[]'::jsonb)->>0, et.image_url, NULLIF(e.image_urls, '[]'::jsonb)->>0, e.image_url) AS image_url,
            e.image_url AS equipment_image_url,
            et.image_url AS type_image_url,
            e.image_urls AS equipment_image_urls,
            et.image_urls AS type_image_urls,
+           e.card_image_url,
            e.purchase_price,
            l.name AS location,
            e.location_id,
@@ -3118,6 +3259,7 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
            cl.longitude AS current_location_longitude,
            e.type_id,
            e.notes,
+           e.directions,
            eb.id AS bundle_id,
            eb.name AS bundle_name,
            eb.primary_equipment_id AS bundle_primary_equipment_id,
@@ -3171,7 +3313,7 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
              ro.customer_id,
              CASE
                WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-               THEN c.company_name || ' (' || pc.company_name || ')'
+               THEN pc.company_name || ' - ' || c.company_name
                ELSE c.company_name
              END AS customer_name,
              ro.site_address,
@@ -3205,7 +3347,7 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
              ro.customer_id,
              CASE
                WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-               THEN c.company_name || ' (' || pc.company_name || ')'
+               THEN pc.company_name || ' - ' || c.company_name
                ELSE c.company_name
              END AS customer_name,
              ro.site_address,
@@ -3228,12 +3370,209 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
          ro.id DESC
        LIMIT 1
     ) reserved_ro ON TRUE
-    WHERE ${where.join(" AND ")}
-    ORDER BY e.created_at DESC;
+     WHERE ${where.join(" AND ")}
+     ORDER BY e.created_at DESC;
   `,
-    params
-  );
-  return result.rows;
+     params
+   );
+  const rows = result.rows || [];
+  await attachEquipmentTrackingSummaryToRows(companyId, rows).catch(() => null);
+  return rows;
+}
+
+async function attachEquipmentTrackingSummaryToRows(companyId, rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return list;
+
+  const equipmentIds = list.map((r) => Number(r?.id)).filter((v) => Number.isFinite(v));
+  const typeIds = Array.from(new Set(list.map((r) => Number(r?.type_id)).filter((v) => Number.isFinite(v) && v > 0)));
+  if (!equipmentIds.length || !typeIds.length) return list;
+
+  const [defsRes, valuesRes, metersRes] = await Promise.all([
+    pool.query(
+      `
+      SELECT id, equipment_type_id, field_key, label, data_type, unit, required, options, sort_order,
+             show_on_assets_table, table_column_label, table_column_mode, rule
+        FROM equipment_type_tracking_fields
+       WHERE company_id = $1
+         AND archived_at IS NULL
+         AND equipment_type_id = ANY($2::int[])
+       ORDER BY sort_order ASC, label ASC, id ASC
+      `,
+      [companyId, typeIds]
+    ),
+    pool.query(
+      `
+      SELECT equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz,
+             due_date, due_timestamptz,
+             updated_at
+        FROM equipment_tracking_field_values
+       WHERE company_id = $1
+         AND equipment_id = ANY($2::int[])
+      `,
+      [companyId, equipmentIds]
+    ),
+    pool.query(
+      `
+      SELECT DISTINCT ON (equipment_id)
+             equipment_id, reading, read_at
+        FROM equipment_meter_readings
+       WHERE company_id = $1
+         AND meter_type = 'hours'
+         AND equipment_id = ANY($2::int[])
+       ORDER BY equipment_id, read_at DESC, id DESC
+      `,
+      [companyId, equipmentIds]
+    ),
+  ]);
+
+  const defsByType = new Map();
+  for (const row of defsRes.rows || []) {
+    const tid = Number(row.equipment_type_id);
+    if (!Number.isFinite(tid)) continue;
+    const defList = defsByType.get(String(tid)) || [];
+    defList.push({
+      id: Number(row.id),
+      equipmentTypeId: tid,
+      fieldKey: row.field_key,
+      label: row.label,
+      dataType: row.data_type,
+      unit: row.unit || null,
+      required: row.required === true,
+      options: coerceJsonArray(row.options),
+      sortOrder: Number(row.sort_order) || 0,
+      showOnAssetsTable: row.show_on_assets_table === true,
+      tableColumnLabel: row.table_column_label || null,
+      tableColumnMode: row.table_column_mode || "value",
+      rule: coerceJsonObject(row.rule),
+    });
+    defsByType.set(String(tid), defList);
+  }
+
+  const previousFieldIds = [];
+  {
+    const seen = new Set();
+    for (const defs of defsByType.values()) {
+      for (const def of defs) {
+        if (def.showOnAssetsTable !== true) continue;
+        const mode = normalizeEquipmentTrackingTableColumnMode(def.tableColumnMode);
+        if (mode !== "value_and_previous") continue;
+        const fid = Number(def.id);
+        if (!Number.isFinite(fid) || fid <= 0) continue;
+        const k = String(fid);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        previousFieldIds.push(fid);
+      }
+    }
+  }
+
+  const valuesByEquipmentId = new Map();
+  const dueValuesByEquipmentId = new Map();
+  for (const row of valuesRes.rows || []) {
+    const eid = Number(row.equipment_id);
+    const fid = Number(row.field_id);
+    if (!Number.isFinite(eid) || !Number.isFinite(fid)) continue;
+    const map = valuesByEquipmentId.get(String(eid)) || {};
+    map[String(fid)] = rawEquipmentTrackingValueFromRow(row);
+    valuesByEquipmentId.set(String(eid), map);
+
+    const dueMap = dueValuesByEquipmentId.get(String(eid)) || {};
+    dueMap[String(fid)] = rawEquipmentTrackingDueFromRow(row);
+    dueValuesByEquipmentId.set(String(eid), dueMap);
+  }
+
+  const previousByEquipmentId = new Map();
+  if (previousFieldIds.length) {
+    const eventsRes = await pool.query(
+      `
+      SELECT equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz
+        FROM (
+          SELECT equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz,
+                 ROW_NUMBER() OVER (PARTITION BY equipment_id, field_id ORDER BY occurred_at DESC, id DESC) AS rn
+            FROM equipment_tracking_field_events
+           WHERE company_id = $1
+             AND equipment_id = ANY($2::int[])
+             AND field_id = ANY($3::int[])
+        ) t
+       WHERE rn = 2
+      `,
+      [companyId, equipmentIds, previousFieldIds]
+    );
+    for (const row of eventsRes.rows || []) {
+      const eid = Number(row.equipment_id);
+      const fid = Number(row.field_id);
+      if (!Number.isFinite(eid) || !Number.isFinite(fid)) continue;
+      const map = previousByEquipmentId.get(String(eid)) || {};
+      map[String(fid)] = rawEquipmentTrackingValueFromRow(row);
+      previousByEquipmentId.set(String(eid), map);
+    }
+  }
+
+  const meterByEquipmentId = new Map();
+  for (const row of metersRes.rows || []) {
+    const eid = Number(row.equipment_id);
+    if (!Number.isFinite(eid)) continue;
+    const reading = Number(row.reading);
+    meterByEquipmentId.set(String(eid), Number.isFinite(reading) ? reading : null);
+  }
+
+  for (const row of list) {
+    const eid = Number(row?.id);
+    if (!Number.isFinite(eid)) continue;
+    const tid = Number(row?.type_id);
+    const defs = defsByType.get(String(tid)) || [];
+    const valuesByFieldId = valuesByEquipmentId.get(String(eid)) || {};
+    const dueValuesByFieldId = dueValuesByEquipmentId.get(String(eid)) || {};
+    const latestMeterHours = meterByEquipmentId.has(String(eid)) ? meterByEquipmentId.get(String(eid)) : null;
+
+    const summary = computeEquipmentTrackingSummary({
+      definitions: defs,
+      valuesByFieldId,
+      dueValuesByFieldId,
+      latestMeterHours,
+    });
+
+    row.tracking_status_key = summary.overallStatusKey;
+    row.tracking_status = summary.overallStatusLabel;
+    row.tracking_needs = summary.needs;
+    row.tracking_needs_summary = summary.needs.join("; ");
+    row.meter_hours = latestMeterHours;
+    const statusByFieldId = {};
+    const statusByFieldKey = {};
+    const defById = new Map(defs.map((d) => [String(d?.id ?? ""), d]).filter(([k]) => k));
+    for (const status of summary.statuses || []) {
+      const fid = status && status.fieldId !== undefined ? String(status.fieldId) : "";
+      if (!fid) continue;
+      statusByFieldId[fid] = String(status.statusKey || "").trim() || "none";
+      const def = defById.get(fid) || null;
+      const fieldKey = def?.fieldKey ? String(def.fieldKey).trim() : "";
+      if (fieldKey && !statusByFieldKey[fieldKey]) {
+        statusByFieldKey[fieldKey] = String(status.statusKey || "").trim() || "none";
+      }
+    }
+    row.tracking_table_status_by_field_id = statusByFieldId;
+    row.tracking_table_status_by_field_key = statusByFieldKey;
+
+    const tableValues = {};
+    const tableValuesByKey = {};
+    for (const def of defs) {
+      if (def.showOnAssetsTable !== true) continue;
+      const rawValue = valuesByFieldId[String(def.id)];
+      const rawDueValue = dueValuesByFieldId[String(def.id)];
+      const previousRawValue = (previousByEquipmentId.get(String(eid)) || {})[String(def.id)];
+      const formatted = formatTrackingTableCellValue({ def, rawValue, rawDueValue, previousRawValue, latestMeterHours });
+      tableValues[String(def.id)] = formatted;
+      const fieldKey = def?.fieldKey ? String(def.fieldKey).trim() : "";
+      if (fieldKey && tableValuesByKey[fieldKey] === undefined) {
+        tableValuesByKey[fieldKey] = formatted;
+      }
+    }
+    row.tracking_table_values = tableValues;
+    row.tracking_table_values_by_key = tableValuesByKey;
+  }
+
+  return list;
 }
 
 async function setEquipmentCurrentLocationForIds({ companyId, equipmentIds, currentLocationId }) {
@@ -3250,6 +3589,20 @@ async function setEquipmentCurrentLocationForIds({ companyId, equipmentIds, curr
   return result.rowCount || 0;
 }
 
+async function setEquipmentDirectionsForIds({ companyId, equipmentIds, directions }) {
+  const ids = Array.isArray(equipmentIds) ? equipmentIds.map((v) => Number(v)).filter((v) => Number.isFinite(v)) : [];
+  if (!ids.length) return 0;
+  const clean = directions === null || directions === undefined ? null : String(directions).trim() || null;
+  const result = await pool.query(
+    `UPDATE equipment
+        SET directions = $3
+      WHERE company_id = $1
+        AND id = ANY($2::int[])`,
+    [companyId, ids, clean]
+  );
+  return result.rowCount || 0;
+}
+
 async function createEquipment({
   companyId,
   typeId,
@@ -3260,32 +3613,38 @@ async function createEquipment({
   manufacturer,
   imageUrl,
   imageUrls,
+  cardImageUrl,
   locationId,
   currentLocationId,
   purchasePrice,
   notes,
+  directions,
 }) {
   const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean).map(String) : [];
   const primaryUrl = urls[0] || imageUrl || null;
+  const cleanCondition = condition === null || condition === undefined ? null : String(condition).trim() || null;
+  const cleanCardImageUrl = cardImageUrl === null || cardImageUrl === undefined ? null : String(cardImageUrl).trim() || null;
   const result = await pool.query(
     `INSERT INTO equipment
-      (company_id, type_id, type, model_name, serial_number, condition, manufacturer, image_url, image_urls, location_id, current_location_id, purchase_price, notes)
-     VALUES ($1, $2, COALESCE($3, (SELECT name FROM equipment_types WHERE id = $2)), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-     RETURNING id, type_id, type, model_name, serial_number, condition, manufacturer, image_url, image_urls, location_id, current_location_id, purchase_price, notes`,
+      (company_id, type_id, type, model_name, serial_number, condition, manufacturer, image_url, image_urls, card_image_url, location_id, current_location_id, purchase_price, notes, directions)
+     VALUES ($1, $2, COALESCE($3, (SELECT name FROM equipment_types WHERE id = $2)), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+     RETURNING id, type_id, type, model_name, serial_number, condition, manufacturer, image_url, image_urls, location_id, current_location_id, purchase_price, notes, directions`,
     [
       companyId,
       typeId || null,
       typeName || null,
       modelName,
       serialNumber,
-      condition,
+      cleanCondition,
       manufacturer,
       primaryUrl,
       JSON.stringify(urls),
+      cleanCardImageUrl,
       locationId || null,
       currentLocationId || null,
       purchasePrice,
       notes || null,
+      directions || null,
     ]
   );
   const updated = result.rows[0];
@@ -3303,11 +3662,15 @@ async function updateEquipment({
   manufacturer,
   imageUrl,
   imageUrls,
+  cardImageUrl,
   locationId,
   currentLocationId,
   purchasePrice,
   notes,
+  directions,
 }) {
+  const cleanCondition = condition === null || condition === undefined ? null : String(condition).trim() || null;
+  const cleanCardImageUrl = cardImageUrl === null || cardImageUrl === undefined ? null : String(cardImageUrl).trim() || null;
   const existingRes = await pool.query(
     `SELECT id, type_id FROM equipment WHERE id = $1 AND company_id = $2 LIMIT 1`,
     [id, companyId]
@@ -3328,25 +3691,29 @@ async function updateEquipment({
          manufacturer = $6,
          image_url = $7,
          image_urls = $8,
-         location_id = $9,
-         current_location_id = $10,
-         purchase_price = $11,
-         notes = $12
-     WHERE id = $13 AND company_id = $14
-     RETURNING id, type_id, type, model_name, serial_number, condition, manufacturer, image_url, image_urls, location_id, current_location_id, purchase_price, notes`,
+         card_image_url = $9,
+         location_id = $10,
+         current_location_id = $11,
+         purchase_price = $12,
+         notes = $13,
+         directions = $14
+     WHERE id = $15 AND company_id = $16
+     RETURNING id, type_id, type, model_name, serial_number, condition, manufacturer, image_url, image_urls, location_id, current_location_id, purchase_price, notes, directions`,
     [
       typeId || null,
       typeName || null,
       modelName,
       serialNumber,
-      condition,
+      cleanCondition,
       manufacturer,
       primaryUrl,
       JSON.stringify(urls),
+      cleanCardImageUrl,
       locationId || null,
       currentLocationId || null,
       purchasePrice,
       notes || null,
+      directions || null,
       id,
       companyId,
     ]
@@ -3498,7 +3865,9 @@ async function getEquipmentTrackingSummary({ companyId, equipmentId, eventsLimit
     listEquipmentTypeTrackingFields({ companyId: cid, equipmentTypeId: typeId }),
     pool.query(
       `
-      SELECT field_id, value_text, value_number, value_bool, value_date, value_timestamptz, updated_at
+      SELECT field_id, value_text, value_number, value_bool, value_date, value_timestamptz,
+             due_date, due_timestamptz,
+             updated_at
         FROM equipment_tracking_field_values
        WHERE company_id = $1 AND equipment_id = $2
       `,
@@ -3537,16 +3906,19 @@ async function getEquipmentTrackingSummary({ companyId, equipmentId, eventsLimit
   ]);
 
   const valuesByFieldId = {};
+  const dueValuesByFieldId = {};
   for (const row of valuesRes.rows || []) {
     const fid = Number(row.field_id);
     if (!Number.isFinite(fid)) continue;
     valuesByFieldId[String(fid)] = rawEquipmentTrackingValueFromRow(row);
+    dueValuesByFieldId[String(fid)] = rawEquipmentTrackingDueFromRow(row);
   }
 
   const latestMeterHours = meterRes.rows?.[0]?.reading !== undefined ? Number(meterRes.rows[0].reading) : null;
   const summary = computeEquipmentTrackingSummary({
     definitions: fields,
     valuesByFieldId,
+    dueValuesByFieldId,
     latestMeterHours: Number.isFinite(latestMeterHours) ? latestMeterHours : null,
   });
 
@@ -3578,6 +3950,7 @@ async function getEquipmentTrackingSummary({ companyId, equipmentId, eventsLimit
     },
     fields,
     valuesByFieldId,
+    dueValuesByFieldId,
     latestMeterHours: Number.isFinite(latestMeterHours) ? latestMeterHours : null,
     summary,
     events: normalizedEvents,
@@ -3628,19 +4001,22 @@ async function upsertEquipmentTrackingValues({ companyId, equipmentId, values })
       const dataType = defsById.get(String(fieldId));
       if (!dataType) continue;
       const parsed = parseEquipmentTrackingValueForColumns(dataType, item?.value);
+      const dueParsed = parseEquipmentTrackingDueForColumns(dataType, item?.due ?? item?.dueValue);
 
       const res = await pool.query(
         `
         INSERT INTO equipment_tracking_field_values
-          (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, updated_at)
+          (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, due_date, due_timestamptz, updated_at)
         VALUES
-          ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+          ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
         ON CONFLICT (company_id, equipment_id, field_id) DO UPDATE
           SET value_text = EXCLUDED.value_text,
               value_number = EXCLUDED.value_number,
               value_bool = EXCLUDED.value_bool,
               value_date = EXCLUDED.value_date,
               value_timestamptz = EXCLUDED.value_timestamptz,
+              due_date = EXCLUDED.due_date,
+              due_timestamptz = EXCLUDED.due_timestamptz,
               updated_at = NOW()
         `,
         [
@@ -3652,6 +4028,8 @@ async function upsertEquipmentTrackingValues({ companyId, equipmentId, values })
           parsed.value_bool,
           parsed.value_date,
           parsed.value_timestamptz,
+          dueParsed.due_date,
+          dueParsed.due_timestamptz,
         ]
       );
       updated += res.rowCount ? 1 : 0;
@@ -3665,7 +4043,7 @@ async function upsertEquipmentTrackingValues({ companyId, equipmentId, values })
   return { updated };
 }
 
-async function createEquipmentTrackingEvent({ companyId, equipmentId, fieldId, value, note = "", occurredAt = null }) {
+async function createEquipmentTrackingEvent({ companyId, equipmentId, fieldId, value, due = null, note = "", occurredAt = null }) {
   const cid = Number(companyId);
   const eid = Number(equipmentId);
   const fid = Number(fieldId);
@@ -3690,6 +4068,7 @@ async function createEquipmentTrackingEvent({ companyId, equipmentId, fieldId, v
   if (!dataType) throw new Error("Field not found.");
 
   const parsed = parseEquipmentTrackingValueForColumns(dataType, value);
+  const dueParsed = parseEquipmentTrackingDueForColumns(dataType, due);
   const occurred = occurredAt ? normalizeTimestamptz(occurredAt) : new Date().toISOString();
   const cleanNote = String(note || "").trim() || null;
 
@@ -3698,9 +4077,9 @@ async function createEquipmentTrackingEvent({ companyId, equipmentId, fieldId, v
     await pool.query(
       `
       INSERT INTO equipment_tracking_field_events
-        (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, note, occurred_at)
+        (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, due_date, due_timestamptz, note, occurred_at)
       VALUES
-        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       `,
       [
         cid,
@@ -3711,6 +4090,8 @@ async function createEquipmentTrackingEvent({ companyId, equipmentId, fieldId, v
         parsed.value_bool,
         parsed.value_date,
         parsed.value_timestamptz,
+        dueParsed.due_date,
+        dueParsed.due_timestamptz,
         cleanNote,
         occurred,
       ]
@@ -3719,15 +4100,17 @@ async function createEquipmentTrackingEvent({ companyId, equipmentId, fieldId, v
     await pool.query(
       `
       INSERT INTO equipment_tracking_field_values
-        (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, updated_at)
+        (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, due_date, due_timestamptz, updated_at)
       VALUES
-        ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
       ON CONFLICT (company_id, equipment_id, field_id) DO UPDATE
         SET value_text = EXCLUDED.value_text,
             value_number = EXCLUDED.value_number,
             value_bool = EXCLUDED.value_bool,
             value_date = EXCLUDED.value_date,
             value_timestamptz = EXCLUDED.value_timestamptz,
+            due_date = EXCLUDED.due_date,
+            due_timestamptz = EXCLUDED.due_timestamptz,
             updated_at = NOW()
       `,
       [
@@ -3739,6 +4122,8 @@ async function createEquipmentTrackingEvent({ companyId, equipmentId, fieldId, v
         parsed.value_bool,
         parsed.value_date,
         parsed.value_timestamptz,
+        dueParsed.due_date,
+        dueParsed.due_timestamptz,
       ]
     );
 
@@ -4578,6 +4963,16 @@ function formatWorkOrderRow(row) {
     : row.work_date
       ? String(row.work_date).slice(0, 10)
       : null;
+  const dueDate = row.due_date instanceof Date
+    ? row.due_date.toISOString().slice(0, 10)
+    : row.due_date
+      ? String(row.due_date).slice(0, 10)
+      : null;
+  const recurrenceLastGenerated = row.recurrence_last_generated instanceof Date
+    ? row.recurrence_last_generated.toISOString().slice(0, 10)
+    : row.recurrence_last_generated
+      ? String(row.recurrence_last_generated).slice(0, 10)
+      : null;
   const primaryUnitId = row.unit_id !== undefined && row.unit_id !== null
     ? Number(row.unit_id)
     : unitIds[0]
@@ -4591,6 +4986,23 @@ function formatWorkOrderRow(row) {
     companyId: Number(row.company_id),
     number: row.work_order_number || "",
     date: workDate,
+    rentalOrderId: row.rental_order_id === null || row.rental_order_id === undefined ? null : Number(row.rental_order_id),
+    rentalOrderNumber: row.rental_order_number || "",
+    customerId: row.customer_id === null || row.customer_id === undefined ? null : Number(row.customer_id),
+    customerName: row.customer_name || "",
+    category: row.category || "",
+    contact: row.contact || "",
+    siteName: row.site_name || "",
+    siteAddress: row.site_address || "",
+    siteAccessCode: row.site_access_code || "",
+    dueDate,
+    isRecurring: row.is_recurring === true,
+    recurrenceFrequency: row.recurrence_frequency || "",
+    recurrenceInterval:
+      row.recurrence_interval === null || row.recurrence_interval === undefined ? null : Number(row.recurrence_interval),
+    recurrenceParentId:
+      row.recurrence_parent_id === null || row.recurrence_parent_id === undefined ? null : Number(row.recurrence_parent_id),
+    recurrenceLastGenerated,
     unitIds,
     unitLabels,
     unitId: Number.isFinite(primaryUnitId) ? primaryUnitId : null,
@@ -4621,6 +5033,8 @@ async function listWorkOrders({
   serviceStatus,
   returnInspection,
   search,
+  dueFrom,
+  dueTo,
   limit = 250,
   offset = 0,
 } = {}) {
@@ -4659,8 +5073,22 @@ async function listWorkOrders({
     idx += 1;
   }
   if (search) {
-    filters.push(`(work_order_number ILIKE $${idx} OR work_summary ILIKE $${idx} OR issues ILIKE $${idx})`);
+    filters.push(
+      `(work_order_number ILIKE $${idx} OR work_summary ILIKE $${idx} OR issues ILIKE $${idx} OR customer_name ILIKE $${idx} OR site_name ILIKE $${idx} OR category ILIKE $${idx})`
+    );
     params.push(`%${String(search).trim()}%`);
+    idx += 1;
+  }
+  const dueFromDate = normalizeDateOnly(dueFrom);
+  if (dueFromDate) {
+    filters.push(`due_date >= $${idx}::date`);
+    params.push(dueFromDate);
+    idx += 1;
+  }
+  const dueToDate = normalizeDateOnly(dueTo);
+  if (dueToDate) {
+    filters.push(`due_date <= $${idx}::date`);
+    params.push(dueToDate);
     idx += 1;
   }
 
@@ -4670,7 +5098,13 @@ async function listWorkOrders({
 
   const res = await pool.query(
     `
-    SELECT id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
+    SELECT id, company_id, work_order_number, work_date,
+           rental_order_id, rental_order_number,
+           customer_id, customer_name, category, contact,
+           site_name, site_address, site_access_code,
+           due_date, is_recurring, recurrence_frequency, recurrence_interval,
+           recurrence_parent_id, recurrence_last_generated,
+           unit_ids, unit_labels, unit_id, unit_label,
            work_summary, issues, order_status, service_status, return_inspection, parts, labor,
            source, source_order_id, source_order_number, source_line_item_id, source_meta,
            created_at, updated_at, completed_at, closed_at
@@ -4691,7 +5125,13 @@ async function getWorkOrder({ companyId, id }) {
   if (!Number.isFinite(wid) || wid <= 0) throw new Error("id is required.");
   const res = await pool.query(
     `
-    SELECT id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
+    SELECT id, company_id, work_order_number, work_date,
+           rental_order_id, rental_order_number,
+           customer_id, customer_name, category, contact,
+           site_name, site_address, site_access_code,
+           due_date, is_recurring, recurrence_frequency, recurrence_interval,
+           recurrence_parent_id, recurrence_last_generated,
+           unit_ids, unit_labels, unit_id, unit_label,
            work_summary, issues, order_status, service_status, return_inspection, parts, labor,
            source, source_order_id, source_order_number, source_line_item_id, source_meta,
            created_at, updated_at, completed_at, closed_at
@@ -4708,8 +5148,7 @@ async function createWorkOrder(payload = {}) {
   const cid = Number(payload.companyId);
   if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
 
-  const date = normalizeDateOnly(payload.date);
-  if (!date) throw new Error("date is required.");
+  const date = normalizeDateOnly(payload.date) || new Date().toISOString().slice(0, 10);
 
   let unitIds = normalizeWorkOrderUnitIds(payload.unitIds);
   if (!unitIds.length && payload.unitId) unitIds = normalizeWorkOrderUnitIds([payload.unitId]);
@@ -4734,6 +5173,23 @@ async function createWorkOrder(payload = {}) {
   const sourceLineItemId = payload.sourceLineItemId ? String(payload.sourceLineItemId).trim() : null;
   const sourceMeta = coerceJsonObject(payload.sourceMeta);
 
+  const rentalOrderId = toNullableInt(payload.rentalOrderId || payload.rental_order_id || payload.rentalOrderID);
+  const rentalOrderNumber = payload.rentalOrderNumber ? String(payload.rentalOrderNumber).trim() : null;
+  const customerId = toNullableInt(payload.customerId || payload.customer_id);
+  const customerName = payload.customerName ? String(payload.customerName).trim() : null;
+  const category = payload.category ? String(payload.category).trim() : null;
+  const contact = payload.contact ? String(payload.contact).trim() : null;
+  const siteName = payload.siteName ? String(payload.siteName).trim() : null;
+  const siteAddress = payload.siteAddress ? String(payload.siteAddress).trim() : null;
+  const siteAccessCode = payload.siteAccessCode ? String(payload.siteAccessCode).trim() : null;
+  const dueDate = normalizeDateOnly(payload.dueDate);
+  const isRecurring = payload.isRecurring === true;
+  const recurrenceFrequency = payload.recurrenceFrequency ? String(payload.recurrenceFrequency).trim().toLowerCase() : null;
+  const recurrenceIntervalRaw = toNullableInt(payload.recurrenceInterval);
+  const recurrenceInterval = isRecurring && recurrenceIntervalRaw && recurrenceIntervalRaw > 0 ? recurrenceIntervalRaw : null;
+  const recurrenceParentId = toNullableInt(payload.recurrenceParentId || payload.recurrence_parent_id);
+  const recurrenceLastGenerated = normalizeDateOnly(payload.recurrenceLastGenerated || payload.recurrence_last_generated);
+
   const nowIso = new Date().toISOString();
   let completedAt = normalizeTimestamptz(payload.completedAt);
   let closedAt = normalizeTimestamptz(payload.closedAt);
@@ -4753,13 +5209,25 @@ async function createWorkOrder(payload = {}) {
   const res = await pool.query(
     `
     INSERT INTO work_orders
-      (company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
+      (company_id, work_order_number, work_date,
+       rental_order_id, rental_order_number,
+       customer_id, customer_name, category, contact,
+       site_name, site_address, site_access_code,
+       due_date, is_recurring, recurrence_frequency, recurrence_interval,
+       recurrence_parent_id, recurrence_last_generated,
+       unit_ids, unit_labels, unit_id, unit_label,
        work_summary, issues, order_status, service_status, return_inspection, parts, labor,
        source, source_order_id, source_order_number, source_line_item_id, source_meta,
        completed_at, closed_at, updated_at)
     VALUES
-      ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW())
-    RETURNING id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
+      ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,NOW())
+    RETURNING id, company_id, work_order_number, work_date,
+              rental_order_id, rental_order_number,
+              customer_id, customer_name, category, contact,
+              site_name, site_address, site_access_code,
+              due_date, is_recurring, recurrence_frequency, recurrence_interval,
+              recurrence_parent_id, recurrence_last_generated,
+              unit_ids, unit_labels, unit_id, unit_label,
               work_summary, issues, order_status, service_status, return_inspection, parts, labor,
               source, source_order_id, source_order_number, source_line_item_id, source_meta,
               created_at, updated_at, completed_at, closed_at
@@ -4768,6 +5236,21 @@ async function createWorkOrder(payload = {}) {
       cid,
       workOrderNumber,
       date,
+      rentalOrderId,
+      rentalOrderNumber,
+      customerId,
+      customerName,
+      category,
+      contact,
+      siteName,
+      siteAddress,
+      siteAccessCode,
+      dueDate,
+      isRecurring,
+      recurrenceFrequency,
+      recurrenceInterval,
+      recurrenceParentId,
+      recurrenceLastGenerated,
       JSON.stringify(unitIds),
       JSON.stringify(unitLabels),
       unitId,
@@ -4827,6 +5310,25 @@ async function updateWorkOrder(payload = {}) {
   const sourceLineItemId = merged.sourceLineItemId ? String(merged.sourceLineItemId).trim() : null;
   const sourceMeta = coerceJsonObject(merged.sourceMeta);
 
+  const rentalOrderId = toNullableInt(merged.rentalOrderId || merged.rental_order_id || merged.rentalOrderID);
+  const rentalOrderNumber = merged.rentalOrderNumber ? String(merged.rentalOrderNumber).trim() : null;
+  const customerId = toNullableInt(merged.customerId || merged.customer_id);
+  const customerName = merged.customerName ? String(merged.customerName).trim() : null;
+  const category = merged.category ? String(merged.category).trim() : null;
+  const contact = merged.contact ? String(merged.contact).trim() : null;
+  const siteName = merged.siteName ? String(merged.siteName).trim() : null;
+  const siteAddress = merged.siteAddress ? String(merged.siteAddress).trim() : null;
+  const siteAccessCode = merged.siteAccessCode ? String(merged.siteAccessCode).trim() : null;
+  const dueDate = normalizeDateOnly(merged.dueDate);
+  const isRecurring = merged.isRecurring === true;
+  const recurrenceFrequency = merged.recurrenceFrequency ? String(merged.recurrenceFrequency).trim().toLowerCase() : null;
+  const recurrenceIntervalRaw = toNullableInt(merged.recurrenceInterval);
+  const recurrenceInterval = isRecurring && recurrenceIntervalRaw && recurrenceIntervalRaw > 0 ? recurrenceIntervalRaw : null;
+  const recurrenceParentId = toNullableInt(merged.recurrenceParentId || merged.recurrence_parent_id || existing.recurrenceParentId);
+  const recurrenceLastGenerated = normalizeDateOnly(
+    merged.recurrenceLastGenerated || merged.recurrence_last_generated || existing.recurrenceLastGenerated
+  );
+
   const nowIso = new Date().toISOString();
   let completedAt = normalizeTimestamptz(merged.completedAt);
   let closedAt = normalizeTimestamptz(merged.closedAt);
@@ -4844,27 +5346,48 @@ async function updateWorkOrder(payload = {}) {
     UPDATE work_orders
        SET work_order_number = $1,
            work_date = $2,
-           unit_ids = $3,
-           unit_labels = $4,
-           unit_id = $5,
-           unit_label = $6,
-           work_summary = $7,
-           issues = $8,
-           order_status = $9,
-           service_status = $10,
-           return_inspection = $11,
-           parts = $12,
-           labor = $13,
-           source = $14,
-           source_order_id = $15,
-           source_order_number = $16,
-           source_line_item_id = $17,
-           source_meta = $18,
-           completed_at = $19,
-           closed_at = $20,
+           rental_order_id = $3,
+           rental_order_number = $4,
+           customer_id = $5,
+           customer_name = $6,
+           category = $7,
+           contact = $8,
+           site_name = $9,
+           site_address = $10,
+           site_access_code = $11,
+           due_date = $12,
+           is_recurring = $13,
+           recurrence_frequency = $14,
+           recurrence_interval = $15,
+           recurrence_parent_id = $16,
+           recurrence_last_generated = $17,
+           unit_ids = $18,
+           unit_labels = $19,
+           unit_id = $20,
+           unit_label = $21,
+           work_summary = $22,
+           issues = $23,
+           order_status = $24,
+           service_status = $25,
+           return_inspection = $26,
+           parts = $27,
+           labor = $28,
+           source = $29,
+           source_order_id = $30,
+           source_order_number = $31,
+           source_line_item_id = $32,
+           source_meta = $33,
+           completed_at = $34,
+           closed_at = $35,
            updated_at = NOW()
-     WHERE id = $21 AND company_id = $22
-     RETURNING id, company_id, work_order_number, work_date, unit_ids, unit_labels, unit_id, unit_label,
+     WHERE id = $36 AND company_id = $37
+     RETURNING id, company_id, work_order_number, work_date,
+               rental_order_id, rental_order_number,
+               customer_id, customer_name, category, contact,
+               site_name, site_address, site_access_code,
+               due_date, is_recurring, recurrence_frequency, recurrence_interval,
+               recurrence_parent_id, recurrence_last_generated,
+               unit_ids, unit_labels, unit_id, unit_label,
                work_summary, issues, order_status, service_status, return_inspection, parts, labor,
                source, source_order_id, source_order_number, source_line_item_id, source_meta,
                created_at, updated_at, completed_at, closed_at
@@ -4872,6 +5395,21 @@ async function updateWorkOrder(payload = {}) {
     [
       workOrderNumber,
       date,
+      rentalOrderId,
+      rentalOrderNumber,
+      customerId,
+      customerName,
+      category,
+      contact,
+      siteName,
+      siteAddress,
+      siteAccessCode,
+      dueDate,
+      isRecurring,
+      recurrenceFrequency,
+      recurrenceInterval,
+      recurrenceParentId,
+      recurrenceLastGenerated,
       JSON.stringify(unitIds),
       JSON.stringify(unitLabels),
       unitId,
@@ -4905,6 +5443,182 @@ async function deleteWorkOrder({ companyId, id }) {
   await pool.query(`DELETE FROM work_orders WHERE company_id = $1 AND id = $2`, [cid, wid]);
 }
 
+async function runRecurringWorkOrderSweep({ maxCreatesPerTemplate = 25 } = {}) {
+  const maxCreates = Math.min(Math.max(Number(maxCreatesPerTemplate) || 25, 1), 250);
+  const client = await pool.connect();
+  try {
+    const todayRes = await client.query(`SELECT CURRENT_DATE AS d`);
+    const today = todayRes.rows?.[0]?.d instanceof Date
+      ? todayRes.rows[0].d.toISOString().slice(0, 10)
+      : String(todayRes.rows?.[0]?.d || "").slice(0, 10);
+    if (!today) return { ok: false, created: 0, error: "Unable to determine current date." };
+
+    const templatesRes = await client.query(
+      `
+      SELECT id
+        FROM work_orders
+       WHERE is_recurring = TRUE
+         AND due_date IS NOT NULL
+         AND due_date <= $1::date
+         AND COALESCE(recurrence_last_generated, '0001-01-01'::date) < due_date
+       ORDER BY due_date ASC, id ASC
+       LIMIT 250
+      `,
+      [today]
+    );
+    const templateIds = (templatesRes.rows || []).map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+    if (!templateIds.length) return { ok: true, created: 0 };
+
+    let createdTotal = 0;
+
+    for (const templateId of templateIds) {
+      await client.query("BEGIN");
+      try {
+        const lockRes = await client.query(
+          `
+          SELECT id, company_id,
+                 due_date,
+                 rental_order_id, rental_order_number,
+                 customer_id, customer_name, category, contact,
+                 site_name, site_address, site_access_code,
+                 recurrence_frequency, recurrence_interval, recurrence_last_generated,
+                 unit_ids, unit_labels, unit_id, unit_label,
+                 work_summary, issues, service_status, return_inspection,
+                 parts, labor,
+                 source, source_order_id, source_order_number, source_line_item_id, source_meta
+            FROM work_orders
+           WHERE id = $1
+           FOR UPDATE
+          `,
+          [templateId]
+        );
+        const tpl = lockRes.rows?.[0] || null;
+        if (!tpl) {
+          await client.query("ROLLBACK");
+          continue;
+        }
+
+        let dueDate = normalizeDateOnly(tpl.due_date);
+        const freq = normalizeRecurrenceFrequency(tpl.recurrence_frequency);
+        const interval = Number(tpl.recurrence_interval || 0);
+        const lastGen = normalizeDateOnly(tpl.recurrence_last_generated);
+        if (!dueDate || !freq || !Number.isFinite(interval) || interval <= 0) {
+          await client.query("COMMIT");
+          continue;
+        }
+
+        let createsForTemplate = 0;
+
+        while (dueDate && dueDate <= today && createsForTemplate < maxCreates) {
+          const effectiveLastGen = normalizeDateOnly(tpl.recurrence_last_generated) || lastGen;
+          if (effectiveLastGen && effectiveLastGen >= dueDate) break;
+
+          const unitIds = normalizeWorkOrderUnitIds(coerceJsonArray(tpl.unit_ids).map((id) => String(id ?? "")));
+          if (!unitIds.length) break;
+          const unitLabels = normalizeWorkOrderUnitLabels(coerceJsonArray(tpl.unit_labels).map((l) => String(l ?? "")));
+          const unitId = toNullableInt(unitIds[0] || tpl.unit_id);
+          const unitLabel = unitLabels[0] || (tpl.unit_label ? String(tpl.unit_label).trim() : null);
+
+          const workOrderNumber = await nextDocumentNumber(
+            client,
+            Number(tpl.company_id),
+            "WO",
+            new Date(`${dueDate}T00:00:00.000Z`),
+            { yearDigits: 4, seqDigits: 5 }
+          );
+
+          await client.query(
+            `
+            INSERT INTO work_orders
+              (company_id, work_order_number, work_date,
+               rental_order_id, rental_order_number,
+               customer_id, customer_name, category, contact,
+               site_name, site_address, site_access_code,
+               due_date,
+               is_recurring, recurrence_frequency, recurrence_interval,
+               recurrence_parent_id,
+               unit_ids, unit_labels, unit_id, unit_label,
+               work_summary, issues,
+               order_status, service_status, return_inspection,
+               parts, labor,
+               source, source_order_id, source_order_number, source_line_item_id, source_meta,
+               updated_at)
+            VALUES
+              ($1,$2,$3,
+               $4,$5,
+               $6,$7,$8,$9,
+               $10,$11,$12,
+               $13,
+               FALSE,NULL,NULL,
+               $14,
+               $15,$16,$17,$18,
+               $19,$20,
+               'open',$21,$22,
+               $23,$24,
+               $25,$26,$27,$28,$29,$30,
+               NOW())
+            `,
+            [
+              Number(tpl.company_id),
+              workOrderNumber,
+              dueDate,
+              tpl.rental_order_id ?? null,
+              tpl.rental_order_number ?? null,
+              tpl.customer_id ?? null,
+              tpl.customer_name ?? null,
+              tpl.category ?? null,
+              tpl.contact ?? null,
+              tpl.site_name ?? null,
+              tpl.site_address ?? null,
+              tpl.site_access_code ?? null,
+              dueDate,
+              Number(tpl.id),
+              JSON.stringify(unitIds),
+              JSON.stringify(unitLabels),
+              unitId,
+              unitLabel,
+              tpl.work_summary ?? null,
+              tpl.issues ?? null,
+              normalizeWorkOrderServiceStatus(tpl.service_status),
+              tpl.return_inspection === true,
+              JSON.stringify(normalizeWorkOrderLines(coerceJsonArray(tpl.parts))),
+              JSON.stringify(normalizeWorkOrderLines(coerceJsonArray(tpl.labor))),
+              tpl.source ?? "recurring",
+              tpl.source_order_id ?? null,
+              tpl.source_order_number ?? null,
+              tpl.source_line_item_id ?? null,
+              JSON.stringify(coerceJsonObject(tpl.source_meta) || {}),
+            ]
+          );
+
+          createdTotal += 1;
+          createsForTemplate += 1;
+
+          const nextDue = computeNextRecurringDueDate({ dueDate, frequency: freq, interval });
+          if (!nextDue || nextDue === dueDate) break;
+
+          await client.query(
+            `UPDATE work_orders SET due_date = $1, recurrence_last_generated = $2, updated_at = NOW() WHERE id = $3`,
+            [nextDue, dueDate, Number(tpl.id)]
+          );
+
+          tpl.recurrence_last_generated = dueDate;
+          dueDate = nextDue;
+        }
+
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        console.error("Recurring work order sweep failed for template", templateId, err?.message || err);
+      }
+    }
+
+    return { ok: true, created: createdTotal };
+  } finally {
+    client.release();
+  }
+}
+
 async function listCustomers(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
   const fromIso = from ? normalizeTimestamptz(from) : null;
   const toIso = to ? normalizeTimestamptz(to) : null;
@@ -4924,7 +5638,7 @@ async function listCustomers(companyId, { from = null, to = null, dateField = "c
             c.company_name,
             CASE
               WHEN c.parent_customer_id IS NOT NULL AND p.company_name IS NOT NULL
-              THEN c.company_name || ' (' || p.company_name || ')'
+              THEN p.company_name || ' - ' || c.company_name
               ELSE c.company_name
             END AS display_name,
             c.contact_name,
@@ -4966,7 +5680,7 @@ async function getCustomerById({ companyId, id }) {
             c.company_name,
             CASE
               WHEN c.parent_customer_id IS NOT NULL AND p.company_name IS NOT NULL
-              THEN c.company_name || ' (' || p.company_name || ')'
+              THEN p.company_name || ' - ' || c.company_name
               ELSE c.company_name
             END AS display_name,
             c.contact_name,
@@ -5733,10 +6447,141 @@ async function importInventoryFromText({ companyId, text }) {
     return String(row[idx] ?? "").trim();
   };
 
+  const normalizeHeader = (value) =>
+    String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .replace(/_+/g, "_");
+
+  const indexByKey = new Map();
+  header.forEach((name, idx) => {
+    const key = normalizeHeader(name);
+    if (key) indexByKey.set(key, idx);
+  });
+
+  const getAny = (row, aliases) => {
+    for (const alias of aliases) {
+      const idx = indexByKey.get(alias);
+      if (idx === undefined) continue;
+      return String(row[idx] ?? "").trim();
+    }
+    return "";
+  };
+
   const existingTypeIds = await pool.query(`SELECT id, name FROM equipment_types WHERE company_id = $1`, [companyId]);
   const typeIdByName = new Map(existingTypeIds.rows.map((t) => [normalizeCustomerMatchKey(t.name), t.id]));
 
   const stats = { typesCreated: 0, typesUpdated: 0, equipmentCreated: 0, equipmentSkipped: 0 };
+
+  const looksLikeFlatInventoryImport =
+    indexByKey.has("equipment_type") &&
+    (indexByKey.has("model_name") || indexByKey.has("model") || indexByKey.has("asset") || indexByKey.has("unit"));
+
+  const hasServiceTrackingColumns = [
+    "last_service_date",
+    "service_due_date",
+    "next_service_date",
+    "current_hours",
+    "hours_operated",
+    "operating_hours",
+    "hours",
+    "service_notes",
+    "service_note",
+  ].some((key) => indexByKey.has(key));
+
+  const getOrCreateLocationIdByName = async ({ name, isBaseLocation }) => {
+    const trimmed = String(name ?? "").trim();
+    if (!trimmed) return null;
+    const res = await pool.query(
+      `
+      INSERT INTO locations (company_id, name, is_base_location)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (company_id, name) DO UPDATE
+        SET is_base_location = locations.is_base_location OR EXCLUDED.is_base_location
+      RETURNING id
+      `,
+      [companyId, trimmed, isBaseLocation === true]
+    );
+    return res.rows?.[0]?.id ?? null;
+  };
+
+  const trackingFieldCacheByTypeId = new Map();
+  const ensureServiceTrackingFields = async (equipmentTypeId) => {
+    const tid = Number(equipmentTypeId);
+    if (!Number.isFinite(tid) || tid <= 0) return { lastServiceFieldId: null, hoursFieldId: null };
+    if (trackingFieldCacheByTypeId.has(tid)) return trackingFieldCacheByTypeId.get(tid);
+
+    const desired = {
+      last_service_date: {
+        label: "Last Service Date",
+        fieldKey: "last_service_date",
+        dataType: "date",
+        unit: "hours",
+        required: false,
+        sortOrder: 0,
+        options: [],
+        showOnAssetsTable: true,
+        tableColumnLabel: "Last Service Date",
+        tableColumnMode: "value_and_next_due",
+        rule: { ruleType: "manual_due_date_separate", intervalDays: null, warnDays: null, intervalHours: null, warnHours: null },
+      },
+      hours_operated: {
+        label: "Hours Operated",
+        fieldKey: "hours_operated",
+        dataType: "number",
+        unit: "hours",
+        required: false,
+        sortOrder: 0,
+        options: [],
+        showOnAssetsTable: true,
+        tableColumnLabel: "Hours Operated",
+        tableColumnMode: "value",
+        rule: { ruleType: "none", intervalDays: null, warnDays: null, intervalHours: 100, warnHours: 10 },
+      },
+    };
+
+    const load = async () => {
+      const res = await pool.query(
+        `
+        SELECT id, field_key, label, data_type, unit, required, options, sort_order,
+               show_on_assets_table, table_column_label, table_column_mode, rule
+          FROM equipment_type_tracking_fields
+         WHERE company_id = $1
+           AND equipment_type_id = $2
+           AND archived_at IS NULL
+        `,
+        [companyId, tid]
+      );
+      const byKey = new Map((res.rows || []).map((r) => [String(r.field_key || ""), r]));
+      return byKey;
+    };
+
+    const byKey = await load();
+
+    for (const [key, def] of Object.entries(desired)) {
+      const existing = byKey.get(key) || null;
+      if (!existing) {
+        await createEquipmentTypeTrackingField({ companyId, equipmentTypeId: tid, ...def });
+        continue;
+      }
+      await updateEquipmentTypeTrackingField({
+        companyId,
+        equipmentTypeId: tid,
+        id: Number(existing.id),
+        ...def,
+      });
+    }
+
+    const reloaded = await load();
+    const ids = {
+      lastServiceFieldId: reloaded.get("last_service_date") ? Number(reloaded.get("last_service_date").id) : null,
+      hoursFieldId: reloaded.get("hours_operated") ? Number(reloaded.get("hours_operated").id) : null,
+    };
+    trackingFieldCacheByTypeId.set(tid, ids);
+    return ids;
+  };
 
   let currentTypeId = null;
   let currentTypeName = "";
@@ -5744,6 +6589,178 @@ async function importInventoryFromText({ companyId, text }) {
 
   await pool.query("BEGIN");
   try {
+    if (looksLikeFlatInventoryImport) {
+      const anyDirections = rows.slice(1).some((row) => !!getAny(row, ["directions", "direction"]));
+      if (anyDirections) {
+        await pool.query(
+          `UPDATE company_settings SET asset_directions_enabled = TRUE, updated_at = NOW() WHERE company_id = $1`,
+          [companyId]
+        ).catch(() => null);
+      }
+
+      const ensuredTypeIds = new Set();
+      for (let i = 1; i < rows.length; i += 1) {
+        const row = rows[i];
+        const typeName = getAny(row, ["equipment_type", "type", "equipment", "item", "category"]) || "";
+        const modelName =
+          getAny(row, ["model_name", "model", "unit", "asset", "equipment_id", "equipment"]) || "";
+
+        if (!typeName || !modelName) {
+          stats.equipmentSkipped += 1;
+          continue;
+        }
+
+        const baseLocationName = getAny(row, ["base_location", "home_location", "location"]) || "";
+        const currentLocationName = getAny(row, ["current_location", "current_site", "site", "job_site"]) || "";
+        const directions = getAny(row, ["directions", "direction"]) || null;
+
+        const lastServiceRaw = getAny(row, ["last_service_date", "last_service"]) || "";
+        const nextServiceRaw = getAny(row, ["service_due_date", "next_service_date", "next_service", "service_due"]) || "";
+        const hoursRaw = getAny(row, ["current_hours", "hours", "hours_operated", "operating_hours"]) || "";
+
+        const serviceNotes = getAny(row, ["service_notes", "service_note"]) || "";
+        const notesRaw = getAny(row, ["notes", "note"]) || "";
+
+        const notesParts = [];
+        if (serviceNotes) notesParts.push(`Service: ${serviceNotes}`);
+        if (notesRaw) notesParts.push(notesRaw);
+        const notes = notesParts.length ? notesParts.join(" | ") : null;
+
+        const typeKey = normalizeCustomerMatchKey(typeName);
+        let typeId = typeKey ? typeIdByName.get(typeKey) : null;
+        if (!typeId) {
+          const existed = false;
+          const createdTypeId = await upsertEquipmentTypeFromImport({
+            companyId,
+            name: typeName,
+            categoryId: null,
+            imageUrl: null,
+            description: null,
+            terms: null,
+            dailyRate: null,
+            weeklyRate: null,
+            monthlyRate: null,
+          });
+          typeId = createdTypeId;
+          if (typeId && typeKey) typeIdByName.set(typeKey, typeId);
+          if (!existed) stats.typesCreated += 1;
+        }
+
+        if (!typeId) {
+          stats.equipmentSkipped += 1;
+          continue;
+        }
+
+        if (hasServiceTrackingColumns && !ensuredTypeIds.has(typeId)) {
+          await ensureServiceTrackingFields(typeId).catch(() => null);
+          ensuredTypeIds.add(typeId);
+        }
+
+        const baseLocationId = await getOrCreateLocationIdByName({ name: baseLocationName, isBaseLocation: true });
+        const currentLocationIdRaw = currentLocationName
+          ? await getOrCreateLocationIdByName({ name: currentLocationName, isBaseLocation: false })
+          : null;
+        const currentLocationId = currentLocationIdRaw || baseLocationId;
+
+        const serialNumber = modelName;
+        const existingEq = await pool.query(
+          `SELECT id FROM equipment WHERE company_id = $1 AND serial_number = $2 LIMIT 1`,
+          [companyId, serialNumber]
+        );
+
+        let equipmentId = existingEq.rows?.[0]?.id ? Number(existingEq.rows[0].id) : null;
+        if (equipmentId) {
+          await pool.query(
+            `UPDATE equipment
+                SET type_id = $1,
+                    type = COALESCE((SELECT name FROM equipment_types WHERE id = $1), type),
+                    model_name = $2,
+                    location_id = COALESCE($3, location_id),
+                    current_location_id = COALESCE($4, current_location_id),
+                    directions = COALESCE($5, directions),
+                    notes = COALESCE($6, notes)
+              WHERE company_id = $7 AND id = $8`,
+            [typeId, modelName, baseLocationId, currentLocationId, directions, notes, companyId, equipmentId]
+          );
+          stats.equipmentSkipped += 1;
+        } else {
+          const ins = await pool.query(
+            `INSERT INTO equipment
+              (company_id, type_id, type, model_name, serial_number, condition, manufacturer, image_url, location_id, current_location_id, purchase_price, notes, directions)
+             VALUES
+              ($1, $2, COALESCE((SELECT name FROM equipment_types WHERE id = $2), $3), $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+             RETURNING id`,
+            [
+              companyId,
+              typeId,
+              typeName || "Imported",
+              modelName,
+              serialNumber,
+              "Normal Wear & Tear",
+              null,
+              null,
+              baseLocationId,
+              currentLocationId,
+              null,
+              notes,
+              directions,
+            ]
+          );
+          equipmentId = ins.rows?.[0]?.id ? Number(ins.rows[0].id) : null;
+          if (equipmentId) stats.equipmentCreated += 1;
+          else stats.equipmentSkipped += 1;
+        }
+
+        if (!equipmentId) continue;
+
+        const lastServiceDate = normalizeTrackingDateOnly(lastServiceRaw);
+        const nextServiceDate = normalizeTrackingDateOnly(nextServiceRaw);
+        const hoursNum = (() => {
+          const n = Number(String(hoursRaw || "").replace(/,/g, "").trim());
+          return Number.isFinite(n) ? n : null;
+        })();
+
+        const shouldTrack = !!(lastServiceDate || nextServiceDate || hoursNum !== null);
+        if (!shouldTrack) continue;
+
+        const fields = await ensureServiceTrackingFields(typeId);
+
+        if (fields.lastServiceFieldId && (lastServiceDate || nextServiceDate)) {
+          await pool.query(
+            `
+            INSERT INTO equipment_tracking_field_values
+              (company_id, equipment_id, field_id, value_date, due_date, updated_at)
+            VALUES
+              ($1,$2,$3,$4,$5,NOW())
+            ON CONFLICT (company_id, equipment_id, field_id) DO UPDATE
+              SET value_date = EXCLUDED.value_date,
+                  due_date = EXCLUDED.due_date,
+                  updated_at = NOW()
+            `,
+            [companyId, equipmentId, fields.lastServiceFieldId, lastServiceDate, nextServiceDate]
+          );
+        }
+
+        if (fields.hoursFieldId && hoursNum !== null) {
+          await pool.query(
+            `
+            INSERT INTO equipment_tracking_field_values
+              (company_id, equipment_id, field_id, value_number, updated_at)
+            VALUES
+              ($1,$2,$3,$4,NOW())
+            ON CONFLICT (company_id, equipment_id, field_id) DO UPDATE
+              SET value_number = EXCLUDED.value_number,
+                  updated_at = NOW()
+            `,
+            [companyId, equipmentId, fields.hoursFieldId, hoursNum]
+          );
+        }
+      }
+
+      await pool.query("COMMIT");
+      return stats;
+    }
+
     for (let i = 1; i < rows.length; i += 1) {
       const row = rows[i];
       const itemId = get(row, "Item ID Number");
@@ -6275,6 +7292,410 @@ async function importCustomerPricingFromInventoryText({ companyId, customerId, t
   return stats;
 }
 
+async function importWorkOrdersFromText({ companyId, text } = {}) {
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!text) return { created: 0, updated: 0, skipped: 0, equipmentCreated: 0, errors: [] };
+
+  const firstLine = text.split(/\r?\n/, 1)[0] || "";
+  const delimiter = firstLine.includes("\t") ? "\t" : ",";
+  const rows = parseDelimitedRows(text, delimiter).filter((r) => r.some((c) => String(c ?? "").trim() !== ""));
+  if (rows.length < 2) return { created: 0, updated: 0, skipped: 0, equipmentCreated: 0, errors: [] };
+
+  const header = rows[0].map((h) => String(h ?? "").trim());
+  const normalizeHeader = (value) =>
+    String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .replace(/_+/g, "_");
+
+  const indexByKey = new Map();
+  header.forEach((name, idx) => {
+    const key = normalizeHeader(name);
+    if (key) indexByKey.set(key, idx);
+  });
+
+  const getAny = (row, aliases) => {
+    for (const alias of aliases) {
+      const idx = indexByKey.get(alias);
+      if (idx === undefined) continue;
+      return String(row[idx] ?? "").trim();
+    }
+    return "";
+  };
+
+  const normalizeWorkOrderNumberKey = (value) => String(value ?? "").trim().toUpperCase();
+  const normalizeAssetLookupKey = (value) =>
+    String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
+
+  const parseDateOnlyFlexible = (value) => {
+    if (!value) return null;
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+    const isoMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (isoMatch) return isoMatch[1];
+    const slashMatch = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+    if (!slashMatch) return null;
+    const month = Number(slashMatch[1]);
+    const day = Number(slashMatch[2]);
+    let year = Number(slashMatch[3]);
+    if (!Number.isFinite(month) || !Number.isFinite(day) || !Number.isFinite(year)) return null;
+    if (year < 100) year += year >= 70 ? 1900 : 2000;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    return `${year}-${pad2(month)}-${pad2(day)}`;
+  };
+
+  const parseUnits = async ({ inventorySummary, equipmentByKey, stats }) => {
+    const raw = String(inventorySummary || "").trim();
+    if (!raw) return { unitIds: [], unitLabels: [] };
+    const tokens = raw
+      .split(/[,\n;]+/g)
+      .map((t) => String(t || "").trim())
+      .filter(Boolean)
+      .map((t) => t.replace(/^"+|"+$/g, ""))
+      .filter(Boolean);
+
+    const seenIds = new Set();
+    const seenLabels = new Set();
+    const unitIds = [];
+    const unitLabels = [];
+
+    for (const token of tokens) {
+      const key = normalizeAssetLookupKey(token);
+      if (!key) continue;
+      let eq = equipmentByKey.get(key) || null;
+      if (!eq) {
+        // Create placeholder equipment so the work order can reference a unit.
+        const created = await createEquipment({
+          companyId: cid,
+          typeName: "Imported",
+          modelName: token,
+          serialNumber: token,
+          condition: "unknown",
+          manufacturer: null,
+          imageUrl: null,
+          imageUrls: [],
+          locationId: null,
+          currentLocationId: null,
+          purchasePrice: null,
+          notes: "Auto-created during work order import.",
+          directions: null,
+        });
+        const createdId = Number(created?.id);
+        if (!Number.isFinite(createdId) || createdId <= 0) continue;
+        stats.equipmentCreated += 1;
+        eq = { id: createdId, label: token };
+        equipmentByKey.set(key, eq);
+        equipmentByKey.set(normalizeAssetLookupKey(String(createdId)), eq);
+      }
+
+      const idStr = String(eq.id);
+      if (!seenIds.has(idStr)) {
+        seenIds.add(idStr);
+        unitIds.push(idStr);
+      }
+      const label = String(eq.label || token || "").trim();
+      if (label && !seenLabels.has(label)) {
+        seenLabels.add(label);
+        unitLabels.push(label);
+      }
+    }
+
+    return { unitIds, unitLabels };
+  };
+
+  const parseRecurrenceDetail = (detail) => {
+    const raw = String(detail || "").trim().toLowerCase();
+    if (!raw) return { frequency: "weeks", interval: 1 };
+
+    const everyMatch = raw.match(/every\s+(\d+)\s*(day|week|month|year)s?/i);
+    if (everyMatch) {
+      const interval = Math.max(1, Number(everyMatch[1] || 1));
+      const unit = String(everyMatch[2] || "").toLowerCase();
+      if (unit.startsWith("day")) return { frequency: "days", interval };
+      if (unit.startsWith("week")) return { frequency: "weeks", interval };
+      if (unit.startsWith("month")) return { frequency: "months", interval };
+      if (unit.startsWith("year")) return { frequency: "months", interval: interval * 12 };
+    }
+
+    if (raw.includes("daily")) return { frequency: "days", interval: 1 };
+    if (raw.includes("weekly")) return { frequency: "weeks", interval: 1 };
+    if (raw.includes("monthly")) return { frequency: "months", interval: 1 };
+    if (raw.includes("quarter")) return { frequency: "months", interval: 3 };
+    if (raw.includes("year")) return { frequency: "months", interval: 12 };
+
+    const shortMatch = raw.match(/(\d+)\s*(day|week|month)s?/i);
+    if (shortMatch) {
+      const interval = Math.max(1, Number(shortMatch[1] || 1));
+      const unit = String(shortMatch[2] || "").toLowerCase();
+      if (unit.startsWith("day")) return { frequency: "days", interval };
+      if (unit.startsWith("week")) return { frequency: "weeks", interval };
+      if (unit.startsWith("month")) return { frequency: "months", interval };
+    }
+
+    return { frequency: "weeks", interval: 1 };
+  };
+
+  const [equipmentRes, customersRes, existingWorkOrdersRes, rentalOrdersRes] = await Promise.all([
+    pool.query(`SELECT id, model_name, serial_number FROM equipment WHERE company_id = $1`, [cid]),
+    pool.query(`SELECT id, company_name FROM customers WHERE company_id = $1`, [cid]),
+    pool.query(`SELECT id, work_order_number FROM work_orders WHERE company_id = $1`, [cid]),
+    pool.query(`SELECT id, ro_number FROM rental_orders WHERE company_id = $1 AND ro_number IS NOT NULL`, [cid]),
+  ]);
+
+  const equipmentByKey = new Map();
+  (equipmentRes.rows || []).forEach((row) => {
+    const id = Number(row.id);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const modelName = String(row.model_name || "").trim();
+    const serialNumber = String(row.serial_number || "").trim();
+    const label = modelName || serialNumber || String(id);
+    const eq = { id, label };
+    [String(id), modelName, serialNumber].forEach((value) => {
+      const key = normalizeAssetLookupKey(value);
+      if (key && !equipmentByKey.has(key)) equipmentByKey.set(key, eq);
+    });
+  });
+
+  const customerIdByKey = new Map();
+  (customersRes.rows || []).forEach((row) => {
+    const id = Number(row.id);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const key = normalizeCustomerMatchKey(row.company_name);
+    if (key && !customerIdByKey.has(key)) customerIdByKey.set(key, id);
+  });
+
+  const existingWorkOrderIdByNumber = new Map();
+  (existingWorkOrdersRes.rows || []).forEach((row) => {
+    const id = Number(row.id);
+    const numberKey = normalizeWorkOrderNumberKey(row.work_order_number);
+    if (!Number.isFinite(id) || id <= 0 || !numberKey) return;
+    if (!existingWorkOrderIdByNumber.has(numberKey)) existingWorkOrderIdByNumber.set(numberKey, id);
+  });
+
+  const rentalOrderIdByNumber = new Map();
+  (rentalOrdersRes.rows || []).forEach((row) => {
+    const id = Number(row.id);
+    const key = String(row.ro_number || "").trim().toUpperCase();
+    if (!Number.isFinite(id) || id <= 0 || !key) return;
+    if (!rentalOrderIdByNumber.has(key)) rentalOrderIdByNumber.set(key, id);
+  });
+
+  const stats = { created: 0, updated: 0, skipped: 0, equipmentCreated: 0, errors: [] };
+
+  const numberAliases = ["work_order_number", "work_order", "work_order_no", "work_order_num", "wo", "number"];
+  const categoryAliases = ["category", "type"];
+  const createdAliases = ["created_date", "created", "create_date", "work_date", "date"];
+  const dueAliases = ["due_date", "due", "due_on"];
+  const recurringAliases = ["recurring", "is_recurring", "repeat"];
+  const recurrenceDetailAliases = ["recurrence_detail", "recurrence_details", "recurrence", "repeat_detail", "frequency"];
+  const customerAliases = ["customer", "customer_name", "company", "company_name", "business"];
+  const siteAliases = ["site", "site_address", "address", "job_site"];
+  const siteNameAliases = ["site_name", "site_name_override", "site_label"];
+  const contactAliases = ["contact", "contact_name", "contact_person"];
+  const taskAliases = ["task_at_hand", "task", "summary", "work_summary", "description"];
+  const inventoryAliases = ["inventory_summary", "inventory", "units", "unit_ids", "unit_labels", "assets", "equipment"];
+  const notesAliases = ["notes", "note", "issues", "comments"];
+  const roAliases = ["ro", "ro_number", "rental_order", "rental_order_number", "order_number"];
+  const orderStatusAliases = ["order_status", "status"];
+  const serviceStatusAliases = ["service_status", "service"];
+  const returnInspectionAliases = ["return_inspection", "returninspection"];
+
+  for (let i = 1; i < rows.length; i += 1) {
+    const row = rows[i];
+    const rowNumber = i + 1;
+    try {
+      const rawNumber = getAny(row, numberAliases);
+      let workOrderNumber = rawNumber ? String(rawNumber).trim() : "";
+
+      const category = getAny(row, categoryAliases) || null;
+      const createdDate = parseDateOnlyFlexible(getAny(row, createdAliases));
+      const dueDate = parseDateOnlyFlexible(getAny(row, dueAliases));
+      const workDate = createdDate || dueDate || new Date().toISOString().slice(0, 10);
+
+      const roNumber = getAny(row, roAliases);
+      const roKey = String(roNumber || "").trim().toUpperCase();
+      const rentalOrderId = roKey ? rentalOrderIdByNumber.get(roKey) || null : null;
+      const rentalOrderNumber = roKey || null;
+
+      const customerNameRaw = getAny(row, customerAliases);
+      const customerName = customerNameRaw ? String(customerNameRaw).trim() : null;
+      const customerKey = normalizeCustomerMatchKey(customerNameRaw);
+      const customerId = customerKey ? customerIdByKey.get(customerKey) || null : null;
+
+      const contact = getAny(row, contactAliases) || null;
+      const siteRaw = getAny(row, siteAliases);
+      const siteNameRaw = getAny(row, siteNameAliases);
+      const siteName = String(siteNameRaw || "").trim() || null;
+      const siteAddressCandidate = String(siteRaw || "").trim() || null;
+      const siteAddress =
+        siteAddressCandidate && (!siteName || normalizeCustomerMatchKey(siteAddressCandidate) !== normalizeCustomerMatchKey(siteName))
+          ? siteAddressCandidate
+          : null;
+      const effectiveSiteName = siteName || (siteAddressCandidate ? siteAddressCandidate : null);
+
+      const workSummary = getAny(row, taskAliases) || null;
+      const issues = getAny(row, notesAliases) || null;
+
+      const inventorySummary = getAny(row, inventoryAliases);
+      const { unitIds, unitLabels } = await parseUnits({ inventorySummary, equipmentByKey, stats });
+      if (!unitIds.length) {
+        stats.skipped += 1;
+        stats.errors.push({ row: rowNumber, error: "No units found (inventory_summary/units is required)." });
+        continue;
+      }
+
+      const orderStatus = normalizeWorkOrderStatus(getAny(row, orderStatusAliases));
+      const serviceStatus = normalizeWorkOrderServiceStatus(getAny(row, serviceStatusAliases));
+      const returnInspection = parseYesNo(getAny(row, returnInspectionAliases)) === true;
+
+      const recurring = parseYesNo(getAny(row, recurringAliases)) === true;
+      const recurrenceDetail = getAny(row, recurrenceDetailAliases);
+      const { frequency, interval } = recurring ? parseRecurrenceDetail(recurrenceDetail) : { frequency: null, interval: null };
+      const recurrenceFrequency = recurring ? normalizeRecurrenceFrequency(frequency) : null;
+      const recurrenceInterval = recurring && Number.isFinite(Number(interval)) ? Math.max(1, Math.floor(Number(interval))) : null;
+
+      if (!workOrderNumber) {
+        const effectiveDate = new Date(`${workDate}T00:00:00.000Z`);
+        workOrderNumber = await nextDocumentNumber(pool, cid, "WO", effectiveDate, { yearDigits: 4, seqDigits: 5 });
+      }
+
+      const numberKey = normalizeWorkOrderNumberKey(workOrderNumber);
+      if (!numberKey) {
+        stats.skipped += 1;
+        stats.errors.push({ row: rowNumber, error: "Missing work order number." });
+        continue;
+      }
+
+      const unitId = Number(unitIds[0]);
+      const unitLabel = unitLabels[0] || null;
+      const createdAtIso = createdDate ? `${createdDate}T00:00:00.000Z` : `${workDate}T00:00:00.000Z`;
+
+      const existingId = existingWorkOrderIdByNumber.get(numberKey) || null;
+      if (existingId) {
+        await pool.query(
+          `
+          UPDATE work_orders
+             SET work_date = $1,
+                 rental_order_id = $2,
+                 rental_order_number = $3,
+                 customer_id = $4,
+                 customer_name = $5,
+                 category = $6,
+                 contact = $7,
+                 site_name = $8,
+                 site_address = $9,
+                 due_date = $10,
+                 is_recurring = $11,
+                 recurrence_frequency = $12,
+                 recurrence_interval = $13,
+                 unit_ids = $14,
+                 unit_labels = $15,
+                 unit_id = $16,
+                 unit_label = $17,
+                 work_summary = $18,
+                 issues = $19,
+                 order_status = $20,
+                 service_status = $21,
+                 return_inspection = $22,
+                 updated_at = NOW()
+           WHERE company_id = $23 AND id = $24
+          `,
+          [
+            workDate,
+            rentalOrderId,
+            rentalOrderNumber,
+            customerId,
+            customerName,
+            category,
+            contact,
+            effectiveSiteName,
+            siteAddress,
+            dueDate,
+            recurring,
+            recurrenceFrequency,
+            recurrenceInterval,
+            JSON.stringify(unitIds),
+            JSON.stringify(unitLabels),
+            Number.isFinite(unitId) ? unitId : null,
+            unitLabel,
+            workSummary,
+            issues,
+            orderStatus,
+            serviceStatus,
+            returnInspection,
+            cid,
+            Number(existingId),
+          ]
+        );
+        stats.updated += 1;
+        continue;
+      }
+
+      const insertRes = await pool.query(
+        `
+        INSERT INTO work_orders
+          (company_id, work_order_number, work_date,
+           rental_order_id, rental_order_number,
+           customer_id, customer_name, category, contact,
+           site_name, site_address,
+           due_date, is_recurring, recurrence_frequency, recurrence_interval,
+           unit_ids, unit_labels, unit_id, unit_label,
+           work_summary, issues, order_status, service_status, return_inspection,
+           parts, labor, source_meta,
+           created_at, updated_at)
+        VALUES
+          ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,'[]'::jsonb,'[]'::jsonb,'{}'::jsonb,$26,$27)
+        RETURNING id
+        `,
+        [
+          cid,
+          workOrderNumber,
+          workDate,
+          rentalOrderId,
+          rentalOrderNumber,
+          customerId,
+          customerName,
+          category,
+          contact,
+          effectiveSiteName,
+          siteAddress,
+          dueDate,
+          recurring,
+          recurrenceFrequency,
+          recurrenceInterval,
+          JSON.stringify(unitIds),
+          JSON.stringify(unitLabels),
+          Number.isFinite(unitId) ? unitId : null,
+          unitLabel,
+          workSummary,
+          issues,
+          orderStatus,
+          serviceStatus,
+          returnInspection,
+          createdAtIso,
+          createdAtIso,
+        ]
+      );
+      const insertedId = Number(insertRes.rows?.[0]?.id);
+      if (Number.isFinite(insertedId) && insertedId > 0) {
+        existingWorkOrderIdByNumber.set(numberKey, insertedId);
+      }
+      stats.created += 1;
+    } catch (err) {
+      stats.skipped += 1;
+      stats.errors.push({ row: rowNumber, error: err?.message ? String(err.message) : "Import failed." });
+    }
+  }
+
+  return stats;
+}
+
 async function importCustomersFromText({ companyId, text }) {
   if (!companyId) throw new Error("companyId is required.");
   if (!text) return { created: 0, updated: 0, skipped: 0, errors: [], updatedCustomers: [] };
@@ -6296,6 +7717,31 @@ async function importCustomersFromText({ companyId, text }) {
     return String(row[idx] ?? "").trim();
   };
 
+  const normalizeHeader = (value) =>
+    String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .replace(/_+/g, "_");
+
+  const indexByKey = new Map();
+  header.forEach((name, idx) => {
+    const key = normalizeHeader(name);
+    if (key) indexByKey.set(key, idx);
+  });
+
+  const getAny = (row, aliases) => {
+    for (const alias of aliases) {
+      const idx = indexByKey.get(alias);
+      if (idx === undefined) continue;
+      return String(row[idx] ?? "").trim();
+    }
+    return "";
+  };
+
+  const contactKey = (entry) => [entry?.name, entry?.email, entry?.phone].map((v) => normalizeCustomerMatchKey(v)).join("|");
+
   const existing = await pool.query(
     `SELECT id, email, company_name FROM customers WHERE company_id = $1`,
     [companyId]
@@ -6313,58 +7759,208 @@ async function importCustomersFromText({ companyId, text }) {
 
   await pool.query("BEGIN");
   try {
+    const bucketsByCompanyKey = new Map();
+
     for (let i = 1; i < rows.length; i += 1) {
       const row = rows[i];
 
       const companyName =
+        getAny(row, ["company_name", "company", "customer", "customer_name", "business"]) ||
         get(row, "Company Name") ||
         get(row, "Company name") ||
         get(row, "Company") ||
         get(row, "Last Name") ||
         "";
-      const contactName = get(row, "Last Name") || "";
-      const email = get(row, "Email") || "";
-      const primaryPhone = get(row, "Primary Phone") || "";
+
+      const rawContactName =
+        getAny(row, ["contact_name", "contact_na", "contact", "contact_person"]) ||
+        get(row, "Last Name") ||
+        "";
+      const rawContactTitle = getAny(row, ["contact_title", "contact_tit", "title", "role"]) || "";
+      const contactName =
+        rawContactTitle && rawContactName ? `${rawContactName} (${rawContactTitle})` : rawContactName;
+
+      const email =
+        getAny(row, ["email", "contact_email", "contact_er"]) ||
+        get(row, "Email") ||
+        "";
+      const primaryPhone =
+        getAny(row, ["primary_phone", "phone", "contact_phone", "contact_ph"]) ||
+        get(row, "Primary Phone") ||
+        "";
       const phoneDigits = primaryPhone.replace(/[^\d]/g, "");
       const phone = phoneDigits || primaryPhone;
-      const streetAddress = [get(row, "Street Address"), get(row, "Suite")].filter(Boolean).join(", ") || "";
-      const city = get(row, "City") || "";
-      const region = get(row, "State/Province") || "";
-      const postalCode = get(row, "Postal Code") || "";
-      const country = get(row, "Country") || "";
-      const canChargeDeposit = parseYesNo(get(row, "Can Charge Deposit"));
+
+      const streetAddress =
+        getAny(row, ["street_address", "street_add", "address", "street"]) ||
+        [get(row, "Street Address"), get(row, "Suite")].filter(Boolean).join(", ") ||
+        "";
+      const city = getAny(row, ["city", "town"]) || get(row, "City") || "";
+      const region =
+        getAny(row, ["state_province", "province", "state", "region"]) ||
+        get(row, "State/Province") ||
+        "";
+      const postalCode =
+        getAny(row, ["postal_code", "postal_cod", "postcode", "zip", "zip_code"]) ||
+        get(row, "Postal Code") ||
+        "";
+      const country = getAny(row, ["country"]) || get(row, "Country") || "";
+      const canChargeDeposit = parseYesNo(getAny(row, ["can_charge_deposit"]) || get(row, "Can Charge Deposit"));
 
       if (!companyName && !email && !phone) {
         stats.skipped += 1;
         continue;
       }
 
-      const emailKey = normalizeCustomerMatchKey(email);
       const companyKey = normalizeCustomerMatchKey(companyName);
+      if (!companyKey) {
+        stats.skipped += 1;
+        continue;
+      }
+
+      const bucket =
+        bucketsByCompanyKey.get(companyKey) || {
+          companyName: companyName || "",
+          streetAddress: streetAddress || "",
+          city: city || "",
+          region: region || "",
+          country: country || "",
+          postalCode: postalCode || "",
+          canChargeDeposit: !!canChargeDeposit,
+          contacts: [],
+          contactsByKey: new Set(),
+          primaryEmail: "",
+          primaryPhone: "",
+          primaryContactName: "",
+          rows: [],
+        };
+
+      if (!bucket.companyName && companyName) bucket.companyName = companyName;
+      if (!bucket.streetAddress && streetAddress) bucket.streetAddress = streetAddress;
+      if (!bucket.city && city) bucket.city = city;
+      if (!bucket.region && region) bucket.region = region;
+      if (!bucket.country && country) bucket.country = country;
+      if (!bucket.postalCode && postalCode) bucket.postalCode = postalCode;
+      bucket.canChargeDeposit = bucket.canChargeDeposit || !!canChargeDeposit;
+
+      if (contactName || email || phone) {
+        const contact = { name: contactName || "", email: email || "", phone: phone || "" };
+        const key = contactKey(contact);
+        if (key && !bucket.contactsByKey.has(key)) {
+          bucket.contactsByKey.add(key);
+          bucket.contacts.push(contact);
+        }
+        if (!bucket.primaryContactName && contactName) bucket.primaryContactName = contactName;
+        if (!bucket.primaryEmail && email) bucket.primaryEmail = email;
+        if (!bucket.primaryPhone && phone) bucket.primaryPhone = phone;
+      }
+
+      bucket.rows.push(i + 1);
+      bucketsByCompanyKey.set(companyKey, bucket);
+    }
+
+    for (const [companyKey, bucket] of bucketsByCompanyKey.entries()) {
+      const companyName = bucket.companyName || "";
+      const email = bucket.primaryEmail || "";
+      const phone = bucket.primaryPhone || "";
+      const streetAddress = bucket.streetAddress || "";
+      const city = bucket.city || "";
+      const region = bucket.region || "";
+      const postalCode = bucket.postalCode || "";
+      const country = bucket.country || "";
+      const contacts = bucket.contacts || [];
+      const contactName = bucket.primaryContactName || "";
+      const canChargeDeposit = bucket.canChargeDeposit === true;
+
+      const emailKey = normalizeCustomerMatchKey(email);
       const existingId = (emailKey && byEmail.get(emailKey)) || (companyKey && byCompany.get(companyKey)) || null;
 
       if (existingId) {
-        await pool.query(
-          `UPDATE customers SET can_charge_deposit = $1 WHERE id = $2 AND company_id = $3`,
-          [!!canChargeDeposit, existingId, companyId]
+        const existingRes = await pool.query(
+          `SELECT contact_name, street_address, city, region, country, postal_code, email, phone, contacts
+             FROM customers
+            WHERE id = $1 AND company_id = $2
+            LIMIT 1`,
+          [existingId, companyId]
         );
+        const existingRow = existingRes.rows?.[0] || {};
+        let existingContacts = [];
+        try {
+          existingContacts = Array.isArray(existingRow.contacts) ? existingRow.contacts : JSON.parse(existingRow.contacts || "[]");
+        } catch {
+          existingContacts = [];
+        }
+
+        const merged = [];
+        const seen = new Set();
+        existingContacts.forEach((c) => {
+          const key = contactKey(c);
+          if (!key || seen.has(key)) return;
+          seen.add(key);
+          merged.push({ name: String(c?.name || ""), email: String(c?.email || ""), phone: String(c?.phone || "") });
+        });
+        contacts.forEach((c) => {
+          const key = contactKey(c);
+          if (!key || seen.has(key)) return;
+          seen.add(key);
+          merged.push({ name: String(c?.name || ""), email: String(c?.email || ""), phone: String(c?.phone || "") });
+        });
+
+        const nextContactName = existingRow.contact_name || contactName || null;
+        const nextEmail = existingRow.email || email || null;
+        const nextPhone = existingRow.phone || phone || null;
+        const nextStreet = existingRow.street_address || streetAddress || null;
+        const nextCity = existingRow.city || city || null;
+        const nextRegion = existingRow.region || region || null;
+        const nextCountry = existingRow.country || country || null;
+        const nextPostal = existingRow.postal_code || postalCode || null;
+
+        await pool.query(
+          `UPDATE customers
+              SET can_charge_deposit = $1,
+                  contact_name = $2,
+                  email = $3,
+                  phone = $4,
+                  street_address = $5,
+                  city = $6,
+                  region = $7,
+                  country = $8,
+                  postal_code = $9,
+                  contacts = $10::jsonb
+            WHERE id = $11 AND company_id = $12`,
+          [
+            canChargeDeposit,
+            nextContactName,
+            nextEmail,
+            nextPhone,
+            nextStreet,
+            nextCity,
+            nextRegion,
+            nextCountry,
+            nextPostal,
+            JSON.stringify(merged),
+            existingId,
+            companyId,
+          ]
+        );
+
         stats.updated += 1;
         stats.updatedCustomers.push({
           id: existingId,
           companyName: companyName || null,
           email: email || null,
-          row: i + 1,
+          row: bucket.rows?.[0] || null,
         });
         continue;
       }
 
       const created = await pool.query(
-        `INSERT INTO customers (company_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, can_charge_deposit)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `INSERT INTO customers (company_id, company_name, contact_name, street_address, city, region, country, postal_code, email, phone, can_charge_deposit, contacts)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
          RETURNING id`,
         [
           companyId,
-          companyName,
+          companyName || email || phone || "Imported customer",
           contactName || null,
           streetAddress || null,
           city || null,
@@ -6373,7 +7969,8 @@ async function importCustomersFromText({ companyId, text }) {
           postalCode || null,
           email || null,
           phone || null,
-          !!canChargeDeposit,
+          canChargeDeposit,
+          JSON.stringify(contacts),
         ]
       );
       stats.created += 1;
@@ -6389,6 +7986,446 @@ async function importCustomersFromText({ companyId, text }) {
   }
 
   return stats;
+}
+
+async function importRentalOrdersFromSheets({ companyId, ordersText, lineItemsText }) {
+  const result = {
+    ordersCreated: 0,
+    ordersSkipped: 0,
+    lineItemsCreated: 0,
+    lineItemsSkipped: 0,
+    customersCreated: 0,
+    customersMatched: 0,
+    equipmentMatched: 0,
+    placeholderEquipmentCreated: 0,
+    warnings: [],
+    errors: [],
+  };
+
+  const cid = Number(companyId);
+  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
+  if (!ordersText) throw new Error("ordersText is required.");
+  if (!lineItemsText) throw new Error("lineItemsText is required.");
+
+  const normalizeHeader = (value) =>
+    String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .replace(/_+/g, "_");
+
+  const parseSheet = (text) => {
+    const firstLine = String(text || "").split(/\r?\n/, 1)[0] || "";
+    const delimiter = firstLine.includes("\t") ? "\t" : ",";
+    const rows = parseDelimitedRows(String(text || ""), delimiter).filter((r) => r.some((c) => String(c ?? "").trim() !== ""));
+    if (rows.length < 2) return { delimiter, rows, header: [], keyToIndexes: new Map(), get: () => "" };
+
+    const header = rows[0].map((h) => String(h ?? "").trim());
+    const headerKeys = header.map((h) => normalizeHeader(h));
+    const keyToIndexes = new Map();
+    headerKeys.forEach((key, idx) => {
+      if (!key) return;
+      if (!keyToIndexes.has(key)) keyToIndexes.set(key, []);
+      keyToIndexes.get(key).push(idx);
+    });
+
+    const get = (row, aliases) => {
+      for (const alias of aliases) {
+        const indexes = keyToIndexes.get(alias) || [];
+        for (const idx of indexes) {
+          const value = String(row[idx] ?? "").trim();
+          if (value) return value;
+        }
+      }
+      return "";
+    };
+
+    return { delimiter, rows, header, headerKeys, keyToIndexes, get };
+  };
+
+  const ordersSheet = parseSheet(ordersText);
+  const linesSheet = parseSheet(lineItemsText);
+
+  const orderRoAliases = ["ro", "ro_number", "order", "order_number", "rental_order", "rental_order_number"];
+  const lineRoAliases = ["ro", "ro_number", "order", "order_number", "rental_order", "rental_order_number"];
+
+  const orderRoIdxExists = orderRoAliases.some((k) => ordersSheet.keyToIndexes?.has?.(k));
+  const lineRoIdxExists = lineRoAliases.some((k) => linesSheet.keyToIndexes?.has?.(k));
+  if (!orderRoIdxExists) {
+    result.errors.push("Orders sheet is missing required column: RO.");
+    return result;
+  }
+  if (!lineRoIdxExists) {
+    result.errors.push("Line items sheet is missing required column: RO.");
+    return result;
+  }
+
+  const ordersByRo = new Map();
+  for (let i = 1; i < (ordersSheet.rows || []).length; i += 1) {
+    const row = ordersSheet.rows[i];
+    const roNumber = ordersSheet.get(row, orderRoAliases);
+    if (!roNumber) {
+      result.ordersSkipped += 1;
+      continue;
+    }
+    const key = String(roNumber).trim();
+    const existing = ordersByRo.get(key) || {
+      roNumber: key,
+      rowNumber: i + 1,
+      customerName: "",
+      fulfillmentMethod: "",
+      status: "",
+      siteName: "",
+      address: "",
+      directions: "",
+      siteAccessInfo: "",
+      createdAt: "",
+      updatedAt: "",
+    };
+
+    const customerName = ordersSheet.get(row, ["customer", "customer_name", "company", "company_name", "client"]);
+    const fulfillmentMethod = ordersSheet.get(row, ["fulfillment_method", "fulfilment_method", "fulfillment", "fulfilment", "method"]);
+    const status = ordersSheet.get(row, ["status", "order_status"]);
+    const siteName = ordersSheet.get(row, ["site_name", "site"]);
+    const address = ordersSheet.get(row, ["dropoff_address", "dropoff", "site_address", "address"]);
+    const directions = ordersSheet.get(row, ["directions"]);
+    const siteAccessInfo = ordersSheet.get(row, ["site_access_info", "site_access_information_pin", "site_access", "access", "pin"]);
+    const createdAt = ordersSheet.get(row, ["created_at", "created"]);
+    const updatedAt = ordersSheet.get(row, ["updated_at", "updated"]);
+
+    if (!existing.customerName && customerName) existing.customerName = customerName;
+    if (!existing.fulfillmentMethod && fulfillmentMethod) existing.fulfillmentMethod = fulfillmentMethod;
+    if (!existing.status && status) existing.status = status;
+    if (!existing.siteName && siteName) existing.siteName = siteName;
+    if (!existing.address && address) existing.address = address;
+    if (!existing.directions && directions) existing.directions = directions;
+    if (!existing.siteAccessInfo && siteAccessInfo) existing.siteAccessInfo = siteAccessInfo;
+    if (!existing.createdAt && createdAt) existing.createdAt = createdAt;
+    if (!existing.updatedAt && updatedAt) existing.updatedAt = updatedAt;
+
+    ordersByRo.set(key, existing);
+  }
+
+  const lineItemsByRo = new Map();
+  for (let i = 1; i < (linesSheet.rows || []).length; i += 1) {
+    const row = linesSheet.rows[i];
+    const roNumber = linesSheet.get(row, lineRoAliases);
+    if (!roNumber) {
+      result.lineItemsSkipped += 1;
+      continue;
+    }
+    const key = String(roNumber).trim();
+    const typeName = linesSheet.get(row, ["equipment_type", "equipment", "type", "item"]);
+    const modelName = linesSheet.get(row, ["model_name", "model", "unit", "asset", "equipment_id", "equipment"]);
+    const startAt = linesSheet.get(row, ["start_at", "start", "start_date", "start_time"]);
+    const endAt = linesSheet.get(row, ["end_at", "end", "end_date", "end_time", "due_at", "due"]);
+    const returnedAt = linesSheet.get(row, ["returned_at", "returned", "return_at", "returned_time"]);
+    const lineItemExternalId = linesSheet.get(row, ["line_item_id", "lineitemid", "line_item", "id"]);
+
+    if (!lineItemsByRo.has(key)) lineItemsByRo.set(key, []);
+    lineItemsByRo.get(key).push({
+      rowNumber: i + 1,
+      roNumber: key,
+      typeName,
+      modelName,
+      startAt,
+      endAt,
+      returnedAt,
+      lineItemExternalId,
+    });
+  }
+
+  const normalizeStatus = (value) => {
+    const v = String(value || "").trim().toLowerCase();
+    if (!v) return "ordered";
+    if (v.startsWith("request")) return "requested";
+    if (v.startsWith("reserv")) return "reservation";
+    if (v.startsWith("order")) return "ordered";
+    if (v.startsWith("receiv")) return "received";
+    if (v.startsWith("close")) return "closed";
+    if (v === "quote" || v === "qo") return "quote";
+    return "ordered";
+  };
+
+  const normalizeFulfillment = (value) => {
+    const v = String(value || "").trim().toLowerCase();
+    if (!v) return "pickup";
+    if (v.includes("deliver") || v.includes("dropoff") || v.includes("drop off")) return "dropoff";
+    return "pickup";
+  };
+
+  const parseDocNumber = (doc) => {
+    const raw = String(doc || "").trim();
+    const m = raw.match(/^([A-Za-z]+)-(\d{2,4})-(\d+)$/);
+    if (!m) return null;
+    const prefix = String(m[1] || "").toUpperCase();
+    const yearPart = String(m[2] || "");
+    const seq = Number(m[3]);
+    if (!Number.isFinite(seq) || seq <= 0) return null;
+    const year = yearPart.length === 2 ? 2000 + Number(yearPart) : Number(yearPart);
+    if (!Number.isFinite(year) || year <= 0) return null;
+    return { prefix, year, seq };
+  };
+
+  const normalizeAssetKey = (value) => String(value || "").trim().toLowerCase();
+  const importNowIso = new Date().toISOString();
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const customersRes = await client.query(`SELECT id, company_name FROM customers WHERE company_id = $1`, [cid]);
+    const customerIdByName = new Map(
+      (customersRes.rows || []).map((r) => [normalizeCustomerMatchKey(r.company_name), Number(r.id)]).filter((x) => x[0])
+    );
+
+    const typesRes = await client.query(`SELECT id, name FROM equipment_types WHERE company_id = $1`, [cid]);
+    const typeIdByName = new Map(
+      (typesRes.rows || []).map((r) => [normalizeCustomerMatchKey(r.name), Number(r.id)]).filter((x) => x[0])
+    );
+
+    const equipmentRes = await client.query(`SELECT id, serial_number, model_name FROM equipment WHERE company_id = $1`, [cid]);
+    const equipmentIdBySerial = new Map();
+    const equipmentIdByModel = new Map();
+    (equipmentRes.rows || []).forEach((r) => {
+      const sid = normalizeAssetKey(r.serial_number);
+      const mid = normalizeAssetKey(r.model_name);
+      if (sid && !equipmentIdBySerial.has(sid)) equipmentIdBySerial.set(sid, Number(r.id));
+      if (mid && !equipmentIdByModel.has(mid)) equipmentIdByModel.set(mid, Number(r.id));
+    });
+
+    const ensureCustomerId = async (name) => {
+      const trimmed = String(name || "").trim();
+      const key = normalizeCustomerMatchKey(trimmed);
+      if (key && customerIdByName.has(key)) return { id: customerIdByName.get(key), created: false };
+      const fallbackName = trimmed || "Imported Customer";
+      const insert = await client.query(
+        `INSERT INTO customers (company_id, company_name) VALUES ($1, $2) RETURNING id`,
+        [cid, fallbackName]
+      );
+      const id = Number(insert.rows?.[0]?.id);
+      if (key) customerIdByName.set(key, id);
+      else customerIdByName.set(normalizeCustomerMatchKey(fallbackName), id);
+      return { id, created: true };
+    };
+
+    const ensureTypeId = async (name) => {
+      const trimmed = String(name || "").trim();
+      const key = normalizeCustomerMatchKey(trimmed);
+      if (key && typeIdByName.has(key)) return typeIdByName.get(key);
+      const fallbackName = trimmed || "Imported Type";
+      const insert = await client.query(
+        `INSERT INTO equipment_types (company_id, name) VALUES ($1, $2)
+         ON CONFLICT (company_id, name) DO UPDATE SET name = EXCLUDED.name
+         RETURNING id`,
+        [cid, fallbackName]
+      );
+      const id = Number(insert.rows?.[0]?.id);
+      typeIdByName.set(normalizeCustomerMatchKey(fallbackName), id);
+      return id;
+    };
+
+    const ensureEquipmentId = async ({ modelName, typeId, typeName }) => {
+      const key = normalizeAssetKey(modelName);
+      if (!key) return { id: null, created: false };
+      const existing = equipmentIdBySerial.get(key) || equipmentIdByModel.get(key) || null;
+      if (existing) return { id: existing, created: false };
+
+      const insert = await client.query(
+        `INSERT INTO equipment (company_id, type, model_name, serial_number, condition, type_id)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id`,
+        [cid, typeName || "Imported", modelName, modelName, "Normal Wear & Tear", typeId || null]
+      );
+      const id = Number(insert.rows?.[0]?.id);
+      if (id) {
+        equipmentIdBySerial.set(key, id);
+        equipmentIdByModel.set(key, id);
+      }
+      return { id, created: true };
+    };
+
+    const orderIdsByRo = new Map();
+    const maxSeqByYear = new Map();
+
+    for (const order of ordersByRo.values()) {
+      const roNumber = String(order.roNumber || "").trim();
+      if (!roNumber) {
+        result.ordersSkipped += 1;
+        continue;
+      }
+
+      const exists = await client.query(
+        `SELECT id FROM rental_orders WHERE company_id = $1 AND ro_number = $2 LIMIT 1`,
+        [cid, roNumber]
+      );
+      if (exists.rowCount) {
+        result.ordersSkipped += 1;
+        orderIdsByRo.set(roNumber, Number(exists.rows[0].id));
+        continue;
+      }
+
+      const customerOutcome = await ensureCustomerId(order.customerName);
+      if (customerOutcome.created) result.customersCreated += 1;
+      else result.customersMatched += 1;
+
+      const fulfillmentMethod = normalizeFulfillment(order.fulfillmentMethod);
+      const status = normalizeStatus(order.status);
+      const address = String(order.address || "").trim() || null;
+      const siteName = String(order.siteName || "").trim() || null;
+      const directions = String(order.directions || "").trim() || null;
+      const siteAccessInfo = String(order.siteAccessInfo || "").trim() || null;
+      const createdIso = normalizeTimestamptz(order.createdAt) || null;
+      const updatedIso = normalizeTimestamptz(order.updatedAt) || createdIso || null;
+
+      const legacyData = {
+        import_source: "sheets_csv",
+        imported_from_row: order.rowNumber || null,
+      };
+
+      const ins = await client.query(
+        `
+        INSERT INTO rental_orders
+          (company_id, quote_number, ro_number, external_contract_number, legacy_data, customer_id, fulfillment_method, status,
+           dropoff_address, site_name, site_address, site_access_info, directions, site_address_query, created_at, updated_at)
+        VALUES
+          ($1, NULL, $2, NULL, $3::jsonb, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13::timestamptz, NOW()), COALESCE($14::timestamptz, COALESCE($13::timestamptz, NOW())))
+        RETURNING id
+        `,
+        [
+          cid,
+          roNumber,
+          JSON.stringify(legacyData),
+          customerOutcome.id,
+          fulfillmentMethod,
+          status,
+          fulfillmentMethod === "dropoff" ? address : null,
+          siteName,
+          address,
+          siteAccessInfo,
+          directions,
+          address,
+          createdIso,
+          updatedIso,
+        ]
+      );
+      const orderId = Number(ins.rows?.[0]?.id);
+      if (!orderId) {
+        result.ordersSkipped += 1;
+        continue;
+      }
+      result.ordersCreated += 1;
+      orderIdsByRo.set(roNumber, orderId);
+
+      const parsed = parseDocNumber(roNumber);
+      if (parsed && parsed.prefix === "RO") {
+        const currentMax = maxSeqByYear.get(parsed.year) || 0;
+        if (parsed.seq > currentMax) maxSeqByYear.set(parsed.year, parsed.seq);
+      }
+    }
+
+    const orderCreatedAtByRo = new Map();
+    for (const order of ordersByRo.values()) {
+      if (!order?.roNumber) continue;
+      const createdIso = normalizeTimestamptz(order.createdAt) || null;
+      if (createdIso) orderCreatedAtByRo.set(String(order.roNumber).trim(), createdIso);
+    }
+
+    for (const [roNumber, items] of lineItemsByRo.entries()) {
+      const orderId = orderIdsByRo.get(roNumber) || null;
+      if (!orderId) {
+        result.lineItemsSkipped += Array.isArray(items) ? items.length : 0;
+        if (result.warnings.length < 50) result.warnings.push(`No matching rental order found for ${roNumber}.`);
+        continue;
+      }
+
+      const status = normalizeStatus(ordersByRo.get(roNumber)?.status);
+      const defaultStart = orderCreatedAtByRo.get(roNumber) || null;
+
+      for (const li of items || []) {
+        const typeId = await ensureTypeId(li.typeName);
+        const parsedStart = normalizeTimestamptz(li.startAt);
+        const parsedEnd = normalizeTimestamptz(li.endAt);
+        const startIso = parsedStart || defaultStart || importNowIso;
+        let endIso =
+          parsedEnd ||
+          (startIso ? new Date(Date.parse(startIso) + 30 * 24 * 60 * 60 * 1000).toISOString() : null);
+        if (parsedEnd) {
+          const sMs = Date.parse(startIso);
+          const eMs = Date.parse(parsedEnd);
+          if (Number.isFinite(sMs) && Number.isFinite(eMs) && eMs <= sMs) {
+            endIso = new Date(sMs + 30 * 24 * 60 * 60 * 1000).toISOString();
+            if (result.warnings.length < 50) {
+              result.warnings.push(
+                `Row ${li.rowNumber || "?"}: end_at is before start_at for ${roNumber}; defaulted end_at to start_at + 30 days.`
+              );
+            }
+          }
+        }
+        if (!startIso || !endIso) {
+          result.lineItemsSkipped += 1;
+          if (result.warnings.length < 50) {
+            result.warnings.push(`Row ${li.rowNumber || "?"}: missing start/end for ${roNumber}.`);
+          }
+          continue;
+        }
+        const returnedIso = normalizeTimestamptz(li.returnedAt) || null;
+        const fulfilledAt = status === "ordered" || status === "received" || status === "closed" ? startIso : null;
+
+        const ins = await client.query(
+          `INSERT INTO rental_order_line_items (rental_order_id, type_id, start_at, end_at, fulfilled_at, returned_at)
+           VALUES ($1,$2,$3::timestamptz,$4::timestamptz,$5::timestamptz,$6::timestamptz)
+           RETURNING id`,
+          [orderId, typeId, startIso, endIso, fulfilledAt, returnedIso]
+        );
+        const lineItemId = Number(ins.rows?.[0]?.id);
+        if (!lineItemId) {
+          result.lineItemsSkipped += 1;
+          continue;
+        }
+        result.lineItemsCreated += 1;
+
+        const modelName = String(li.modelName || "").trim();
+        if (!modelName) continue;
+
+        const eq = await ensureEquipmentId({ modelName, typeId, typeName: li.typeName || "Imported" });
+        if (eq.created) result.placeholderEquipmentCreated += 1;
+        if (eq.id) {
+          result.equipmentMatched += 1;
+          await client.query(
+            `INSERT INTO rental_order_line_inventory (line_item_id, equipment_id)
+             VALUES ($1,$2)
+             ON CONFLICT DO NOTHING`,
+            [lineItemId, eq.id]
+          );
+        }
+      }
+    }
+
+    for (const [year, maxSeq] of maxSeqByYear.entries()) {
+      const nextSeq = Number(maxSeq) + 1;
+      if (!Number.isFinite(nextSeq) || nextSeq <= 1) continue;
+      await client.query(
+        `
+        INSERT INTO doc_sequences (company_id, doc_prefix, year, next_seq)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (company_id, doc_prefix, year) DO UPDATE
+          SET next_seq = GREATEST(doc_sequences.next_seq, EXCLUDED.next_seq)
+        `,
+        [cid, "RO", Number(year), nextSeq]
+      );
+    }
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  return result;
 }
 
 async function deleteCustomer({ id, companyId }) {
@@ -6549,6 +8586,53 @@ function normalizeDateOnly(value) {
   if (!raw) return null;
   const isoMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
   return isoMatch ? isoMatch[1] : null;
+}
+
+function normalizeRecurrenceFrequency(value) {
+  const v = String(value || "").trim().toLowerCase();
+  if (v === "days" || v === "weeks" || v === "months") return v;
+  return null;
+}
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function daysInMonth(year, month1) {
+  return new Date(Date.UTC(year, month1, 0)).getUTCDate();
+}
+
+function addMonthsDateOnly(dateOnly, months) {
+  const raw = normalizeDateOnly(dateOnly);
+  if (!raw) return null;
+  const [y, m, d] = raw.split("-").map((p) => Number(p));
+  if (![y, m, d].every((n) => Number.isFinite(n))) return null;
+  const baseMonthIndex = (m - 1) + Number(months || 0);
+  const year = y + Math.floor(baseMonthIndex / 12);
+  const monthIndex = ((baseMonthIndex % 12) + 12) % 12;
+  const month1 = monthIndex + 1;
+  const maxDay = daysInMonth(year, month1);
+  const day = Math.min(d, maxDay);
+  return `${year}-${pad2(month1)}-${pad2(day)}`;
+}
+
+function addDaysDateOnly(dateOnly, days) {
+  const raw = normalizeDateOnly(dateOnly);
+  if (!raw) return null;
+  const dt = new Date(`${raw}T00:00:00.000Z`);
+  if (Number.isNaN(dt.getTime())) return null;
+  dt.setUTCDate(dt.getUTCDate() + Number(days || 0));
+  return dt.toISOString().slice(0, 10);
+}
+
+function computeNextRecurringDueDate({ dueDate, frequency, interval }) {
+  const due = normalizeDateOnly(dueDate);
+  const freq = normalizeRecurrenceFrequency(frequency);
+  const intv = Number(interval || 0);
+  if (!due || !freq || !Number.isFinite(intv) || intv <= 0) return null;
+  if (freq === "months") return addMonthsDateOnly(due, intv);
+  if (freq === "weeks") return addDaysDateOnly(due, intv * 7);
+  return addDaysDateOnly(due, intv);
 }
 
 function normalizeWorkOrderStatus(value) {
@@ -6930,11 +9014,13 @@ async function getCompanySettings(companyId) {
             monthly_proration_method,
             billing_timezone,
             logo_url,
+            asset_directions_enabled,
             qbo_enabled,
             qbo_billing_day,
             qbo_adjustment_policy,
             qbo_income_account_ids,
             qbo_default_tax_code,
+            hide_qbo_sections_when_disconnected,
             tax_enabled,
             default_tax_rate,
             tax_registration_number,
@@ -6942,7 +9028,9 @@ async function getCompanySettings(companyId) {
               auto_apply_customer_credit,
               auto_work_order_on_return,
                   required_storefront_customer_fields,
+            assets_table_columns,
             rental_info_fields,
+            order_contacts_enabled,
             customer_contact_categories,
             customer_document_categories,
             customer_terms_template,
@@ -6966,11 +9054,13 @@ async function getCompanySettings(companyId) {
       monthly_proration_method: normalizeMonthlyProrationMethod(res.rows[0].monthly_proration_method),
       billing_timezone: normalizeBillingTimeZone(res.rows[0].billing_timezone),
       logo_url: res.rows[0].logo_url || null,
+      asset_directions_enabled: res.rows[0].asset_directions_enabled === true,
       qbo_enabled: res.rows[0].qbo_enabled === true,
       qbo_billing_day: normalizeQboBillingDay(res.rows[0].qbo_billing_day),
       qbo_adjustment_policy: normalizeQboAdjustmentPolicy(res.rows[0].qbo_adjustment_policy),
       qbo_income_account_ids: normalizeQboIncomeAccountIds(res.rows[0].qbo_income_account_ids),
       qbo_default_tax_code: normalizeQboTaxCodeId(res.rows[0].qbo_default_tax_code),
+      hide_qbo_sections_when_disconnected: res.rows[0].hide_qbo_sections_when_disconnected === true,
       tax_enabled: res.rows[0].tax_enabled === true,
       default_tax_rate: Number(res.rows[0].default_tax_rate || 0),
       tax_registration_number: res.rows[0].tax_registration_number || null,
@@ -6978,7 +9068,9 @@ async function getCompanySettings(companyId) {
         auto_apply_customer_credit: res.rows[0].auto_apply_customer_credit === true,
         auto_work_order_on_return: res.rows[0].auto_work_order_on_return === true,
           required_storefront_customer_fields: normalizeStorefrontCustomerRequirements(res.rows[0].required_storefront_customer_fields),
+          assets_table_columns: normalizeAssetsTableColumns(res.rows[0].assets_table_columns),
           rental_info_fields: normalizeRentalInfoFields(res.rows[0].rental_info_fields),
+          order_contacts_enabled: res.rows[0].order_contacts_enabled !== false,
           customer_contact_categories: normalizeCustomerContactCategories(res.rows[0].customer_contact_categories),
           customer_document_categories: normalizeCustomerDocumentCategories(res.rows[0].customer_document_categories),
           customer_terms_template: res.rows[0].customer_terms_template || null,
@@ -7003,11 +9095,13 @@ async function getCompanySettings(companyId) {
     monthly_proration_method: "hours",
     billing_timezone: "UTC",
     logo_url: null,
+    asset_directions_enabled: false,
     qbo_enabled: false,
     qbo_billing_day: 1,
     qbo_adjustment_policy: "credit_memo",
     qbo_income_account_ids: [],
     qbo_default_tax_code: null,
+    hide_qbo_sections_when_disconnected: false,
     tax_enabled: false,
     default_tax_rate: 0,
     tax_registration_number: null,
@@ -7015,6 +9109,7 @@ async function getCompanySettings(companyId) {
       auto_apply_customer_credit: true,
       auto_work_order_on_return: false,
         required_storefront_customer_fields: [],
+        assets_table_columns: null,
         rental_info_fields: normalizeRentalInfoFields(null),
         customer_contact_categories: normalizeCustomerContactCategories(null),
         customer_document_categories: [],
@@ -7026,6 +9121,7 @@ async function getCompanySettings(companyId) {
         customer_service_agreement_size_bytes: null,
         dashboard_incidents_count: 0,
         dashboard_incident_metrics: {},
+        order_contacts_enabled: true,
     };
 }
 
@@ -7189,9 +9285,12 @@ async function upsertCompanyEmailSettings({
   taxInclusivePricing = null,
   autoApplyCustomerCredit = null,
   autoWorkOrderOnReturn = null,
+  assetDirectionsEnabled = undefined,
   logoUrl = undefined,
     requiredStorefrontCustomerFields = undefined,
+    assetsTableColumns = undefined,
     rentalInfoFields = undefined,
+    orderContactsEnabled = undefined,
     customerContactCategories = undefined,
     customerDocumentCategories = undefined,
     customerTermsTemplate = undefined,
@@ -7207,6 +9306,7 @@ async function upsertCompanyEmailSettings({
   qboAdjustmentPolicy = null,
   qboIncomeAccountIds = undefined,
   qboDefaultTaxCode = undefined,
+  hideQboSectionsWhenDisconnected = undefined,
 }) {
   const current = await getCompanySettings(companyId);
   const nextMode =
@@ -7247,13 +9347,31 @@ async function upsertCompanyEmailSettings({
     autoWorkOrderOnReturn === null || autoWorkOrderOnReturn === undefined
       ? current.auto_work_order_on_return === true
       : autoWorkOrderOnReturn === true;
+  const nextAssetDirectionsEnabled =
+    assetDirectionsEnabled === undefined || assetDirectionsEnabled === null
+      ? current.asset_directions_enabled === true
+      : assetDirectionsEnabled === true;
   const nextLogo = logoUrl === undefined ? current.logo_url : (logoUrl ? String(logoUrl) : null);
   const nextRequired = normalizeStorefrontCustomerRequirements(
     requiredStorefrontCustomerFields === undefined ? current.required_storefront_customer_fields : requiredStorefrontCustomerFields
   );
+  const nextAssetsTableColumns = normalizeAssetsTableColumns(
+    assetsTableColumns === undefined ? current.assets_table_columns : assetsTableColumns
+  );
   const nextRentalInfoFields = normalizeRentalInfoFields(
     rentalInfoFields === undefined ? current.rental_info_fields : rentalInfoFields
   );
+  const nextOrderContactsEnabled =
+    orderContactsEnabled === undefined || orderContactsEnabled === null
+      ? current.order_contacts_enabled !== false
+      : orderContactsEnabled === true;
+  if (assetDirectionsEnabled !== undefined && assetDirectionsEnabled !== null) {
+    const enabled = assetDirectionsEnabled === true;
+    if (nextRentalInfoFields?.directions) {
+      nextRentalInfoFields.directions.enabled = enabled;
+      if (!enabled) nextRentalInfoFields.directions.required = false;
+    }
+  }
     const nextCustomerDocumentCategories = normalizeCustomerDocumentCategories(
       customerDocumentCategories === undefined ? current.customer_document_categories : customerDocumentCategories
     );
@@ -7335,22 +9453,28 @@ async function upsertCompanyEmailSettings({
   );
   const nextQboDefaultTaxCode =
     qboDefaultTaxCode === undefined ? normalizeQboTaxCodeId(current.qbo_default_tax_code) : normalizeQboTaxCodeId(qboDefaultTaxCode);
+  const nextHideQboSections =
+    hideQboSectionsWhenDisconnected === undefined || hideQboSectionsWhenDisconnected === null
+      ? current.hide_qbo_sections_when_disconnected === true
+      : hideQboSectionsWhenDisconnected === true;
   const res = await pool.query(
     `
         INSERT INTO company_settings
-          (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, rental_info_fields, customer_contact_categories, customer_document_categories, customer_terms_template, customer_esign_required, customer_service_agreement_url, customer_service_agreement_file_name, customer_service_agreement_mime, customer_service_agreement_size_bytes, dashboard_incidents_count, dashboard_incident_metrics)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, $22, $23, $24, $25, $26, $27, $28, $29::jsonb)
+          (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, asset_directions_enabled, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, hide_qbo_sections_when_disconnected, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, assets_table_columns, rental_info_fields, order_contacts_enabled, customer_contact_categories, customer_document_categories, customer_terms_template, customer_esign_required, customer_service_agreement_url, customer_service_agreement_file_name, customer_service_agreement_mime, customer_service_agreement_size_bytes, dashboard_incidents_count, dashboard_incident_metrics)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb, $21::jsonb, $22::jsonb, $23, $24::jsonb, $25::jsonb, $26, $27, $28, $29, $30, $31, $32, $33::jsonb)
       ON CONFLICT (company_id)
       DO UPDATE SET billing_rounding_mode = EXCLUDED.billing_rounding_mode,
                     billing_rounding_granularity = EXCLUDED.billing_rounding_granularity,
                     monthly_proration_method = EXCLUDED.monthly_proration_method,
                     billing_timezone = EXCLUDED.billing_timezone,
                     logo_url = EXCLUDED.logo_url,
+                    asset_directions_enabled = EXCLUDED.asset_directions_enabled,
                     qbo_enabled = EXCLUDED.qbo_enabled,
                     qbo_billing_day = EXCLUDED.qbo_billing_day,
                     qbo_adjustment_policy = EXCLUDED.qbo_adjustment_policy,
                     qbo_income_account_ids = EXCLUDED.qbo_income_account_ids,
                     qbo_default_tax_code = EXCLUDED.qbo_default_tax_code,
+                    hide_qbo_sections_when_disconnected = EXCLUDED.hide_qbo_sections_when_disconnected,
                     tax_enabled = EXCLUDED.tax_enabled,
                     default_tax_rate = EXCLUDED.default_tax_rate,
                     tax_registration_number = EXCLUDED.tax_registration_number,
@@ -7358,7 +9482,9 @@ async function upsertCompanyEmailSettings({
                     auto_apply_customer_credit = EXCLUDED.auto_apply_customer_credit,
                     auto_work_order_on_return = EXCLUDED.auto_work_order_on_return,
                     required_storefront_customer_fields = EXCLUDED.required_storefront_customer_fields,
+                    assets_table_columns = EXCLUDED.assets_table_columns,
                     rental_info_fields = EXCLUDED.rental_info_fields,
+                    order_contacts_enabled = EXCLUDED.order_contacts_enabled,
                     customer_contact_categories = EXCLUDED.customer_contact_categories,
                     customer_document_categories = EXCLUDED.customer_document_categories,
                     customer_terms_template = EXCLUDED.customer_terms_template,
@@ -7376,11 +9502,13 @@ async function upsertCompanyEmailSettings({
                 monthly_proration_method,
                 billing_timezone,
                 logo_url,
+                asset_directions_enabled,
                 qbo_enabled,
                 qbo_billing_day,
                 qbo_adjustment_policy,
                 qbo_income_account_ids,
                 qbo_default_tax_code,
+                hide_qbo_sections_when_disconnected,
                 tax_enabled,
                 default_tax_rate,
                 tax_registration_number,
@@ -7388,7 +9516,9 @@ async function upsertCompanyEmailSettings({
                 auto_apply_customer_credit,
                 auto_work_order_on_return,
                 required_storefront_customer_fields,
+                assets_table_columns,
                 rental_info_fields,
+                order_contacts_enabled,
                 customer_contact_categories,
                 customer_document_categories,
                 customer_terms_template,
@@ -7407,11 +9537,13 @@ async function upsertCompanyEmailSettings({
       nextProrationMethod,
       nextTimeZone,
       nextLogo,
+      nextAssetDirectionsEnabled,
       nextQboEnabled,
       nextQboBillingDay,
       nextQboAdjustment,
       JSON.stringify(nextQboIncomeAccounts),
       nextQboDefaultTaxCode,
+      nextHideQboSections,
       nextTaxEnabled,
       nextTaxRate,
         nextTaxRegistration,
@@ -7419,7 +9551,9 @@ async function upsertCompanyEmailSettings({
         nextAutoApplyCustomerCredit,
         nextAutoWorkOrderOnReturn,
         JSON.stringify(nextRequired),
+        nextAssetsTableColumns === null ? null : JSON.stringify(nextAssetsTableColumns),
         JSON.stringify(nextRentalInfoFields),
+        nextOrderContactsEnabled,
         JSON.stringify(nextCustomerContactCategories),
         JSON.stringify(nextCustomerDocumentCategories),
         nextCustomerTermsTemplate,
@@ -7477,6 +9611,31 @@ function normalizeDashboardIncidentEntry(entry) {
 function normalizeDashboardIncidentCount(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : 0;
+}
+
+function normalizeAssetsTableColumns(value) {
+  if (value === null || value === undefined) return null;
+  let raw = value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  const seen = new Set();
+  for (const entry of raw) {
+    const key = String(entry || "").trim();
+    if (!key) continue;
+    if (key.length > 120) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+    if (out.length >= 250) break;
+  }
+  return out.length ? out : null;
 }
 
 function normalizeStorefrontCustomerRequirements(value) {
@@ -7652,6 +9811,7 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   siteName: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  directions: { enabled: false, required: false },
   monitoringPersonnel: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -7861,7 +10021,7 @@ function computeMonthlyRecurringForItems({
     const durationDays = Math.max(1, Math.ceil((endMs - startMs) / dayMs - 1e-9));
 
     const inventoryCount = Number(item.inventory_count || 0);
-    const qty = item.bundle_id ? 1 : inventoryCount > 0 ? 1 : demandOnly ? 1 : 0;
+    const qty = 1;
     const computedLineAmount = computeDisplayLineAmount({
       startAt: startIso,
       endAt: endIso,
@@ -8112,7 +10272,7 @@ async function listRentalOrders(companyId, { statuses = null, quoteOnly = false 
            ro.customer_id,
            CASE
              WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-             THEN c.company_name || ' (' || pc.company_name || ')'
+             THEN pc.company_name || ' - ' || c.company_name
              ELSE c.company_name
            END AS customer_name,
            ro.salesperson_id,
@@ -8177,7 +10337,10 @@ async function listRentalOrders(companyId, { statuses = null, quoteOnly = false 
   return result.rows;
 }
 
-async function listRentalOrdersForRange(companyId, { from, to, statuses = null, quoteOnly = false, dateField = "rental_period" } = {}) {
+async function listRentalOrdersForRange(
+  companyId,
+  { from, to, statuses = null, quoteOnly = false, dateField = "rental_period", includeFeesInRange = false } = {}
+) {
   const fromIso = normalizeTimestamptz(from);
   const toIso = normalizeTimestamptz(to);
   if (!fromIso || !toIso) return [];
@@ -8199,8 +10362,23 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
     where.push(`ro.${dateField} >= $2::timestamptz`);
     where.push(`ro.${dateField} < $3::timestamptz`);
   } else {
-    where.push(`(SELECT MIN(li.start_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) < $3::timestamptz`);
-    where.push(`(SELECT MAX(li.end_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) > $2::timestamptz`);
+    const lineOverlap = `(
+      (SELECT MIN(li.start_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) < $3::timestamptz
+      AND
+      (SELECT MAX(li.end_at) FROM rental_order_line_items li WHERE li.rental_order_id = ro.id) > $2::timestamptz
+    )`;
+    if (includeFeesInRange) {
+      const feeOverlap = `EXISTS (
+        SELECT 1
+          FROM rental_order_fees f
+         WHERE f.rental_order_id = ro.id
+           AND f.fee_date >= $2::date
+           AND f.fee_date < $3::date
+      )`;
+      where.push(`(${lineOverlap} OR ${feeOverlap})`);
+    } else {
+      where.push(lineOverlap);
+    }
   }
   if (useStatuses) {
     params.push(useStatuses);
@@ -8229,7 +10407,7 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
            ro.customer_id,
            CASE
              WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-             THEN c.company_name || ' (' || pc.company_name || ')'
+             THEN pc.company_name || ' - ' || c.company_name
              ELSE c.company_name
            END AS customer_name,
            ro.salesperson_id,
@@ -8291,120 +10469,7 @@ async function listRentalOrdersForRange(companyId, { from, to, statuses = null, 
     `,
     params
   );
-  const rows = result.rows || [];
-  if (!rows.length) return rows;
-
-  const equipmentIds = rows.map((r) => Number(r.id)).filter((v) => Number.isFinite(v));
-  const typeIds = Array.from(new Set(rows.map((r) => Number(r.type_id)).filter((v) => Number.isFinite(v) && v > 0)));
-  if (!equipmentIds.length || !typeIds.length) return rows;
-
-  const [defsRes, valuesRes, metersRes] = await Promise.all([
-    pool.query(
-      `
-      SELECT id, equipment_type_id, field_key, label, data_type, unit, required, options, sort_order,
-             show_on_assets_table, table_column_label, table_column_mode, rule
-        FROM equipment_type_tracking_fields
-       WHERE company_id = $1
-         AND archived_at IS NULL
-         AND equipment_type_id = ANY($2::int[])
-       ORDER BY sort_order ASC, label ASC, id ASC
-      `,
-      [companyId, typeIds]
-    ),
-    pool.query(
-      `
-      SELECT equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, updated_at
-        FROM equipment_tracking_field_values
-       WHERE company_id = $1
-         AND equipment_id = ANY($2::int[])
-      `,
-      [companyId, equipmentIds]
-    ),
-    pool.query(
-      `
-      SELECT DISTINCT ON (equipment_id)
-             equipment_id, reading, read_at
-        FROM equipment_meter_readings
-       WHERE company_id = $1
-         AND meter_type = 'hours'
-         AND equipment_id = ANY($2::int[])
-       ORDER BY equipment_id, read_at DESC, id DESC
-      `,
-      [companyId, equipmentIds]
-    ),
-  ]);
-
-  const defsByType = new Map();
-  for (const row of defsRes.rows || []) {
-    const tid = Number(row.equipment_type_id);
-    if (!Number.isFinite(tid)) continue;
-    const list = defsByType.get(String(tid)) || [];
-    list.push({
-      id: Number(row.id),
-      equipmentTypeId: tid,
-      fieldKey: row.field_key,
-      label: row.label,
-      dataType: row.data_type,
-      unit: row.unit || null,
-      required: row.required === true,
-      options: coerceJsonArray(row.options),
-      sortOrder: Number(row.sort_order) || 0,
-      showOnAssetsTable: row.show_on_assets_table === true,
-      tableColumnLabel: row.table_column_label || null,
-      tableColumnMode: row.table_column_mode || "value",
-      rule: coerceJsonObject(row.rule),
-    });
-    defsByType.set(String(tid), list);
-  }
-
-  const valuesByEquipmentId = new Map();
-  for (const row of valuesRes.rows || []) {
-    const eid = Number(row.equipment_id);
-    const fid = Number(row.field_id);
-    if (!Number.isFinite(eid) || !Number.isFinite(fid)) continue;
-    const map = valuesByEquipmentId.get(String(eid)) || {};
-    map[String(fid)] = rawEquipmentTrackingValueFromRow(row);
-    valuesByEquipmentId.set(String(eid), map);
-  }
-
-  const meterByEquipmentId = new Map();
-  for (const row of metersRes.rows || []) {
-    const eid = Number(row.equipment_id);
-    if (!Number.isFinite(eid)) continue;
-    const reading = Number(row.reading);
-    meterByEquipmentId.set(String(eid), Number.isFinite(reading) ? reading : null);
-  }
-
-  for (const row of rows) {
-    const eid = Number(row.id);
-    if (!Number.isFinite(eid)) continue;
-    const tid = Number(row.type_id);
-    const defs = defsByType.get(String(tid)) || [];
-    const valuesByFieldId = valuesByEquipmentId.get(String(eid)) || {};
-    const latestMeterHours = meterByEquipmentId.has(String(eid)) ? meterByEquipmentId.get(String(eid)) : null;
-
-    const summary = computeEquipmentTrackingSummary({
-      definitions: defs,
-      valuesByFieldId,
-      latestMeterHours,
-    });
-
-    row.tracking_status_key = summary.overallStatusKey;
-    row.tracking_status = summary.overallStatusLabel;
-    row.tracking_needs = summary.needs;
-    row.tracking_needs_summary = summary.needs.join("; ");
-    row.meter_hours = latestMeterHours;
-
-    const tableValues = {};
-    for (const def of defs) {
-      if (def.showOnAssetsTable !== true) continue;
-      const rawValue = valuesByFieldId[String(def.id)];
-      tableValues[String(def.id)] = formatTrackingTableCellValue({ def, rawValue, latestMeterHours });
-    }
-    row.tracking_table_values = tableValues;
-  }
-
-  return rows;
+  return result.rows || [];
 }
 
 async function listRentalOrderPickListForRange(companyId, { from, to, statuses = null } = {}) {
@@ -8494,7 +10559,7 @@ async function listRentalOrderPickListForRange(companyId, { from, to, statuses =
            ro.customer_id,
            CASE
              WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-             THEN c.company_name || ' (' || pc.company_name || ')'
+             THEN pc.company_name || ' - ' || c.company_name
              ELSE c.company_name
            END AS customer_name,
            ro.pickup_location_id,
@@ -8607,7 +10672,7 @@ async function listRentalOrderLineItemsForRange(
            ro.customer_id,
            CASE
              WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-             THEN c.company_name || ' (' || pc.company_name || ')'
+             THEN pc.company_name || ' - ' || c.company_name
              ELSE c.company_name
            END AS customer_name,
            ro.salesperson_id,
@@ -8882,7 +10947,7 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            ro.site_name,
            CASE
              WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-             THEN c.company_name || ' (' || pc.company_name || ')'
+             THEN pc.company_name || ' - ' || c.company_name
              ELSE c.company_name
            END AS customer_name,
            ro.pickup_location_id,
@@ -8916,7 +10981,7 @@ async function listTimelineData(companyId, { from, to, statuses = null } = {}) {
            ro.site_name,
            CASE
              WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-             THEN c.company_name || ' (' || pc.company_name || ')'
+             THEN pc.company_name || ' - ' || c.company_name
              ELSE c.company_name
            END AS customer_name,
            ro.pickup_location_id,
@@ -9000,8 +11065,8 @@ async function rescheduleLineItemEnd({ companyId, lineItemId, endAt }) {
                ro.quote_number,
                ro.ro_number,
                CASE
-                 WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-                 THEN c.company_name || ' (' || pc.company_name || ')'
+                WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+                 THEN pc.company_name || ' - ' || c.company_name
                  ELSE c.company_name
                END AS customer_name,
                li.start_at,
@@ -9079,10 +11144,10 @@ async function findPickupConflicts({ client, companyId, equipmentIds, orderId, s
              ro.quote_number,
              ro.ro_number,
              CASE
-               WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-               THEN c.company_name || ' (' || pc.company_name || ')'
-               ELSE c.company_name
-             END AS customer_name,
+              WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+              THEN pc.company_name || ' - ' || c.company_name
+              ELSE c.company_name
+            END AS customer_name,
              COALESCE(li.fulfilled_at, li.start_at) AS start_at,
              CASE
                WHEN li.fulfilled_at IS NOT NULL AND li.returned_at IS NULL THEN 'infinity'::timestamptz
@@ -9219,10 +11284,10 @@ async function setLineItemPickedUp({
                  ro.quote_number,
                  ro.ro_number,
                  CASE
-                   WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-                   THEN c.company_name || ' (' || pc.company_name || ')'
-                   ELSE c.company_name
-                 END AS customer_name,
+                  WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+                  THEN pc.company_name || ' - ' || c.company_name
+                  ELSE c.company_name
+                END AS customer_name,
                  COALESCE(li.fulfilled_at, li.start_at) AS start_at,
                  COALESCE(li.returned_at, GREATEST(li.end_at, NOW())) AS end_at
             FROM rental_order_line_inventory liv
@@ -10230,10 +12295,10 @@ async function getAvailabilityShortfallsCustomerDemand({
       SELECT li.id,
              ro.customer_id,
              CASE
-               WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-               THEN c.company_name || ' (' || pc.company_name || ')'
-               ELSE c.company_name
-             END AS customer_name,
+              WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+              THEN pc.company_name || ' - ' || c.company_name
+              ELSE c.company_name
+            END AS customer_name,
              li.type_id,
              et.name AS type_name,
              li.start_at,
@@ -10560,7 +12625,7 @@ async function getTypeAvailabilityShortfallDetails({ companyId, typeId, date, lo
            ro.ro_number,
            CASE
              WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-             THEN c.company_name || ' (' || pc.company_name || ')'
+             THEN pc.company_name || ' - ' || c.company_name
              ELSE c.company_name
            END AS customer_name,
            ro.pickup_location_id,
@@ -11479,7 +13544,7 @@ async function getRentalOrder({ companyId, id }) {
     SELECT ro.*,
            CASE
              WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-             THEN c.company_name || ' (' || pc.company_name || ')'
+             THEN pc.company_name || ' - ' || c.company_name
              ELSE c.company_name
            END AS customer_name,
            c.contact_name AS customer_contact_name,
@@ -11685,6 +13750,7 @@ async function createRentalOrder({
   logisticsInstructions,
   specialInstructions,
   criticalAreas,
+  directions,
   monitoringPersonnel,
   notificationCircumstances,
   coverageHours,
@@ -11751,10 +13817,10 @@ async function createRentalOrder({
       INSERT INTO rental_orders
         (company_id, quote_number, ro_number, external_contract_number, legacy_data, customer_id, customer_po, salesperson_id, fulfillment_method, status,
          terms, general_notes, pickup_location_id, dropoff_address, site_name, site_address, site_access_info, site_address_lat, site_address_lng, site_address_query,
-         logistics_instructions, special_instructions, critical_areas, monitoring_personnel,
+         logistics_instructions, special_instructions, critical_areas, directions, monitoring_personnel,
          notification_circumstances, coverage_hours, coverage_timezone, coverage_stat_holidays_required,
          emergency_contact_instructions, emergency_contacts, site_contacts, order_contact_settings, created_at, updated_at)
-      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25::jsonb,$26::jsonb,$27,$28,$29,$30::jsonb,$31::jsonb,$32::jsonb,COALESCE($33::timestamptz, NOW()),COALESCE($33::timestamptz, NOW()))
+      VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26::jsonb,$27::jsonb,$28,$29,$30,$31::jsonb,$32::jsonb,$33::jsonb,COALESCE($34::timestamptz, NOW()),COALESCE($34::timestamptz, NOW()))
       RETURNING id, quote_number, ro_number
       `,
       [
@@ -11781,6 +13847,7 @@ async function createRentalOrder({
         logisticsInstructions || null,
         specialInstructions || null,
         criticalAreas || null,
+        directions || null,
         monitoringPersonnel || null,
         JSON.stringify(notificationCircumstancesValue),
         JSON.stringify(coverageHoursValue),
@@ -11848,7 +13915,7 @@ async function createRentalOrder({
       }
       const qty = bundleData ? 1 : inventoryIds.length;
       const isRerent = !!String(item.unitDescription || item.unit_description || "").trim();
-      const effectiveQty = bundleData ? 1 : (qty ? qty : isRerent ? 1 : (demandOnly ? 1 : 0));
+      const effectiveQty = bundleData ? 1 : (qty ? qty : 1);
       const computedUnits = computeBillableUnits({
         startAt,
         endAt,
@@ -13360,6 +15427,7 @@ async function updateRentalOrder({
   logisticsInstructions,
   specialInstructions,
   criticalAreas,
+  directions,
   monitoringPersonnel,
   notificationCircumstances,
   coverageHours,
@@ -13465,17 +15533,18 @@ async function updateRentalOrder({
              logistics_instructions = $18,
              special_instructions = $19,
              critical_areas = $20,
-             monitoring_personnel = $21,
-             notification_circumstances = $22::jsonb,
-             coverage_hours = $23::jsonb,
-             coverage_timezone = $24,
-             coverage_stat_holidays_required = $25,
-             emergency_contact_instructions = $26,
-             emergency_contacts = $27::jsonb,
-             site_contacts = $28::jsonb,
-             order_contact_settings = COALESCE($29::jsonb, order_contact_settings),
+             directions = $21,
+             monitoring_personnel = $22,
+             notification_circumstances = $23::jsonb,
+             coverage_hours = $24::jsonb,
+             coverage_timezone = $25,
+             coverage_stat_holidays_required = $26,
+             emergency_contact_instructions = $27,
+             emergency_contacts = $28::jsonb,
+             site_contacts = $29::jsonb,
+             order_contact_settings = COALESCE($30::jsonb, order_contact_settings),
              updated_at = NOW()
-       WHERE id = $30 AND company_id = $31
+       WHERE id = $31 AND company_id = $32
        RETURNING id, quote_number, ro_number
       `,
       [
@@ -13499,6 +15568,7 @@ async function updateRentalOrder({
         logisticsInstructions || null,
         specialInstructions || null,
         criticalAreas || null,
+        directions || null,
         monitoringPersonnel || null,
         JSON.stringify(notificationCircumstancesValue),
         JSON.stringify(coverageHoursValue),
@@ -13563,7 +15633,7 @@ async function updateRentalOrder({
       }
       const qty = bundleData ? 1 : inventoryIds.length;
       const isRerent = !!String(item.unitDescription || item.unit_description || "").trim();
-      const effectiveQty = bundleData ? 1 : (qty ? qty : isRerent ? 1 : (demandOnly ? 1 : 0));
+      const effectiveQty = bundleData ? 1 : (qty ? qty : 1);
       const billableUnits = computeBillableUnits({
         startAt,
         endAt,
@@ -14426,7 +16496,7 @@ async function listCustomerChangeRequests({ companyId, status = null, customerId
            r.reviewed_at,
            CASE
              WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-             THEN c.company_name || ' (' || pc.company_name || ')'
+             THEN pc.company_name || ' - ' || c.company_name
              ELSE c.company_name
            END AS customer_name,
            ro.quote_number,
@@ -16241,6 +18311,7 @@ async function createStorefrontReservation({
   siteAccessInfo,
   deliveryInstructions,
   criticalAreas,
+  directions,
   monitoringPersonnel,
   notificationCircumstances,
   generalNotes,
@@ -16310,6 +18381,7 @@ async function createStorefrontReservation({
   const siteAddressValue = useRentalInfoField("siteAddress") ? String(siteAddress || "").trim() || null : null;
   const siteAccessInfoValue = useRentalInfoField("siteAccessInfo") ? String(siteAccessInfo || "").trim() || null : null;
   const criticalAreasValue = useRentalInfoField("criticalAreas") ? String(criticalAreas || "").trim() || null : null;
+  const directionsValue = useRentalInfoField("directions") ? String(directions || "").trim() || null : null;
   const monitoringPersonnelValue = useRentalInfoField("monitoringPersonnel")
     ? String(monitoringPersonnel || "").trim() || null
     : null;
@@ -16356,6 +18428,9 @@ async function createStorefrontReservation({
   }
   if (rentalInfoFields?.criticalAreas?.enabled && rentalInfoFields?.criticalAreas?.required && !criticalAreasValue) {
     missingRentalInfo.push("Critical Assets and Locations on Site");
+  }
+  if (rentalInfoFields?.directions?.enabled && rentalInfoFields?.directions?.required && !directionsValue) {
+    missingRentalInfo.push("Directions");
   }
   if (
     rentalInfoFields?.monitoringPersonnel?.enabled &&
@@ -16470,6 +18545,7 @@ async function createStorefrontReservation({
     terms: typeRow.terms || null,
     generalNotes: combinedGeneralNotes,
     criticalAreas: criticalAreasValue,
+    directions: directionsValue,
     monitoringPersonnel: monitoringPersonnelValue,
     notificationCircumstances: notificationCircumstancesValue,
     coverageHours: coverageHoursValue,
@@ -17017,11 +19093,11 @@ async function getRentalOrderQboContext({ companyId, orderId } = {}) {
            ro.quote_number,
            ro.status,
            ro.customer_id,
-           CASE
-             WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
-             THEN c.company_name || ' (' || pc.company_name || ')'
-             ELSE c.company_name
-           END AS customer_name,
+             CASE
+               WHEN c.parent_customer_id IS NOT NULL AND pc.company_name IS NOT NULL
+              THEN pc.company_name || ' - ' || c.company_name
+              ELSE c.company_name
+            END AS customer_name,
            c.qbo_customer_id
       FROM rental_orders ro
       JOIN customers c ON c.id = ro.customer_id
@@ -17294,6 +19370,7 @@ module.exports = {
   listEquipmentTrackingTableColumns,
   setEquipmentCurrentLocationForIds,
   setEquipmentCurrentLocationToBaseForIds,
+  setEquipmentDirectionsForIds,
   createEquipment,
   updateEquipment,
   deleteEquipment,
@@ -17345,10 +19422,13 @@ module.exports = {
   createWorkOrder,
   updateWorkOrder,
   deleteWorkOrder,
+  runRecurringWorkOrderSweep,
   importInventoryFromText,
   importCompanyEquipmentFromText,
   importCustomerPricingFromInventoryText,
+  importWorkOrdersFromText,
   importCustomersFromText,
+  importRentalOrdersFromSheets,
   importRentalOrdersFromLegacyExports,
   importRentalOrdersFromFutureInventoryReport,
   backfillLegacyRates,

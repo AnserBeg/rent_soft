@@ -1,5 +1,5 @@
 const TRACKING_DATA_TYPES = new Set(["date", "datetime", "number", "text", "boolean", "select"]);
-const TRACKING_RULE_TYPES = new Set(["none", "time_interval", "meter_interval", "manual_due_date"]);
+const TRACKING_RULE_TYPES = new Set(["none", "time_interval", "meter_interval", "manual_due_date", "manual_due_date_separate"]);
 
 function asNumber(value) {
   const n = Number(value);
@@ -34,8 +34,8 @@ function normalizeDatetime(value) {
 
 function normalizeTrackingRule(rule) {
   const input = rule && typeof rule === "object" ? rule : {};
-  const enabled = input.enabled === true;
   const ruleType = TRACKING_RULE_TYPES.has(String(input.ruleType || "")) ? String(input.ruleType) : "none";
+  const enabled = ruleType !== "none";
   const intervalDays = Math.max(0, Math.floor(asNumber(input.intervalDays) ?? 0)) || null;
   const warnDays = Math.max(0, Math.floor(asNumber(input.warnDays) ?? 0)) || null;
   const intervalHours = Math.max(0, asNumber(input.intervalHours) ?? 0) || null;
@@ -97,7 +97,7 @@ function addDaysIsoDate(dateOnly, days) {
   return out.toISOString().slice(0, 10);
 }
 
-function computeTrackingStatusForField({ def, rawValue, latestMeterHours, now = new Date() }) {
+function computeTrackingStatusForField({ def, rawValue, rawDueValue = null, latestMeterHours, now = new Date() }) {
   if (!def) return null;
   const rule = normalizeTrackingRule(def.rule);
   if (!rule.enabled || rule.ruleType === "none") {
@@ -137,6 +137,32 @@ function computeTrackingStatusForField({ def, rawValue, latestMeterHours, now = 
       dueAt: due,
       dueAtLabel: due,
       valueLabel: due,
+    };
+  }
+
+  if (rule.ruleType === "manual_due_date_separate") {
+    const due = normalizeDateOnly(rawDueValue);
+    if (!due) {
+      return {
+        fieldId: def.id,
+        label: def.label,
+        statusKey: "missing",
+        dueAt: null,
+        dueAtLabel: null,
+        valueLabel: formatTrackingValueForDisplay(def, rawValue),
+      };
+    }
+    const overdue = nowDateOnly ? due < nowDateOnly : false;
+    const warnDays = rule.warnDays ?? 0;
+    const warnAt = warnDays ? addDaysIsoDate(nowDateOnly, warnDays) : null;
+    const dueSoon = !overdue && warnAt ? due <= warnAt : false;
+    return {
+      fieldId: def.id,
+      label: def.label,
+      statusKey: overdue ? "overdue" : dueSoon ? "dueSoon" : "ok",
+      dueAt: due,
+      dueAtLabel: due,
+      valueLabel: formatTrackingValueForDisplay(def, rawValue),
     };
   }
 
@@ -241,12 +267,13 @@ function statusLabelForKey(key) {
   }
 }
 
-function computeEquipmentTrackingSummary({ definitions, valuesByFieldId, latestMeterHours, now = new Date() }) {
+function computeEquipmentTrackingSummary({ definitions, valuesByFieldId, dueValuesByFieldId = null, latestMeterHours, now = new Date() }) {
   const defs = Array.isArray(definitions) ? definitions.map(normalizeTrackingFieldDefinition).filter(Boolean) : [];
   const statuses = defs.map((def) =>
     computeTrackingStatusForField({
       def,
       rawValue: valuesByFieldId ? valuesByFieldId[String(def.id)] : null,
+      rawDueValue: dueValuesByFieldId ? dueValuesByFieldId[String(def.id)] : null,
       latestMeterHours,
       now,
     })

@@ -95,9 +95,12 @@
                 <h2>Work order list</h2>
               </div>
               <div class="inline-actions">
+                <button class="ghost" id="import-work-orders" type="button">Import</button>
                 <button class="primary" id="new-work-order">New work order</button>
               </div>
             </div>
+            <input type="file" id="import-work-orders-file" accept=".csv,.tsv,.txt" style="display:none;" />
+            <p class="hint" id="import-work-orders-status" style="margin: 0 0 10px;"></p>
 
             <div class="table-shell">
               <div class="table-head">

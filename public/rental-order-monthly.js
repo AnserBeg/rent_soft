@@ -371,7 +371,7 @@ function lineItemQty(lineItem, orderStatus) {
   if (lineItem.bundleId) return 1;
   const ids = Array.isArray(lineItem.inventoryIds) ? lineItem.inventoryIds : [];
   if (ids.length) return ids.length;
-  return isDemandOnlyStatus(orderStatus) ? 1 : 0;
+  return 1;
 }
 
 function lineItemLabel(lineItem) {

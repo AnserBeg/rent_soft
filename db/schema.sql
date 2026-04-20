@@ -124,9 +124,11 @@ CREATE TABLE IF NOT EXISTS equipment (
   image_url TEXT,
   image_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
   location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
+  current_location_id INTEGER REFERENCES locations(id) ON DELETE SET NULL,
   purchase_price NUMERIC(12, 2),
   type_id INTEGER REFERENCES equipment_types(id) ON DELETE SET NULL,
   notes TEXT,
+  directions TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -187,6 +189,21 @@ CREATE TABLE IF NOT EXISTS work_orders (
   company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
   work_order_number TEXT NOT NULL,
   work_date DATE NOT NULL,
+  rental_order_id INTEGER,
+  rental_order_number TEXT,
+  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  customer_name TEXT,
+  category TEXT,
+  contact TEXT,
+  site_name TEXT,
+  site_address TEXT,
+  site_access_code TEXT,
+  due_date DATE,
+  is_recurring BOOLEAN NOT NULL DEFAULT FALSE,
+  recurrence_frequency TEXT,
+  recurrence_interval INTEGER,
+  recurrence_parent_id INTEGER REFERENCES work_orders(id) ON DELETE SET NULL,
+  recurrence_last_generated DATE,
   unit_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
   unit_labels JSONB NOT NULL DEFAULT '[]'::jsonb,
   unit_id INTEGER REFERENCES equipment(id) ON DELETE SET NULL,
@@ -215,6 +232,8 @@ CREATE INDEX IF NOT EXISTS work_orders_company_status_idx ON work_orders (compan
 CREATE INDEX IF NOT EXISTS work_orders_company_service_idx ON work_orders (company_id, service_status);
 CREATE INDEX IF NOT EXISTS work_orders_updated_idx ON work_orders (company_id, updated_at);
 CREATE INDEX IF NOT EXISTS work_orders_unit_ids_idx ON work_orders USING GIN (unit_ids);
+CREATE INDEX IF NOT EXISTS work_orders_company_due_idx ON work_orders (company_id, due_date);
+CREATE INDEX IF NOT EXISTS work_orders_company_recurring_idx ON work_orders (company_id, is_recurring, due_date);
 
 -- Equipment tracking (custom fields + meters)
 CREATE TABLE IF NOT EXISTS equipment_type_tracking_fields (
@@ -321,6 +340,7 @@ CREATE TABLE IF NOT EXISTS rental_orders (
   logistics_instructions TEXT,
   special_instructions TEXT,
   critical_areas TEXT,
+  directions TEXT,
   notification_circumstances JSONB NOT NULL DEFAULT '[]'::jsonb,
   coverage_hours JSONB NOT NULL DEFAULT '{}'::jsonb,
   emergency_contact_instructions TEXT,
@@ -372,6 +392,8 @@ CREATE TABLE IF NOT EXISTS company_settings (
   monthly_proration_method TEXT NOT NULL DEFAULT 'hours',
   billing_timezone TEXT NOT NULL DEFAULT 'UTC',
   logo_url TEXT,
+  asset_directions_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  hide_qbo_sections_when_disconnected BOOLEAN NOT NULL DEFAULT FALSE,
   tax_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   default_tax_rate NUMERIC(8, 5) NOT NULL DEFAULT 0,
   tax_registration_number TEXT,
@@ -379,7 +401,7 @@ CREATE TABLE IF NOT EXISTS company_settings (
   auto_apply_customer_credit BOOLEAN NOT NULL DEFAULT TRUE,
   auto_work_order_on_return BOOLEAN NOT NULL DEFAULT FALSE,
   required_storefront_customer_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
-  rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"emergencyContactInstructions":{"enabled":true,"required":false},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
+  rental_info_fields JSONB NOT NULL DEFAULT '{"siteAddress":{"enabled":true,"required":false},"siteName":{"enabled":true,"required":false},"criticalAreas":{"enabled":true,"required":true},"directions":{"enabled":false,"required":false},"generalNotes":{"enabled":true,"required":true},"emergencyContacts":{"enabled":true,"required":true},"emergencyContactInstructions":{"enabled":true,"required":false},"siteContacts":{"enabled":true,"required":true},"notificationCircumstances":{"enabled":true,"required":false},"coverageHours":{"enabled":true,"required":true}}'::jsonb,
   customer_contact_categories JSONB NOT NULL DEFAULT '[{"key":"contacts","label":"Contacts"},{"key":"accountingContacts","label":"Accounting contacts"}]'::jsonb,
   customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
   customer_terms_template TEXT,

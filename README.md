@@ -24,6 +24,9 @@ npm start
 ```
 Server listens on `PORT` (default 4000) and serves the UI at `http://localhost:4000`.
 
+## Recurring work orders
+If a work order is marked as recurring and has a `Due Date`, the server will automatically create a new work order when the due date arrives. Configure with `RECURRING_WORK_ORDERS_ENABLED` and `RECURRING_WORK_ORDER_SWEEP_MS` in `.env`.
+
 ## Mobile UI
 The UI is not a separate app: it’s the same HTML pages with responsive CSS (media queries) and a small JS enhancement. On small screens the left sidebar becomes an off-canvas menu opened via a top “menu” button.
 

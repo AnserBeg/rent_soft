@@ -68,6 +68,7 @@ const siteNameInput = document.getElementById("site-name");
 const siteAddressInput = document.getElementById("site-address");
 const siteAccessInfoInput = document.getElementById("site-access-info");
 const criticalAreasInput = document.getElementById("critical-areas");
+const directionsInput = document.getElementById("directions");
 const monitoringPersonnelInput = document.getElementById("monitoring-personnel");
 const generalNotesInput = document.getElementById("general-notes");
 const generalNotesEditor = document.getElementById("general-notes-editor");
@@ -194,6 +195,7 @@ const rentalInfoFieldContainers = {
   siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
   siteAccessInfo: document.querySelector('[data-rental-info-field="siteAccessInfo"]'),
   criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
+  directions: document.querySelector('[data-rental-info-field="directions"]'),
   monitoringPersonnel: document.querySelector('[data-rental-info-field="monitoringPersonnel"]'),
   generalNotes: document.querySelector('[data-rental-info-field="generalNotes"]'),
   emergencyContacts: document.querySelector('[data-rental-info-field="emergencyContacts"]'),
@@ -244,6 +246,153 @@ let siteAddressLng = null;
 let siteAddressQuery = "";
 let siteAddressInputLock = false;
 
+function resolveFetchUrl(url) {
+  try {
+    return new URL(String(url || ""), window.location.href).toString();
+  } catch {
+    return String(url || "");
+  }
+}
+
+async function fetchJson(url, opts = {}) {
+  const method = String(opts.method || "GET").toUpperCase();
+  const requestUrl = String(url || "");
+
+  const attempt = async (attemptUrl) => {
+    const res = await fetch(attemptUrl, {
+      credentials: "same-origin",
+      ...opts,
+      headers: {
+        Accept: "application/json",
+        ...(opts.headers || {}),
+      },
+    });
+    const contentType = String(res.headers.get("content-type") || "");
+    let raw = "";
+    try {
+      raw = await res.text();
+    } catch {
+      raw = "";
+    }
+    let data = null;
+    const trimmed = raw.trim();
+    const looksJson =
+      contentType.toLowerCase().includes("application/json") || trimmed.startsWith("{") || trimmed.startsWith("[");
+    if (looksJson && trimmed) {
+      try {
+        data = JSON.parse(trimmed);
+      } catch {
+        data = null;
+      }
+    }
+    return { res, contentType, raw, data };
+  };
+
+  const first = await attempt(requestUrl);
+  let { res, contentType, raw, data } = first;
+  let usedFallback = false;
+
+  if (
+    !res.ok &&
+    res.status === 404 &&
+    requestUrl.startsWith("api/") &&
+    !requestUrl.startsWith("/api/")
+  ) {
+    const retryUrl = `/${requestUrl}`;
+    const retry = await attempt(retryUrl);
+    if (retry.res.ok || retry.res.status !== 404 || retry.data !== null) {
+      usedFallback = true;
+      ({ res, contentType, raw, data } = retry);
+      console.warn("[customer-link] API request retried with absolute path", {
+        originalUrl: resolveFetchUrl(requestUrl),
+        retryUrl: resolveFetchUrl(retryUrl),
+        method,
+      });
+    }
+  }
+
+  const resolvedUrl = resolveFetchUrl(res.url || requestUrl);
+
+  if (!res.ok) {
+    const message =
+      data && typeof data === "object" && data.error
+        ? String(data.error)
+        : `Request failed: ${res.status} ${res.statusText}`;
+    console.error("[customer-link] request failed", {
+      url: resolvedUrl,
+      method,
+      status: res.status,
+      statusText: res.statusText,
+      contentType,
+      usedFallback,
+      bodyPreview: raw.slice(0, 800),
+    });
+    const err = new Error(message);
+    err.httpStatus = res.status;
+    err.url = resolvedUrl;
+    throw err;
+  }
+
+  if (data === null) {
+    console.error("[customer-link] expected JSON response", {
+      url: resolvedUrl,
+      method,
+      status: res.status,
+      statusText: res.statusText,
+      contentType,
+      usedFallback,
+      bodyPreview: raw.slice(0, 800),
+    });
+    const err = new Error("Unexpected response format (expected JSON).");
+    err.httpStatus = res.status;
+    err.url = resolvedUrl;
+    throw err;
+  }
+
+  return data;
+}
+
+async function fetchOk(url, opts = {}) {
+  const method = String(opts.method || "GET").toUpperCase();
+  const requestUrl = String(url || "");
+
+  const attempt = async (attemptUrl) => {
+    return await fetch(attemptUrl, {
+      credentials: "same-origin",
+      ...opts,
+      headers: {
+        ...(opts.headers || {}),
+      },
+    });
+  };
+
+  let res = await attempt(requestUrl);
+  let usedFallback = false;
+
+  if (!res.ok && res.status === 404 && requestUrl.startsWith("api/") && !requestUrl.startsWith("/api/")) {
+    const retryUrl = `/${requestUrl}`;
+    const retryRes = await attempt(retryUrl);
+    if (retryRes.ok || retryRes.status !== 404) {
+      usedFallback = true;
+      res = retryRes;
+      console.warn("[customer-link] API request retried with absolute path", {
+        originalUrl: resolveFetchUrl(requestUrl),
+        retryUrl: resolveFetchUrl(retryUrl),
+        method,
+      });
+    }
+  }
+
+  if (res.ok) return;
+
+  const resolvedUrl = resolveFetchUrl(res.url || requestUrl);
+  const err = new Error(`Request failed: ${res.status} ${res.statusText}`);
+  err.httpStatus = res.status;
+  err.url = resolvedUrl;
+  err.usedFallback = usedFallback;
+  throw err;
+}
+
 const DEFAULT_CONTACT_CATEGORIES = [
   { key: "contacts", label: "Contacts" },
   { key: "accountingContacts", label: "Accounting contacts" },
@@ -253,6 +402,7 @@ const contactCategoryLists = new Map();
 let orderContactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
 let orderContactSettings = {};
 let orderContactCustomerGroups = {};
+let orderContactsEnabled = true;
 
 let sideAddressPicker = {
   selected: null,
@@ -289,6 +439,7 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   siteName: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  directions: { enabled: false, required: false },
   monitoringPersonnel: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -528,6 +679,25 @@ function parseContacts(raw) {
   return [];
 }
 
+function normalizeContactValue(value) {
+  return String(value ?? "").trim();
+}
+
+function collectContacts(list) {
+  if (!list) return [];
+  const rows = Array.from(list.querySelectorAll(".contact-row"));
+  return rows
+    .map((row) => {
+      const name = normalizeContactValue(row.querySelector('[data-contact-field="name"]')?.value);
+      const title = normalizeContactValue(row.querySelector('[data-contact-field="title"]')?.value);
+      const email = normalizeContactValue(row.querySelector('[data-contact-field="email"]')?.value);
+      const phone = normalizeContactValue(row.querySelector('[data-contact-field="phone"]')?.value);
+      if (!name && !email && !phone) return null;
+      return { name, title, email, phone };
+    })
+    .filter(Boolean);
+}
+
 function normalizeContactEntries(list) {
   const raw = parseContacts(list);
   return raw
@@ -623,6 +793,7 @@ function setOrderContactRows(list, rows) {
 }
 
 function collectOrderContactSettings() {
+  if (!orderContactsEnabled) return {};
   if (!orderContactCategoriesContainer) return {};
   const settings = {};
   orderContactCategoryConfig.forEach((category) => {
@@ -636,6 +807,10 @@ function collectOrderContactSettings() {
 }
 
 function renderOrderContactCategories() {
+  if (!orderContactsEnabled) {
+    if (orderContactCategoriesContainer) orderContactCategoriesContainer.innerHTML = "";
+    return;
+  }
   if (!orderContactCategoriesContainer) return;
   orderContactCategoriesContainer.innerHTML = "";
 
@@ -754,10 +929,13 @@ function setSideAddressPickerMapStyle(style) {
 }
 
 async function getPublicConfig() {
-  const res = await fetch("api/public-config");
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Unable to load config");
-  return data || {};
+  try {
+    return await fetchJson("api/public-config");
+  } catch (err) {
+    const message = err?.message ? String(err.message) : "Unable to load config.";
+    const status = err?.httpStatus ? ` (HTTP ${err.httpStatus})` : "";
+    throw new Error(`${message}${status}`);
+  }
 }
 
 function openSideAddressPickerModal() {
@@ -806,9 +984,16 @@ function setSideAddressSelected(lat, lng, { provider, query } = {}) {
   if (sideAddressPickerMeta) {
     sideAddressPickerMeta.textContent = `Selected: ${Number(lat).toFixed(6)}, ${Number(lng).toFixed(6)}`;
   }
-  if (sideAddressPickerInput && query) {
-    sideAddressPickerInput.value = String(query);
+  if (query) {
+    if (sideAddressPickerSearch) sideAddressPickerSearch.value = String(query);
+    if (sideAddressPickerInput) sideAddressPickerInput.value = String(query);
   }
+}
+
+function getSideAddressPickerManualText() {
+  const fromSearch = String(sideAddressPickerSearch?.value || "").trim();
+  if (fromSearch) return fromSearch;
+  return String(sideAddressPickerInput?.value || "").trim();
 }
 
 function getSelectedSideAddressUnitId() {
@@ -983,7 +1168,7 @@ function handleSideAddressMapClick(lat, lng, { provider } = {}) {
 
 async function saveCustomerLinkUnitPin({ unitId, latitude, longitude, provider, query, label }) {
   if (!token) throw new Error("Missing link token.");
-  const res = await fetch(`api/public/customer-links/${encodeURIComponent(token)}/unit-pins`, {
+  return await fetchJson(`api/public/customer-links/${encodeURIComponent(token)}/unit-pins`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -995,9 +1180,6 @@ async function saveCustomerLinkUnitPin({ unitId, latitude, longitude, provider, 
       label: label || null,
     }),
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Unable to save unit pin.");
-  return data;
 }
 
 async function saveSideAddressUnitPinForSelectedUnit() {
@@ -1234,8 +1416,8 @@ function initGoogleSideAddressPicker(center) {
                 sideAddressPicker.google.pickSeq = pickSeq;
                 const details = await fetchPlaceDetails(placeId, label);
                 if (pickSeq !== sideAddressPicker.google.pickSeq) return;
-                if (sideAddressPickerInput) sideAddressPickerInput.value = details.label;
                 if (sideAddressPickerSearch) sideAddressPickerSearch.value = details.label;
+                if (sideAddressPickerInput) sideAddressPickerInput.value = details.label;
                 if (!sideAddressPicker.google.marker) {
                   sideAddressPicker.google.marker = new window.google.maps.Marker({
                     position: { lat: details.lat, lng: details.lng },
@@ -1285,9 +1467,9 @@ async function openSideAddressPicker() {
   if (sideAddressPickerMeta) sideAddressPickerMeta.textContent = "Loading map...";
   hideSideAddressSuggestions();
   syncSideAddressUnitSelect();
-  if (sideAddressPickerInput && !String(sideAddressPickerInput.value || "").trim()) {
-    const existing = String(siteAddressInput?.value || "").trim();
-    if (existing) sideAddressPickerInput.value = existing;
+  const existingAddress = String(siteAddressInput?.value || "").trim();
+  if (existingAddress && sideAddressPickerSearch && !String(sideAddressPickerSearch.value || "").trim()) {
+    sideAddressPickerSearch.value = existingAddress;
   }
 
   let center = { lat: 20, lng: 0 };
@@ -1346,7 +1528,7 @@ async function openSideAddressPicker() {
 }
 
 function saveSideAddressFromPicker() {
-  const manual = String(sideAddressPickerInput?.value || "").trim();
+  const manual = getSideAddressPickerManualText();
   const fallbackQuery = sideAddressPicker.selected?.query ? String(sideAddressPicker.selected.query) : "";
   const fallbackCoords = sideAddressPicker.selected
     ? `${Number(sideAddressPicker.selected.lat).toFixed(6)}, ${Number(sideAddressPicker.selected.lng).toFixed(6)}`
@@ -2401,16 +2583,14 @@ async function uploadImage({ companyId, file }) {
   const body = new FormData();
   body.append("companyId", String(companyId));
   body.append("image", prepared);
-  const res = await fetch("api/uploads/image", { method: "POST", body });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Unable to upload image.");
+  const data = await fetchJson("api/uploads/image", { method: "POST", body });
   if (!data.url) throw new Error("Upload did not return an image url.");
   return data.url;
 }
 
 async function deleteImage({ companyId, url }) {
   if (!companyId || !url) return;
-  await fetch("api/uploads/image", {
+  await fetchOk("api/uploads/image", {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ companyId, url }),
@@ -3092,16 +3272,7 @@ async function loadLink() {
     return;
   }
   try {
-    const res = await fetch(`api/public/customer-links/${encodeURIComponent(token)}`);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const errorMessage = data.error || "Unable to load link.";
-      if (String(errorMessage).toLowerCase().includes("expired")) {
-        showExpiredLinkMessage();
-        return;
-      }
-      throw new Error(errorMessage);
-    }
+    const data = await fetchJson(`api/public/customer-links/${encodeURIComponent(token)}`);
     linkData = data;
     if (data.link?.singleUse && data.link?.usedAt) {
       showUsedLinkMessage({
@@ -3125,6 +3296,7 @@ async function loadLink() {
     companyNameInput.value = customer.companyName || "";
     renderContactCategories(data.contactCategories || []);
     orderContactCategoryConfig = normalizeContactCategories(data.contactCategories || []);
+    orderContactsEnabled = data.orderContactsEnabled !== false;
     const groups = buildCustomerContactGroups(customer);
     setContactCategoryRows(groups);
     streetInput.value = customer.streetAddress || "";
@@ -3137,7 +3309,7 @@ async function loadLink() {
     const showOrder = !!order || scope === "new_quote" || scope === "order_update";
     if (customerPoField) customerPoField.style.display = showOrder ? "grid" : "none";
     if (orderSection) orderSection.style.display = showOrder ? "block" : "none";
-    if (orderContactSection) orderContactSection.style.display = showOrder ? "block" : "none";
+    if (orderContactSection) orderContactSection.style.display = showOrder && orderContactsEnabled ? "block" : "none";
     if (lineItemsSection) lineItemsSection.style.display = showOrder ? "block" : "none";
     if (rentalInfoSection) rentalInfoSection.style.display = showOrder ? "block" : "none";
     if (showOrder) {
@@ -3176,6 +3348,7 @@ async function loadLink() {
       siteAddressQuery = order?.siteAddressQuery ? String(order.siteAddressQuery) : "";
       if (siteAccessInfoInput) siteAccessInfoInput.value = order?.siteAccessInfo || "";
       if (criticalAreasInput) criticalAreasInput.value = order?.criticalAreas || "";
+      if (directionsInput) directionsInput.value = order?.directions || "";
       if (monitoringPersonnelInput) monitoringPersonnelInput.value = order?.monitoringPersonnel || "";
       setGeneralNotesHtml(order?.generalNotes || "");
       setContactRows(emergencyContactsList, order?.emergencyContacts || []);
@@ -3197,7 +3370,11 @@ async function loadLink() {
       applyRentalInfoConfig(data.rentalInfoFields || null);
     }
     orderContactSettings = order?.orderContactSettings || order?.order_contact_settings || {};
-    renderOrderContactCategories();
+    if (showOrder && orderContactsEnabled) {
+      renderOrderContactCategories();
+    } else if (orderContactCategoriesContainer) {
+      orderContactCategoriesContainer.innerHTML = "";
+    }
 
     types = Array.isArray(data.types) ? data.types : [];
     lineItems = Array.isArray(data.lineItems)
@@ -3278,7 +3455,13 @@ async function loadLink() {
     }
 
   } catch (err) {
-    linkBanner.textContent = err?.message ? String(err.message) : "Unable to load link.";
+    const message = err?.message ? String(err.message) : "Unable to load link.";
+    if (message.toLowerCase().includes("expired")) {
+      showExpiredLinkMessage();
+      return;
+    }
+    const status = err?.httpStatus ? ` (HTTP ${err.httpStatus})` : "";
+    linkBanner.textContent = `${message}${status}`;
     setFormDisabled(true);
   }
 }
@@ -3472,12 +3655,14 @@ contactCategoriesContainer?.addEventListener("click", (e) => {
 });
 
 orderContactCategoriesContainer?.addEventListener("change", (e) => {
+  if (!orderContactsEnabled) return;
   if (e.target?.matches?.("[data-contact-field]")) {
     orderContactSettings = collectOrderContactSettings();
   }
 });
 
 orderContactCategoriesContainer?.addEventListener("click", (e) => {
+  if (!orderContactsEnabled) return;
   const addBtn = e.target.closest?.("[data-add-order-contact]");
   if (addBtn) {
     e.preventDefault();
@@ -3500,6 +3685,7 @@ orderContactCategoriesContainer?.addEventListener("click", (e) => {
 });
 
 orderContactCategoriesContainer?.addEventListener("input", (e) => {
+  if (!orderContactsEnabled) return;
   if (e.target?.matches?.("[data-contact-field]")) {
     orderContactSettings = collectOrderContactSettings();
   }
@@ -3880,6 +4066,7 @@ form?.addEventListener("submit", async (evt) => {
         ...(siteAddressQuery ? { siteAddressQuery } : {}),
         siteAccessInfo: siteAccessInfoInput?.value.trim() || "",
         criticalAreas: criticalAreasInput?.value.trim() || "",
+        directions: directionsInput?.value.trim() || "",
         monitoringPersonnel: monitoringPersonnelInput?.value.trim() || "",
         generalNotes: convertedNotes.trim(),
         notificationCircumstances: collectNotificationCircumstances(),
@@ -3889,7 +4076,7 @@ form?.addEventListener("submit", async (evt) => {
         emergencyContacts: collectContacts(emergencyContactsList),
         emergencyContactInstructions: emergencyContactInstructionsInput?.value.trim() || "",
         siteContacts: collectContacts(siteContactsList),
-        orderContactSettings: collectOrderContactSettings(),
+        orderContactSettings: orderContactsEnabled ? collectOrderContactSettings() : undefined,
       } : {},
       lineItems: lineItemsSection.style.display !== "none" ? lineItems.map((li) => ({
         lineItemId: li.lineItemId || null,
@@ -3940,12 +4127,10 @@ form?.addEventListener("submit", async (evt) => {
       });
     });
 
-    const res = await fetch(`api/public/customer-links/${encodeURIComponent(token)}/submit`, {
+    const data = await fetchJson(`api/public/customer-links/${encodeURIComponent(token)}/submit`, {
       method: "POST",
       body: formData,
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Unable to submit update.");
 
     submissionComplete = true;
     linkBanner.textContent = "Thank you! Your submission has been received.";

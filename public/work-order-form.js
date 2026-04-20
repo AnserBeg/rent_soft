@@ -5,6 +5,7 @@ const workOrderNumber = document.getElementById("work-order-number");
 const workSummaryInput = document.getElementById("work-summary");
 const workIssuesInput = document.getElementById("work-issues");
 const workDateInput = document.getElementById("work-date");
+const createdDateInput = document.getElementById("created-date");
 const unitSelect = document.getElementById("unit-select");
 const unitSearchInput = document.getElementById("unit-search-input");
 const unitSuggestions = document.getElementById("unit-suggestions");
@@ -13,6 +14,20 @@ const orderStatusInput = document.getElementById("order-status");
 const serviceStatusSelect = document.getElementById("service-status");
 const returnInspectionToggle = document.getElementById("return-inspection");
 const serviceHint = document.getElementById("service-hint");
+
+const rentalOrderSelect = document.getElementById("rental-order-id");
+const customerSelect = document.getElementById("customer-id");
+const customerNameInput = document.getElementById("customer-name");
+const categoryInput = document.getElementById("work-category");
+const contactInput = document.getElementById("work-contact");
+const siteNameInput = document.getElementById("site-name");
+const siteAddressInput = document.getElementById("site-address");
+const siteAccessCodeInput = document.getElementById("site-access-code");
+const dueDateInput = document.getElementById("due-date");
+const isRecurringToggle = document.getElementById("is-recurring");
+const recurrenceIntervalInput = document.getElementById("recurrence-interval");
+const recurrenceFrequencySelect = document.getElementById("recurrence-frequency");
+const recurrenceHint = document.getElementById("recurrence-hint");
 const addPartLineBtn = document.getElementById("add-part-line");
 const addLaborLineBtn = document.getElementById("add-labor-line");
 const partsLines = document.getElementById("parts-lines");
@@ -44,6 +59,8 @@ let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let partsCache = [];
 let equipmentCache = [];
 let workOrdersCache = [];
+let rentalOrdersCache = [];
+let customersCache = [];
 let editingWorkOrder = null;
 let pendingUnitId = initialUnitId ? String(initialUnitId) : null;
 let pendingSummary = initialSummary ? String(initialSummary) : null;
@@ -472,6 +489,108 @@ function applyPrefillToForm() {
   }
 }
 
+function setCreatedDateFromWorkOrder(order) {
+  if (!createdDateInput) return;
+  const iso = order?.createdAt ? String(order.createdAt) : "";
+  const match = iso.match(/^(\d{4}-\d{2}-\d{2})/);
+  createdDateInput.value = match ? match[1] : "";
+}
+
+function rentalOrderLabel(order) {
+  if (!order) return "";
+  const number = order.ro_number || order.quote_number || order.external_contract_number || "";
+  const customer = order.customer_name || "";
+  const status = order.status ? ` (${order.status})` : "";
+  const bits = [number, customer].filter(Boolean).join(" \u2014 ");
+  return `${bits}${status}`.trim() || `Order #${order.id}`;
+}
+
+function customerLabel(c) {
+  if (!c) return "";
+  const name = c.company_name || c.companyName || "";
+  const contact = c.contact_name || c.contactName || "";
+  return contact ? `${name} \u2014 ${contact}` : name;
+}
+
+function getSelectedRentalOrder() {
+  const id = rentalOrderSelect?.value ? Number(rentalOrderSelect.value) : null;
+  if (!Number.isFinite(id)) return null;
+  return rentalOrdersCache.find((o) => Number(o.id) === id) || null;
+}
+
+function getSelectedCustomer() {
+  const id = customerSelect?.value ? Number(customerSelect.value) : null;
+  if (!Number.isFinite(id)) return null;
+  return customersCache.find((c) => Number(c.id) === id) || null;
+}
+
+function syncRecurrenceControls() {
+  const enabled = isRecurringToggle?.checked === true;
+  if (recurrenceIntervalInput) recurrenceIntervalInput.disabled = !enabled;
+  if (recurrenceFrequencySelect) recurrenceFrequencySelect.disabled = !enabled;
+  if (recurrenceHint) {
+    if (!enabled) {
+      recurrenceHint.textContent = "";
+    } else {
+      const interval = Number(recurrenceIntervalInput?.value || 1);
+      const freq = String(recurrenceFrequencySelect?.value || "").trim();
+      const intervalLabel = Number.isFinite(interval) && interval > 0 ? interval : 1;
+      const freqLabel = freq || "days";
+      recurrenceHint.textContent = `Next due date will be ${intervalLabel} ${freqLabel} after the due date.`;
+    }
+  }
+}
+
+async function loadCustomers() {
+  if (!activeCompanyId || !customerSelect) return;
+  customerSelect.disabled = true;
+  try {
+    const res = await fetch(`/api/customers?companyId=${encodeURIComponent(String(activeCompanyId))}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load customers.");
+    customersCache = Array.isArray(data.customers) ? data.customers : [];
+    customerSelect.innerHTML = `<option value="">(None)</option>`;
+    customersCache.forEach((c) => {
+      const opt = document.createElement("option");
+      opt.value = c.id;
+      opt.textContent = customerLabel(c) || `Customer #${c.id}`;
+      customerSelect.appendChild(opt);
+    });
+    if (editingWorkOrder?.customerId) {
+      customerSelect.value = String(editingWorkOrder.customerId);
+    }
+  } catch {
+    // ignore
+  } finally {
+    customerSelect.disabled = false;
+  }
+}
+
+async function loadRentalOrders() {
+  if (!activeCompanyId || !rentalOrderSelect) return;
+  rentalOrderSelect.disabled = true;
+  try {
+    const res = await fetch(`/api/rental-orders?companyId=${encodeURIComponent(String(activeCompanyId))}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Unable to load rental orders.");
+    rentalOrdersCache = Array.isArray(data.orders) ? data.orders : [];
+    rentalOrderSelect.innerHTML = `<option value="">(None)</option>`;
+    rentalOrdersCache.forEach((o) => {
+      const opt = document.createElement("option");
+      opt.value = o.id;
+      opt.textContent = rentalOrderLabel(o);
+      rentalOrderSelect.appendChild(opt);
+    });
+    if (editingWorkOrder?.rentalOrderId) {
+      rentalOrderSelect.value = String(editingWorkOrder.rentalOrderId);
+    }
+  } catch {
+    // ignore
+  } finally {
+    rentalOrderSelect.disabled = false;
+  }
+}
+
 function buildPartRow(data = {}) {
   const row = document.createElement("div");
   row.className = "workorder-line-grid workorder-line-row";
@@ -672,6 +791,7 @@ async function syncWorkOrderPause(record) {
 
 function applyWorkOrderToForm(order) {
   editingWorkOrder = order;
+  setCreatedDateFromWorkOrder(order);
   if (workOrderNumber && order?.number) {
     workOrderNumber.textContent = order.number;
     workOrderNumber.style.display = "inline-flex";
@@ -695,6 +815,20 @@ function applyWorkOrderToForm(order) {
   if (orderStatusInput) orderStatusInput.value = order?.orderStatus || "open";
   if (serviceStatusSelect) serviceStatusSelect.value = order?.serviceStatus || "in_service";
   if (returnInspectionToggle) returnInspectionToggle.checked = order?.returnInspection === true;
+
+  if (rentalOrderSelect && order?.rentalOrderId) rentalOrderSelect.value = String(order.rentalOrderId);
+  if (customerSelect && order?.customerId) customerSelect.value = String(order.customerId);
+  if (customerNameInput) customerNameInput.value = order?.customerName || "";
+  if (categoryInput) categoryInput.value = order?.category || "";
+  if (contactInput) contactInput.value = order?.contact || "";
+  if (siteNameInput) siteNameInput.value = order?.siteName || "";
+  if (siteAddressInput) siteAddressInput.value = order?.siteAddress || "";
+  if (siteAccessCodeInput) siteAccessCodeInput.value = order?.siteAccessCode || "";
+  if (dueDateInput) dueDateInput.value = order?.dueDate || "";
+  if (isRecurringToggle) isRecurringToggle.checked = order?.isRecurring === true;
+  if (recurrenceIntervalInput) recurrenceIntervalInput.value = order?.recurrenceInterval ? String(order.recurrenceInterval) : "1";
+  if (recurrenceFrequencySelect) recurrenceFrequencySelect.value = order?.recurrenceFrequency || "";
+  syncRecurrenceControls();
 
   partsLines?.replaceChildren();
   laborLines?.replaceChildren();
@@ -769,8 +903,8 @@ function initForm() {
 
   if (partsLines && !partsLines.children.length) partsLines.appendChild(buildPartRow());
   if (laborLines && !laborLines.children.length) laborLines.appendChild(buildLaborRow());
-  if (!workOrderId && workDateInput && !workDateInput.value) {
-    workDateInput.value = new Date().toISOString().slice(0, 10);
+  if (!workOrderId && createdDateInput && !createdDateInput.value) {
+    createdDateInput.value = new Date().toISOString().slice(0, 10);
   }
   if (orderStatusInput && !orderStatusInput.value) orderStatusInput.value = "open";
   if (returnInspectionToggle && returnInspectionToggle.checked) {
@@ -789,7 +923,10 @@ async function saveWorkOrder() {
     return null;
   }
 
-  const date = workDateInput?.value || "";
+  const date =
+    (editingWorkOrder?.date || "").trim()
+    || (createdDateInput?.value || "").trim()
+    || new Date().toISOString().slice(0, 10);
   const unitIds = getSelectedUnitIds();
   const unitLabels = getSelectedUnitLabels();
   const workSummary = workSummaryInput?.value?.trim() || "";
@@ -798,10 +935,25 @@ async function saveWorkOrder() {
   const returnInspection = returnInspectionToggle?.checked === true;
   const serviceStatus = returnInspection ? "out_of_service" : (serviceStatusSelect?.value || "in_service");
 
-  if (!date) {
-    setSaveStatus("Please select a date.");
-    return null;
-  }
+  const selectedRental = getSelectedRentalOrder();
+  const selectedCustomer = getSelectedCustomer();
+  const rentalOrderId = selectedRental ? Number(selectedRental.id) : null;
+  const rentalOrderNumber = selectedRental ? (selectedRental.ro_number || selectedRental.quote_number || "") : (editingWorkOrder?.rentalOrderNumber || "");
+  const customerId = selectedCustomer ? Number(selectedCustomer.id) : null;
+  const customerName =
+    String(customerNameInput?.value || "").trim()
+    || (selectedCustomer ? String(selectedCustomer.company_name || "").trim() : "")
+    || (editingWorkOrder?.customerName || "");
+  const category = String(categoryInput?.value || "").trim();
+  const contact = String(contactInput?.value || "").trim();
+  const siteName = String(siteNameInput?.value || "").trim();
+  const siteAddress = String(siteAddressInput?.value || "").trim();
+  const siteAccessCode = String(siteAccessCodeInput?.value || "").trim();
+  const dueDate = dueDateInput?.value || "";
+  const isRecurring = isRecurringToggle?.checked === true;
+  const recurrenceFrequency = String(recurrenceFrequencySelect?.value || "").trim();
+  const recurrenceInterval = Number(recurrenceIntervalInput?.value || 1);
+
   if (!unitIds.length) {
     setSaveStatus("Please select at least one unit.");
     return null;
@@ -827,6 +979,19 @@ async function saveWorkOrder() {
   const payload = {
     companyId: activeCompanyId,
     date,
+    rentalOrderId,
+    rentalOrderNumber,
+    customerId,
+    customerName,
+    category,
+    contact,
+    siteName,
+    siteAddress,
+    siteAccessCode,
+    dueDate: dueDate || null,
+    isRecurring,
+    recurrenceFrequency: isRecurring ? (recurrenceFrequency || null) : null,
+    recurrenceInterval: isRecurring && Number.isFinite(recurrenceInterval) && recurrenceInterval > 0 ? recurrenceInterval : null,
     unitIds,
     unitLabels,
     unitId: unitIds[0] || null,
@@ -1012,6 +1177,31 @@ returnInspectionToggle?.addEventListener("change", () => {
   updateServiceHint();
 });
 
+isRecurringToggle?.addEventListener("change", syncRecurrenceControls);
+recurrenceIntervalInput?.addEventListener("input", syncRecurrenceControls);
+recurrenceFrequencySelect?.addEventListener("change", syncRecurrenceControls);
+
+rentalOrderSelect?.addEventListener("change", () => {
+  const selected = getSelectedRentalOrder();
+  if (!selected) return;
+  if (siteNameInput) siteNameInput.value = selected.site_name || siteNameInput.value || "";
+  if (siteAddressInput) siteAddressInput.value = selected.site_address || siteAddressInput.value || "";
+  if (customerNameInput && !String(customerNameInput.value || "").trim()) {
+    customerNameInput.value = selected.customer_name || "";
+  }
+  if (customerSelect && selected.customer_id) {
+    customerSelect.value = String(selected.customer_id);
+  }
+});
+
+customerSelect?.addEventListener("change", () => {
+  const selected = getSelectedCustomer();
+  if (!selected) return;
+  if (customerNameInput && !String(customerNameInput.value || "").trim()) {
+    customerNameInput.value = String(selected.company_name || "").trim();
+  }
+});
+
 async function applyTrackingUpdateFromWorkOrder(record) {
   if (!record || !activeCompanyId) return;
   if (!(trackingUpdateOnComplete?.checked === true)) return;
@@ -1019,11 +1209,15 @@ async function applyTrackingUpdateFromWorkOrder(record) {
   if (!meta?.equipmentId || !meta?.trackingFieldId) return;
 
   const dataType = String(meta.trackingDataType || "").trim();
+  const baseDateOnly =
+    (dueDateInput?.value || "").trim()
+    || (createdDateInput?.value || "").trim()
+    || new Date().toISOString().slice(0, 10);
   let value = null;
   if (dataType === "date") {
-    value = workDateInput?.value || null;
+    value = baseDateOnly || null;
   } else if (dataType === "datetime") {
-    const base = workDateInput?.value ? `${workDateInput.value}T00:00:00` : "";
+    const base = baseDateOnly ? `${baseDateOnly}T00:00:00` : "";
     const ms = base ? Date.parse(base) : NaN;
     value = Number.isFinite(ms) ? new Date(ms).toISOString() : new Date().toISOString();
   } else if (dataType === "number") {
@@ -1085,6 +1279,9 @@ if (activeCompanyId) {
   companyMeta.textContent = "";
   initForm();
   renderSourceMetaHint();
+  syncRecurrenceControls();
+  loadCustomers();
+  loadRentalOrders();
   fetchWorkOrders()
     .then(() => updateServiceHint())
     .catch((err) => {
@@ -1094,6 +1291,8 @@ if (activeCompanyId) {
     fetchWorkOrderById(workOrderId)
       .then((existing) => {
         if (existing) applyWorkOrderToForm(existing);
+        loadCustomers();
+        loadRentalOrders();
       })
       .catch((err) => {
         setSaveStatus(err?.message || "Unable to load work order.");

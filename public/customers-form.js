@@ -19,6 +19,7 @@ const branchNameRow = document.getElementById("branch-name-row");
 const branchNameInput = customerForm?.querySelector('input[name="branchName"]');
 const companyNameRow = document.getElementById("company-name-row");
 const companyNameInput = customerForm?.querySelector('input[name="companyName"]');
+const qboCustomerIdRow = document.getElementById("qbo-customer-id-row");
 const qboCustomerIdInput = customerForm?.querySelector('input[name="qboCustomerId"]');
 const salesSelect = document.getElementById("sales-select");
 const pricingTypeSelect = document.getElementById("pricing-type-select");
@@ -70,6 +71,8 @@ let pricingSearchTerm = "";
 let customerExtras = { documents: [], storefront: null };
 let extrasDrawerOpen = false;
 let extrasActiveTab = "documents";
+
+let hideQboSectionsWhenDisconnected = false;
 
 const DEFAULT_CONTACT_CATEGORIES = [
   { key: "contacts", label: "Contacts" },
@@ -370,14 +373,14 @@ function renderParentOptions() {
 }
 
 function setBranchMode(isBranch) {
-  if (parentCustomerRow) parentCustomerRow.style.display = isBranch ? "block" : "none";
+  if (parentCustomerRow) parentCustomerRow.style.display = isBranch ? "" : "none";
   if (parentCustomerSelect) {
     parentCustomerSelect.disabled = !isBranch;
     if (!isBranch) parentCustomerSelect.value = "";
   }
   if (parentCustomerSearchInput) parentCustomerSearchInput.disabled = !isBranch;
-  if (companyNameRow) companyNameRow.style.display = isBranch ? "none" : "block";
-  if (branchNameRow) branchNameRow.style.display = isBranch ? "block" : "none";
+  if (companyNameRow) companyNameRow.style.display = isBranch ? "none" : "";
+  if (branchNameRow) branchNameRow.style.display = isBranch ? "" : "none";
   if (companyNameInput) {
     companyNameInput.disabled = isBranch;
     companyNameInput.required = !isBranch;
@@ -401,6 +404,25 @@ function applyParentDefaults(parentId) {
   }
 }
 
+async function updateQboCustomerIdVisibility() {
+  if (!qboCustomerIdRow) return;
+  if (!hideQboSectionsWhenDisconnected) {
+    qboCustomerIdRow.style.display = "";
+    return;
+  }
+  if (!activeCompanyId) return;
+  try {
+    const res = await fetch(`/api/qbo/status?companyId=${encodeURIComponent(String(activeCompanyId))}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return;
+    const connected = data.connected === true;
+    qboCustomerIdRow.style.display = connected ? "" : "none";
+  } catch {
+    // Keep visible if we can't confirm QBO status.
+    qboCustomerIdRow.style.display = "";
+  }
+}
+
 async function ensureCustomersCache() {
   if (!activeCompanyId) return;
   if (customersCache.length) return;
@@ -419,10 +441,12 @@ async function loadContactCategories() {
     const data = await res.json().catch(() => ({}));
     if (res.ok) {
       categories = data.settings?.customer_contact_categories || DEFAULT_CONTACT_CATEGORIES;
+      hideQboSectionsWhenDisconnected = data.settings?.hide_qbo_sections_when_disconnected === true;
     }
   }
   contactCategoryConfig = normalizeContactCategories(categories);
   renderContactCategories(contactCategoryConfig);
+  updateQboCustomerIdVisibility().catch(() => {});
   return contactCategoryConfig;
 }
 
@@ -908,12 +932,10 @@ async function loadCustomer() {
   if (!activeCompanyId || !editingCustomerId) return;
   try {
     await contactCategoriesPromise;
-    await ensureCustomersCache();
-    const customer = customersCache.find((c) => Number(c.id) === Number(editingCustomerId));
-    if (!customer) {
-      companyMeta.textContent = "Customer not found for this company.";
-      return;
-    }
+    const res = await fetch(`/api/customers/${editingCustomerId}?companyId=${activeCompanyId}`);
+    if (!res.ok) throw new Error("Unable to fetch customer from server.");
+    const customer = await res.json();
+    
     if (companyNameInput) companyNameInput.value = customer.company_name || "";
     if (branchNameInput) branchNameInput.value = customer.company_name || "";
     const groups = buildCustomerContactGroups(customer);

@@ -263,7 +263,7 @@
             </p>
           </section>
 
-          <section class="card wide">
+          <section class="card wide" id="qbo-documents-section">
             <div class="card-header">
               <div>
                 <p class="eyebrow" style="display:none;">Accounting</p>
@@ -310,6 +310,11 @@
                 <div data-rental-info-field="criticalAreas">
                   <label>Critical Assets and Locations on Site
                     <textarea id="critical-areas"></textarea>
+                  </label>
+                </div>
+                <div data-rental-info-field="directions">
+                  <label>Directions
+                    <textarea id="directions"></textarea>
                   </label>
                 </div>
                 <div data-rental-info-field="monitoringPersonnel">
@@ -738,13 +743,10 @@
         <button class="ghost small" id="close-side-address-picker" type="button">Close</button>
       </div>
       <div class="stack">
-        <div class="three-col">
+        <div class="two-col">
           <label>Search address
             <input id="side-address-picker-search" placeholder="Start typing an address..." autocomplete="off" />
             <div id="side-address-picker-suggestions" class="rs-autocomplete" hidden></div>
-          </label>
-          <label>Site address
-            <input id="side-address-picker-input" placeholder="Site address or label..." />
           </label>
           <label>Map view
             <select id="side-address-picker-map-style">

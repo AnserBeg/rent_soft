@@ -266,6 +266,7 @@ async function loadYearTotals({ year, statuses, seq }) {
   query.set("to", range.to);
   query.set("statuses", statuses.join(","));
   query.set("dateField", "rental_period");
+  query.set("includeFeesInRange", "1");
 
   let orders = [];
   try {
@@ -680,7 +681,7 @@ function lineItemQty(lineItem, orderStatus) {
   if (lineItem.bundleId) return 1;
   const ids = Array.isArray(lineItem.inventoryIds) ? lineItem.inventoryIds : [];
   if (ids.length) return ids.length;
-  return isDemandOnlyStatus(orderStatus) ? 1 : 0;
+  return 1;
 }
 
 function fmtDateTime(value) {
@@ -1031,6 +1032,7 @@ async function loadMonthlyTotals() {
   query.set("to", parsed.to);
   query.set("statuses", statuses.join(","));
   query.set("dateField", "rental_period");
+  query.set("includeFeesInRange", "1");
 
   setPageMeta(`Loading ${monthLabel} totals...`);
   setAsOfMeta("");

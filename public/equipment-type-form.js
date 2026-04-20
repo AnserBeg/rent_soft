@@ -11,6 +11,7 @@ const formTitle = document.getElementById("form-title");
 const deleteTypeBtn = document.getElementById("delete-type");
 const typeForm = document.getElementById("type-form");
 const categorySelect = document.getElementById("category-select");
+const qboItemSection = document.getElementById("qbo-item-section");
 const qboItemSelect = document.getElementById("qbo-item-select");
 const qboItemHint = document.getElementById("qbo-item-hint");
 const qboItemRefreshBtn = document.getElementById("qbo-item-refresh");
@@ -61,6 +62,7 @@ let selectedTypeImage = null;
 let typeAiBusy = false;
 let qboConnected = false;
 let qboItemsCache = [];
+let hideQboSectionsWhenDisconnected = false;
 let trackingFieldsCache = [];
 let editingTrackingFieldId = null;
 
@@ -115,6 +117,27 @@ function setQboItemHint(message) {
   qboItemHint.textContent = message ? String(message) : "";
 }
 
+function applyQboItemSectionVisibility() {
+  if (!qboItemSection) return;
+  const shouldHide = hideQboSectionsWhenDisconnected && !qboConnected;
+  qboItemSection.style.display = shouldHide ? "none" : "";
+}
+
+async function loadQboUiSettings() {
+  hideQboSectionsWhenDisconnected = false;
+  if (!activeCompanyId) return;
+  try {
+    const res = await fetch(`/api/company-settings?companyId=${encodeURIComponent(String(activeCompanyId))}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return;
+    hideQboSectionsWhenDisconnected = data.settings?.hide_qbo_sections_when_disconnected === true;
+  } catch {
+    hideQboSectionsWhenDisconnected = false;
+  } finally {
+    applyQboItemSectionVisibility();
+  }
+}
+
 function renderQboItems() {
   if (!qboItemSelect) return;
   const selected = String(typeForm?.qboItemId?.value || qboItemSelect.value || "").trim();
@@ -159,11 +182,13 @@ async function loadQboStatus() {
         ? "Select the matching QuickBooks item by name."
         : "Connect QuickBooks Online to load items."
     );
+    applyQboItemSectionVisibility();
   } catch (err) {
     qboConnected = false;
     if (qboItemRefreshBtn) qboItemRefreshBtn.disabled = true;
     qboItemSelect.disabled = true;
     setQboItemHint(err?.message ? String(err.message) : "Unable to load QBO status.");
+    applyQboItemSectionVisibility();
   }
 }
 
@@ -315,13 +340,13 @@ function openTrackingFieldModal(field) {
   trackingFieldForm.sortOrder.value = f?.sortOrder ?? 0;
   trackingFieldForm.required.checked = f?.required === true;
 
-  const show = f?.showOnAssetsTable === true;
-  trackingFieldForm.showOnAssetsTable.checked = show;
   trackingFieldForm.tableColumnLabel.value = f?.tableColumnLabel || "";
-  trackingFieldForm.tableColumnMode.value = f?.tableColumnMode || "value";
+  const show = f?.showOnAssetsTable === true;
+  const rawTableMode = String(f?.tableColumnMode || "").trim();
+  const initialTableMode = show ? (rawTableMode && rawTableMode !== "none" ? rawTableMode : "value") : "none";
+  trackingFieldForm.tableColumnMode.value = initialTableMode;
 
   const rule = f?.rule && typeof f.rule === "object" ? f.rule : {};
-  trackingFieldForm.ruleEnabled.checked = rule.enabled === true;
   trackingFieldForm.ruleType.value = rule.ruleType || "none";
   trackingFieldForm.intervalDays.value = rule.intervalDays ?? "";
   trackingFieldForm.warnDays.value = rule.warnDays ?? "";
@@ -334,6 +359,8 @@ function openTrackingFieldModal(field) {
   trackingFieldForm.optionsText.value = optionsText;
 
   if (deleteTrackingFieldBtn) deleteTrackingFieldBtn.style.display = editingTrackingFieldId ? "inline-flex" : "none";
+  syncTrackingFieldTableUi();
+  syncTrackingFieldRuleUi();
   trackingFieldModal.classList.add("show");
 }
 
@@ -383,7 +410,8 @@ function renderTrackingFieldsTable() {
     div.className = "table-row";
     div.dataset.id = String(row.id);
     const rule = row?.rule && typeof row.rule === "object" ? row.rule : {};
-    const ruleText = rule?.enabled ? (rule.ruleType || "enabled") : "none";
+    const ruleType = String(rule?.ruleType || "none").trim() || "none";
+    const ruleText = ruleType !== "none" ? ruleType : "none";
     const tableText = row.showOnAssetsTable ? "shown" : "hidden";
     div.innerHTML = `
       <span>${escapeHtml(row.label || "--")}</span>
@@ -431,14 +459,14 @@ function trackingFieldPayloadFromForm() {
   const unit = String(trackingFieldForm.unit.value || "").trim() || null;
   const sortOrder = Number(trackingFieldForm.sortOrder.value || 0);
   const required = trackingFieldForm.required.checked === true;
-  const showOnAssetsTable = trackingFieldForm.showOnAssetsTable.checked === true;
   const tableColumnLabel = String(trackingFieldForm.tableColumnLabel.value || "").trim() || null;
-  const tableColumnMode = String(trackingFieldForm.tableColumnMode.value || "value").trim();
+  const tableColumnMode = String(trackingFieldForm.tableColumnMode.value || "none").trim() || "none";
+  const showOnAssetsTable = tableColumnMode !== "none";
 
   const options = dataType === "select" ? parseTrackingOptionsText(trackingFieldForm.optionsText.value) : [];
 
-  const ruleEnabled = trackingFieldForm.ruleEnabled.checked === true;
-  const ruleType = ruleEnabled ? String(trackingFieldForm.ruleType.value || "none").trim() : "none";
+  const ruleType = String(trackingFieldForm.ruleType.value || "none").trim() || "none";
+  const ruleEnabled = ruleType !== "none";
   const intervalDays = trackingFieldForm.intervalDays.value === "" ? null : Number(trackingFieldForm.intervalDays.value);
   const warnDays = trackingFieldForm.warnDays.value === "" ? null : Number(trackingFieldForm.warnDays.value);
   const intervalHours = trackingFieldForm.intervalHours.value === "" ? null : Number(trackingFieldForm.intervalHours.value);
@@ -464,6 +492,26 @@ function trackingFieldPayloadFromForm() {
       warnHours: Number.isFinite(warnHours) ? warnHours : null,
     },
   };
+}
+
+function syncTrackingFieldTableUi() {
+  if (!trackingFieldForm) return;
+  const mode = String(trackingFieldForm.tableColumnMode?.value || "none").trim() || "none";
+  const enabled = mode !== "none";
+  if (trackingFieldForm.tableColumnLabel) trackingFieldForm.tableColumnLabel.disabled = !enabled;
+}
+
+function syncTrackingFieldRuleUi() {
+  if (!trackingFieldForm) return;
+  const ruleType = String(trackingFieldForm.ruleType?.value || "none").trim() || "none";
+  const enableDays = ruleType === "time_interval";
+  const enableWarnDays = ruleType === "time_interval" || ruleType === "manual_due_date" || ruleType === "manual_due_date_separate";
+  const enableHours = ruleType === "meter_interval";
+  const enableWarnHours = ruleType === "meter_interval";
+  if (trackingFieldForm.intervalDays) trackingFieldForm.intervalDays.disabled = !enableDays;
+  if (trackingFieldForm.warnDays) trackingFieldForm.warnDays.disabled = !enableWarnDays;
+  if (trackingFieldForm.intervalHours) trackingFieldForm.intervalHours.disabled = !enableHours;
+  if (trackingFieldForm.warnHours) trackingFieldForm.warnHours.disabled = !enableWarnHours;
 }
 
 async function saveTrackingFieldFromModal() {
@@ -1042,8 +1090,11 @@ function setCompany(id) {
   loadCategories();
   if (editingTypeId) loadType();
   if (qboItemSelect) {
-    loadQboStatus()
-      .then(() => loadQboItems())
+    Promise.all([loadQboUiSettings(), loadQboStatus()])
+      .then(() => {
+        if (hideQboSectionsWhenDisconnected && !qboConnected) return;
+        return loadQboItems();
+      })
       .catch(() => null);
   }
 }
@@ -1094,6 +1145,9 @@ trackingFieldForm?.addEventListener("submit", (e) => {
   e.preventDefault();
   saveTrackingFieldFromModal();
 });
+
+trackingFieldForm?.ruleType?.addEventListener("change", () => syncTrackingFieldRuleUi());
+trackingFieldForm?.tableColumnMode?.addEventListener("change", () => syncTrackingFieldTableUi());
 
 deleteTrackingFieldBtn?.addEventListener("click", (e) => {
   e.preventDefault();

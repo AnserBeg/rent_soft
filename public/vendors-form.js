@@ -11,15 +11,32 @@ const vendorForm = document.getElementById("vendor-form");
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let vendorsCache = [];
 
+let errorBannerTimer = null;
+function showErrorBanner(message = "Unable to load vendor.") {
+  let banner = document.getElementById("vendor-error-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "vendor-error-banner";
+    banner.className = "save-banner error";
+    document.body.appendChild(banner);
+  }
+  banner.textContent = message;
+  banner.classList.add("show");
+  if (errorBannerTimer) clearTimeout(errorBannerTimer);
+  errorBannerTimer = setTimeout(() => {
+    banner.classList.remove("show");
+  }, 3200);
+}
+
 function updateModeLabels() {
   if (editingVendorId) {
-    modeLabel.textContent = `Edit vendor #${editingVendorId}`;
-    formTitle.textContent = "Vendor details";
-    deleteVendorBtn.style.display = "inline-flex";
+    if (modeLabel) modeLabel.textContent = `Edit vendor #${editingVendorId}`;
+    if (formTitle) formTitle.textContent = "Vendor details";
+    if (deleteVendorBtn) deleteVendorBtn.style.display = "inline-flex";
   } else {
-    modeLabel.textContent = "New vendor";
-    formTitle.textContent = "Vendor details";
-    deleteVendorBtn.style.display = "none";
+    if (modeLabel) modeLabel.textContent = "New vendor";
+    if (formTitle) formTitle.textContent = "Vendor details";
+    if (deleteVendorBtn) deleteVendorBtn.style.display = "none";
   }
 }
 
@@ -41,6 +58,7 @@ async function loadVendor() {
   await loadVendors();
   const vendor = vendorsCache.find((v) => String(v.id) === String(editingVendorId));
   if (!vendor) {
+    showErrorBanner("Vendor not found.");
     return;
   }
   vendorForm.companyName.value = vendor.company_name || "";
@@ -96,7 +114,10 @@ deleteVendorBtn?.addEventListener("click", async (e) => {
 if (activeCompanyId) {
   window.RentSoft?.setCompanyId?.(activeCompanyId);
   updateModeLabels();
-  loadVendor().catch(() => {});
+  loadVendor().catch((err) => {
+    showErrorBanner(err?.message || "Unable to load vendor.");
+  });
 } else {
   updateModeLabels();
+  if (editingVendorId) showErrorBanner("Missing companyId. Return to Vendors and try again.");
 }

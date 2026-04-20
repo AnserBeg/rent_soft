@@ -145,6 +145,65 @@
             </div>
           </section>
 
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>Order contacts</h2>
+                <p class="hint" style="margin:6px 0 0;">Hide the Order contacts section on rental orders, quotes, and customer links.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="save-order-contacts-enabled" disabled>Save</button>
+              </div>
+            </div>
+            <div class="stack">
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="order-contacts-enabled" type="checkbox" />
+                <span>Show Order contacts section</span>
+              </label>
+              <p class="hint" id="order-contacts-enabled-hint" style="margin:0;"></p>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Assets table columns</h2>
+                <p class="hint" style="margin:6px 0 0;">Choose the company default columns shown on the Assets page. Users can still customize columns in their own browser.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="save-assets-table-columns" disabled>Save</button>
+                <button class="ghost" id="reset-assets-table-columns" type="button">Show all by default</button>
+              </div>
+            </div>
+
+            <div class="stack">
+              <label class="hint" style="margin:0;">Filter
+                <input id="assets-table-columns-search" class="search-input" placeholder="Type to filter columns..." />
+              </label>
+              <div class="checklist" id="assets-table-columns-list" aria-label="Company default assets table columns"></div>
+              <p class="hint" id="assets-table-columns-hint" style="margin:0;"></p>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>Asset directions</h2>
+                <p class="hint" style="margin:6px 0 0;">When enabled, assets show a Directions field and you'll be prompted to keep it in sync with current location.</p>
+              </div>
+              <div class="inline-actions">
+                <button class="primary" id="save-asset-directions" disabled>Save</button>
+              </div>
+            </div>
+            <div class="stack">
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="asset-directions-enabled" type="checkbox" />
+                <span>Enable Directions field on assets</span>
+              </label>
+              <p class="hint" id="asset-directions-hint" style="margin:0;"></p>
+            </div>
+          </section>
+
           <section class="card wide">
             <div class="card-header">
               <div>
@@ -256,6 +315,10 @@
               <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
                 <input id="qbo-enabled" type="checkbox" />
                 <span>Enable QBO draft billing</span>
+              </label>
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="qbo-hide-sections-when-disconnected" type="checkbox" />
+                <span>Hide QBO fields when not connected</span>
               </label>
               <div class="three-col">
                 <label>Billing day

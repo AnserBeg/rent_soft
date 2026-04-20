@@ -90,22 +90,15 @@
             <div class="card-header">
               <div>
                 <p class="eyebrow">Details</p>
-                <h2>Unit and date</h2>
+                <h2>Unit and dates</h2>
               </div>
             </div>
             <div class="three-col">
-              <label>Date
-                <input id="work-date" type="date" />
+              <label>Created date
+                <input id="created-date" type="date" disabled />
               </label>
-              <label>Units (stock)
-                <input id="unit-search-input" type="text" placeholder="Select units" autocomplete="off"
-                  role="combobox" aria-autocomplete="list" aria-expanded="false"
-                  aria-controls="unit-suggestions" />
-                <div id="unit-suggestions" class="rs-autocomplete" role="listbox" hidden></div>
-                <div id="unit-selected" class="selection-pills"></div>
-                <select id="unit-select" multiple size="4" style="display:none;" aria-hidden="true" tabindex="-1">
-                  <option value="">Select a unit</option>
-                </select>
+              <label>Due date
+                <input id="due-date" type="date" />
               </label>
               <label>Service status
                 <select id="service-status">
@@ -114,6 +107,16 @@
                 </select>
               </label>
             </div>
+            <label style="margin-top:12px;">Units (stock)
+              <input id="unit-search-input" type="text" placeholder="Select units" autocomplete="off"
+                role="combobox" aria-autocomplete="list" aria-expanded="false"
+                aria-controls="unit-suggestions" />
+              <div id="unit-suggestions" class="rs-autocomplete" role="listbox" hidden></div>
+              <div id="unit-selected" class="selection-pills"></div>
+              <select id="unit-select" multiple size="4" style="display:none;" aria-hidden="true" tabindex="-1">
+                <option value="">Select a unit</option>
+              </select>
+            </label>
             <p class="hint" style="margin: 10px 0 0;">Select one or more units (type to search).</p>
             <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff; margin-top:12px;">
               <input id="return-inspection" type="checkbox" />
@@ -129,9 +132,70 @@
             </label>
             <p class="hint" id="tracking-update-hint" style="display:none; margin: 6px 0 0;"></p>
             <div class="stack workorder-summary" style="margin-top:12px;">
-              <label>Issues
+              <label>Task at hand
                 <textarea id="work-issues" class="notes-area" placeholder="Add any issues or concerns..."></textarea>
               </label>
+            </div>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <p class="eyebrow">Job</p>
+                <h2>Customer and site</h2>
+              </div>
+            </div>
+            <div class="three-col">
+              <label>Rental order
+                <select id="rental-order-id">
+                  <option value="">(None)</option>
+                </select>
+              </label>
+              <label>Customer
+                <select id="customer-id">
+                  <option value="">(None)</option>
+                </select>
+              </label>
+              <label>Category
+                <input id="work-category" type="text" placeholder="e.g. Repair, Service, Install" />
+              </label>
+            </div>
+            <div class="three-col" style="margin-top:12px;">
+              <label>Site name
+                <input id="site-name" type="text" placeholder="Job site name" />
+              </label>
+              <label>Site address
+                <input id="site-address" type="text" placeholder="Street, city, region..." />
+              </label>
+              <label>Site pin / access code
+                <input id="site-access-code" type="text" placeholder="Gate code, lockbox, etc." />
+              </label>
+            </div>
+            <div class="three-col" style="margin-top:12px;">
+              <label>Customer name (override)
+                <input id="customer-name" type="text" placeholder="Displayed customer name" />
+              </label>
+              <label>Contact
+                <input id="work-contact" type="text" placeholder="Primary contact for this work order" />
+              </label>
+            </div>
+            <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin-top:12px;">
+              <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
+                <input id="is-recurring" type="checkbox" />
+                <span>Recurring</span>
+              </label>
+              <label style="min-width:180px;">Every
+                <input id="recurrence-interval" type="number" min="1" step="1" value="1" />
+              </label>
+              <label style="min-width:220px;">Frequency
+                <select id="recurrence-frequency">
+                  <option value="">(Select)</option>
+                  <option value="days">Days</option>
+                  <option value="weeks">Weeks</option>
+                  <option value="months">Months</option>
+                </select>
+              </label>
+              <p class="hint" id="recurrence-hint" style="margin:0;"></p>
             </div>
           </section>
 

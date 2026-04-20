@@ -508,7 +508,7 @@ function lineItemQty(lineItem, orderStatus) {
   if (lineItem.bundleId) return 1;
   const ids = Array.isArray(lineItem.inventoryIds) ? lineItem.inventoryIds : [];
   if (ids.length) return ids.length;
-  return isDemandOnlyStatus(orderStatus) ? 1 : 0;
+  return 1;
 }
 
 function computeOrderMonthTotals({ order, lineItems, fees, monthKey }) {
@@ -739,6 +739,7 @@ async function init() {
       to: toDate.toISOString().slice(0, 10),
       statuses: DEFAULT_STATUSES.join(","),
       dateField: "rental_period",
+      includeFeesInRange: "1",
     });
     const res = await fetch(`/api/rental-orders?${qs.toString()}`);
     const data = await res.json().catch(() => ({}));

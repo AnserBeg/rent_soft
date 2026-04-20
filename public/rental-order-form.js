@@ -49,6 +49,7 @@ const downloadOrderPdfBtn = document.getElementById("download-order-pdf");
 const openHistoryBtn = document.getElementById("open-history");
 const openMonthlyChargesBtn = document.getElementById("open-monthly-charges");
 const openCustomerUpdatesBtn = document.getElementById("open-customer-updates");
+const qboDocumentsSection = document.getElementById("qbo-documents-section");
 const qboDocumentsList = document.getElementById("qbo-documents-list");
 const qboDocumentsHint = document.getElementById("qbo-documents-hint");
 const qboSyncNowBtn = document.getElementById("qbo-sync-now");
@@ -76,6 +77,7 @@ const addSiteContactRowBtn = document.getElementById("add-site-contact-row");
 const orderContactCategoriesContainer = document.getElementById("order-contact-categories");
 const orderContactsToggleBtn = document.getElementById("toggle-order-contacts");
 const orderContactsBody = document.getElementById("order-contacts-body");
+const orderContactsSection = orderContactsToggleBtn?.closest?.("section") || orderContactsBody?.closest?.("section") || null;
 const fulfillmentSelects = [
   document.getElementById("fulfillment-select"),
   document.getElementById("fulfillment-select-2"),
@@ -96,6 +98,7 @@ const siteNameInput = document.getElementById("site-name");
 const siteAddressInput = document.getElementById("site-address");
 const siteAccessInfoInput = document.getElementById("site-access-info");
 const criticalAreasInput = document.getElementById("critical-areas");
+const directionsInput = document.getElementById("directions");
 const monitoringPersonnelInput = document.getElementById("monitoring-personnel");
 const generalNotesInput = document.getElementById("general-notes");
 const generalNotesEditor = document.getElementById("general-notes-editor");
@@ -112,6 +115,7 @@ const rentalInfoFieldContainers = {
   siteAddress: document.querySelector('[data-rental-info-field="siteAddress"]'),
   siteAccessInfo: document.querySelector('[data-rental-info-field="siteAccessInfo"]'),
   criticalAreas: document.querySelector('[data-rental-info-field="criticalAreas"]'),
+  directions: document.querySelector('[data-rental-info-field="directions"]'),
   monitoringPersonnel: document.querySelector('[data-rental-info-field="monitoringPersonnel"]'),
   generalNotes: document.querySelector('[data-rental-info-field="generalNotes"]'),
   emergencyContacts: document.querySelector('[data-rental-info-field="emergencyContacts"]'),
@@ -270,7 +274,16 @@ let billingRoundingGranularity = "unit";
 let monthlyProrationMethod = "hours";
 let billingTimeZone = "UTC";
 let autoWorkOrderOnReturn = false;
+let assetDirectionsEnabled = false;
+let orderContactsEnabled = true;
 let rentalInfoFields = null;
+let hideQboSectionsWhenDisconnected = false;
+let showQboDocumentsSection = true;
+
+function applyOrderContactsEnabled(enabled) {
+  if (!orderContactsSection) return;
+  orderContactsSection.style.display = enabled === false ? "none" : "";
+}
 
 const RERENT_TYPE_LABEL = "Rerent";
 const RERENT_OPTION_VALUE = "__rerent__";
@@ -316,11 +329,13 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   siteName: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  directions: { enabled: false, required: false },
   monitoringPersonnel: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
   emergencyContactInstructions: { enabled: true, required: false },
   siteContacts: { enabled: true, required: true },
+  notificationCircumstances: { enabled: true, required: false },
   coverageHours: { enabled: true, required: true },
 };
 
@@ -1129,6 +1144,7 @@ let draft = {
   siteAddressLng: null,
   siteAddressQuery: "",
   criticalAreas: "",
+  directions: "",
   monitoringPersonnel: "",
   generalNotes: "",
   coverageHours: [],
@@ -1175,6 +1191,7 @@ function resetDraftForNew() {
     siteAddressLng: null,
     siteAddressQuery: "",
     criticalAreas: "",
+    directions: "",
     monitoringPersonnel: "",
     generalNotes: "",
     coverageHours: [],
@@ -1669,8 +1686,9 @@ function setSideAddressSelected(lat, lng, { provider, query } = {}) {
   if (sideAddressPickerMeta) {
     sideAddressPickerMeta.textContent = `Selected: ${nextLat.toFixed(6)}, ${nextLng.toFixed(6)}`;
   }
-  if (sideAddressPickerInput && query) {
-    sideAddressPickerInput.value = String(query);
+  if (query) {
+    if (sideAddressPickerSearch) sideAddressPickerSearch.value = String(query);
+    if (sideAddressPickerInput) sideAddressPickerInput.value = String(query);
   }
   syncSideAddressPickerMarker(nextLat, nextLng);
   return true;
@@ -1895,7 +1913,7 @@ async function createLocationForSideAddressUnitPin({ name, latitude, longitude, 
   return data;
 }
 
-async function setSideAddressUnitCurrentLocation({ unitId, locationId }) {
+async function setSideAddressUnitCurrentLocation({ unitId, locationId, directions } = {}) {
   const res = await fetch("/api/equipment/current-location", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1903,11 +1921,20 @@ async function setSideAddressUnitCurrentLocation({ unitId, locationId }) {
       companyId: activeCompanyId,
       equipmentIds: [Number(unitId)],
       currentLocationId: Number(locationId),
+      ...(assetDirectionsEnabled ? { directions } : {}),
     }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to update current location.");
   return data;
+}
+
+function promptAssetDirectionsForLocation({ suggested = "" } = {}) {
+  const defaultValue = String(suggested || "");
+  const response = window.prompt("Directions for this asset's current location (optional):", defaultValue);
+  const finalValue = response === null ? defaultValue : String(response);
+  const trimmed = finalValue.trim();
+  return trimmed || null;
 }
 
 function buildSideAddressUnitPinLocationName({ unitId, label }) {
@@ -1949,7 +1976,10 @@ async function saveSideAddressUnitPinForSelectedUnit() {
       provider: sel.provider,
       query: sel.query,
     });
-    await setSideAddressUnitCurrentLocation({ unitId, locationId: location.id });
+    const directions = assetDirectionsEnabled
+      ? promptAssetDirectionsForLocation({ suggested: String(draft?.directions || "").trim() })
+      : undefined;
+    await setSideAddressUnitCurrentLocation({ unitId, locationId: location.id, directions });
     sideAddressPicker.unitMarkerData.set(String(unitId), {
       lat: sel.lat,
       lng: sel.lng,
@@ -1960,6 +1990,7 @@ async function saveSideAddressUnitPinForSelectedUnit() {
       eq.current_location = location.name || eq.current_location || null;
       eq.current_location_latitude = sel.lat;
       eq.current_location_longitude = sel.lng;
+      if (assetDirectionsEnabled) eq.directions = directions || null;
     }
     sideAddressPicker.unitSelected = null;
     updateSideAddressUnitMeta(`Saved pin for ${label}.`);
@@ -2044,6 +2075,12 @@ function bindSideAddressSearchMirror() {
   });
 }
 
+function getSideAddressPickerManualText() {
+  const fromSearch = String(sideAddressPickerSearch?.value || "").trim();
+  if (fromSearch) return fromSearch;
+  return String(sideAddressPickerInput?.value || "").trim();
+}
+
 const MAP_TILE_SOURCES = {
   street: {
     url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -2122,7 +2159,7 @@ function setSideAddressPickerMapStyle(style) {
 
 async function applySideAddressPickerTextSelection() {
   if (sideAddressPicker.google.marker || sideAddressPicker.leaflet.marker) return true;
-  const query = String(draft.siteAddressQuery || draft.siteAddress || sideAddressPickerInput?.value || "").trim();
+  const query = String(draft.siteAddressQuery || draft.siteAddress || sideAddressPickerSearch?.value || sideAddressPickerInput?.value || "").trim();
   if (!query) return false;
 
   const parsedCoords = parseLatLngFromText(query);
@@ -2402,8 +2439,8 @@ function initLeafletSideAddressPicker(center) {
             const lng = toFiniteCoordinate(picked?.__rs_lng);
             hideSideAddressSuggestions();
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-            if (sideAddressPickerInput) sideAddressPickerInput.value = label || "";
             if (sideAddressPickerSearch) sideAddressPickerSearch.value = label || "";
+            if (sideAddressPickerInput) sideAddressPickerInput.value = label || "";
             if (!sideAddressPicker.leaflet.marker) {
               sideAddressPicker.leaflet.marker = window.L.marker([lat, lng], { draggable: true }).addTo(map);
               sideAddressPicker.leaflet.marker.on("dragend", () => {
@@ -2534,8 +2571,8 @@ function initGoogleSideAddressPicker(center) {
                 sideAddressPicker.google.pickSeq = pickSeq;
                 const details = await fetchPlaceDetails(placeId, label);
                 if (pickSeq !== sideAddressPicker.google.pickSeq) return;
-                if (sideAddressPickerInput) sideAddressPickerInput.value = details.label;
                 if (sideAddressPickerSearch) sideAddressPickerSearch.value = details.label;
+                if (sideAddressPickerInput) sideAddressPickerInput.value = details.label;
                 if (!sideAddressPicker.google.marker) {
                   sideAddressPicker.google.marker = new window.google.maps.Marker({
                     position: { lat: details.lat, lng: details.lng },
@@ -2597,9 +2634,9 @@ async function openSideAddressPicker() {
   }
   syncSideAddressUnitSelect();
 
-  if (sideAddressPickerInput && !String(sideAddressPickerInput.value || "").trim()) {
-    const existing = String(siteAddressInput?.value || draft.siteAddress || "").trim();
-    if (existing) sideAddressPickerInput.value = existing;
+  const existingAddress = String(siteAddressInput?.value || draft.siteAddress || "").trim();
+  if (existingAddress && sideAddressPickerSearch && !String(sideAddressPickerSearch.value || "").trim()) {
+    sideAddressPickerSearch.value = existingAddress;
   }
 
   let center = { lat: 20, lng: 0 };
@@ -2673,7 +2710,7 @@ async function openSideAddressPicker() {
 }
 
 function saveSideAddressFromPicker() {
-  const manual = String(sideAddressPickerInput?.value || "").trim();
+  const manual = getSideAddressPickerManualText();
   const fallbackQuery = sideAddressPicker.selected?.query ? String(sideAddressPicker.selected.query) : "";
   const fallbackCoords = sideAddressPicker.selected
     ? `${Number(sideAddressPicker.selected.lat).toFixed(6)}, ${Number(sideAddressPicker.selected.lng).toFixed(6)}`
@@ -3297,6 +3334,10 @@ async function loadCompanySettings() {
   monthlyProrationMethod = "hours";
   billingTimeZone = "UTC";
   autoWorkOrderOnReturn = false;
+  assetDirectionsEnabled = false;
+  orderContactsEnabled = true;
+  hideQboSectionsWhenDisconnected = false;
+  applyOrderContactsEnabled(true);
   applyRentalInfoConfig(null);
   if (!activeCompanyId) return;
   const res = await fetch(`/api/company-settings?companyId=${activeCompanyId}`);
@@ -3316,16 +3357,52 @@ async function loadCompanySettings() {
   if (res.ok && data.settings?.auto_work_order_on_return !== undefined) {
     autoWorkOrderOnReturn = data.settings.auto_work_order_on_return === true;
   }
+  if (res.ok && data.settings?.asset_directions_enabled !== undefined) {
+    assetDirectionsEnabled = data.settings.asset_directions_enabled === true;
+  }
+  if (res.ok && data.settings?.order_contacts_enabled !== undefined) {
+    orderContactsEnabled = data.settings.order_contacts_enabled !== false;
+    applyOrderContactsEnabled(orderContactsEnabled);
+  }
   if (res.ok) {
     applyRentalInfoConfig(data.settings?.rental_info_fields || null);
   }
   if (res.ok) {
-    orderContactCategoryConfig = normalizeContactCategories(
-      data.settings?.customer_contact_categories || DEFAULT_CONTACT_CATEGORIES
-    );
-    renderOrderContactCategories();
+    hideQboSectionsWhenDisconnected = data.settings?.hide_qbo_sections_when_disconnected === true;
   }
+  if (res.ok) {
+    if (orderContactsEnabled) {
+      orderContactCategoryConfig = normalizeContactCategories(
+        data.settings?.customer_contact_categories || DEFAULT_CONTACT_CATEGORIES
+      );
+      renderOrderContactCategories();
+    } else if (orderContactCategoriesContainer) {
+      orderContactCategoriesContainer.innerHTML = "";
+    }
+  }
+  updateQboDocumentsSectionVisibility().catch(() => {});
   setCoverageTimeZoneInput(draft.coverageTimeZone, { silent: true });
+}
+
+async function updateQboDocumentsSectionVisibility() {
+  if (!qboDocumentsSection) return;
+  if (!hideQboSectionsWhenDisconnected) {
+    showQboDocumentsSection = true;
+    qboDocumentsSection.style.display = "";
+    return;
+  }
+  if (!activeCompanyId) return;
+  try {
+    const res = await fetch(`/api/qbo/status?companyId=${encodeURIComponent(String(activeCompanyId))}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return;
+    const connected = data.connected === true;
+    showQboDocumentsSection = connected;
+    qboDocumentsSection.style.display = connected ? "" : "none";
+  } catch {
+    showQboDocumentsSection = true;
+    qboDocumentsSection.style.display = "";
+  }
 }
 
 function billingPeriodDays(rateBasis) {
@@ -3711,10 +3788,7 @@ function resolveDisplayLineAmount({
 }
 
 function lineItemQty(li) {
-  if (isRerentLineItem(li)) return 1;
-  if (isDemandOnlyStatus(draft.status)) return 1;
-  if (li?.bundleId) return 1;
-  return (li.inventoryIds || []).length ? 1 : 0;
+  return 1;
 }
 
 function lineItemHasUnit(li) {
@@ -3947,6 +4021,7 @@ function renderQboDocuments(docs) {
 }
 
 async function loadQboDocuments() {
+  if (!showQboDocumentsSection) return;
   if (!activeCompanyId || !editingOrderId) return;
   if (qboDocumentsHint) qboDocumentsHint.textContent = "Loading QBO documents...";
   try {
@@ -3996,6 +4071,7 @@ function buildDraftSnapshot() {
     siteAddressLng: toFiniteCoordinate(draft.siteAddressLng),
     siteAddressQuery: draft.siteAddressQuery || "",
     criticalAreas: draft.criticalAreas || "",
+    directions: draft.directions || "",
     monitoringPersonnel: draft.monitoringPersonnel || "",
     generalNotes: draft.generalNotes || "",
     coverageHours: collectCoverageHoursFromInputs(),
@@ -4003,7 +4079,7 @@ function buildDraftSnapshot() {
     coverageStatHolidaysRequired: coverageStatHolidaysCheckbox?.checked === true,
     emergencyContacts: collectContacts(emergencyContactsList),
     siteContacts: collectContacts(siteContactsList),
-    orderContactSettings: collectOrderContactSettings(),
+    orderContactSettings: orderContactsEnabled ? collectOrderContactSettings() : undefined,
     notificationCircumstances: collectNotificationCircumstances(),
     status: normalizeOrderStatus(draft.status || "quote"),
     pickupInvoiceMode: draft.pickupInvoiceMode === "bulk" ? "bulk" : null,
@@ -6143,10 +6219,15 @@ function uniqueEquipmentIdsFromLineItems(items) {
 async function setCurrentLocationToBaseForEquipmentIds(equipmentIds) {
   const ids = Array.isArray(equipmentIds) ? equipmentIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)) : [];
   if (!activeCompanyId || !ids.length) return;
+  const directions = assetDirectionsEnabled ? promptAssetDirectionsForLocation({ suggested: "" }) : undefined;
   const res = await fetch("/api/equipment/current-location/base", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ companyId: activeCompanyId, equipmentIds: ids }),
+    body: JSON.stringify({
+      companyId: activeCompanyId,
+      equipmentIds: ids,
+      ...(assetDirectionsEnabled ? { directions } : {}),
+    }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Unable to update current location.");
@@ -6154,7 +6235,7 @@ async function setCurrentLocationToBaseForEquipmentIds(equipmentIds) {
   equipmentCache = equipmentCache.map((eq) => {
     if (!idSet.has(Number(eq.id))) return eq;
     if (!eq.location_id) return eq;
-    return { ...eq, current_location_id: eq.location_id, current_location: eq.location };
+    return { ...eq, current_location_id: eq.location_id, current_location: eq.location, ...(assetDirectionsEnabled ? { directions: directions || null } : {}) };
   });
 }
 
@@ -6798,6 +6879,7 @@ function initFormFieldsFromDraft() {
   if (siteAddressInput) siteAddressInput.value = draft.siteAddress || "";
   if (siteAccessInfoInput) siteAccessInfoInput.value = draft.siteAccessInfo || "";
   if (criticalAreasInput) criticalAreasInput.value = draft.criticalAreas || "";
+  if (directionsInput) directionsInput.value = draft.directions || "";
   if (monitoringPersonnelInput) monitoringPersonnelInput.value = draft.monitoringPersonnel || "";
   setGeneralNotesHtml(draft.generalNotes || "");
   setCoverageInputs(draft.coverageHours || []);
@@ -6838,6 +6920,7 @@ function syncRentalInfoDraft() {
   draft.siteAddressQuery = "";
   }
   draft.criticalAreas = criticalAreasInput?.value || "";
+  draft.directions = directionsInput?.value || "";
   draft.monitoringPersonnel = monitoringPersonnelInput?.value || "";
   draft.generalNotes = getGeneralNotesHtml();
   draft.emergencyContactInstructions = emergencyContactInstructionsInput?.value || "";
@@ -6884,6 +6967,7 @@ async function loadOrder() {
     ? String(o.site_address_query ?? o.siteAddressQuery)
     : "";
   draft.criticalAreas = o.critical_areas || o.criticalAreas || "";
+  draft.directions = o.directions || "";
   draft.monitoringPersonnel = o.monitoring_personnel || o.monitoringPersonnel || "";
   draft.generalNotes = o.general_notes || o.generalNotes || "";
   draft.emergencyContactInstructions =
@@ -8010,6 +8094,7 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     siteAddressLng: toFiniteCoordinate(draft.siteAddressLng),
     siteAddressQuery: draft.siteAddressQuery || null,
     criticalAreas: draft.criticalAreas || null,
+    directions: draft.directions || null,
     monitoringPersonnel: draft.monitoringPersonnel || null,
     generalNotes: draft.generalNotes || null,
     coverageHours: draft.coverageHours || [],
@@ -8018,7 +8103,7 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     emergencyContacts: collectContacts(emergencyContactsList),
     emergencyContactInstructions: draft.emergencyContactInstructions || null,
     siteContacts: collectContacts(siteContactsList),
-    orderContactSettings: collectOrderContactSettings(),
+    orderContactSettings: orderContactsEnabled ? collectOrderContactSettings() : undefined,
     notificationCircumstances: collectNotificationCircumstances(),
     status: normalizeOrderStatus(draft.status || "quote"),
     actorName,

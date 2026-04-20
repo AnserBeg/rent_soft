@@ -1,6 +1,9 @@
 const companyMeta = document.getElementById("company-meta");
 const workOrdersTable = document.getElementById("work-orders-table");
 const newWorkOrderBtn = document.getElementById("new-work-order");
+const importWorkOrdersBtn = document.getElementById("import-work-orders");
+const importWorkOrdersFileInput = document.getElementById("import-work-orders-file");
+const importWorkOrdersStatus = document.getElementById("import-work-orders-status");
 const searchInput = document.getElementById("search");
 const statusToggle = document.getElementById("status-toggle");
 const statusButtons = statusToggle ? Array.from(statusToggle.querySelectorAll("button[data-status]")) : [];
@@ -15,6 +18,12 @@ let statusFilter = "open";
 
 const LIST_STATE_KEY = "rentsoft.work-orders.listState";
 const STATUS_OPTIONS = ["open", "completed", "closed"];
+
+function setImportStatus(message, isError) {
+  if (!importWorkOrdersStatus) return;
+  importWorkOrdersStatus.textContent = message || "";
+  importWorkOrdersStatus.style.color = isError ? "#b42318" : "";
+}
 
 function loadListState() {
   const raw = localStorage.getItem(LIST_STATE_KEY);
@@ -124,13 +133,20 @@ function renderWorkOrders(rows) {
   workOrdersTable.innerHTML = `
     <div class="table-row table-header">
       <span>Work order</span>
-      <span>Date</span>
+      <span>Created</span>
+      <span>Due</span>
+      <span>Customer</span>
       <span>Units</span>
+      <span>Category</span>
       <span>Service</span>
       <span>Updated</span>
     </div>`;
 
   rows.forEach((order) => {
+    const createdAt = order?.createdAt ? new Date(order.createdAt) : null;
+    const createdLabel = createdAt && !Number.isNaN(createdAt.getTime())
+      ? createdAt.toLocaleDateString()
+      : "--";
     const updatedAt = order?.updatedAt ? new Date(order.updatedAt) : null;
     const updatedLabel = updatedAt && !Number.isNaN(updatedAt.getTime())
       ? updatedAt.toLocaleDateString()
@@ -143,8 +159,11 @@ function renderWorkOrders(rows) {
     const inspectionBadge = order?.returnInspection ? `<div style="margin-top:4px;"><span class="badge return-inspection">Return inspection</span></div>` : "";
     div.innerHTML = `
       <span>${order.number || "--"}</span>
-      <span>${order.date || "--"}</span>
+      <span>${createdLabel}</span>
+      <span>${order.dueDate || "--"}</span>
+      <span>${order.customerName || "--"}</span>
       <span>${formatUnitSummary(order)}</span>
+      <span>${order.category || "--"}</span>
       <span>${serviceLabel}${inspectionBadge}</span>
       <span>${updatedLabel}</span>
     `;
@@ -240,6 +259,51 @@ newWorkOrderBtn?.addEventListener("click", (e) => {
     return;
   }
   window.location.href = "work-order-form.html";
+});
+
+importWorkOrdersBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) {
+    if (companyMeta) companyMeta.textContent = "Log in to continue.";
+    return;
+  }
+  setImportStatus("");
+  importWorkOrdersFileInput?.click();
+});
+
+importWorkOrdersFileInput?.addEventListener("change", async () => {
+  if (!activeCompanyId) return;
+  const file = importWorkOrdersFileInput?.files?.[0] || null;
+  if (!file) return;
+
+  const body = new FormData();
+  body.append("companyId", String(activeCompanyId));
+  body.append("file", file);
+
+  if (importWorkOrdersBtn) importWorkOrdersBtn.disabled = true;
+  setImportStatus("Importing work orders…");
+  try {
+    const res = await fetch("/api/work-orders/import", { method: "POST", body });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Import failed.");
+
+    const created = Number(data.created || 0);
+    const updated = Number(data.updated || 0);
+    const skipped = Number(data.skipped || 0);
+    const equipmentCreated = Number(data.equipmentCreated || 0);
+    const errors = Array.isArray(data.errors) ? data.errors : [];
+    const errorHint = errors.length ? ` First error: row ${errors[0].row}: ${errors[0].error}` : "";
+    setImportStatus(
+      `Import complete: created ${created}, updated ${updated}, skipped ${skipped}. Equipment created ${equipmentCreated}.${errorHint}`,
+      errors.length > 0
+    );
+    await loadWorkOrders();
+  } catch (err) {
+    setImportStatus(err?.message || "Import failed.", true);
+  } finally {
+    if (importWorkOrdersBtn) importWorkOrdersBtn.disabled = false;
+    if (importWorkOrdersFileInput) importWorkOrdersFileInput.value = "";
+  }
 });
 
 searchInput?.addEventListener("input", (e) => {

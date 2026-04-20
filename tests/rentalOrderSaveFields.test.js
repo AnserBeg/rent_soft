@@ -151,6 +151,7 @@ function shouldRunDbTest() {
         logisticsInstructions: "Gate code is 1234",
         specialInstructions: "Call on arrival",
         criticalAreas: "Keep clear of loading zone",
+        directions: "Enter from NW gate and follow signs to yard office.",
         monitoringPersonnel: "Two contractors on site during monitoring hours",
         notificationCircumstances: ["After hours", "Gate locked"],
         coverageHours: [
@@ -196,6 +197,7 @@ function shouldRunDbTest() {
       assert.equal(order1.logistics_instructions, "Gate code is 1234");
       assert.equal(order1.special_instructions, "Call on arrival");
       assert.equal(order1.critical_areas, "Keep clear of loading zone");
+      assert.equal(order1.directions, "Enter from NW gate and follow signs to yard office.");
       assert.equal(order1.monitoring_personnel, "Two contractors on site during monitoring hours");
       assert.deepEqual(order1.notification_circumstances, ["After hours", "Gate locked"]);
       assert.deepEqual(order1.coverage_hours, [
@@ -246,6 +248,7 @@ function shouldRunDbTest() {
         logisticsInstructions: "Gate code is 5678",
         specialInstructions: "Do not block driveway",
         criticalAreas: "Stage near loading dock",
+        directions: "Use the service road off 3rd St; trailer entrance is the second driveway.",
         monitoringPersonnel: "Supervisor on site only",
         notificationCircumstances: ["After hours", "after hours", "  "],
         coverageHours: [{ startDay: "mon", startTime: "08:00", endTime: "17:00" }],
@@ -279,6 +282,7 @@ function shouldRunDbTest() {
       assert.equal(order2.logistics_instructions, "Gate code is 5678");
       assert.equal(order2.special_instructions, "Do not block driveway");
       assert.equal(order2.critical_areas, "Stage near loading dock");
+      assert.equal(order2.directions, "Use the service road off 3rd St; trailer entrance is the second driveway.");
       assert.equal(order2.emergency_contact_instructions, "Call 911 first, then site supervisor.");
       assert.equal(order2.monitoring_personnel, "Supervisor on site only");
       assert.deepEqual(order2.notification_circumstances, ["After hours"]);

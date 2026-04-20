@@ -110,27 +110,29 @@
 
             <div class="form-body">
               <form id="customer-form" class="stack">
-                <label>Customer type
-                  <select name="customerKind" id="customer-kind">
-                    <option value="standalone">Standalone</option>
-                    <option value="branch">Branch</option>
-                  </select>
-                </label>
-                <label id="parent-customer-row" style="display:none;">Parent customer
-                  <input id="parent-customer-search" type="text" placeholder="Search parent customer" autocomplete="off" />
-                  <div class="rs-autocomplete" id="parent-customer-suggestions" role="listbox" hidden></div>
-                  <select name="parentCustomerId" id="parent-customer-select" style="display:none;">
-                    <option value="">Select parent customer</option>
-                  </select>
-                </label>
-                <label id="branch-name-row" style="display:none;">Branch name <input name="branchName" /></label>
-                <label id="company-name-row">Company name <input name="companyName" required /></label>
-                <label>QBO Customer ID <input name="qboCustomerId" placeholder="QuickBooks Customer ID" /></label>
-                <div class="stack" id="customer-contact-categories"></div>
-                <label>Street address <input name="streetAddress" /></label>
-                <div class="two-col">
-                  <label>City <input name="city" /></label>
-                  <label>Province/State <input name="region" /></label>
+                 <div class="three-col">
+                   <label>Customer type
+                     <select name="customerKind" id="customer-kind">
+                       <option value="standalone">Standalone</option>
+                       <option value="branch">Branch</option>
+                     </select>
+                   </label>
+                   <label id="company-name-row">Company name <input name="companyName" required /></label>
+                   <label id="qbo-customer-id-row">QBO Customer ID <input name="qboCustomerId" placeholder="QuickBooks Customer ID" /></label>
+                 </div>
+                 <label id="parent-customer-row" style="display:none;">Parent customer
+                   <input id="parent-customer-search" type="text" placeholder="Search parent customer" autocomplete="off" />
+                   <div class="rs-autocomplete" id="parent-customer-suggestions" role="listbox" hidden></div>
+                   <select name="parentCustomerId" id="parent-customer-select" style="display:none;">
+                     <option value="">Select parent customer</option>
+                   </select>
+                 </label>
+                 <label id="branch-name-row" style="display:none;">Branch name <input name="branchName" /></label>
+                 <div class="stack" id="customer-contact-categories"></div>
+                 <label>Street address <input name="streetAddress" /></label>
+                 <div class="two-col">
+                   <label>City <input name="city" /></label>
+                   <label>Province/State <input name="region" /></label>
                 </div>
                 <div class="two-col">
                   <label>Country <input name="country" /></label>

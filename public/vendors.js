@@ -127,7 +127,8 @@ newVendorBtn?.addEventListener("click", (e) => {
     companyMeta.textContent = "Log in to continue.";
     return;
   }
-  window.location.href = "vendors-form.html";
+  const returnTo = encodeURIComponent((window.location.pathname.split("/").pop() || "vendors.html") + window.location.search);
+  window.location.href = `vendors-form.html?companyId=${encodeURIComponent(activeCompanyId)}&returnTo=${returnTo}`;
 });
 
 vendorsTable.addEventListener("click", (e) => {
@@ -148,7 +149,8 @@ vendorsTable.addEventListener("click", (e) => {
   if (!row || row.classList.contains("table-header")) return;
   const id = row.dataset.id;
   if (!id || !activeCompanyId) return;
-  window.location.href = `vendors-form.html?id=${id}`;
+  const returnTo = encodeURIComponent((window.location.pathname.split("/").pop() || "vendors.html") + window.location.search);
+  window.location.href = `vendors-form.html?id=${encodeURIComponent(id)}&companyId=${encodeURIComponent(activeCompanyId)}&returnTo=${returnTo}`;
 });
 
 searchInput?.addEventListener("input", (e) => {

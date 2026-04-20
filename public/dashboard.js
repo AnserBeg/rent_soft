@@ -782,7 +782,7 @@ function hasBenchStagesUI() {
 }
 
 function hasRevenueUI() {
-  return Boolean(revTsCanvas || spDonutCanvas);
+  return Boolean(revTsCanvas || qboIncomeTotal || rangeStartInput || rangeDaysSelect || todayBtn);
 }
 
 function hasRevenueTimeSeriesUI() {
@@ -4536,7 +4536,7 @@ function init() {
     initShortfallUI();
   }
 
-  if (hasRevenueUI()) {
+  if (incidentsMonthIncidentsEl) {
     initIncidentsWidget();
   }
 

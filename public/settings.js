@@ -14,6 +14,17 @@ const saveStorefrontRequirementsBtn = document.getElementById("save-storefront-r
 const rentalInfoFieldsContainer = document.getElementById("rental-info-fields");
 const rentalInfoFieldsHint = document.getElementById("rental-info-fields-hint");
 const saveRentalInfoFieldsBtn = document.getElementById("save-rental-info-fields");
+const assetsTableColumnsList = document.getElementById("assets-table-columns-list");
+const assetsTableColumnsSearch = document.getElementById("assets-table-columns-search");
+const assetsTableColumnsHint = document.getElementById("assets-table-columns-hint");
+const saveAssetsTableColumnsBtn = document.getElementById("save-assets-table-columns");
+const resetAssetsTableColumnsBtn = document.getElementById("reset-assets-table-columns");
+const assetDirectionsEnabledToggle = document.getElementById("asset-directions-enabled");
+const saveAssetDirectionsBtn = document.getElementById("save-asset-directions");
+const assetDirectionsHint = document.getElementById("asset-directions-hint");
+const orderContactsEnabledToggle = document.getElementById("order-contacts-enabled");
+const saveOrderContactsEnabledBtn = document.getElementById("save-order-contacts-enabled");
+const orderContactsEnabledHint = document.getElementById("order-contacts-enabled-hint");
 const customerDocCategoriesInput = document.getElementById("customer-doc-categories");
 const customerContactCategoriesContainer = document.getElementById("customer-contact-categories");
 const addContactCategoryBtn = document.getElementById("add-contact-category");
@@ -48,6 +59,7 @@ const qboStatus = document.getElementById("qbo-status");
 const qboConnectBtn = document.getElementById("qbo-connect");
 const qboDisconnectBtn = document.getElementById("qbo-disconnect");
 const qboEnabledToggle = document.getElementById("qbo-enabled");
+const qboHideSectionsWhenDisconnectedToggle = document.getElementById("qbo-hide-sections-when-disconnected");
 const qboBillingDayInput = document.getElementById("qbo-billing-day");
 const qboAdjustmentPolicySelect = document.getElementById("qbo-adjustment-policy");
 const qboIncomeAccountsSelect = document.getElementById("qbo-income-accounts");
@@ -98,6 +110,16 @@ let qboTaxCodesCache = [];
 let qboTaxCodesLoading = false;
 let qboDefaultTaxCode = "";
 let workOrderSettingsLoaded = false;
+let assetsTableColumnsLoaded = false;
+let assetsTableColumnsDirty = false;
+let assetDirectionsLoaded = false;
+let assetDirectionsDirty = false;
+let orderContactsEnabledLoaded = false;
+let orderContactsEnabledDirty = false;
+let assetsTableTrackingColumnsCache = [];
+let assetsTableColumnsAvailable = [];
+let assetsTableColumnsCompanyDefault = null; // null => show all by default
+let assetsTableColumnsSelectedKeys = [];
 
 const storefrontRequirementOptions = [
   { key: "businessName", label: "Business name" },
@@ -119,6 +141,7 @@ const rentalInfoFieldOptions = [
   { key: "siteName", label: "Site name" },
   { key: "siteAccessInfo", label: "Site access information / pin" },
   { key: "criticalAreas", label: "Critical Assets and Locations on Site" },
+  { key: "directions", label: "Directions" },
   { key: "monitoringPersonnel", label: "Personnel/contractors expected on site during monitoring hours" },
   { key: "generalNotes", label: "General notes" },
   { key: "emergencyContacts", label: "Emergency contacts" },
@@ -133,6 +156,7 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   siteName: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  directions: { enabled: false, required: false },
   monitoringPersonnel: { enabled: true, required: false },
   generalNotes: { enabled: true, required: true },
   emergencyContacts: { enabled: true, required: true },
@@ -145,6 +169,16 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
 const DEFAULT_CONTACT_CATEGORIES = [
   { key: "contacts", label: "Contacts", locked: true },
   { key: "accountingContacts", label: "Accounting contacts", locked: true },
+];
+
+const ASSETS_TABLE_BASE_COLUMNS = [
+  { key: "type", label: "Type", locked: true },
+  { key: "model_name", label: "Model" },
+  { key: "rental_order_number", label: "RO" },
+  { key: "rental_customer_name", label: "Customer" },
+  { key: "availability_status", label: "Status" },
+  { key: "location", label: "Base" },
+  { key: "current_location", label: "Current" },
 ];
 
 function updateMapProviderUi() {
@@ -189,6 +223,38 @@ function normalizeRentalInfoFields(value) {
     normalized[key] = { enabled, required };
   });
   return normalized;
+}
+
+function safeJsonParse(value, fallback) {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeAssetsTableColumns(value) {
+  if (value === null || value === undefined) return null;
+  let raw = value;
+  if (typeof raw === "string") raw = safeJsonParse(raw, null);
+  if (!Array.isArray(raw)) return null;
+  const out = [];
+  const seen = new Set();
+  raw.forEach((entry) => {
+    const key = String(entry || "").trim();
+    if (!key) return;
+    if (key.length > 120) return;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(key);
+  });
+  return out.length ? out : null;
+}
+
+function normalizeTrackingColumnKey(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? `tracking:${Math.round(n)}` : null;
 }
 
 function normalizeContactCategoryKey(value) {
@@ -646,6 +712,9 @@ function syncQboDefaultTaxCodeFromSelect() {
 function setQboSettingsFields(settings) {
   if (!settings) return;
   if (qboEnabledToggle) qboEnabledToggle.checked = settings.qbo_enabled === true;
+  if (qboHideSectionsWhenDisconnectedToggle) {
+    qboHideSectionsWhenDisconnectedToggle.checked = settings.hide_qbo_sections_when_disconnected === true;
+  }
   if (qboBillingDayInput) qboBillingDayInput.value = settings.qbo_billing_day ? String(settings.qbo_billing_day) : "1";
   if (qboAdjustmentPolicySelect) qboAdjustmentPolicySelect.value = settings.qbo_adjustment_policy || "credit_memo";
   if (qboIncomeAccountsSelect) {
@@ -663,6 +732,7 @@ function qboSettingsPayload() {
   return {
     companyId: activeCompanyId,
     qboEnabled: qboEnabledToggle?.checked === true,
+    hideQboSectionsWhenDisconnected: qboHideSectionsWhenDisconnectedToggle?.checked === true,
     qboBillingDay: qboBillingDayInput?.value ? Number(qboBillingDayInput.value) : null,
     qboAdjustmentPolicy: qboAdjustmentPolicySelect?.value || "credit_memo",
     qboIncomeAccountIds: qboIncomeAccountIds,
@@ -984,6 +1054,225 @@ async function saveCompanyProfile() {
   return data.profile;
 }
 
+async function loadAssetsTableTrackingColumns() {
+  if (!activeCompanyId) return [];
+  const res = await fetch(
+    `/api/equipment/tracking-table-columns?companyId=${encodeURIComponent(String(activeCompanyId))}`
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load tracking table columns");
+  const cols = Array.isArray(data.trackingTableColumns) ? data.trackingTableColumns : [];
+  assetsTableTrackingColumnsCache = cols;
+  return cols;
+}
+
+function buildAssetsTableColumnsAvailable() {
+  const tracking = Array.isArray(assetsTableTrackingColumnsCache) ? assetsTableTrackingColumnsCache : [];
+  const out = ASSETS_TABLE_BASE_COLUMNS.map((col) => ({ ...col, group: "Base" }));
+  const seen = new Set(out.map((col) => col.key));
+
+  tracking.forEach((col) => {
+    const key = normalizeTrackingColumnKey(col?.id);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const labelRaw = col?.tableColumnLabel || col?.label || col?.fieldKey || `Field ${col?.id || ""}`;
+    const label = String(labelRaw || "").trim() || `Field ${col?.id || ""}`;
+    out.push({ key, label, locked: false, group: "Tracking fields" });
+  });
+
+  return out;
+}
+
+function ensureLockedAssetsTableColumnsSelected(keys) {
+  const selected = new Set(Array.isArray(keys) ? keys : []);
+  ASSETS_TABLE_BASE_COLUMNS.forEach((col) => {
+    if (col.locked) selected.add(col.key);
+  });
+  return Array.from(selected);
+}
+
+function renderAssetsTableColumnsList() {
+  if (!assetsTableColumnsList) return;
+  assetsTableColumnsList.replaceChildren();
+
+  const options = Array.isArray(assetsTableColumnsAvailable) ? assetsTableColumnsAvailable : [];
+  const selected = new Set(ensureLockedAssetsTableColumnsSelected(assetsTableColumnsSelectedKeys));
+
+  const addGroupHeader = (label) => {
+    const header = document.createElement("div");
+    header.className = "hint";
+    header.style.gridColumn = "1 / -1";
+    header.style.fontWeight = "700";
+    header.textContent = label;
+    assetsTableColumnsList.appendChild(header);
+  };
+
+  const renderRows = (groupLabel) => {
+    options
+      .filter((opt) => opt.group === groupLabel)
+      .forEach((opt) => {
+        const row = document.createElement("label");
+        row.className = "check-row";
+        row.dataset.key = opt.key;
+        row.dataset.label = String(opt.label || opt.key).toLowerCase();
+
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.dataset.key = opt.key;
+        input.checked = selected.has(opt.key);
+        input.disabled = opt.locked === true;
+
+        const text = document.createElement("span");
+        text.textContent = opt.label || opt.key;
+
+        row.appendChild(input);
+        row.appendChild(text);
+        assetsTableColumnsList.appendChild(row);
+      });
+  };
+
+  addGroupHeader("Base columns");
+  renderRows("Base");
+
+  const trackingExists = options.some((opt) => opt.group === "Tracking fields");
+  if (trackingExists) {
+    addGroupHeader("Tracking fields");
+    renderRows("Tracking fields");
+  }
+
+  const total = options.length;
+  const checked = selected.size;
+  if (assetsTableColumnsHint) {
+    const hasDefault = normalizeAssetsTableColumns(assetsTableColumnsCompanyDefault) !== null;
+    assetsTableColumnsHint.textContent = hasDefault
+      ? `Default is set (${checked}/${total} selected).`
+      : `No default set yet (${checked}/${total} selected).`;
+  }
+}
+
+function applyAssetsTableColumnsFilter(term) {
+  if (!assetsTableColumnsList) return;
+  const needle = String(term || "").trim().toLowerCase();
+  const rows = Array.from(assetsTableColumnsList.querySelectorAll?.("label.check-row") || []);
+  rows.forEach((row) => {
+    const label = String(row.dataset.label || "");
+    row.style.display = !needle || label.includes(needle) ? "" : "none";
+  });
+}
+
+function setAssetsTableColumnsDirty(dirty) {
+  assetsTableColumnsDirty = dirty === true;
+  if (saveAssetsTableColumnsBtn) saveAssetsTableColumnsBtn.disabled = !assetsTableColumnsLoaded || !assetsTableColumnsDirty;
+}
+
+function setAssetsTableColumnsFromCompanySettings(value) {
+  assetsTableColumnsCompanyDefault = normalizeAssetsTableColumns(value);
+  const availableKeys = new Set(assetsTableColumnsAvailable.map((opt) => opt.key));
+  const selected = assetsTableColumnsCompanyDefault
+    ? assetsTableColumnsCompanyDefault.filter((k) => availableKeys.has(k))
+    : assetsTableColumnsAvailable.map((opt) => opt.key);
+  assetsTableColumnsSelectedKeys = ensureLockedAssetsTableColumnsSelected(selected);
+  setAssetsTableColumnsDirty(false);
+  renderAssetsTableColumnsList();
+  applyAssetsTableColumnsFilter(assetsTableColumnsSearch?.value || "");
+}
+
+async function saveAssetsTableColumnsDefault() {
+  if (!activeCompanyId) return;
+  const available = Array.isArray(assetsTableColumnsAvailable) ? assetsTableColumnsAvailable : [];
+  const availableKeys = available.map((opt) => opt.key);
+  const selected = ensureLockedAssetsTableColumnsSelected(assetsTableColumnsSelectedKeys)
+    .filter((k) => availableKeys.includes(k));
+  const shouldStoreNull = selected.length >= availableKeys.length;
+  const payloadValue = shouldStoreNull ? null : selected;
+
+  const res = await fetch("/api/company-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId: activeCompanyId, assetsTableColumns: payloadValue }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to save assets table columns");
+  setAssetsTableColumnsFromCompanySettings(data.settings?.assets_table_columns ?? null);
+}
+
+function getAssetsTableColumnsBaselineSelectedKeys() {
+  const available = Array.isArray(assetsTableColumnsAvailable) ? assetsTableColumnsAvailable : [];
+  const availableKeys = available.map((opt) => opt.key);
+  const baseline = normalizeAssetsTableColumns(assetsTableColumnsCompanyDefault);
+  const selected = baseline ? baseline.filter((k) => availableKeys.includes(k)) : availableKeys;
+  return ensureLockedAssetsTableColumnsSelected(selected);
+}
+
+function updateAssetsTableColumnsDirtyState() {
+  const baseline = new Set(getAssetsTableColumnsBaselineSelectedKeys());
+  const current = new Set(ensureLockedAssetsTableColumnsSelected(assetsTableColumnsSelectedKeys));
+  const isEqual =
+    baseline.size === current.size && Array.from(baseline).every((k) => current.has(k));
+  setAssetsTableColumnsDirty(!isEqual);
+}
+
+function setAssetDirectionsDirty(isDirty) {
+  assetDirectionsDirty = isDirty === true;
+  if (saveAssetDirectionsBtn) saveAssetDirectionsBtn.disabled = !assetDirectionsLoaded || !assetDirectionsDirty;
+}
+
+function setAssetDirectionsHint(message) {
+  if (!assetDirectionsHint) return;
+  const msg = String(message || "").trim();
+  assetDirectionsHint.textContent = msg;
+  assetDirectionsHint.style.display = msg ? "block" : "none";
+}
+
+async function saveAssetDirectionsSetting() {
+  if (!activeCompanyId || !assetDirectionsEnabledToggle) return;
+  setAssetDirectionsHint("");
+  const res = await fetch("/api/company-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ companyId: activeCompanyId, assetDirectionsEnabled: assetDirectionsEnabledToggle.checked === true }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to save asset directions setting");
+  const enabled = data.settings?.asset_directions_enabled === true;
+  assetDirectionsEnabledToggle.checked = enabled;
+  setAssetDirectionsDirty(false);
+  setAssetDirectionsHint("Saved.");
+}
+
+function setOrderContactsEnabledDirty(isDirty) {
+  orderContactsEnabledDirty = isDirty === true;
+  if (saveOrderContactsEnabledBtn) {
+    saveOrderContactsEnabledBtn.disabled = !orderContactsEnabledLoaded || !orderContactsEnabledDirty;
+  }
+}
+
+function setOrderContactsEnabledHint(message) {
+  if (!orderContactsEnabledHint) return;
+  const msg = String(message || "").trim();
+  orderContactsEnabledHint.textContent = msg;
+  orderContactsEnabledHint.style.display = msg ? "block" : "none";
+}
+
+async function saveOrderContactsEnabledSetting() {
+  if (!activeCompanyId || !orderContactsEnabledToggle) return;
+  setOrderContactsEnabledHint("");
+  const res = await fetch("/api/company-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      companyId: activeCompanyId,
+      orderContactsEnabled: orderContactsEnabledToggle.checked === true,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to save order contacts setting");
+  const enabled = data.settings?.order_contacts_enabled !== false;
+  orderContactsEnabledToggle.checked = enabled;
+  setOrderContactsEnabledDirty(false);
+  setOrderContactsEnabledHint("Saved.");
+}
+
 async function loadSettings() {
   if (!activeCompanyId) return;
   const res = await fetch(`/api/company-settings?companyId=${activeCompanyId}`);
@@ -1021,6 +1310,39 @@ async function loadSettings() {
   }
   workOrderSettingsLoaded = true;
   if (saveWorkOrderSettingsBtn) saveWorkOrderSettingsBtn.disabled = false;
+
+  if (assetsTableColumnsList) {
+    try {
+      await loadAssetsTableTrackingColumns();
+    } catch (err) {
+      // Non-fatal: we can still show base columns.
+      assetsTableTrackingColumnsCache = [];
+      if (assetsTableColumnsHint) {
+        assetsTableColumnsHint.textContent = err?.message ? String(err.message) : "Unable to load tracking columns.";
+      }
+    }
+
+    assetsTableColumnsAvailable = buildAssetsTableColumnsAvailable();
+    assetsTableColumnsLoaded = true;
+    setAssetsTableColumnsFromCompanySettings(data.settings?.assets_table_columns ?? null);
+    if (resetAssetsTableColumnsBtn) resetAssetsTableColumnsBtn.disabled = false;
+  }
+
+  if (assetDirectionsEnabledToggle) {
+    assetDirectionsEnabledToggle.checked = data.settings?.asset_directions_enabled === true;
+    assetDirectionsLoaded = true;
+    setAssetDirectionsDirty(false);
+  }
+  if (saveAssetDirectionsBtn) saveAssetDirectionsBtn.disabled = !assetDirectionsLoaded || !assetDirectionsDirty;
+
+  if (orderContactsEnabledToggle) {
+    orderContactsEnabledToggle.checked = data.settings?.order_contacts_enabled !== false;
+    orderContactsEnabledLoaded = true;
+    setOrderContactsEnabledDirty(false);
+  }
+  if (saveOrderContactsEnabledBtn) {
+    saveOrderContactsEnabledBtn.disabled = !orderContactsEnabledLoaded || !orderContactsEnabledDirty;
+  }
 }
 
 async function loadQboIncomeAccounts({ force = false } = {}) {
@@ -1245,6 +1567,93 @@ saveRentalInfoFieldsBtn?.addEventListener("click", async (e) => {
     setRentalInfoFieldsHint(err?.message ? String(err.message) : "Unable to save rental info fields.");
   } finally {
     saveRentalInfoFieldsBtn.disabled = !rentalInfoFieldsLoaded;
+  }
+});
+
+assetsTableColumnsSearch?.addEventListener("input", (e) => {
+  applyAssetsTableColumnsFilter(e.target.value);
+});
+
+assetsTableColumnsList?.addEventListener("change", () => {
+  const inputs = Array.from(assetsTableColumnsList.querySelectorAll?.("input[type='checkbox'][data-key]") || []);
+  const selected = inputs.filter((i) => i.checked).map((i) => String(i.dataset.key || "")).filter(Boolean);
+  assetsTableColumnsSelectedKeys = ensureLockedAssetsTableColumnsSelected(selected);
+  updateAssetsTableColumnsDirtyState();
+  renderAssetsTableColumnsList();
+  applyAssetsTableColumnsFilter(assetsTableColumnsSearch?.value || "");
+});
+
+saveAssetsTableColumnsBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  if (!assetsTableColumnsLoaded) return;
+  if (assetsTableColumnsHint) assetsTableColumnsHint.textContent = "Saving...";
+  saveAssetsTableColumnsBtn.disabled = true;
+  try {
+    await saveAssetsTableColumnsDefault();
+    if (assetsTableColumnsHint) assetsTableColumnsHint.textContent = "Assets table columns saved.";
+  } catch (err) {
+    if (assetsTableColumnsHint) assetsTableColumnsHint.textContent = err?.message ? String(err.message) : "Unable to save columns.";
+  } finally {
+    saveAssetsTableColumnsBtn.disabled = !assetsTableColumnsLoaded || !assetsTableColumnsDirty;
+  }
+});
+
+resetAssetsTableColumnsBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  if (!assetsTableColumnsLoaded) return;
+  if (assetsTableColumnsHint) assetsTableColumnsHint.textContent = "Saving...";
+  resetAssetsTableColumnsBtn.disabled = true;
+  try {
+    assetsTableColumnsSelectedKeys = assetsTableColumnsAvailable.map((opt) => opt.key);
+    await saveAssetsTableColumnsDefault();
+    if (assetsTableColumnsHint) assetsTableColumnsHint.textContent = "Now showing all columns by default.";
+  } catch (err) {
+    if (assetsTableColumnsHint) assetsTableColumnsHint.textContent = err?.message ? String(err.message) : "Unable to reset columns.";
+  } finally {
+    resetAssetsTableColumnsBtn.disabled = false;
+    saveAssetsTableColumnsBtn.disabled = !assetsTableColumnsLoaded || !assetsTableColumnsDirty;
+  }
+});
+
+assetDirectionsEnabledToggle?.addEventListener("change", () => {
+  if (!assetDirectionsLoaded) return;
+  setAssetDirectionsHint("");
+  setAssetDirectionsDirty(true);
+});
+
+saveAssetDirectionsBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  if (!assetDirectionsLoaded) return;
+  setAssetDirectionsHint("Saving...");
+  saveAssetDirectionsBtn.disabled = true;
+  try {
+    await saveAssetDirectionsSetting();
+  } catch (err) {
+    setAssetDirectionsHint(err?.message ? String(err.message) : "Unable to save setting.");
+    saveAssetDirectionsBtn.disabled = !assetDirectionsLoaded || !assetDirectionsDirty;
+  }
+});
+
+orderContactsEnabledToggle?.addEventListener("change", () => {
+  if (!orderContactsEnabledLoaded) return;
+  setOrderContactsEnabledHint("");
+  setOrderContactsEnabledDirty(true);
+});
+
+saveOrderContactsEnabledBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) return;
+  if (!orderContactsEnabledLoaded) return;
+  setOrderContactsEnabledHint("Saving...");
+  saveOrderContactsEnabledBtn.disabled = true;
+  try {
+    await saveOrderContactsEnabledSetting();
+  } catch (err) {
+    setOrderContactsEnabledHint(err?.message ? String(err.message) : "Unable to save setting.");
+    saveOrderContactsEnabledBtn.disabled = !orderContactsEnabledLoaded || !orderContactsEnabledDirty;
   }
 });
 

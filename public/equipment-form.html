@@ -76,59 +76,80 @@
                 </div>
                 <p class="hint" id="company-meta"></p>
               </div>
-              <button class="ghost small" id="close-equipment-modal" type="button">Back to stock</button>
+              <div class="inline-actions">
+                <button class="ghost small" id="open-equipment-rental-order" type="button" style="display:none;">Open rental order</button>
+                <button class="ghost small" id="close-equipment-modal" type="button">Back to stock</button>
+              </div>
             </div>
 
             <form id="equipment-form" class="stack">
-              <div class="two-col">
-                <label>Type of equipment
-                  <select name="typeId" id="type-select" required>
-                    <option value="">Select a type</option>
-                    <option value="__new_type__">+ Add new type...</option>
-                  </select>
-                </label>
-                <label>Model name <input name="modelName" required /></label>
+              <div class="equipment-hero">
+                <div class="equipment-hero-media">
+                  <label>Images (optional)</label>
+                  <input name="imageUrls" type="hidden" />
+                  <input name="imageUrl" type="hidden" />
+                  <input name="cardImageUrl" type="hidden" />
+                  <div class="equipment-image-preview" id="equipment-image-preview-wrap" hidden>
+                    <div class="equipment-image-preview-frame">
+                      <button type="button" class="equipment-image-preview-nav prev" id="equipment-image-preview-prev" aria-label="Previous image">‹</button>
+                      <img id="equipment-image-preview-img" alt="" loading="lazy" referrerpolicy="no-referrer" />
+                      <button type="button" class="equipment-image-preview-nav next" id="equipment-image-preview-next" aria-label="Next image">›</button>
+                    </div>
+                    <div class="hint" id="equipment-image-preview-hint"></div>
+                  </div>
+                  <div class="inline-actions" style="justify-content:flex-start;">
+                    <button type="button" class="ghost small" id="open-equipment-image-modal">Add or edit images</button>
+                  </div>
+                </div>
+                <div class="equipment-hero-fields two-col">
+                  <label>Type of equipment
+                    <select name="typeId" id="type-select" required>
+                      <option value="">Select a type</option>
+                      <option value="__new_type__">+ Add new type...</option>
+                    </select>
+                  </label>
+                  <label>Condition
+                    <select name="condition">
+                      <option value="">Not set</option>
+                      <option>New</option>
+                      <option>Normal Wear & Tear</option>
+                      <option>Damaged but Usable</option>
+                      <option>Needs Repair</option>
+                      <option>Unusable</option>
+                      <option>Lost</option>
+                    </select>
+                  </label>
+                  <label>Model name <input name="modelName" required /></label>
+                  <label>Manufacturer <input name="manufacturer" /></label>
+                  <label>Serial # <input name="serialNumber" required /></label>
+                  <label>Purchase price ($) <input name="purchasePrice" type="number" min="0" step="0.01" /></label>
+                </div>
               </div>
-              <label>Images (optional)</label>
-              <div class="inline-actions" style="justify-content:flex-start;">
-                <button type="button" class="ghost small" id="open-equipment-image-modal">Add or edit images</button>
-              </div>
-              <input name="imageUrls" type="hidden" />
-              <input name="imageUrl" type="hidden" />
               <div class="two-col">
-                <label>Serial # <input name="serialNumber" required /></label>
-                <label>Manufacturer <input name="manufacturer" /></label>
-              </div>
-              <div class="two-col">
-                <label>Condition
-                  <select name="condition" required>
-                    <option>New</option>
-                    <option>Normal Wear & Tear</option>
-                    <option>Damaged but Usable</option>
-                    <option>Needs Repair</option>
-                    <option>Unusable</option>
-                    <option>Lost</option>
-                  </select>
-                </label>
                 <label>Base location (yard)
                   <select name="locationId" id="location-select">
                     <option value="">Select a location</option>
                     <option value="__new__">+ Add new location...</option>
                   </select>
                 </label>
+                <div class="stack" style="gap:10px;">
+                  <label>Current location
+                    <select id="current-location-mode-select">
+                      <option value="">Same as base location</option>
+                      <option value="__current__" hidden>Current location</option>
+                      <option value="__new__">Choose on map...</option>
+                    </select>
+                    <input type="hidden" name="currentLocationId" id="current-location-id" />
+                  </label>
+                  <div class="inline-actions" style="justify-content:flex-start;">
+                    <button type="button" class="ghost small" id="open-current-location-picker">Pick current location on map</button>
+                    <button type="button" class="ghost small danger" id="clear-current-location">Clear current location</button>
+                  </div>
+                </div>
               </div>
-              <label>Current location
-                <select id="current-location-mode-select">
-                  <option value="">Same as base location</option>
-                  <option value="__new__">Choose on map...</option>
-                </select>
-                <input type="hidden" name="currentLocationId" id="current-location-id" />
-                <div class="readonly-field is-empty" id="current-location-display">Same as base location</div>
+              <label id="equipment-directions-wrap" style="display:none;">Directions
+                <textarea name="directions" id="equipment-directions" placeholder="Entrance details, gate codes, approach route, staging area, etc."></textarea>
               </label>
-              <div class="inline-actions" style="justify-content:flex-start;">
-                <button type="button" class="ghost small" id="open-current-location-picker">Pick current location on map</button>
-                <button type="button" class="ghost small danger" id="clear-current-location">Clear current location</button>
-              </div>
               <div class="bundle-panel">
                 <div class="label-head">
                   <span>Bundle</span>
@@ -139,7 +160,6 @@
                 </div>
               </div>
               <label>Notes <textarea name="notes"></textarea></label>
-              <label>Purchase price ($) <input name="purchasePrice" type="number" min="0" step="0.01" /></label>
               <div class="inline-actions">
                 <button type="button" class="ghost danger" id="delete-equipment" style="display:none;">Delete</button>
                 <button type="submit" class="primary" id="save-equipment">Save equipment</button>
@@ -151,6 +171,16 @@
                     <button class="ghost small" id="close-equipment-image-modal" type="button">Close</button>
                   </div>
                   <div class="stack">
+                    <div class="equipment-image-viewer" id="equipment-image-viewer" hidden>
+                      <div class="equipment-image-viewer-toolbar">
+                        <div class="equipment-image-viewer-actions">
+                          <button type="button" class="ghost small" id="equipment-image-prev">Prev</button>
+                          <button type="button" class="ghost small" id="equipment-image-next">Next</button>
+                        </div>
+                      </div>
+                      <img id="equipment-image-viewer-img" alt="" loading="lazy" referrerpolicy="no-referrer" />
+                      <div class="hint" id="equipment-image-viewer-hint"></div>
+                    </div>
                     <label>Upload images
                       <input name="imageFiles" type="file" accept="image/*" multiple />
                     </label>
@@ -252,53 +282,50 @@
           <div class="table" id="equipment-work-orders-table"></div>
         </div>
       </div>
-      <div class="drawer-panel" data-panel="tracking" style="display:none;">
-        <div class="stack">
-          <div class="pill-row">
-            <span class="pill" id="equipment-tracking-status">--</span>
-            <span class="hint" id="equipment-tracking-needs-summary"></span>
-          </div>
-          <div class="stack" id="equipment-tracking-needs"></div>
+       <div class="drawer-panel" data-panel="tracking" style="display:none;">
+         <div class="stack">
+           <div class="pill-row">
+             <span class="pill" id="equipment-tracking-status">--</span>
+             <span class="hint" id="equipment-tracking-needs-summary"></span>
+           </div>
+           <div class="stack" id="equipment-tracking-needs"></div>
 
-          <div class="card inset">
-            <div class="card-header compact">
-              <div>
-                <h4 style="margin:0;">Hours meter</h4>
-                <p class="hint" id="equipment-meter-meta" style="margin:6px 0 0;">Track hours of operation (manual readings).</p>
-              </div>
-            </div>
-            <div class="three-col">
-              <label>Reading (hours)
-                <input id="equipment-meter-reading" type="number" min="0" step="0.1" />
-              </label>
-              <label>Read at
-                <input id="equipment-meter-read-at" type="datetime-local" />
-              </label>
-              <label>Note
-                <input id="equipment-meter-note" type="text" placeholder="Optional" />
-              </label>
-            </div>
+           <div class="card inset" id="equipment-tracking-fields-card">
+             <div class="card-header compact">
+               <div>
+                 <h4 style="margin:0;">Tracking fields</h4>
+                 <p class="hint" style="margin:6px 0 0;">Log updates for your custom fields.</p>
+               </div>
+             </div>
+             <div class="stack" id="equipment-tracking-fields"></div>
+           </div>
+
+            <div class="card inset">
+              <div class="card-header compact">
+                <div>
+                  <h4 style="margin:0;">Hours meter</h4>
+                 <p class="hint" id="equipment-meter-meta" style="margin:6px 0 0;">Track hours of operation (manual readings).</p>
+               </div>
+             </div>
+             <div class="three-col">
+               <label>Reading (hours)
+                 <input id="equipment-meter-reading" type="number" min="0" step="0.1" />
+               </label>
+               <label>Read at
+                 <input id="equipment-meter-read-at" type="datetime-local" />
+               </label>
+               <label>Note
+                 <input id="equipment-meter-note" type="text" placeholder="Optional" />
+               </label>
+             </div>
             <div class="inline-actions" style="justify-content:flex-start;">
-              <button class="ghost small" id="equipment-meter-add" type="button">Add reading</button>
-            </div>
-            <div class="table" id="equipment-meter-readings-table"></div>
-          </div>
+               <button class="ghost small" id="equipment-meter-add" type="button">Add reading</button>
+             </div>
+             <div class="table" id="equipment-meter-readings-table"></div>
+             <div class="inline-actions" id="equipment-meter-history-actions" style="justify-content:flex-end;"></div>
+           </div>
 
-          <div class="card inset">
-            <div class="card-header compact">
-              <div>
-                <h4 style="margin:0;">Tracking fields</h4>
-                <p class="hint" style="margin:6px 0 0;">Custom fields configured per equipment type.</p>
-              </div>
-              <div class="inline-actions">
-                <button class="primary small" id="equipment-tracking-save" type="button">Save values</button>
-              </div>
-            </div>
-            <p class="hint" id="equipment-tracking-save-status" style="margin:0 0 10px;"></p>
-            <div class="stack" id="equipment-tracking-fields"></div>
-          </div>
-
-          <div class="card inset">
+          <div class="card inset" id="equipment-tracking-history-card" style="display:none;">
             <div class="card-header compact">
               <div>
                 <h4 style="margin:0;">History</h4>
@@ -340,13 +367,10 @@
         <button class="ghost small" id="close-current-location-picker" type="button">Close</button>
       </div>
       <div class="stack">
-        <div class="three-col">
+        <div class="two-col">
           <label>Search address
             <input id="current-location-picker-search" placeholder="Start typing an address..." autocomplete="off" />
             <div id="current-location-picker-suggestions" class="rs-autocomplete" hidden></div>
-          </label>
-          <label>Label/name
-            <input id="current-location-picker-name" placeholder="Jobsite / customer / address label..." />
           </label>
           <label>Map view
             <select id="current-location-picker-map-style">
@@ -366,7 +390,7 @@
 
   <script src="vendor/leaflet.js"></script>
   <script src="session.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>
 

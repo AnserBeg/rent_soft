@@ -153,6 +153,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
     deliveryMethod: 'pickup' as 'pickup' | 'delivery',
     deliveryAddress: '',
     criticalAreas: '',
+    directions: '',
     generalNotes: '',
   });
 
@@ -343,6 +344,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
       if (!startAt || !endAt) throw new Error('Please select valid rental dates.');
 
       const criticalAreas = String(formData.criticalAreas || '').trim();
+      const directions = String(formData.directions || '').trim();
       const generalNotes = String(formData.generalNotes || '').trim();
       const sanitizedEmergencyContacts = normalizeContactList(emergencyContacts);
       const sanitizedSiteContacts = normalizeContactList(siteContacts);
@@ -372,6 +374,7 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
         customerToken: token,
         customerNotes: notes || undefined,
         criticalAreas,
+        directions: directions || undefined,
         generalNotes,
         emergencyContacts: sanitizedEmergencyContacts,
         siteContacts: sanitizedSiteContacts,
@@ -1177,6 +1180,16 @@ export const DetailModal: React.FC<DetailModalProps> = ({ item, company, onClose
                                  onChange={(e) => setFormData({ ...formData, criticalAreas: e.target.value })}
                                  className="mt-2 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all"
                                  placeholder="Highlight any obstacles, underground utilities, or no-go zones."
+                               />
+                            </label>
+                            <label className="block">
+                               <span className="text-xs font-bold text-slate-500">Directions</span>
+                               <textarea
+                                 rows={3}
+                                 value={formData.directions}
+                                 onChange={(e) => setFormData({ ...formData, directions: e.target.value })}
+                                 className="mt-2 w-full p-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:border-brand-accent focus:ring-1 focus:ring-brand-accent transition-all"
+                                 placeholder="Entrance details, gate codes, approach route, staging area, etc."
                                />
                             </label>
                             <label className="block">

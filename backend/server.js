@@ -52,6 +52,7 @@ const {
   listEquipment,
   setEquipmentCurrentLocationForIds,
   setEquipmentCurrentLocationToBaseForIds,
+  setEquipmentDirectionsForIds,
   createEquipment,
   updateEquipment,
   deleteEquipment,
@@ -106,6 +107,8 @@ const {
   importInventoryFromText,
   importCompanyEquipmentFromText,
   importCustomerPricingFromInventoryText,
+  importWorkOrdersFromText,
+  importRentalOrdersFromSheets,
   importRentalOrdersFromLegacyExports,
   importRentalOrdersFromFutureInventoryReport,
   backfillLegacyRates,
@@ -180,6 +183,7 @@ const {
   setLineItemPickedUp,
   setLineItemReturned,
   applyWorkOrderPauseToEquipment,
+  runRecurringWorkOrderSweep,
   getTypeAvailabilitySeries,
   getAvailabilityShortfallsSummary,
   getUnassignedReservedCountsByType,
@@ -289,6 +293,7 @@ const DISPATCH_ALLOWED_API = [
   { method: "GET", pattern: /^\/api\/work-orders$/ },
   { method: "GET", pattern: /^\/api\/work-orders\/[^/]+$/ },
   { method: "POST", pattern: /^\/api\/work-orders$/ },
+  { method: "POST", pattern: /^\/api\/work-orders\/import$/ },
   { method: "PUT", pattern: /^\/api\/work-orders\/[^/]+$/ },
   { method: "DELETE", pattern: /^\/api\/work-orders\/[^/]+$/ },
   { method: "POST", pattern: /^\/api\/equipment\/[^/]+\/work-order-pause$/ },
@@ -1386,6 +1391,7 @@ app.get(
             logisticsInstructions: order.logistics_instructions || null,
             specialInstructions: order.special_instructions || null,
             criticalAreas: order.critical_areas || null,
+            directions: order.directions || null,
             notificationCircumstances: order.notification_circumstances || [],
             coverageHours: order.coverage_hours || [],
             coverageTimeZone: order.coverage_timezone || null,
@@ -1401,6 +1407,7 @@ app.get(
       lineItems: preparedLineItems,
       types: sanitizedTypes,
       rentalInfoFields: settings?.rental_info_fields || null,
+      orderContactsEnabled: settings?.order_contacts_enabled !== false,
       contactCategories: settings?.customer_contact_categories || null,
       proofAvailable: !!(latestProof?.proof_pdf_path),
     });
@@ -2045,6 +2052,7 @@ const ALLOWED_ORDER_FIELDS = new Set([
   "logisticsInstructions",
   "specialInstructions",
   "criticalAreas",
+  "directions",
   "monitoringPersonnel",
   "notificationCircumstances",
   "coverageHours",
@@ -2502,6 +2510,7 @@ function sanitizeOrderPayload(input, allowedFields) {
   if (allowedFields.includes("logisticsInstructions")) out.logisticsInstructions = read("logisticsInstructions") || null;
   if (allowedFields.includes("specialInstructions")) out.specialInstructions = read("specialInstructions") || null;
   if (allowedFields.includes("criticalAreas")) out.criticalAreas = read("criticalAreas") || null;
+  if (allowedFields.includes("directions")) out.directions = read("directions") || null;
   if (allowedFields.includes("monitoringPersonnel")) out.monitoringPersonnel = read("monitoringPersonnel") || null;
   if (allowedFields.includes("generalNotes")) out.generalNotes = read("generalNotes") || null;
   if (allowedFields.includes("generalNotesImages") || allowedFields.includes("generalNotes")) {
@@ -2873,12 +2882,15 @@ async function updateEquipmentCurrentLocationFromSiteAddress({
 }) {
   const cid = Number(companyId);
   if (!Number.isFinite(cid)) return { ok: true, updated: 0 };
+  const settings = await getCompanySettings(cid).catch(() => null);
+  const assetDirectionsEnabled = settings?.asset_directions_enabled === true;
 
   let items = Array.isArray(lineItems) ? lineItems : [];
   let addr = siteAddress || null;
   let lat = siteAddressLat;
   let lng = siteAddressLng;
   let query = siteAddressQuery || null;
+  let directions = null;
   if (orderId) {
     const detail = await getRentalOrder({ companyId: cid, id: Number(orderId) }).catch(() => null);
     if (detail?.order) {
@@ -2886,6 +2898,7 @@ async function updateEquipmentCurrentLocationFromSiteAddress({
       lat = detail.order.site_address_lat ?? detail.order.siteAddressLat ?? lat;
       lng = detail.order.site_address_lng ?? detail.order.siteAddressLng ?? lng;
       query = detail.order.site_address_query ?? detail.order.siteAddressQuery ?? query;
+      directions = detail.order.directions ?? directions;
     }
     if (!items.length && Array.isArray(detail?.lineItems)) items = detail.lineItems;
   }
@@ -2914,6 +2927,10 @@ async function updateEquipmentCurrentLocationFromSiteAddress({
     equipmentIds: targetIds,
     currentLocationId: Number(loc.id),
   });
+  if (assetDirectionsEnabled) {
+    const cleanDirections = directions === null || directions === undefined ? null : String(directions).trim() || null;
+    await setEquipmentDirectionsForIds({ companyId: cid, equipmentIds: targetIds, directions: cleanDirections }).catch(() => null);
+  }
 
   const targetSet = new Set(targetIds.map((id) => String(id)));
   const cleanupIds = new Set();
@@ -4458,6 +4475,7 @@ app.post(
         siteAccessInfo,
         deliveryInstructions,
         criticalAreas,
+        directions,
         monitoringPersonnel,
         notificationCircumstances,
         generalNotes,
@@ -4497,6 +4515,7 @@ app.post(
           siteAccessInfo,
           deliveryInstructions,
           criticalAreas,
+          directions,
           monitoringPersonnel,
           notificationCircumstances,
           generalNotes,
@@ -5836,6 +5855,18 @@ app.get(
 );
 
 app.get(
+  "/api/customers/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.query;
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const customer = await getCustomerById({ companyId, id });
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
+    res.json(customer);
+  })
+);
+
+app.get(
   "/api/vendors",
   asyncHandler(async (req, res) => {
     const { companyId, from, to, dateField } = req.query;
@@ -5982,6 +6013,9 @@ app.post(
         accountingContacts,
         contactGroups,
         canChargeDeposit,
+        notes,
+        salesPersonId,
+        followUpDate,
       } = req.body;
     if (!companyId || (!companyName && !parentCustomerId)) {
       return res.status(400).json({ error: "companyId and companyName are required." });
@@ -6004,6 +6038,9 @@ app.post(
           accountingContacts,
           contactGroups,
           canChargeDeposit: canChargeDeposit === true || canChargeDeposit === "true" || canChargeDeposit === "on",
+          notes,
+          salesPersonId,
+          followUpDate,
         });
       res.status(201).json(customer);
     } catch (err) {
@@ -6037,6 +6074,9 @@ app.put(
         accountingContacts,
         contactGroups,
         canChargeDeposit,
+        notes,
+        salesPersonId,
+        followUpDate,
       } = req.body;
     if (!companyId || (!companyName && !parentCustomerId)) {
       return res.status(400).json({ error: "companyId and companyName are required." });
@@ -6060,6 +6100,9 @@ app.put(
           accountingContacts,
           contactGroups,
           canChargeDeposit: canChargeDeposit === true || canChargeDeposit === "true" || canChargeDeposit === "on",
+          notes,
+          salesPersonId,
+          followUpDate,
         });
       if (!updated) return res.status(404).json({ error: "Customer not found" });
       res.json(updated);
@@ -6107,6 +6150,25 @@ app.post(
 
     const text = req.file.buffer.toString("utf8");
     const result = await importInventoryFromText({ companyId, text });
+    res.status(201).json(result);
+  })
+);
+
+app.post(
+  "/api/work-orders/import",
+  (req, res, next) => {
+    importUpload.single("file")(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || "Upload failed." });
+      next();
+    });
+  },
+  asyncHandler(async (req, res) => {
+    const companyId = Number(req.body.companyId);
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    if (!req.file?.buffer) return res.status(400).json({ error: "file is required." });
+
+    const text = req.file.buffer.toString("utf8");
+    const result = await importWorkOrdersFromText({ companyId, text });
     res.status(201).json(result);
   })
 );
@@ -6188,6 +6250,34 @@ app.post(
       futureReportText,
     });
     res.status(201).json({ ...result, importSource: futureReportText ? "legacy_plus_future" : "legacy_exports" });
+  })
+);
+
+app.post(
+  "/api/rental-orders/import-sheets",
+  (req, res, next) => {
+    importUpload.fields([
+      { name: "orders", maxCount: 1 },
+      { name: "lineItems", maxCount: 1 },
+    ])(req, res, (err) => {
+      if (err) return res.status(400).json({ error: err.message || "Upload failed." });
+      next();
+    });
+  },
+  asyncHandler(async (req, res) => {
+    const companyId = Number(req.body.companyId);
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+
+    const ordersFile = req.files?.orders?.[0];
+    const lineItemsFile = req.files?.lineItems?.[0];
+    if (!ordersFile?.buffer || !lineItemsFile?.buffer) {
+      return res.status(400).json({ error: "orders and lineItems files are required." });
+    }
+
+    const ordersText = ordersFile.buffer.toString("utf8");
+    const lineItemsText = lineItemsFile.buffer.toString("utf8");
+    const result = await importRentalOrdersFromSheets({ companyId, ordersText, lineItemsText });
+    res.status(201).json(result);
   })
 );
 
@@ -6608,6 +6698,7 @@ function resolveOverallChangeRequestStatus({
           logisticsInstructions: existing.logistics_instructions || null,
           specialInstructions: existing.special_instructions || null,
           criticalAreas: existing.critical_areas || null,
+          directions: existing.directions || null,
           monitoringPersonnel: existing.monitoring_personnel || null,
           notificationCircumstances: existing.notification_circumstances || [],
           coverageHours: existing.coverage_hours || [],
@@ -6649,6 +6740,7 @@ function resolveOverallChangeRequestStatus({
         logisticsInstructions: mergedOrder.logisticsInstructions,
         specialInstructions: mergedOrder.specialInstructions,
         criticalAreas: mergedOrder.criticalAreas,
+        directions: mergedOrder.directions,
         monitoringPersonnel: mergedOrder.monitoringPersonnel,
         notificationCircumstances: mergedOrder.notificationCircumstances,
         coverageHours: mergedOrder.coverageHours,
@@ -7347,8 +7439,11 @@ app.put(
           taxInclusivePricing,
       autoApplyCustomerCredit,
       autoWorkOrderOnReturn,
+      assetDirectionsEnabled,
       logoUrl,
+      orderContactsEnabled,
         requiredStorefrontCustomerFields,
+        assetsTableColumns,
         rentalInfoFields,
         customerContactCategories,
         customerDocumentCategories,
@@ -7365,6 +7460,7 @@ app.put(
       qboAdjustmentPolicy,
       qboIncomeAccountIds,
       qboDefaultTaxCode,
+      hideQboSectionsWhenDisconnected,
     } = req.body;
       if (!companyId) return res.status(400).json({ error: "companyId is required." });
       const settings = await upsertCompanySettings({
@@ -7379,8 +7475,11 @@ app.put(
         taxInclusivePricing: taxInclusivePricing ?? null,
           autoApplyCustomerCredit: autoApplyCustomerCredit ?? null,
           autoWorkOrderOnReturn: autoWorkOrderOnReturn ?? null,
+          assetDirectionsEnabled: assetDirectionsEnabled ?? undefined,
           logoUrl,
+          orderContactsEnabled,
             requiredStorefrontCustomerFields,
+            assetsTableColumns,
             rentalInfoFields,
             customerContactCategories,
             customerDocumentCategories,
@@ -7397,6 +7496,7 @@ app.put(
       qboAdjustmentPolicy: qboAdjustmentPolicy ?? null,
       qboIncomeAccountIds: qboIncomeAccountIds ?? undefined,
       qboDefaultTaxCode,
+      hideQboSectionsWhenDisconnected,
     });
     res.json({ settings });
   })
@@ -8259,7 +8359,7 @@ app.post(
 app.get(
   "/api/rental-orders",
   asyncHandler(async (req, res) => {
-    const { companyId, statuses, from, to, dateField } = req.query;
+    const { companyId, statuses, from, to, dateField, includeFeesInRange } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     if (from && to) {
       const orders = await listRentalOrdersForRange(companyId, {
@@ -8268,6 +8368,7 @@ app.get(
         statuses: statuses || null,
         quoteOnly: false,
         dateField: dateField || "rental_period",
+        includeFeesInRange: parseBoolean(includeFeesInRange) === true,
       });
       return res.json({ orders });
     }
@@ -8279,7 +8380,7 @@ app.get(
 app.get(
   "/api/rental-quotes",
   asyncHandler(async (req, res) => {
-    const { companyId, statuses, from, to, dateField } = req.query;
+    const { companyId, statuses, from, to, dateField, includeFeesInRange } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     if (from && to) {
       const orders = await listRentalOrdersForRange(companyId, {
@@ -8288,6 +8389,7 @@ app.get(
         statuses: statuses || null,
         quoteOnly: true,
         dateField: dateField || "rental_period",
+        includeFeesInRange: parseBoolean(includeFeesInRange) === true,
       });
       return res.json({ orders });
     }
@@ -8943,6 +9045,7 @@ app.post(
       logisticsInstructions,
       specialInstructions,
       criticalAreas,
+      directions,
       monitoringPersonnel,
       notificationCircumstances,
       coverageHours,
@@ -8991,6 +9094,7 @@ app.post(
         logisticsInstructions,
         specialInstructions,
         criticalAreas,
+        directions,
         monitoringPersonnel,
         notificationCircumstances,
         coverageHours,
@@ -9076,6 +9180,7 @@ app.put(
       logisticsInstructions,
       specialInstructions,
       criticalAreas,
+      directions,
       monitoringPersonnel,
       notificationCircumstances,
       coverageHours,
@@ -9125,6 +9230,7 @@ app.put(
         logisticsInstructions,
         specialInstructions,
         criticalAreas,
+        directions,
         monitoringPersonnel,
         notificationCircumstances,
         coverageHours,
@@ -9913,7 +10019,8 @@ app.delete(
 app.get(
   "/api/work-orders",
   asyncHandler(async (req, res) => {
-    const { companyId, unitId, status, orderStatus, serviceStatus, returnInspection, search, limit, offset } = req.query || {};
+    const { companyId, unitId, status, orderStatus, serviceStatus, returnInspection, search, dueFrom, dueTo, limit, offset } =
+      req.query || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     const parsedReturnInspection = parseBoolean(returnInspection);
     const workOrders = await listWorkOrders({
@@ -9923,6 +10030,8 @@ app.get(
       serviceStatus,
       returnInspection: parsedReturnInspection === null ? undefined : parsedReturnInspection,
       search,
+      dueFrom,
+      dueTo,
       limit,
       offset,
     });
@@ -9948,6 +10057,19 @@ app.post(
     const {
       companyId,
       date,
+      rentalOrderId,
+      rentalOrderNumber,
+      customerId,
+      customerName,
+      category,
+      contact,
+      siteName,
+      siteAddress,
+      siteAccessCode,
+      dueDate,
+      isRecurring,
+      recurrenceFrequency,
+      recurrenceInterval,
       unitIds,
       unitLabels,
       unitId,
@@ -9968,13 +10090,25 @@ app.post(
       closedAt,
     } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    if (!date) return res.status(400).json({ error: "date is required." });
     const hasUnitIds = Array.isArray(unitIds) ? unitIds.length > 0 : !!unitId;
     if (!hasUnitIds) return res.status(400).json({ error: "unitIds are required." });
 
     const workOrder = await createWorkOrder({
       companyId,
-      date,
+      date: date || new Date().toISOString().slice(0, 10),
+      rentalOrderId,
+      rentalOrderNumber,
+      customerId,
+      customerName,
+      category,
+      contact,
+      siteName,
+      siteAddress,
+      siteAccessCode,
+      dueDate,
+      isRecurring,
+      recurrenceFrequency,
+      recurrenceInterval,
       unitIds,
       unitLabels,
       unitId,
@@ -10005,6 +10139,19 @@ app.put(
     const {
       companyId,
       date,
+      rentalOrderId,
+      rentalOrderNumber,
+      customerId,
+      customerName,
+      category,
+      contact,
+      siteName,
+      siteAddress,
+      siteAccessCode,
+      dueDate,
+      isRecurring,
+      recurrenceFrequency,
+      recurrenceInterval,
       unitIds,
       unitLabels,
       unitId,
@@ -10028,7 +10175,20 @@ app.put(
     const updated = await updateWorkOrder({
       id: Number(id),
       companyId,
-      date,
+      ...(date ? { date } : {}),
+      rentalOrderId,
+      rentalOrderNumber,
+      customerId,
+      customerName,
+      category,
+      contact,
+      siteName,
+      siteAddress,
+      siteAccessCode,
+      dueDate,
+      isRecurring,
+      recurrenceFrequency,
+      recurrenceInterval,
       unitIds,
       unitLabels,
       unitId,
@@ -10161,7 +10321,7 @@ app.delete(
 app.post(
   "/api/equipment/current-location",
   asyncHandler(async (req, res) => {
-    const { companyId, equipmentIds, equipmentId, currentLocationId } = req.body || {};
+    const { companyId, equipmentIds, equipmentId, currentLocationId, directions } = req.body || {};
     const cid = Number(companyId);
     if (!Number.isFinite(cid)) return res.status(400).json({ error: "companyId is required." });
     const ids = Array.isArray(equipmentIds)
@@ -10175,6 +10335,13 @@ app.post(
 
     const beforeRows = await listEquipmentCurrentLocationIdsForIds({ companyId: cid, equipmentIds: ids });
     const updated = await setEquipmentCurrentLocationForIds({ companyId: cid, equipmentIds: ids, currentLocationId: locId });
+    const settings = await getCompanySettings(cid).catch(() => null);
+    const assetDirectionsEnabled = settings?.asset_directions_enabled === true;
+    const directionsProvided = directions !== undefined;
+    if (assetDirectionsEnabled && directionsProvided) {
+      const clean = directions === null || directions === undefined ? null : String(directions).trim() || null;
+      await setEquipmentDirectionsForIds({ companyId: cid, equipmentIds: ids, directions: clean });
+    }
     const cleanupIds = new Set();
 
     for (const row of beforeRows) {
@@ -10200,7 +10367,7 @@ app.post(
 app.post(
   "/api/equipment/current-location/base",
   asyncHandler(async (req, res) => {
-    const { companyId, equipmentIds } = req.body || {};
+    const { companyId, equipmentIds, directions } = req.body || {};
     const cid = Number(companyId);
     if (!Number.isFinite(cid)) return res.status(400).json({ error: "companyId is required." });
     const ids = Array.isArray(equipmentIds) ? equipmentIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)) : [];
@@ -10213,6 +10380,13 @@ app.post(
     if (!updateIds.length) return res.json({ ok: true, updated: 0 });
 
     const updated = await setEquipmentCurrentLocationToBaseForIds({ companyId: cid, equipmentIds: updateIds });
+    const settings = await getCompanySettings(cid).catch(() => null);
+    const assetDirectionsEnabled = settings?.asset_directions_enabled === true;
+    const directionsProvided = directions !== undefined;
+    if (assetDirectionsEnabled) {
+      const clean = directionsProvided ? (directions === null || directions === undefined ? null : String(directions).trim() || null) : null;
+      await setEquipmentDirectionsForIds({ companyId: cid, equipmentIds: updateIds, directions: clean });
+    }
     const cleanupIds = new Set();
 
     for (const row of rows) {
@@ -10238,6 +10412,26 @@ app.post(
 );
 
 app.get(
+  "/api/equipment/tracking-table-columns",
+  asyncHandler(async (req, res) => {
+    const { companyId, equipmentTypeIds } = req.query || {};
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const cid = Number(companyId);
+    const parsedTypeIds = (() => {
+      if (equipmentTypeIds === undefined || equipmentTypeIds === null || equipmentTypeIds === "") return null;
+      const rawList = Array.isArray(equipmentTypeIds) ? equipmentTypeIds : String(equipmentTypeIds).split(",");
+      const ids = rawList.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0);
+      return ids.length ? Array.from(new Set(ids)) : null;
+    })();
+    const trackingTableColumns = await listEquipmentTrackingTableColumns({
+      companyId: cid,
+      equipmentTypeIds: parsedTypeIds,
+    }).catch(() => []);
+    res.json({ trackingTableColumns });
+  })
+);
+
+app.get(
   "/api/equipment",
   asyncHandler(async (req, res) => {
     const { companyId, from, to, dateField } = req.query;
@@ -10251,6 +10445,19 @@ app.get(
       equipmentTypeIds: typeIds.length ? typeIds : null,
     }).catch(() => []);
     res.json({ equipment, trackingTableColumns });
+  })
+);
+
+app.get(
+  "/api/equipment/:id",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { companyId } = req.query;
+    if (!companyId) return res.status(400).json({ error: "companyId is required." });
+    const all = await listEquipment(companyId);
+    const equipment = (all || []).find((e) => String(e.id) === String(id));
+    if (!equipment) return res.status(404).json({ error: "Equipment not found" });
+    res.json(equipment);
   })
 );
 
@@ -10290,7 +10497,7 @@ app.post(
   "/api/equipment/:id/tracking/events",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { companyId, fieldId, value, note, occurredAt } = req.body || {};
+    const { companyId, fieldId, value, due, note, occurredAt } = req.body || {};
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     if (!fieldId) return res.status(400).json({ error: "fieldId is required." });
     await createEquipmentTrackingEvent({
@@ -10298,6 +10505,7 @@ app.post(
       equipmentId: Number(id),
       fieldId: Number(fieldId),
       value,
+      due,
       note,
       occurredAt,
     });
@@ -10336,30 +10544,42 @@ app.post(
       manufacturer,
       imageUrl,
       imageUrls,
+      cardImageUrl,
       locationId,
       currentLocationId,
       purchasePrice,
       notes,
+      directions,
     } = req.body;
-    if (!companyId || (!typeId && !typeName) || !modelName || !serialNumber || !condition) {
-      return res
-        .status(400)
-        .json({ error: "companyId, (typeId or typeName), modelName, serialNumber, and condition are required." });
+    const missing = [];
+    if (!companyId) missing.push("companyId");
+    if (!typeId && !typeName) missing.push("typeId or typeName");
+    if (!modelName) missing.push("modelName");
+    if (!serialNumber) missing.push("serialNumber");
+    if (missing.length > 0) {
+      return res.status(400).json({ error: `Missing required fields: ${missing.join(", ")}` });
     }
+    const settings = await getCompanySettings(companyId).catch(() => null);
+    const assetDirectionsEnabled = settings?.asset_directions_enabled === true;
+    const conditionValue = condition === null || condition === undefined ? null : String(condition).trim() || null;
+    const cardImageUrlValue =
+      cardImageUrl === null || cardImageUrl === undefined ? null : String(cardImageUrl).trim() || null;
     const equipment = await createEquipment({
       companyId,
       typeId,
       typeName,
       modelName,
       serialNumber,
-      condition,
+      condition: conditionValue,
       manufacturer,
       imageUrl,
       imageUrls: parseStringArray(imageUrls),
+      cardImageUrl: cardImageUrlValue,
       locationId,
       currentLocationId,
       purchasePrice,
       notes,
+      directions: assetDirectionsEnabled ? directions : null,
     });
     if (equipment?.id && equipment?.current_location_id) {
       await recordEquipmentCurrentLocationChange({
@@ -10387,18 +10607,32 @@ app.put(
       manufacturer,
       imageUrl,
       imageUrls,
+      cardImageUrl,
       locationId,
       currentLocationId,
       purchasePrice,
       notes,
+      directions,
     } = req.body;
-    if (!companyId || (!typeId && !typeName) || !modelName || !serialNumber || !condition) {
-      return res
-        .status(400)
-        .json({ error: "companyId, (typeId or typeName), modelName, serialNumber, and condition are required." });
+    const missing = [];
+    if (!companyId) missing.push("companyId");
+    if (!typeId && !typeName) missing.push("typeId or typeName");
+    if (!modelName) missing.push("modelName");
+    if (!serialNumber) missing.push("serialNumber");
+    if (missing.length > 0) {
+      return res.status(400).json({ error: `Missing required fields: ${missing.join(", ")}` });
     }
 
     const before = await getEquipmentLocationIds({ companyId, equipmentId: Number(id) });
+    const settings = await getCompanySettings(companyId).catch(() => null);
+    const assetDirectionsEnabled = settings?.asset_directions_enabled === true;
+    const directionsValue =
+      assetDirectionsEnabled
+        ? (directions !== undefined ? directions : before?.directions || null)
+        : before?.directions || null;
+    const conditionValue = condition === null || condition === undefined ? null : String(condition).trim() || null;
+    const cardImageUrlValue =
+      cardImageUrl === null || cardImageUrl === undefined ? null : String(cardImageUrl).trim() || null;
     const updated = await updateEquipment({
       id,
       companyId,
@@ -10406,14 +10640,16 @@ app.put(
       typeName,
       modelName,
       serialNumber,
-      condition,
+      condition: conditionValue,
       manufacturer,
       imageUrl,
       imageUrls: parseStringArray(imageUrls),
+      cardImageUrl: cardImageUrlValue,
       locationId,
       currentLocationId,
       purchasePrice,
       notes,
+      directions: directionsValue,
     });
     if (!updated) return res.status(404).json({ error: "Equipment not found" });
     const beforeCurrent = before?.current_location_id ?? null;
@@ -10494,6 +10730,33 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: "Internal server error" });
 });
 
+function startRecurringWorkOrderScheduler() {
+  if (process.env.NODE_ENV === "test") return;
+  const enabledEnv = parseBoolean(process.env.RECURRING_WORK_ORDERS_ENABLED);
+  if (enabledEnv === false) return;
+
+  const intervalMsRaw = Number(process.env.RECURRING_WORK_ORDER_SWEEP_MS);
+  const intervalMs = Number.isFinite(intervalMsRaw) && intervalMsRaw > 0
+    ? Math.min(Math.max(intervalMsRaw, 60_000), 24 * 60 * 60 * 1000)
+    : 5 * 60 * 1000;
+
+  const runOnce = async () => {
+    try {
+      const result = await runRecurringWorkOrderSweep();
+      const created = Number(result?.created || 0);
+      if (created > 0) {
+        console.log(`Recurring work orders: created ${created} work order(s).`);
+      }
+    } catch (err) {
+      console.error("Recurring work order sweep failed:", err?.message || err);
+    }
+  };
+
+  runOnce();
+  const timer = setInterval(runOnce, intervalMs);
+  if (typeof timer.unref === "function") timer.unref();
+}
+
 async function start() {
   await initQboDiscovery();
   await ensureTables();
@@ -10507,6 +10770,7 @@ async function start() {
   } catch (err) {
     console.error("Demo seed failed:", err?.message || err);
   }
+  startRecurringWorkOrderScheduler();
   app.listen(PORT, () => {
     console.log(`API running on http://localhost:${PORT}`);
   });

@@ -16,6 +16,13 @@ const closeRentalInfoImportBtn = document.getElementById("close-rental-info-impo
 const importRentalInfoInput = document.getElementById("import-rental-info-file");
 const runRentalInfoImportBtn = document.getElementById("run-rental-info-import");
 const rentalInfoImportResult = document.getElementById("rental-info-import-result");
+const openSheetsImportBtn = document.getElementById("open-sheets-import");
+const sheetsImportModal = document.getElementById("sheets-import-modal");
+const closeSheetsImportBtn = document.getElementById("close-sheets-import");
+const importOrdersSheetInput = document.getElementById("import-orders-sheet");
+const importLineItemsSheetInput = document.getElementById("import-line-items-sheet");
+const runSheetsImportBtn = document.getElementById("run-sheets-import");
+const sheetsImportResult = document.getElementById("sheets-import-result");
 const openLegacyImportBtn = document.getElementById("open-legacy-import");
 const legacyImportModal = document.getElementById("legacy-import-modal");
 const closeLegacyImportBtn = document.getElementById("close-legacy-import");
@@ -264,7 +271,6 @@ function renderOrders(rows) {
       <span class="sort ${sortField === "end_at" ? "active" : ""}" data-sort="end_at">End ${indicator("end_at")}</span>
       <span class="sort ${sortField === "total" ? "active" : ""}" data-sort="total">Monthly / Total ${indicator("total")}</span>
       <span>Updates</span>
-      <span>History</span>
     </div>`;
 
   if (!rows || rows.length === 0) {
@@ -296,9 +302,6 @@ function renderOrders(rows) {
       <span>${fmtDateTime(row.end_at)}</span>
       <span title="${amountTitle}">${fmtMoney(amountInfo.value)}</span>
       <span>${pendingOrderUpdates.has(Number(row.id)) ? "Pending" : ""}</span>
-      <span style="justify-self:end;">
-        <button class="ghost small" type="button" data-history>History</button>
-      </span>
     `;
     ordersTable.appendChild(div);
   });
@@ -347,16 +350,6 @@ newRoBtn.addEventListener("click", (e) => {
 });
 
 ordersTable.addEventListener("click", (e) => {
-  const historyBtn = e.target.closest?.("[data-history]");
-  if (historyBtn) {
-    e.preventDefault();
-    const row = historyBtn.closest(".table-row");
-    const id = row?.dataset?.id;
-    if (!id || !activeCompanyId) return;
-    window.location.href = `rental-order-history.html?id=${encodeURIComponent(id)}`;
-    return;
-  }
-
   const sort = e.target.closest?.(".sort")?.getAttribute?.("data-sort") ?? e.target.getAttribute?.("data-sort");
   if (sort) {
     e.preventDefault();
@@ -426,6 +419,17 @@ function closeLegacyImport() {
   legacyImportModal.classList.remove("show");
 }
 
+function openSheetsImport() {
+  if (!sheetsImportModal) return;
+  sheetsImportModal.classList.add("show");
+  if (sheetsImportResult) sheetsImportResult.textContent = "";
+}
+
+function closeSheetsImport() {
+  if (!sheetsImportModal) return;
+  sheetsImportModal.classList.remove("show");
+}
+
 function openRentalInfoImport() {
   if (!rentalInfoImportModal) return;
   rentalInfoImportModal.classList.add("show");
@@ -442,9 +446,19 @@ openRentalInfoImportBtn?.addEventListener("click", (e) => {
   openRentalInfoImport();
 });
 
+openSheetsImportBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  openSheetsImport();
+});
+
 closeRentalInfoImportBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   closeRentalInfoImport();
+});
+
+closeSheetsImportBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  closeSheetsImport();
 });
 
 runRentalInfoImportBtn?.addEventListener("click", async (e) => {
@@ -488,6 +502,47 @@ openLegacyImportBtn?.addEventListener("click", (e) => {
   openLegacyImport();
 });
 
+runSheetsImportBtn?.addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!activeCompanyId) {
+    if (sheetsImportResult) sheetsImportResult.textContent = "Select a company first.";
+    return;
+  }
+  const ordersFile = importOrdersSheetInput?.files?.[0] || null;
+  const lineItemsFile = importLineItemsSheetInput?.files?.[0] || null;
+  if (!ordersFile || !lineItemsFile) {
+    if (sheetsImportResult) sheetsImportResult.textContent = "Choose both the rental orders and line items files.";
+    return;
+  }
+
+  if (sheetsImportResult) sheetsImportResult.textContent = "Importing…";
+  if (runSheetsImportBtn) runSheetsImportBtn.disabled = true;
+  try {
+    const body = new FormData();
+    body.append("companyId", String(activeCompanyId));
+    body.append("orders", ordersFile);
+    body.append("lineItems", lineItemsFile);
+    const res = await fetch("/api/rental-orders/import-sheets", { method: "POST", body });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Import failed");
+
+    const warnCount = Array.isArray(data.warnings) ? data.warnings.length : 0;
+    const errorCount = Array.isArray(data.errors) ? data.errors.length : 0;
+    const summary = `Import complete: orders +${data.ordersCreated ?? 0} (skipped ${data.ordersSkipped ?? 0}), line items +${data.lineItemsCreated ?? 0} (skipped ${data.lineItemsSkipped ?? 0}), customers +${data.customersCreated ?? 0}, placeholders +${data.placeholderEquipmentCreated ?? 0}.`;
+    const warnTail = warnCount ? `\nWarnings:\n${data.warnings.slice(0, 5).map((w) => `- ${w}`).join("\n")}` : "";
+    const errorTail = errorCount ? `\nErrors:\n${data.errors.slice(0, 5).map((w) => `- ${w}`).join("\n")}` : "";
+    if (sheetsImportResult) sheetsImportResult.textContent = `${summary}${warnTail}${errorTail}`;
+
+    await loadOrders();
+  } catch (err) {
+    if (sheetsImportResult) sheetsImportResult.textContent = err.message || "Import failed";
+  } finally {
+    if (runSheetsImportBtn) runSheetsImportBtn.disabled = false;
+    if (importOrdersSheetInput) importOrdersSheetInput.value = "";
+    if (importLineItemsSheetInput) importLineItemsSheetInput.value = "";
+  }
+});
+
 closeLegacyImportBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   closeLegacyImport();
@@ -497,6 +552,10 @@ legacyImportModal?.addEventListener("click", (e) => {
   if (e.target === legacyImportModal) closeLegacyImport();
 });
 
+sheetsImportModal?.addEventListener("click", (e) => {
+  if (e.target === sheetsImportModal) closeSheetsImport();
+});
+
 rentalInfoImportModal?.addEventListener("click", (e) => {
   if (e.target === rentalInfoImportModal) closeRentalInfoImport();
 });
@@ -504,6 +563,7 @@ rentalInfoImportModal?.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     closeLegacyImport();
+    closeSheetsImport();
     closeRentalInfoImport();
   }
 });

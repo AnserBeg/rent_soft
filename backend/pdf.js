@@ -69,6 +69,7 @@ const DEFAULT_RENTAL_INFO_FIELDS = {
   siteAddress: { enabled: true, required: false },
   siteAccessInfo: { enabled: true, required: false },
   criticalAreas: { enabled: true, required: true },
+  directions: { enabled: false, required: false },
   monitoringPersonnel: { enabled: true, required: false },
   specialInstructions: { enabled: true, required: false },
   notificationCircumstances: { enabled: true, required: false },
@@ -462,7 +463,7 @@ function lineItemQtyForPdf(lineItem, orderStatus) {
   const unitDescription = safeText(lineItem.unitDescription || lineItem.unit_description || "");
   const isRerent = !!unitDescription && !lineItem.bundleId && invCount === 0;
   if (isRerent) return 1;
-  return isDemandOnlyStatus(orderStatus) ? 1 : 0;
+  return 1;
 }
 
 function computeMonthlyRecurringTotals(
@@ -949,6 +950,10 @@ function writeOrderPdf(
   if (showRentalInfo("criticalAreas")) {
     const val = safeText(order?.critical_areas || order?.criticalAreas);
     if (val) rentalInfoLines.push({ label: "Critical Assets and Locations", value: val });
+  }
+  if (showRentalInfo("directions")) {
+    const val = safeText(order?.directions);
+    if (val) rentalInfoLines.push({ label: "Directions", value: val });
   }
   if (showRentalInfo("monitoringPersonnel")) {
     const val = safeText(order?.monitoring_personnel || order?.monitoringPersonnel);
