@@ -1446,61 +1446,6 @@ button:active {
   font-size: 13px;
 }
 
-.pill.tracking-pill {
-  font-weight: 700;
-}
-
-.pill.tracking-overdue {
-  border-color: rgba(239, 68, 68, 0.55);
-  background: rgba(239, 68, 68, 0.08);
-  color: rgba(153, 27, 27, 1);
-}
-
-.pill.tracking-due-soon {
-  border-color: rgba(245, 158, 11, 0.55);
-  background: rgba(245, 158, 11, 0.10);
-  color: rgba(146, 64, 14, 1);
-}
-
-.pill.tracking-missing {
-  border-color: rgba(100, 116, 139, 0.55);
-  background: rgba(100, 116, 139, 0.10);
-  color: rgba(30, 41, 59, 1);
-}
-
-.pill.tracking-ok {
-  border-color: rgba(34, 197, 94, 0.55);
-  background: rgba(34, 197, 94, 0.10);
-  color: rgba(20, 83, 45, 1);
-}
-
-.tracking-cell {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  padding: 4px 10px;
-  border-radius: 10px;
-  border: 1px solid transparent;
-}
-
-.tracking-cell.tracking-overdue {
-  border-color: rgba(239, 68, 68, 0.55);
-  background: rgba(239, 68, 68, 0.08);
-  color: rgba(153, 27, 27, 1);
-}
-
-.tracking-cell.tracking-due-soon {
-  border-color: rgba(245, 158, 11, 0.55);
-  background: rgba(245, 158, 11, 0.10);
-  color: rgba(146, 64, 14, 1);
-}
-
-.tracking-cell.tracking-ok {
-  border-color: rgba(34, 197, 94, 0.55);
-  background: rgba(34, 197, 94, 0.10);
-  color: rgba(20, 83, 45, 1);
-}
-
 .filter-pill {
   border: 1px solid var(--border);
   padding: 6px 12px;
@@ -4341,60 +4286,6 @@ body.is-col-resizing * {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-}
-
-.tracking-field-row {
-  display: grid;
-  grid-template-columns: minmax(160px, 1.3fr) minmax(220px, 2fr) auto auto;
-  gap: 10px;
-  align-items: end;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: #fff;
-}
-
-.tracking-field-inputs {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.tracking-field-due-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.tracking-field-due-label {
-  line-height: 1;
-}
-
-.tracking-field-row .hint {
-  margin: 0;
-}
-
-.tracking-field-row .tracking-field-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-
-.tracking-field-history {
-  grid-column: 1 / -1;
-  padding-top: 8px;
-}
-
-.tracking-field-history-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.tracking-field-history-table .table-row {
-  grid-template-columns: 1.2fr 0.9fr 1.6fr;
 }
 
 #invoices-table .table-row {

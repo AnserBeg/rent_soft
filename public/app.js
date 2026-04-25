@@ -85,12 +85,6 @@ const openEquipmentLocationHistoryBtn = document.getElementById("open-equipment-
 const openEquipmentWorkOrdersBtn = document.getElementById("open-equipment-work-orders");
 const equipmentWorkOrdersTable = document.getElementById("equipment-work-orders-table");
 const equipmentWorkOrdersMeta = document.getElementById("equipment-work-orders-meta");
-const equipmentTrackingStatusPill = null;
-const equipmentTrackingNeedsSummary = null;
-const equipmentTrackingNeedsList = null;
-const equipmentTrackingFieldsWrap = null;
-const equipmentTrackingEventsTable = null;
-const equipmentTrackingHistoryCard = null;
 const equipmentBundleLabel = document.getElementById("equipment-bundle-label");
 const openBundleModalBtn = document.getElementById("open-bundle-modal");
 const bundleModal = document.getElementById("bundle-modal");
@@ -156,19 +150,14 @@ let equipmentAiBusy = false;
 let equipmentImagePreviewObjectUrl = null;
 let equipmentImageViewerObjectUrl = null;
 
-// Keep per-unit expand/collapse state in-memory (resets on full page reload).
-const expandedTrackingFieldHistoryKeys = new Set();
 let fallbackEquipmentImageUrls = [];
 let equipmentHistoryLoadedForId = null;
 let equipmentWorkOrdersLoadedForId = null;
-let equipmentTrackingLoadedForId = null;
 let equipmentExtrasActiveTab = "location-history";
 let bundlesCache = [];
 let editingBundleId = null;
 let bundleSeedEquipmentId = null;
 let locationsCache = [];
-let trackingTableColumnsCache = [];
-let lastEquipmentTrackingPayload = null;
 let companyAssetsTableColumnsDefault = null; // null => no default (show all)
 let companyAssetsTableColumnsLoadedForId = null;
 let companyAssetDirectionsLoadedForId = null;
@@ -337,12 +326,7 @@ function normalizeEquipmentTableColumnWidths(value, allowedKeys) {
     let key = String(k || "").trim();
     if (!key) continue;
     if (allowed && !allowed.has(key)) {
-      const mapped = mapLegacyTrackingColumnKey(key);
-      if (mapped && allowed.has(mapped)) {
-        key = mapped;
-      } else {
-        continue;
-      }
+      continue;
     }
     const n = Number(v);
     if (!Number.isFinite(n)) continue;
@@ -384,10 +368,6 @@ function clearUserEquipmentTableColumnWidths(companyId) {
   localStorage.removeItem(key);
 }
 
-function mapLegacyTrackingColumnKey(key) {
-  return null;
-}
-
 function getEquipmentTableAvailableColumns() {
   return EQUIPMENT_TABLE_BASE_COLUMNS.slice();
 }
@@ -421,8 +401,7 @@ function getEffectiveEquipmentTableVisibleKeys(companyId, availableColumns) {
           const raw = String(k || "").trim();
           if (!raw) return "";
           if (availableKeys.has(raw)) return raw;
-          const mapped = mapLegacyTrackingColumnKey(raw);
-          return mapped && availableKeys.has(mapped) ? mapped : raw;
+          return raw;
         })
         .filter(Boolean)
     : null;
@@ -1540,451 +1519,6 @@ async function loadEquipmentWorkOrders(equipmentId) {
   equipmentWorkOrdersLoadedForId = String(eid);
 }
 
-function setEquipmentTrackingMessage(message, { isError = false } = {}) {
-  if (!equipmentTrackingNeedsSummary) return;
-  equipmentTrackingNeedsSummary.textContent = message ? String(message) : "";
-  equipmentTrackingNeedsSummary.style.color = isError ? "var(--danger)" : "";
-}
-
-function getHistoryTimeMs(obj, keys) {
-  const list = Array.isArray(keys) ? keys : [];
-  for (const k of list) {
-    const raw = obj?.[k];
-    if (!raw) continue;
-    const ms = Date.parse(String(raw));
-    if (Number.isFinite(ms)) return ms;
-  }
-  return NaN;
-}
-
-function renderEquipmentTrackingEvents(events, fieldsById) {
-  if (!equipmentTrackingEventsTable) return;
-  const rows = Array.isArray(events) ? events : [];
-  if (!rows.length) {
-    equipmentTrackingEventsTable.innerHTML = "";
-    return;
-  }
-  equipmentTrackingEventsTable.innerHTML = `
-    <div class="table-row table-header">
-      <span>When</span>
-      <span>Field</span>
-      <span>Value</span>
-      <span>Note</span>
-    </div>
-  `;
-  rows.forEach((ev) => {
-    const div = document.createElement("div");
-    div.className = "table-row";
-    const when = ev?.occurredAt || ev?.occurred_at || ev?.createdAt || ev?.created_at || "";
-    const fid = String(ev?.fieldId ?? ev?.field_id ?? "");
-    const fieldLabel = fieldsById?.get?.(fid) || `Field ${fid || "--"}`;
-    div.innerHTML = `
-      <span>${escapeHtml(formatHistoryTimestamp(when))}</span>
-      <span>${escapeHtml(fieldLabel)}</span>
-      <span>${escapeHtml(String(ev?.value ?? "--"))}</span>
-      <span>${escapeHtml(String(ev?.note || "--"))}</span>
-    `;
-    equipmentTrackingEventsTable.appendChild(div);
-  });
-}
-
-
-function renderEquipmentTrackingFields(tracking) {
-  if (!equipmentTrackingFieldsWrap) return;
-  equipmentTrackingFieldsWrap.replaceChildren();
-
-  const fields = Array.isArray(tracking?.fields) ? tracking.fields : [];
-  const allEvents = Array.isArray(tracking?.events) ? tracking.events.slice() : [];
-  allEvents.sort((a, b) => {
-    const aTime = getHistoryTimeMs(a, ["occurredAt", "occurred_at", "createdAt", "created_at"]);
-    const bTime = getHistoryTimeMs(b, ["occurredAt", "occurred_at", "createdAt", "created_at"]);
-    if (Number.isFinite(aTime) && Number.isFinite(bTime)) return bTime - aTime;
-    if (Number.isFinite(aTime)) return -1;
-    if (Number.isFinite(bTime)) return 1;
-    return 0;
-  });
-  const eventsByFieldId = new Map();
-  allEvents.forEach((ev) => {
-    const fid = String(ev?.fieldId ?? ev?.field_id ?? "");
-    if (!fid) return;
-    if (!eventsByFieldId.has(fid)) eventsByFieldId.set(fid, []);
-    eventsByFieldId.get(fid).push(ev);
-  });
-
-  const filteredFields = fields.filter((field) => {
-    const fieldKey = String(field?.fieldKey ?? field?.field_key ?? field?.key ?? "").trim().toLowerCase();
-    return fieldKey !== "hours_operated";
-  });
-  if (!filteredFields.length) {
-    const empty = document.createElement("p");
-    empty.className = "hint";
-    empty.textContent = "No tracking fields configured for this equipment type yet.";
-    equipmentTrackingFieldsWrap.appendChild(empty);
-    return;
-  }
-
-  const valuesByFieldId = tracking?.valuesByFieldId && typeof tracking.valuesByFieldId === "object" ? tracking.valuesByFieldId : {};
-  const dueValuesByFieldId =
-    tracking?.dueValuesByFieldId && typeof tracking.dueValuesByFieldId === "object" ? tracking.dueValuesByFieldId : {};
-  const statusByFieldId = new Map(
-    (tracking?.summary?.statuses || []).map((s) => [String(s?.fieldId ?? ""), s]).filter(([k]) => k)
-  );
-  const equipmentIdKey = String(equipmentTrackingLoadedForId || editingEquipmentId || "");
-
-  filteredFields.forEach((field) => {
-    const fid = String(field?.id ?? "");
-    const row = document.createElement("div");
-    row.className = "tracking-field-row";
-    row.dataset.fieldId = fid;
-
-    const labelWrap = document.createElement("div");
-    const label = document.createElement("div");
-    label.style.fontWeight = "800";
-    label.textContent = field.label || field.fieldKey || `Field ${fid}`;
-    const meta = document.createElement("p");
-    meta.className = "hint";
-    const status = statusByFieldId.get(fid);
-    const statusKey = status?.statusKey;
-    const statusLabel =
-      statusKey === "overdue"
-        ? "Overdue"
-        : statusKey === "dueSoon"
-          ? "Due soon"
-          : statusKey === "missing"
-            ? "Missing"
-            : "OK";
-    const due = status?.dueAtLabel ? ` · Next: ${status.dueAtLabel}` : "";
-    meta.textContent = `${field.dataType || "text"}${field.unit ? ` · ${field.unit}` : ""} · ${statusLabel}${due}`;
-    labelWrap.appendChild(label);
-    labelWrap.appendChild(meta);
-
-    const inputWrap = document.createElement("div");
-    inputWrap.className = "tracking-field-inputs";
-    let inputEl = null;
-    const currentValue = valuesByFieldId[fid];
-    const type = String(field.dataType || "").trim();
-    const ruleType = field?.rule?.enabled === true ? String(field?.rule?.ruleType || "none") : "none";
-
-    if (type === "date") {
-      inputEl = document.createElement("input");
-      inputEl.type = "date";
-      inputEl.value = currentValue ? String(currentValue).slice(0, 10) : "";
-    } else if (type === "datetime") {
-      inputEl = document.createElement("input");
-      inputEl.type = "datetime-local";
-      inputEl.value = currentValue ? toDatetimeLocalValue(currentValue) : "";
-    } else if (type === "number") {
-      inputEl = document.createElement("input");
-      inputEl.type = "number";
-      inputEl.min = "0";
-      inputEl.step = "0.1";
-      inputEl.value = currentValue === null || currentValue === undefined ? "" : String(currentValue);
-    } else if (type === "boolean") {
-      inputEl = document.createElement("input");
-      inputEl.type = "checkbox";
-      inputEl.checked = currentValue === true;
-    } else if (type === "select") {
-      inputEl = document.createElement("select");
-      const emptyOpt = document.createElement("option");
-      emptyOpt.value = "";
-      emptyOpt.textContent = "Select...";
-      inputEl.appendChild(emptyOpt);
-      const opts = Array.isArray(field.options) ? field.options : [];
-      opts.forEach((opt) => {
-        const o = document.createElement("option");
-        o.value = String(opt?.value ?? opt ?? "");
-        o.textContent = String(opt?.label ?? opt?.value ?? opt ?? "");
-        inputEl.appendChild(o);
-      });
-      inputEl.value = currentValue === null || currentValue === undefined ? "" : String(currentValue);
-    } else {
-      inputEl = document.createElement("input");
-      inputEl.type = "text";
-      inputEl.value = currentValue === null || currentValue === undefined ? "" : String(currentValue);
-    }
-
-    inputEl.classList.add("tracking-field-input");
-    inputEl.dataset.fieldId = fid;
-    inputWrap.appendChild(inputEl);
-
-    if (ruleType === "manual_due_date_separate" && (type === "date" || type === "datetime")) {
-      const dueGroup = document.createElement("div");
-      dueGroup.className = "tracking-field-due-group";
-      const dueLabel = document.createElement("span");
-      dueLabel.className = "hint tracking-field-due-label";
-      dueLabel.textContent = "Due date";
-
-      const dueInput = document.createElement("input");
-      const currentDue = dueValuesByFieldId[fid];
-      if (type === "date") {
-        dueInput.type = "date";
-        dueInput.value = currentDue ? String(currentDue).slice(0, 10) : "";
-      } else {
-        dueInput.type = "datetime-local";
-        dueInput.value = currentDue ? toDatetimeLocalValue(currentDue) : "";
-      }
-      dueInput.classList.add("tracking-field-due-input");
-      dueInput.dataset.fieldId = fid;
-      dueInput.setAttribute("aria-label", "Due date");
-      dueGroup.appendChild(dueLabel);
-      dueGroup.appendChild(dueInput);
-      inputWrap.appendChild(dueGroup);
-    }
-
-    const actionsWrap = document.createElement("div");
-    actionsWrap.className = "tracking-field-actions";
-
-    const logBtn = document.createElement("button");
-    logBtn.type = "button";
-    logBtn.className = "ghost small";
-    logBtn.dataset.action = "tracking-log-event";
-    logBtn.dataset.fieldId = fid;
-    logBtn.textContent = "Log";
-    actionsWrap.appendChild(logBtn);
-
-    const woBtn = document.createElement("button");
-    woBtn.type = "button";
-    woBtn.className = "ghost small";
-    woBtn.dataset.action = "tracking-create-wo";
-    woBtn.dataset.fieldId = fid;
-    woBtn.textContent = "Create WO";
-    actionsWrap.appendChild(woBtn);
-
-    row.appendChild(labelWrap);
-    row.appendChild(inputWrap);
-    row.appendChild(actionsWrap);
-
-    // Per-field history (most recent first), collapsed to 2 rows by default.
-    const fieldEvents = eventsByFieldId.get(fid) || [];
-    const historyWrap = document.createElement("div");
-    historyWrap.className = "tracking-field-history";
-    historyWrap.dataset.fieldId = fid;
-
-    const head = document.createElement("div");
-    head.className = "tracking-field-history-head";
-    const title = document.createElement("p");
-    title.className = "hint";
-    title.style.margin = "0";
-    title.textContent = "History";
-    head.appendChild(title);
-
-    const historyTable = document.createElement("div");
-    historyTable.className = "table tracking-field-history-table";
-    historyTable.dataset.fieldId = fid;
-
-    if (!fieldEvents.length) {
-      const empty = document.createElement("p");
-      empty.className = "hint";
-      empty.style.margin = "6px 0 0";
-      empty.textContent = "No history yet.";
-      historyWrap.appendChild(head);
-      historyWrap.appendChild(empty);
-    } else {
-      const key = equipmentIdKey ? `${equipmentIdKey}:${fid}` : "";
-      const isExpanded = key ? expandedTrackingFieldHistoryKeys.has(key) : false;
-
-      historyTable.innerHTML = `
-        <div class="table-row table-header">
-          <span>When</span>
-          <span>Value</span>
-          <span>Note</span>
-        </div>
-      `;
-      fieldEvents.forEach((ev, idx) => {
-        const div = document.createElement("div");
-        div.className = "table-row";
-        if (idx >= 2) div.dataset.historyExtra = "1";
-        if (!isExpanded && idx >= 2) div.hidden = true;
-        const when = ev?.occurredAt || ev?.occurred_at || ev?.createdAt || ev?.created_at || "";
-        div.innerHTML = `
-          <span>${escapeHtml(formatHistoryTimestamp(when))}</span>
-          <span>${escapeHtml(String(ev?.value ?? "--"))}</span>
-          <span>${escapeHtml(String(ev?.note || "--"))}</span>
-        `;
-        historyTable.appendChild(div);
-      });
-
-      if (fieldEvents.length > 2 && key) {
-        const toggleBtn = document.createElement("button");
-        toggleBtn.type = "button";
-        toggleBtn.className = "ghost small";
-        toggleBtn.dataset.action = "tracking-toggle-history";
-        toggleBtn.dataset.fieldId = fid;
-        toggleBtn.dataset.equipmentId = equipmentIdKey;
-        toggleBtn.textContent = isExpanded ? "Show less" : `Show all (${fieldEvents.length})`;
-        head.appendChild(toggleBtn);
-      }
-
-      historyWrap.appendChild(head);
-      historyWrap.appendChild(historyTable);
-    }
-
-    row.appendChild(historyWrap);
-    equipmentTrackingFieldsWrap.appendChild(row);
-  });
-}
-
-
-function renderEquipmentTrackingNeeds(tracking) {
-  if (!equipmentTrackingNeedsList) return;
-  equipmentTrackingNeedsList.replaceChildren();
-
-  const statuses = Array.isArray(tracking?.summary?.statuses) ? tracking.summary.statuses : [];
-  const needs = statuses.filter((s) => s?.statusKey === "overdue" || s?.statusKey === "dueSoon" || s?.statusKey === "missing");
-  if (!needs.length) {
-    const ok = document.createElement("p");
-    ok.className = "hint";
-    ok.textContent = "Nothing due right now.";
-    equipmentTrackingNeedsList.appendChild(ok);
-    return;
-  }
-
-  needs.forEach((s) => {
-    const row = document.createElement("div");
-    row.className = "tracking-field-row";
-    row.dataset.fieldId = String(s.fieldId || "");
-
-    const labelWrap = document.createElement("div");
-    const title = document.createElement("div");
-    title.style.fontWeight = "800";
-    title.textContent = s.label || "Tracking item";
-    const meta = document.createElement("p");
-    meta.className = "hint";
-    const statusText = s.statusKey === "overdue" ? "Overdue" : s.statusKey === "dueSoon" ? "Due soon" : "Missing data";
-    meta.textContent = s.dueAtLabel ? `${statusText} · Next: ${s.dueAtLabel}` : statusText;
-    labelWrap.appendChild(title);
-    labelWrap.appendChild(meta);
-
-    const spacer = document.createElement("div");
-
-    const actionsWrap = document.createElement("div");
-    actionsWrap.className = "tracking-field-actions";
-
-    const woBtn = document.createElement("button");
-    woBtn.type = "button";
-    woBtn.className = "primary small";
-    woBtn.dataset.action = "tracking-create-wo";
-    woBtn.dataset.fieldId = String(s.fieldId || "");
-    woBtn.textContent = "Create work order";
-    actionsWrap.appendChild(woBtn);
-
-    row.appendChild(labelWrap);
-    row.appendChild(spacer);
-    row.appendChild(actionsWrap);
-    equipmentTrackingNeedsList.appendChild(row);
-  });
-}
-
-function setEquipmentTrackingStatus(tracking) {
-  if (!equipmentTrackingStatusPill) return;
-  const key = String(tracking?.summary?.overallStatusKey || "none");
-  const label = String(tracking?.summary?.overallStatusLabel || "--");
-  equipmentTrackingStatusPill.textContent = label;
-  equipmentTrackingStatusPill.classList.remove("tracking-overdue", "tracking-due-soon", "tracking-missing", "tracking-ok");
-  equipmentTrackingStatusPill.classList.add("tracking-pill");
-  if (key === "overdue") equipmentTrackingStatusPill.classList.add("tracking-overdue");
-  else if (key === "dueSoon") equipmentTrackingStatusPill.classList.add("tracking-due-soon");
-  else if (key === "missing") equipmentTrackingStatusPill.classList.add("tracking-missing");
-  else if (key === "ok") equipmentTrackingStatusPill.classList.add("tracking-ok");
-}
-
-async function loadEquipmentTracking(equipmentId) {
-  const cid = normalizeCompanyId();
-  const eid = Number(equipmentId);
-  if (!cid || !Number.isFinite(eid)) return;
-
-  setEquipmentTrackingMessage("Loading...");
-  const res = await fetch(
-    `/api/equipment/${encodeURIComponent(String(eid))}/tracking?companyId=${encodeURIComponent(String(cid))}&eventsLimit=50&readingsLimit=50`
-  );
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const msg = data.error || "Unable to load tracking.";
-    setEquipmentTrackingMessage(msg, { isError: true });
-    return;
-  }
-
-  const tracking = data.tracking || null;
-  lastEquipmentTrackingPayload = tracking;
-  equipmentTrackingLoadedForId = String(eid);
-
-  setEquipmentTrackingStatus(tracking);
-  const needsSummary = Array.isArray(tracking?.summary?.needs) ? tracking.summary.needs.join("; ") : "";
-  setEquipmentTrackingMessage(needsSummary);
-
-  renderEquipmentTrackingNeeds(tracking);
-  renderEquipmentTrackingFields(tracking);
-  // Field history is now rendered inline per field; keep the legacy "History" card hidden.
-  if (equipmentTrackingHistoryCard) equipmentTrackingHistoryCard.style.display = "none";
-}
-
-function getTrackingFieldFromCache(fieldId) {
-  const fid = String(fieldId || "");
-  const fields = Array.isArray(lastEquipmentTrackingPayload?.fields) ? lastEquipmentTrackingPayload.fields : [];
-  return fields.find((f) => String(f?.id || "") === fid) || null;
-}
-
-function getTrackingInputValue(inputEl, dataType) {
-  const type = String(dataType || "").trim();
-  if (!inputEl) return null;
-  if (type === "boolean") return inputEl.checked === true;
-  if (type === "number") {
-    const raw = String(inputEl.value || "").trim();
-    if (!raw) return null;
-    const n = Number(raw);
-    return Number.isFinite(n) ? n : null;
-  }
-  if (type === "date") {
-    const raw = String(inputEl.value || "").trim();
-    return raw || null;
-  }
-  if (type === "datetime") {
-    const raw = String(inputEl.value || "").trim();
-    return raw ? new Date(raw).toISOString() : null;
-  }
-  const raw = String(inputEl.value ?? "").trim();
-  return raw ? raw : null;
-}
-
-function openWorkOrderFromTracking({ equipmentId, fieldId }) {
-  const cid = normalizeCompanyId();
-  const eid = Number(equipmentId);
-  const fid = String(fieldId || "");
-  if (!cid || !Number.isFinite(eid) || !fid) return;
-  const field = getTrackingFieldFromCache(fid);
-  const fieldLabel = field?.label || field?.fieldKey || `Field ${fid}`;
-
-  const statuses = Array.isArray(lastEquipmentTrackingPayload?.summary?.statuses)
-    ? lastEquipmentTrackingPayload.summary.statuses
-    : [];
-  const status = statuses.find((s) => String(s?.fieldId || "") === String(fid)) || null;
-  const statusText =
-    status?.statusKey === "overdue"
-      ? "Overdue"
-      : status?.statusKey === "dueSoon"
-        ? "Due soon"
-        : status?.statusKey === "missing"
-          ? "Missing data"
-          : "Tracking";
-  const dueText = status?.dueAtLabel ? ` (next: ${status.dueAtLabel})` : "";
-  const summary = `Tracking: ${fieldLabel} - ${statusText}${dueText}`;
-
-  const sourceMeta = {
-    equipmentId: eid,
-    trackingFieldId: Number(field?.id),
-    trackingFieldLabel: fieldLabel,
-    trackingDataType: field?.dataType || null,
-  };
-
-  const qs = new URLSearchParams();
-  qs.set("companyId", String(cid));
-  qs.set("unitId", String(eid));
-  qs.set("summary", summary);
-  qs.set("source", "asset_tracking");
-  qs.set("sourceMeta", JSON.stringify(sourceMeta));
-  window.location.href = `work-order-form.html?${qs.toString()}`;
-}
-
 function setEquipmentExtrasTab(tab) {
   const next = ["location-history", "work-orders"].includes(String(tab)) ? String(tab) : "location-history";
   equipmentExtrasActiveTab = next;
@@ -2048,12 +1582,6 @@ function resetEquipmentExtrasPanels() {
   if (equipmentWorkOrdersTable) equipmentWorkOrdersTable.innerHTML = "";
   if (equipmentWorkOrdersMeta) equipmentWorkOrdersMeta.textContent = "";
   equipmentWorkOrdersLoadedForId = null;
-  equipmentTrackingLoadedForId = null;
-  lastEquipmentTrackingPayload = null;
-  if (equipmentTrackingNeedsSummary) equipmentTrackingNeedsSummary.textContent = "";
-  if (equipmentTrackingNeedsList) equipmentTrackingNeedsList.innerHTML = "";
-  if (equipmentTrackingEventsTable) equipmentTrackingEventsTable.innerHTML = "";
-  setEquipmentTrackingMessage("");
   if (equipmentExtrasSubtitle) equipmentExtrasSubtitle.textContent = "";
 }
 
