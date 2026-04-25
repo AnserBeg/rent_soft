@@ -41,17 +41,6 @@ const stockChartCanvas = document.getElementById("type-stock-chart");
 const stockImageWrap = document.getElementById("type-stock-image-wrap");
 const stockImageEl = document.getElementById("type-stock-image");
 
-const trackingFieldsStatus = document.getElementById("type-tracking-fields-status");
-const trackingFieldsTable = document.getElementById("type-tracking-fields-table");
-const addTrackingFieldBtn = document.getElementById("add-tracking-field");
-
-const trackingFieldModal = document.getElementById("tracking-field-modal");
-const trackingFieldModalTitle = document.getElementById("tracking-field-modal-title");
-const closeTrackingFieldModalBtn = document.getElementById("close-tracking-field-modal");
-const trackingFieldForm = document.getElementById("tracking-field-form");
-const trackingFieldFormStatus = document.getElementById("tracking-field-form-status");
-const deleteTrackingFieldBtn = document.getElementById("delete-tracking-field");
-
 let activeCompanyId = initialCompanyId ? Number(initialCompanyId) : null;
 let editingTypeId = initialTypeId ? Number(initialTypeId) : null;
 let typesCache = [];
@@ -63,8 +52,6 @@ let typeAiBusy = false;
 let qboConnected = false;
 let qboItemsCache = [];
 let hideQboSectionsWhenDisconnected = false;
-let trackingFieldsCache = [];
-let editingTrackingFieldId = null;
 
 const TYPE_AI_PRESETS = {
   "clean-white":
@@ -289,88 +276,6 @@ function formatFileSize(sizeBytes) {
   return `${Math.round(size / 1024)} KB`;
 }
 
-function setTrackingFieldsStatus(message, { isError = false } = {}) {
-  if (!trackingFieldsStatus) return;
-  trackingFieldsStatus.textContent = message ? String(message) : "";
-  trackingFieldsStatus.style.color = isError ? "var(--danger)" : "";
-}
-
-function setTrackingFieldFormStatus(message, { isError = false } = {}) {
-  if (!trackingFieldFormStatus) return;
-  trackingFieldFormStatus.textContent = message ? String(message) : "";
-  trackingFieldFormStatus.style.color = isError ? "var(--danger)" : "";
-}
-
-function parseTrackingOptionsText(text) {
-  const raw = String(text || "");
-  const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const options = [];
-  lines.forEach((line) => {
-    const parts = line.split("|");
-    const value = String(parts[0] || "").trim();
-    if (!value) return;
-    const label = String(parts[1] || value).trim() || value;
-    options.push({ value, label });
-  });
-  const out = [];
-  const seen = new Set();
-  options.forEach((opt) => {
-    const key = String(opt.value).toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(opt);
-  });
-  return out;
-}
-
-function openTrackingFieldModal(field) {
-  if (!trackingFieldModal || !trackingFieldForm) return;
-  const f = field || null;
-  editingTrackingFieldId = f?.id ? Number(f.id) : null;
-  if (trackingFieldModalTitle) {
-    trackingFieldModalTitle.textContent = editingTrackingFieldId ? `Edit tracking field` : "New tracking field";
-  }
-  setTrackingFieldFormStatus("");
-  trackingFieldForm.reset();
-
-  trackingFieldForm.label.value = f?.label || "";
-  trackingFieldForm.fieldKey.value = f?.fieldKey || "";
-  trackingFieldForm.dataType.value = f?.dataType || "date";
-  trackingFieldForm.unit.value = f?.unit || "";
-  trackingFieldForm.sortOrder.value = f?.sortOrder ?? 0;
-  trackingFieldForm.required.checked = f?.required === true;
-
-  trackingFieldForm.tableColumnLabel.value = f?.tableColumnLabel || "";
-  const show = f?.showOnAssetsTable === true;
-  const rawTableMode = String(f?.tableColumnMode || "").trim();
-  const initialTableMode = show ? (rawTableMode && rawTableMode !== "none" ? rawTableMode : "value") : "none";
-  trackingFieldForm.tableColumnMode.value = initialTableMode;
-
-  const rule = f?.rule && typeof f.rule === "object" ? f.rule : {};
-  trackingFieldForm.ruleType.value = rule.ruleType || "none";
-  trackingFieldForm.intervalDays.value = rule.intervalDays ?? "";
-  trackingFieldForm.warnDays.value = rule.warnDays ?? "";
-  trackingFieldForm.intervalHours.value = rule.intervalHours ?? "";
-  trackingFieldForm.warnHours.value = rule.warnHours ?? "";
-
-  const optionsText = Array.isArray(f?.options)
-    ? f.options.map((o) => `${o.value}${o.label && o.label !== o.value ? `|${o.label}` : ""}`).join("\n")
-    : "";
-  trackingFieldForm.optionsText.value = optionsText;
-
-  if (deleteTrackingFieldBtn) deleteTrackingFieldBtn.style.display = editingTrackingFieldId ? "inline-flex" : "none";
-  syncTrackingFieldTableUi();
-  syncTrackingFieldRuleUi();
-  trackingFieldModal.classList.add("show");
-}
-
-function closeTrackingFieldModal() {
-  if (!trackingFieldModal) return;
-  trackingFieldModal.classList.remove("show");
-  editingTrackingFieldId = null;
-  setTrackingFieldFormStatus("");
-}
-
 function escapeHtml(s) {
   return String(s || "")
     .replaceAll("&", "&amp;")
@@ -378,196 +283,6 @@ function escapeHtml(s) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-}
-
-function renderTrackingFieldsTable() {
-  if (!trackingFieldsTable) return;
-  const rows = Array.isArray(trackingFieldsCache) ? trackingFieldsCache : [];
-  if (!editingTypeId) {
-    trackingFieldsTable.innerHTML = "";
-    setTrackingFieldsStatus("Save the type first to add tracking fields.");
-    return;
-  }
-  if (!rows.length) {
-    trackingFieldsTable.innerHTML = "";
-    setTrackingFieldsStatus("No tracking fields yet.");
-    return;
-  }
-
-  setTrackingFieldsStatus(`${rows.length} field${rows.length === 1 ? "" : "s"}`);
-  trackingFieldsTable.innerHTML = `
-    <div class="table-row table-header">
-      <span>Label</span>
-      <span>Key</span>
-      <span>Type</span>
-      <span>Rule</span>
-      <span>Table</span>
-      <span></span>
-    </div>
-  `;
-  rows.forEach((row) => {
-    const div = document.createElement("div");
-    div.className = "table-row";
-    div.dataset.id = String(row.id);
-    const rule = row?.rule && typeof row.rule === "object" ? row.rule : {};
-    const ruleType = String(rule?.ruleType || "none").trim() || "none";
-    const ruleText = ruleType !== "none" ? ruleType : "none";
-    const tableText = row.showOnAssetsTable ? "shown" : "hidden";
-    div.innerHTML = `
-      <span>${escapeHtml(row.label || "--")}</span>
-      <span class="hint">${escapeHtml(row.fieldKey || "--")}</span>
-      <span>${escapeHtml(row.dataType || "--")}</span>
-      <span>${escapeHtml(ruleText)}</span>
-      <span>${escapeHtml(tableText)}</span>
-      <span><button class="ghost small" data-action="edit-tracking-field" data-id="${escapeHtml(String(row.id))}" type="button">Edit</button></span>
-    `;
-    trackingFieldsTable.appendChild(div);
-  });
-}
-
-async function loadTrackingFields() {
-  if (!activeCompanyId || !editingTypeId) return;
-  try {
-    setTrackingFieldsStatus("Loading...");
-    const res = await fetch(
-      `/api/equipment-types/${encodeURIComponent(String(editingTypeId))}/tracking-fields?companyId=${encodeURIComponent(String(activeCompanyId))}`
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Unable to load tracking fields.");
-    trackingFieldsCache = Array.isArray(data.fields) ? data.fields : [];
-    renderTrackingFieldsTable();
-  } catch (err) {
-    setTrackingFieldsStatus(err?.message || String(err), { isError: true });
-    trackingFieldsCache = [];
-    renderTrackingFieldsTable();
-  }
-}
-
-function slugifyTrackingFieldKey(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  const key = raw.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-  if (!key) return "";
-  if (!/^[a-z]/.test(key)) return `f_${key}`;
-  return key.slice(0, 64);
-}
-
-function trackingFieldPayloadFromForm() {
-  if (!trackingFieldForm) return null;
-  const label = String(trackingFieldForm.label.value || "").trim();
-  const dataType = String(trackingFieldForm.dataType.value || "").trim();
-  const fieldKey = String(trackingFieldForm.fieldKey.value || "").trim() || slugifyTrackingFieldKey(label);
-  const unit = String(trackingFieldForm.unit.value || "").trim() || null;
-  const sortOrder = Number(trackingFieldForm.sortOrder.value || 0);
-  const required = trackingFieldForm.required.checked === true;
-  const tableColumnLabel = String(trackingFieldForm.tableColumnLabel.value || "").trim() || null;
-  const tableColumnMode = String(trackingFieldForm.tableColumnMode.value || "none").trim() || "none";
-  const showOnAssetsTable = tableColumnMode !== "none";
-
-  const options = dataType === "select" ? parseTrackingOptionsText(trackingFieldForm.optionsText.value) : [];
-
-  const ruleType = String(trackingFieldForm.ruleType.value || "none").trim() || "none";
-  const ruleEnabled = ruleType !== "none";
-  const intervalDays = trackingFieldForm.intervalDays.value === "" ? null : Number(trackingFieldForm.intervalDays.value);
-  const warnDays = trackingFieldForm.warnDays.value === "" ? null : Number(trackingFieldForm.warnDays.value);
-  const intervalHours = trackingFieldForm.intervalHours.value === "" ? null : Number(trackingFieldForm.intervalHours.value);
-  const warnHours = trackingFieldForm.warnHours.value === "" ? null : Number(trackingFieldForm.warnHours.value);
-
-  return {
-    label,
-    fieldKey,
-    dataType,
-    unit,
-    sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
-    required,
-    options,
-    showOnAssetsTable,
-    tableColumnLabel,
-    tableColumnMode,
-    rule: {
-      enabled: ruleEnabled,
-      ruleType,
-      intervalDays: Number.isFinite(intervalDays) ? intervalDays : null,
-      warnDays: Number.isFinite(warnDays) ? warnDays : null,
-      intervalHours: Number.isFinite(intervalHours) ? intervalHours : null,
-      warnHours: Number.isFinite(warnHours) ? warnHours : null,
-    },
-  };
-}
-
-function syncTrackingFieldTableUi() {
-  if (!trackingFieldForm) return;
-  const mode = String(trackingFieldForm.tableColumnMode?.value || "none").trim() || "none";
-  const enabled = mode !== "none";
-  if (trackingFieldForm.tableColumnLabel) trackingFieldForm.tableColumnLabel.disabled = !enabled;
-}
-
-function syncTrackingFieldRuleUi() {
-  if (!trackingFieldForm) return;
-  const ruleType = String(trackingFieldForm.ruleType?.value || "none").trim() || "none";
-  const enableDays = ruleType === "time_interval";
-  const enableWarnDays = ruleType === "time_interval" || ruleType === "manual_due_date" || ruleType === "manual_due_date_separate";
-  const enableHours = ruleType === "meter_interval";
-  const enableWarnHours = ruleType === "meter_interval";
-  if (trackingFieldForm.intervalDays) trackingFieldForm.intervalDays.disabled = !enableDays;
-  if (trackingFieldForm.warnDays) trackingFieldForm.warnDays.disabled = !enableWarnDays;
-  if (trackingFieldForm.intervalHours) trackingFieldForm.intervalHours.disabled = !enableHours;
-  if (trackingFieldForm.warnHours) trackingFieldForm.warnHours.disabled = !enableWarnHours;
-}
-
-async function saveTrackingFieldFromModal() {
-  if (!activeCompanyId || !editingTypeId) return;
-  const payload = trackingFieldPayloadFromForm();
-  if (!payload) return;
-  if (!payload.label) {
-    setTrackingFieldFormStatus("Label is required.", { isError: true });
-    return;
-  }
-
-  setTrackingFieldFormStatus("Saving...");
-  const url = editingTrackingFieldId
-    ? `/api/equipment-types/${encodeURIComponent(String(editingTypeId))}/tracking-fields/${encodeURIComponent(String(editingTrackingFieldId))}`
-    : `/api/equipment-types/${encodeURIComponent(String(editingTypeId))}/tracking-fields`;
-  const method = editingTrackingFieldId ? "PUT" : "POST";
-
-  try {
-    const res = await fetch(url, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId: activeCompanyId, ...payload }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Unable to save tracking field.");
-    setTrackingFieldFormStatus("Saved.");
-    closeTrackingFieldModal();
-    await loadTrackingFields();
-  } catch (err) {
-    setTrackingFieldFormStatus(err?.message || String(err), { isError: true });
-  }
-}
-
-async function archiveTrackingFieldFromModal() {
-  if (!activeCompanyId || !editingTypeId || !editingTrackingFieldId) return;
-  const ok = window.confirm("Archive this tracking field? Existing values and history will be kept.");
-  if (!ok) return;
-  setTrackingFieldFormStatus("Archiving...");
-  try {
-    const res = await fetch(
-      `/api/equipment-types/${encodeURIComponent(String(editingTypeId))}/tracking-fields/${encodeURIComponent(String(editingTrackingFieldId))}`,
-      {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ companyId: activeCompanyId }),
-      }
-    );
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.error || "Unable to archive tracking field.");
-    }
-    closeTrackingFieldModal();
-    await loadTrackingFields();
-  } catch (err) {
-    setTrackingFieldFormStatus(err?.message || String(err), { isError: true });
-  }
 }
 
 function renderTypeDocuments() {
@@ -1019,7 +734,6 @@ async function loadType() {
   if (typeForm.qboItemId) typeForm.qboItemId.value = item.qbo_item_id || "";
   renderQboItems();
   await loadStockSeries().catch(() => null);
-  await loadTrackingFields().catch(() => null);
 }
 
 function colorForIndex(i) {
@@ -1111,47 +825,6 @@ qboItemRefreshBtn?.addEventListener("click", (e) => {
   loadQboStatus()
     .then(() => loadQboItems())
     .catch(() => null);
-});
-
-addTrackingFieldBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  if (!editingTypeId) {
-    setTrackingFieldsStatus("Save the type first to add tracking fields.", { isError: true });
-    return;
-  }
-  openTrackingFieldModal(null);
-});
-
-trackingFieldsTable?.addEventListener("click", (e) => {
-  const btn = e.target.closest?.("button[data-action]");
-  const action = btn?.dataset?.action;
-  if (action !== "edit-tracking-field") return;
-  const id = btn?.dataset?.id;
-  if (!id) return;
-  const field = (trackingFieldsCache || []).find((f) => String(f?.id || "") === String(id)) || null;
-  openTrackingFieldModal(field);
-});
-
-closeTrackingFieldModalBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  closeTrackingFieldModal();
-});
-
-trackingFieldModal?.addEventListener("click", (e) => {
-  if (e.target === trackingFieldModal) closeTrackingFieldModal();
-});
-
-trackingFieldForm?.addEventListener("submit", (e) => {
-  e.preventDefault();
-  saveTrackingFieldFromModal();
-});
-
-trackingFieldForm?.ruleType?.addEventListener("change", () => syncTrackingFieldRuleUi());
-trackingFieldForm?.tableColumnMode?.addEventListener("change", () => syncTrackingFieldTableUi());
-
-deleteTrackingFieldBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  archiveTrackingFieldFromModal();
 });
 
 openTypeImageModalBtn?.addEventListener("click", (e) => {

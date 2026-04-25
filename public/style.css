@@ -4322,16 +4322,8 @@ body.is-col-resizing * {
   grid-template-columns: 64px 2fr 1.2fr 1fr 1fr 1fr 0.8fr;
 }
 
-#type-tracking-fields-table .table-row {
-  grid-template-columns: 1.4fr 1fr 0.8fr 0.9fr 0.6fr auto;
-}
-
 #equipment-meter-readings-table .table-row {
   grid-template-columns: 1.2fr 0.8fr 1.6fr;
-}
-
-#equipment-tracking-events-table .table-row {
-  grid-template-columns: 1.2fr 1.2fr 1fr 1.6fr;
 }
 
 .card.inset {
@@ -4787,6 +4779,37 @@ body.is-col-resizing * {
 
 #rental-order-history-table .table-row {
   grid-template-columns: 1.2fr 1.8fr 1fr 2fr 0.6fr;
+}
+
+#audit-diff-table .table-row {
+  grid-template-columns: minmax(180px, 0.9fr) minmax(260px, 1.3fr) minmax(260px, 1.3fr);
+  align-items: start;
+}
+
+#audit-diff-table .table-header {
+  position: static;
+  top: auto;
+}
+
+#audit-diff-table .table-row span {
+  white-space: pre-wrap;
+  overflow: auto;
+  text-overflow: initial;
+}
+
+#audit-diff-table .audit-field {
+  font-weight: 600;
+}
+
+#audit-diff-table .audit-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.35;
+  max-height: 160px;
+}
+
+#audit-diff-table .table-row.audit-changed {
+  background: #fff7ed;
 }
 
 

@@ -1,5 +1,60 @@
 const { Pool } = require("pg");
 const crypto = require("crypto");
+const { isDeepStrictEqual } = require("node:util");
+
+function parseOptionalBool(value) {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) return null;
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "n", "off"].includes(normalized)) return false;
+  return null;
+}
+
+function getDatabaseSslConfig(connectionString) {
+  const explicitSsl = parseOptionalBool(process.env.DATABASE_SSL);
+  if (explicitSsl === false) return null;
+
+  const sslMode = String(process.env.PGSSLMODE || "").trim().toLowerCase();
+  if (sslMode === "disable") return null;
+
+  let hostname = "";
+  let raw = "";
+  if (typeof connectionString === "string") {
+    raw = connectionString.trim();
+    try {
+      hostname = new URL(raw).hostname.toLowerCase();
+    } catch {
+      hostname = "";
+    }
+  }
+
+  const rawLower = raw.toLowerCase();
+  const urlExplicitDisable = rawLower.includes("sslmode=disable");
+  const urlExplicitEnable =
+    rawLower.includes("sslmode=require") ||
+    rawLower.includes("sslmode=verify-ca") ||
+    rawLower.includes("sslmode=verify-full");
+
+  if (urlExplicitDisable) return null;
+
+  const inferredRemoteHost =
+    Boolean(hostname) &&
+    hostname !== "localhost" &&
+    hostname !== "127.0.0.1" &&
+    // Avoid surprising local/dev setups (e.g. docker-compose hostnames like "postgres").
+    hostname.includes(".");
+  const shouldUseSsl =
+    explicitSsl === true ||
+    Boolean(sslMode && sslMode !== "prefer" && sslMode !== "allow") ||
+    urlExplicitEnable ||
+    inferredRemoteHost;
+
+  if (!shouldUseSsl) return null;
+
+  const rejectUnauthorized = parseOptionalBool(process.env.DATABASE_SSL_REJECT_UNAUTHORIZED);
+  return { rejectUnauthorized: rejectUnauthorized ?? true };
+}
 
 const {
   TRACKING_DATA_TYPES,
@@ -13,8 +68,10 @@ const {
   computeTrackingStatusForField,
 } = require("./equipmentTracking");
 
+const databaseSsl = getDatabaseSslConfig(process.env.DATABASE_URL);
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ...(databaseSsl ? { ssl: databaseSsl } : {}),
 });
 
 const SESSION_IDLE_DAYS = (() => {
@@ -805,105 +862,6 @@ async function ensureTables() {
     await client.query(`CREATE INDEX IF NOT EXISTS work_orders_unit_ids_idx ON work_orders USING GIN (unit_ids);`);
     await client.query(`CREATE INDEX IF NOT EXISTS work_orders_company_due_idx ON work_orders (company_id, due_date);`);
     await client.query(`CREATE INDEX IF NOT EXISTS work_orders_company_recurring_idx ON work_orders (company_id, is_recurring, due_date);`);
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS equipment_type_tracking_fields (
-        id SERIAL PRIMARY KEY,
-        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-        equipment_type_id INTEGER NOT NULL REFERENCES equipment_types(id) ON DELETE CASCADE,
-        field_key TEXT NOT NULL,
-        label TEXT NOT NULL,
-        data_type TEXT NOT NULL,
-        unit TEXT,
-        required BOOLEAN NOT NULL DEFAULT FALSE,
-        options JSONB NOT NULL DEFAULT '[]'::jsonb,
-        sort_order INTEGER NOT NULL DEFAULT 0,
-        show_on_assets_table BOOLEAN NOT NULL DEFAULT FALSE,
-        table_column_label TEXT,
-        table_column_mode TEXT NOT NULL DEFAULT 'value',
-        rule JSONB NOT NULL DEFAULT '{}'::jsonb,
-        archived_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        updated_at TIMESTAMPTZ DEFAULT NOW(),
-        UNIQUE(company_id, equipment_type_id, field_key)
-      );
-    `);
-    await client.query(
-      `CREATE INDEX IF NOT EXISTS equipment_type_tracking_fields_company_type_idx ON equipment_type_tracking_fields (company_id, equipment_type_id);`
-    );
-    await client.query(
-      `CREATE INDEX IF NOT EXISTS equipment_type_tracking_fields_company_table_idx ON equipment_type_tracking_fields (company_id, show_on_assets_table) WHERE archived_at IS NULL;`
-    );
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS equipment_tracking_field_values (
-        id SERIAL PRIMARY KEY,
-        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-        equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
-        field_id INTEGER NOT NULL REFERENCES equipment_type_tracking_fields(id) ON DELETE CASCADE,
-        value_text TEXT,
-        value_number NUMERIC(14, 4),
-        value_bool BOOLEAN,
-        value_date DATE,
-        value_timestamptz TIMESTAMPTZ,
-        due_date DATE,
-        due_timestamptz TIMESTAMPTZ,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        updated_at TIMESTAMPTZ DEFAULT NOW(),
-        UNIQUE(company_id, equipment_id, field_id)
-      );
-    `);
-    await client.query(`ALTER TABLE equipment_tracking_field_values ADD COLUMN IF NOT EXISTS due_date DATE;`);
-    await client.query(`ALTER TABLE equipment_tracking_field_values ADD COLUMN IF NOT EXISTS due_timestamptz TIMESTAMPTZ;`);
-    await client.query(
-      `CREATE INDEX IF NOT EXISTS equipment_tracking_field_values_company_equipment_idx ON equipment_tracking_field_values (company_id, equipment_id);`
-    );
-    await client.query(
-      `CREATE INDEX IF NOT EXISTS equipment_tracking_field_values_company_field_idx ON equipment_tracking_field_values (company_id, field_id);`
-    );
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS equipment_tracking_field_events (
-        id SERIAL PRIMARY KEY,
-        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-        equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
-        field_id INTEGER NOT NULL REFERENCES equipment_type_tracking_fields(id) ON DELETE CASCADE,
-        value_text TEXT,
-        value_number NUMERIC(14, 4),
-        value_bool BOOLEAN,
-        value_date DATE,
-        value_timestamptz TIMESTAMPTZ,
-        due_date DATE,
-        due_timestamptz TIMESTAMPTZ,
-        note TEXT,
-        occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      );
-    `);
-    await client.query(`ALTER TABLE equipment_tracking_field_events ADD COLUMN IF NOT EXISTS due_date DATE;`);
-    await client.query(`ALTER TABLE equipment_tracking_field_events ADD COLUMN IF NOT EXISTS due_timestamptz TIMESTAMPTZ;`);
-    await client.query(
-      `CREATE INDEX IF NOT EXISTS equipment_tracking_field_events_company_equipment_idx ON equipment_tracking_field_events (company_id, equipment_id, occurred_at DESC);`
-    );
-    await client.query(
-      `CREATE INDEX IF NOT EXISTS equipment_tracking_field_events_company_field_idx ON equipment_tracking_field_events (company_id, field_id, occurred_at DESC);`
-    );
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS equipment_meter_readings (
-        id SERIAL PRIMARY KEY,
-        company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-        equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
-        meter_type TEXT NOT NULL DEFAULT 'hours',
-        reading NUMERIC(14, 4) NOT NULL,
-        read_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        note TEXT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      );
-    `);
-    await client.query(
-      `CREATE INDEX IF NOT EXISTS equipment_meter_readings_company_equipment_idx ON equipment_meter_readings (company_id, equipment_id, read_at DESC);`
-    );
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS equipment_bundles (
@@ -3376,7 +3334,6 @@ async function listEquipment(companyId, { from = null, to = null, dateField = "c
      params
    );
   const rows = result.rows || [];
-  await attachEquipmentTrackingSummaryToRows(companyId, rows).catch(() => null);
   return rows;
 }
 
@@ -3849,324 +3806,6 @@ async function getEquipmentById({ companyId, equipmentId }) {
     [cid, eid]
   );
   return res.rows?.[0] || null;
-}
-
-async function getEquipmentTrackingSummary({ companyId, equipmentId, eventsLimit = 50, readingsLimit = 50 }) {
-  const cid = Number(companyId);
-  const eid = Number(equipmentId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(eid) || eid <= 0) throw new Error("equipmentId is required.");
-
-  const equipment = await getEquipmentById({ companyId: cid, equipmentId: eid });
-  if (!equipment) return null;
-  const typeId = Number(equipment.type_id);
-
-  const [fields, valuesRes, meterRes, eventsRes, readingsRes] = await Promise.all([
-    listEquipmentTypeTrackingFields({ companyId: cid, equipmentTypeId: typeId }),
-    pool.query(
-      `
-      SELECT field_id, value_text, value_number, value_bool, value_date, value_timestamptz,
-             due_date, due_timestamptz,
-             updated_at
-        FROM equipment_tracking_field_values
-       WHERE company_id = $1 AND equipment_id = $2
-      `,
-      [cid, eid]
-    ),
-    pool.query(
-      `
-      SELECT reading, read_at
-        FROM equipment_meter_readings
-       WHERE company_id = $1 AND equipment_id = $2 AND meter_type = 'hours'
-       ORDER BY read_at DESC, id DESC
-       LIMIT 1
-      `,
-      [cid, eid]
-    ),
-    pool.query(
-      `
-      SELECT id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, note, occurred_at, created_at
-        FROM equipment_tracking_field_events
-       WHERE company_id = $1 AND equipment_id = $2
-       ORDER BY occurred_at DESC, id DESC
-       LIMIT $3
-      `,
-      [cid, eid, Math.min(Math.max(Number(eventsLimit) || 50, 1), 250)]
-    ),
-    pool.query(
-      `
-      SELECT id, meter_type, reading, read_at, note, created_at
-        FROM equipment_meter_readings
-       WHERE company_id = $1 AND equipment_id = $2 AND meter_type = 'hours'
-       ORDER BY read_at DESC, id DESC
-       LIMIT $3
-      `,
-      [cid, eid, Math.min(Math.max(Number(readingsLimit) || 50, 1), 250)]
-    ),
-  ]);
-
-  const valuesByFieldId = {};
-  const dueValuesByFieldId = {};
-  for (const row of valuesRes.rows || []) {
-    const fid = Number(row.field_id);
-    if (!Number.isFinite(fid)) continue;
-    valuesByFieldId[String(fid)] = rawEquipmentTrackingValueFromRow(row);
-    dueValuesByFieldId[String(fid)] = rawEquipmentTrackingDueFromRow(row);
-  }
-
-  const latestMeterHours = meterRes.rows?.[0]?.reading !== undefined ? Number(meterRes.rows[0].reading) : null;
-  const summary = computeEquipmentTrackingSummary({
-    definitions: fields,
-    valuesByFieldId,
-    dueValuesByFieldId,
-    latestMeterHours: Number.isFinite(latestMeterHours) ? latestMeterHours : null,
-  });
-
-  const normalizedEvents = (eventsRes.rows || []).map((row) => ({
-    id: Number(row.id),
-    fieldId: Number(row.field_id),
-    value: rawEquipmentTrackingValueFromRow(row),
-    note: row.note || "",
-    occurredAt: row.occurred_at || null,
-    createdAt: row.created_at || null,
-  }));
-
-  const normalizedReadings = (readingsRes.rows || []).map((row) => ({
-    id: Number(row.id),
-    meterType: row.meter_type || "hours",
-    reading: Number(row.reading),
-    readAt: row.read_at || null,
-    note: row.note || "",
-    createdAt: row.created_at || null,
-  }));
-
-  return {
-    equipment: {
-      id: Number(equipment.id),
-      typeId: Number.isFinite(typeId) ? typeId : null,
-      type: equipment.type || null,
-      modelName: equipment.model_name || null,
-      serialNumber: equipment.serial_number || null,
-    },
-    fields,
-    valuesByFieldId,
-    dueValuesByFieldId,
-    latestMeterHours: Number.isFinite(latestMeterHours) ? latestMeterHours : null,
-    summary,
-    events: normalizedEvents,
-    meterReadings: normalizedReadings,
-  };
-}
-
-async function upsertEquipmentTrackingValues({ companyId, equipmentId, values }) {
-  const cid = Number(companyId);
-  const eid = Number(equipmentId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(eid) || eid <= 0) throw new Error("equipmentId is required.");
-  const list = Array.isArray(values) ? values : [];
-  if (!list.length) return { updated: 0 };
-
-  const fieldIds = Array.from(
-    new Set(
-      list
-        .map((v) => Number(v?.fieldId ?? v?.id))
-        .filter((n) => Number.isFinite(n) && n > 0)
-    )
-  );
-  if (!fieldIds.length) return { updated: 0 };
-
-  const equipment = await getEquipmentById({ companyId: cid, equipmentId: eid });
-  if (!equipment) throw new Error("Equipment not found.");
-  const typeId = Number(equipment.type_id);
-
-  const defsRes = await pool.query(
-    `
-    SELECT id, data_type
-      FROM equipment_type_tracking_fields
-     WHERE company_id = $1
-       AND equipment_type_id = $2
-       AND archived_at IS NULL
-       AND id = ANY($3::int[])
-    `,
-    [cid, typeId, fieldIds]
-  );
-  const defsById = new Map((defsRes.rows || []).map((r) => [String(r.id), String(r.data_type)]));
-
-  let updated = 0;
-  await pool.query("BEGIN");
-  try {
-    for (const item of list) {
-      const fieldId = Number(item?.fieldId ?? item?.id);
-      if (!Number.isFinite(fieldId) || fieldId <= 0) continue;
-      const dataType = defsById.get(String(fieldId));
-      if (!dataType) continue;
-      const parsed = parseEquipmentTrackingValueForColumns(dataType, item?.value);
-      const dueParsed = parseEquipmentTrackingDueForColumns(dataType, item?.due ?? item?.dueValue);
-
-      const res = await pool.query(
-        `
-        INSERT INTO equipment_tracking_field_values
-          (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, due_date, due_timestamptz, updated_at)
-        VALUES
-          ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
-        ON CONFLICT (company_id, equipment_id, field_id) DO UPDATE
-          SET value_text = EXCLUDED.value_text,
-              value_number = EXCLUDED.value_number,
-              value_bool = EXCLUDED.value_bool,
-              value_date = EXCLUDED.value_date,
-              value_timestamptz = EXCLUDED.value_timestamptz,
-              due_date = EXCLUDED.due_date,
-              due_timestamptz = EXCLUDED.due_timestamptz,
-              updated_at = NOW()
-        `,
-        [
-          cid,
-          eid,
-          fieldId,
-          parsed.value_text,
-          parsed.value_number,
-          parsed.value_bool,
-          parsed.value_date,
-          parsed.value_timestamptz,
-          dueParsed.due_date,
-          dueParsed.due_timestamptz,
-        ]
-      );
-      updated += res.rowCount ? 1 : 0;
-    }
-    await pool.query("COMMIT");
-  } catch (err) {
-    await pool.query("ROLLBACK");
-    throw err;
-  }
-
-  return { updated };
-}
-
-async function createEquipmentTrackingEvent({ companyId, equipmentId, fieldId, value, due = null, note = "", occurredAt = null }) {
-  const cid = Number(companyId);
-  const eid = Number(equipmentId);
-  const fid = Number(fieldId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(eid) || eid <= 0) throw new Error("equipmentId is required.");
-  if (!Number.isFinite(fid) || fid <= 0) throw new Error("fieldId is required.");
-
-  const equipment = await getEquipmentById({ companyId: cid, equipmentId: eid });
-  if (!equipment) throw new Error("Equipment not found.");
-  const typeId = Number(equipment.type_id);
-
-  const defRes = await pool.query(
-    `
-    SELECT id, data_type
-      FROM equipment_type_tracking_fields
-     WHERE company_id = $1 AND equipment_type_id = $2 AND archived_at IS NULL AND id = $3
-     LIMIT 1
-    `,
-    [cid, typeId, fid]
-  );
-  const dataType = defRes.rows?.[0]?.data_type ? String(defRes.rows[0].data_type) : null;
-  if (!dataType) throw new Error("Field not found.");
-
-  const parsed = parseEquipmentTrackingValueForColumns(dataType, value);
-  const dueParsed = parseEquipmentTrackingDueForColumns(dataType, due);
-  const occurred = occurredAt ? normalizeTimestamptz(occurredAt) : new Date().toISOString();
-  const cleanNote = String(note || "").trim() || null;
-
-  await pool.query("BEGIN");
-  try {
-    await pool.query(
-      `
-      INSERT INTO equipment_tracking_field_events
-        (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, due_date, due_timestamptz, note, occurred_at)
-      VALUES
-        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-      `,
-      [
-        cid,
-        eid,
-        fid,
-        parsed.value_text,
-        parsed.value_number,
-        parsed.value_bool,
-        parsed.value_date,
-        parsed.value_timestamptz,
-        dueParsed.due_date,
-        dueParsed.due_timestamptz,
-        cleanNote,
-        occurred,
-      ]
-    );
-
-    await pool.query(
-      `
-      INSERT INTO equipment_tracking_field_values
-        (company_id, equipment_id, field_id, value_text, value_number, value_bool, value_date, value_timestamptz, due_date, due_timestamptz, updated_at)
-      VALUES
-        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
-      ON CONFLICT (company_id, equipment_id, field_id) DO UPDATE
-        SET value_text = EXCLUDED.value_text,
-            value_number = EXCLUDED.value_number,
-            value_bool = EXCLUDED.value_bool,
-            value_date = EXCLUDED.value_date,
-            value_timestamptz = EXCLUDED.value_timestamptz,
-            due_date = EXCLUDED.due_date,
-            due_timestamptz = EXCLUDED.due_timestamptz,
-            updated_at = NOW()
-      `,
-      [
-        cid,
-        eid,
-        fid,
-        parsed.value_text,
-        parsed.value_number,
-        parsed.value_bool,
-        parsed.value_date,
-        parsed.value_timestamptz,
-        dueParsed.due_date,
-        dueParsed.due_timestamptz,
-      ]
-    );
-
-    await pool.query("COMMIT");
-  } catch (err) {
-    await pool.query("ROLLBACK");
-    throw err;
-  }
-
-  return { ok: true };
-}
-
-async function createEquipmentMeterReading({ companyId, equipmentId, reading, readAt = null, note = "", meterType = "hours" }) {
-  const cid = Number(companyId);
-  const eid = Number(equipmentId);
-  if (!Number.isFinite(cid) || cid <= 0) throw new Error("companyId is required.");
-  if (!Number.isFinite(eid) || eid <= 0) throw new Error("equipmentId is required.");
-  const r = Number(reading);
-  if (!Number.isFinite(r)) throw new Error("reading is required.");
-  const when = readAt ? normalizeTimestamptz(readAt) : new Date().toISOString();
-  const cleanNote = String(note || "").trim() || null;
-  const mt = String(meterType || "hours").trim().toLowerCase() || "hours";
-
-  const res = await pool.query(
-    `
-    INSERT INTO equipment_meter_readings
-      (company_id, equipment_id, meter_type, reading, read_at, note)
-    VALUES
-      ($1,$2,$3,$4,$5,$6)
-    RETURNING id, meter_type, reading, read_at, note, created_at
-    `,
-    [cid, eid, mt, r, when, cleanNote]
-  );
-  const row = res.rows?.[0];
-  if (!row) return null;
-  return {
-    id: Number(row.id),
-    meterType: row.meter_type || "hours",
-    reading: Number(row.reading),
-    readAt: row.read_at || null,
-    note: row.note || "",
-    createdAt: row.created_at || null,
-  };
 }
 
 async function listEquipmentBundles(companyId, { from = null, to = null, dateField = "created_at" } = {}) {
@@ -6479,17 +6118,7 @@ async function importInventoryFromText({ companyId, text }) {
     indexByKey.has("equipment_type") &&
     (indexByKey.has("model_name") || indexByKey.has("model") || indexByKey.has("asset") || indexByKey.has("unit"));
 
-  const hasServiceTrackingColumns = [
-    "last_service_date",
-    "service_due_date",
-    "next_service_date",
-    "current_hours",
-    "hours_operated",
-    "operating_hours",
-    "hours",
-    "service_notes",
-    "service_note",
-  ].some((key) => indexByKey.has(key));
+  const hasServiceTrackingColumns = false;
 
   const getOrCreateLocationIdByName = async ({ name, isBaseLocation }) => {
     const trimmed = String(name ?? "").trim();
@@ -6507,81 +6136,7 @@ async function importInventoryFromText({ companyId, text }) {
     return res.rows?.[0]?.id ?? null;
   };
 
-  const trackingFieldCacheByTypeId = new Map();
-  const ensureServiceTrackingFields = async (equipmentTypeId) => {
-    const tid = Number(equipmentTypeId);
-    if (!Number.isFinite(tid) || tid <= 0) return { lastServiceFieldId: null, hoursFieldId: null };
-    if (trackingFieldCacheByTypeId.has(tid)) return trackingFieldCacheByTypeId.get(tid);
-
-    const desired = {
-      last_service_date: {
-        label: "Last Service Date",
-        fieldKey: "last_service_date",
-        dataType: "date",
-        unit: "hours",
-        required: false,
-        sortOrder: 0,
-        options: [],
-        showOnAssetsTable: true,
-        tableColumnLabel: "Last Service Date",
-        tableColumnMode: "value_and_next_due",
-        rule: { ruleType: "manual_due_date_separate", intervalDays: null, warnDays: null, intervalHours: null, warnHours: null },
-      },
-      hours_operated: {
-        label: "Hours Operated",
-        fieldKey: "hours_operated",
-        dataType: "number",
-        unit: "hours",
-        required: false,
-        sortOrder: 0,
-        options: [],
-        showOnAssetsTable: true,
-        tableColumnLabel: "Hours Operated",
-        tableColumnMode: "value",
-        rule: { ruleType: "none", intervalDays: null, warnDays: null, intervalHours: 100, warnHours: 10 },
-      },
-    };
-
-    const load = async () => {
-      const res = await pool.query(
-        `
-        SELECT id, field_key, label, data_type, unit, required, options, sort_order,
-               show_on_assets_table, table_column_label, table_column_mode, rule
-          FROM equipment_type_tracking_fields
-         WHERE company_id = $1
-           AND equipment_type_id = $2
-           AND archived_at IS NULL
-        `,
-        [companyId, tid]
-      );
-      const byKey = new Map((res.rows || []).map((r) => [String(r.field_key || ""), r]));
-      return byKey;
-    };
-
-    const byKey = await load();
-
-    for (const [key, def] of Object.entries(desired)) {
-      const existing = byKey.get(key) || null;
-      if (!existing) {
-        await createEquipmentTypeTrackingField({ companyId, equipmentTypeId: tid, ...def });
-        continue;
-      }
-      await updateEquipmentTypeTrackingField({
-        companyId,
-        equipmentTypeId: tid,
-        id: Number(existing.id),
-        ...def,
-      });
-    }
-
-    const reloaded = await load();
-    const ids = {
-      lastServiceFieldId: reloaded.get("last_service_date") ? Number(reloaded.get("last_service_date").id) : null,
-      hoursFieldId: reloaded.get("hours_operated") ? Number(reloaded.get("hours_operated").id) : null,
-    };
-    trackingFieldCacheByTypeId.set(tid, ids);
-    return ids;
-  };
+  const ensureServiceTrackingFields = async () => ({ lastServiceFieldId: null, hoursFieldId: null });
 
   let currentTypeId = null;
   let currentTypeName = "";
@@ -6651,11 +6206,6 @@ async function importInventoryFromText({ companyId, text }) {
           continue;
         }
 
-        if (hasServiceTrackingColumns && !ensuredTypeIds.has(typeId)) {
-          await ensureServiceTrackingFields(typeId).catch(() => null);
-          ensuredTypeIds.add(typeId);
-        }
-
         const baseLocationId = await getOrCreateLocationIdByName({ name: baseLocationName, isBaseLocation: true });
         const currentLocationIdRaw = currentLocationName
           ? await getOrCreateLocationIdByName({ name: currentLocationName, isBaseLocation: false })
@@ -6721,39 +6271,8 @@ async function importInventoryFromText({ companyId, text }) {
         })();
 
         const shouldTrack = !!(lastServiceDate || nextServiceDate || hoursNum !== null);
-        if (!shouldTrack) continue;
-
-        const fields = await ensureServiceTrackingFields(typeId);
-
-        if (fields.lastServiceFieldId && (lastServiceDate || nextServiceDate)) {
-          await pool.query(
-            `
-            INSERT INTO equipment_tracking_field_values
-              (company_id, equipment_id, field_id, value_date, due_date, updated_at)
-            VALUES
-              ($1,$2,$3,$4,$5,NOW())
-            ON CONFLICT (company_id, equipment_id, field_id) DO UPDATE
-              SET value_date = EXCLUDED.value_date,
-                  due_date = EXCLUDED.due_date,
-                  updated_at = NOW()
-            `,
-            [companyId, equipmentId, fields.lastServiceFieldId, lastServiceDate, nextServiceDate]
-          );
-        }
-
-        if (fields.hoursFieldId && hoursNum !== null) {
-          await pool.query(
-            `
-            INSERT INTO equipment_tracking_field_values
-              (company_id, equipment_id, field_id, value_number, updated_at)
-            VALUES
-              ($1,$2,$3,$4,NOW())
-            ON CONFLICT (company_id, equipment_id, field_id) DO UPDATE
-              SET value_number = EXCLUDED.value_number,
-                  updated_at = NOW()
-            `,
-            [companyId, equipmentId, fields.hoursFieldId, hoursNum]
-          );
+        if (shouldTrack) {
+          // Tracking fields have been removed; imported service metadata is kept only in notes.
         }
       }
 
@@ -11333,6 +10852,8 @@ async function setLineItemPickedUp({
       }
     }
 
+    const before = await getRentalOrderAuditSnapshot({ client, companyId: cid, orderId });
+
     const updateRes = nextPickedUp
       ? providedPickedUpAt
         ? await client.query(
@@ -11389,6 +10910,8 @@ async function setLineItemPickedUp({
       settings: pickupSettings,
     });
 
+    const after = await getRentalOrderAuditSnapshot({ client, companyId: cid, orderId });
+
     await insertRentalOrderAudit({
       client,
       companyId: cid,
@@ -11398,6 +10921,9 @@ async function setLineItemPickedUp({
       action: "line_item_pickup",
       summary: nextPickedUp ? "Marked a line item as picked up." : "Undid line item pickup.",
       changes: {
+        before,
+        after,
+        diff: rentalOrderAuditFieldDiff(before, after),
         lineItemId: liid,
         pickedUp: nextPickedUp,
         statusChanged,
@@ -11501,6 +11027,8 @@ async function setLineItemReturned({
       }
     }
 
+    const before = await getRentalOrderAuditSnapshot({ client, companyId: cid, orderId });
+
     const updateRes = nextReturned
       ? providedReturnedAt
         ? await client.query(
@@ -11554,6 +11082,8 @@ async function setLineItemReturned({
       settings: returnSettings,
     });
 
+    const after = await getRentalOrderAuditSnapshot({ client, companyId: cid, orderId });
+
     await insertRentalOrderAudit({
       client,
       companyId: cid,
@@ -11563,6 +11093,9 @@ async function setLineItemReturned({
       action: "line_item_return",
       summary: nextReturned ? "Marked a line item as returned." : "Undid line item return.",
       changes: {
+        before,
+        after,
+        diff: rentalOrderAuditFieldDiff(before, after),
         lineItemId: liid,
         returned: nextReturned,
         statusChanged,
@@ -13995,6 +13528,9 @@ async function createRentalOrder({
       settings,
     });
 
+    const afterRow = await getRentalOrderRowForAudit({ client, companyId, orderId });
+    const after = await getRentalOrderAuditSnapshot({ client, companyId, orderId, orderRow: afterRow });
+
     await insertRentalOrderAudit({
       client,
       companyId,
@@ -14002,17 +13538,15 @@ async function createRentalOrder({
       actorName,
       actorEmail,
       action: "create",
-        summary: `Created ${isQuoteStatus(effectiveStatus) ? "quote" : "rental order"}.`,
-        changes: {
-          status: effectiveStatus,
-          customerId,
-          pickupLocationId: pickupLocationId || null,
-          salespersonId: salespersonId || null,
-          fulfillmentMethod: fulfillmentMethod || "pickup",
-          lineItemsCount: Array.isArray(lineItems) ? lineItems.length : 0,
-          feesCount: Array.isArray(fees) ? fees.length : 0,
-        },
-      });
+      summary: `Created ${isQuoteStatus(effectiveStatus) ? "quote" : "rental order"}.`,
+      changes: {
+        before: null,
+        after,
+        diff: rentalOrderAuditFieldDiff(null, after),
+        lineItemsCount: Array.isArray(lineItems) ? lineItems.length : 0,
+        feesCount: Array.isArray(fees) ? fees.length : 0,
+      },
+    });
 
     await client.query("COMMIT");
       return {
@@ -15485,7 +15019,7 @@ async function updateRentalOrder({
       return data;
     };
     const existingRes = await client.query(
-      `SELECT quote_number, ro_number, status, customer_id, pickup_location_id, salesperson_id, fulfillment_method, coverage_timezone
+      `SELECT *
          FROM rental_orders
         WHERE id = $1 AND company_id = $2
         FOR UPDATE`,
@@ -15496,6 +15030,8 @@ async function updateRentalOrder({
       await client.query("ROLLBACK");
       return null;
     }
+
+    const before = await getRentalOrderAuditSnapshot({ client, companyId, orderId: id, orderRow: existing });
     const prevStatus = normalizeRentalOrderStatus(existing.status);
     let quoteNumber = existing.quote_number || null;
     let roNumber = existing.ro_number || null;
@@ -15736,20 +15272,8 @@ async function updateRentalOrder({
       settings,
     });
 
-    const before = {
-      status: existing.status,
-      customerId: existing.customer_id,
-      pickupLocationId: existing.pickup_location_id,
-      salespersonId: existing.salesperson_id,
-      fulfillmentMethod: existing.fulfillment_method,
-    };
-      const after = {
-        status: effectiveStatus,
-        customerId,
-        pickupLocationId: pickupLocationId || null,
-        salespersonId: salespersonId || null,
-        fulfillmentMethod: fulfillmentMethod || "pickup",
-      };
+    const afterRow = await getRentalOrderRowForAudit({ client, companyId, orderId: id });
+    const after = await getRentalOrderAuditSnapshot({ client, companyId, orderId: id, orderRow: afterRow });
     await insertRentalOrderAudit({
       client,
       companyId,
@@ -15757,10 +15281,11 @@ async function updateRentalOrder({
       actorName,
       actorEmail,
       action: "update",
-      summary: before.status !== after.status ? `Status: ${before.status} → ${after.status}` : "Updated rental order.",
+      summary: before?.status !== after?.status ? `Status: ${before?.status || "--"} -> ${after?.status || "--"}` : "Updated rental order.",
       changes: {
         before,
         after,
+        diff: rentalOrderAuditFieldDiff(before, after),
         lineItemsCount: Array.isArray(lineItems) ? lineItems.length : 0,
         feesCount: Array.isArray(fees) ? fees.length : 0,
       },
@@ -15795,7 +15320,7 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
     const normalizedStatus = normalizeRentalOrderStatus(status);
     const allowsInventory = allowsInventoryAssignment(normalizedStatus);
     const existingRes = await client.query(
-      `SELECT quote_number, ro_number, status
+      `SELECT *
          FROM rental_orders
         WHERE id = $1 AND company_id = $2
         FOR UPDATE`,
@@ -15877,6 +15402,10 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
       settings: statusSettings,
     });
 
+    const before = await getRentalOrderAuditSnapshot({ client, companyId, orderId: id, orderRow: existing });
+    const afterRow = await getRentalOrderRowForAudit({ client, companyId, orderId: id });
+    const after = await getRentalOrderAuditSnapshot({ client, companyId, orderId: id, orderRow: afterRow });
+
     await insertRentalOrderAudit({
       client,
       companyId,
@@ -15884,10 +15413,11 @@ async function updateRentalOrderStatus({ id, companyId, status, actorName, actor
       actorName,
       actorEmail,
       action: "update",
-      summary: existing.status !== normalizedStatus ? `Status: ${existing.status} → ${normalizedStatus}` : "Updated rental order.",
+      summary: before?.status !== after?.status ? `Status: ${before?.status || "--"} -> ${after?.status || "--"}` : "Updated rental order.",
       changes: {
-        before: { status: existing.status },
-        after: { status: normalizedStatus },
+        before,
+        after,
+        diff: rentalOrderAuditFieldDiff(before, after),
       },
     });
 
@@ -16624,6 +16154,215 @@ async function insertRentalOrderAudit({
     [companyId, orderId, actorName || null, actorEmail || null, act, summary || null, JSON.stringify(payload)]
   );
   return result.rows[0] || null;
+}
+
+function rentalOrderAuditSnapshot(orderRow) {
+  if (!orderRow || typeof orderRow !== "object") return null;
+  return {
+    quoteNumber: orderRow.quote_number ?? null,
+    roNumber: orderRow.ro_number ?? null,
+    externalContractNumber: orderRow.external_contract_number ?? null,
+    customerId: orderRow.customer_id ?? null,
+    customerPo: orderRow.customer_po ?? null,
+    salespersonId: orderRow.salesperson_id ?? null,
+    fulfillmentMethod: orderRow.fulfillment_method ?? null,
+    status: orderRow.status ?? null,
+    terms: orderRow.terms ?? null,
+    generalNotes: orderRow.general_notes ?? null,
+    pickupLocationId: orderRow.pickup_location_id ?? null,
+    dropoffAddress: orderRow.dropoff_address ?? null,
+    siteName: orderRow.site_name ?? null,
+    siteAddress: orderRow.site_address ?? null,
+    siteAccessInfo: orderRow.site_access_info ?? null,
+    siteAddressLat: orderRow.site_address_lat ?? null,
+    siteAddressLng: orderRow.site_address_lng ?? null,
+    siteAddressQuery: orderRow.site_address_query ?? null,
+    logisticsInstructions: orderRow.logistics_instructions ?? null,
+    specialInstructions: orderRow.special_instructions ?? null,
+    criticalAreas: orderRow.critical_areas ?? null,
+    directions: orderRow.directions ?? null,
+    monitoringPersonnel: orderRow.monitoring_personnel ?? null,
+    notificationCircumstances: orderRow.notification_circumstances ?? [],
+    coverageHours: orderRow.coverage_hours ?? {},
+    coverageTimeZone: orderRow.coverage_timezone ?? null,
+    coverageStatHolidaysRequired: orderRow.coverage_stat_holidays_required ?? false,
+    emergencyContactInstructions: orderRow.emergency_contact_instructions ?? null,
+    emergencyContacts: orderRow.emergency_contacts ?? [],
+    siteContacts: orderRow.site_contacts ?? [],
+    orderContactSettings: orderRow.order_contact_settings ?? {},
+    monthlyRecurringSubtotal: orderRow.monthly_recurring_subtotal ?? null,
+    monthlyRecurringTotal: orderRow.monthly_recurring_total ?? null,
+    showMonthlyRecurring: orderRow.show_monthly_recurring ?? false,
+  };
+}
+
+function rentalOrderAuditFieldDiff(beforeSnapshot, afterSnapshot) {
+  const before = beforeSnapshot && typeof beforeSnapshot === "object" ? beforeSnapshot : {};
+  const after = afterSnapshot && typeof afterSnapshot === "object" ? afterSnapshot : {};
+  const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).sort();
+  const diff = {};
+  for (const key of keys) {
+    if (!isDeepStrictEqual(before[key], after[key])) {
+      diff[key] = { before: before[key] ?? null, after: after[key] ?? null };
+    }
+  }
+  return diff;
+}
+
+async function getRentalOrderRowForAudit({ client = null, companyId, orderId }) {
+  const runner = client || pool;
+  const res = await runner.query(`SELECT * FROM rental_orders WHERE id = $1 AND company_id = $2 LIMIT 1`, [
+    orderId,
+    companyId,
+  ]);
+  return res.rows?.[0] || null;
+}
+
+async function getRentalOrderAuditSnapshot({ client = null, companyId, orderId, orderRow = null }) {
+  const runner = client || pool;
+  const cid = Number(companyId);
+  const oid = Number(orderId);
+  if (!Number.isFinite(cid) || cid <= 0) return null;
+  if (!Number.isFinite(oid) || oid <= 0) return null;
+
+  const order = orderRow && typeof orderRow === "object" ? orderRow : await getRentalOrderRowForAudit({ client: runner, companyId: cid, orderId: oid });
+  const header = rentalOrderAuditSnapshot(order);
+  if (!header) return null;
+
+  const lineRes = await runner.query(
+    `
+    SELECT li.id,
+           li.type_id,
+           li.start_at,
+           li.end_at,
+           li.fulfilled_at,
+           li.returned_at,
+           li.rate_basis,
+           li.rate_amount,
+           li.billable_units,
+           li.line_amount,
+           li.bundle_id,
+           cond.before_notes,
+           cond.after_notes,
+           cond.unit_description,
+           cond.before_images,
+           cond.after_images,
+           cond.pause_periods,
+           cond.ai_report_markdown,
+           cond.ai_report_generated_at
+      FROM rental_order_line_items li
+ LEFT JOIN rental_order_line_conditions cond ON cond.line_item_id = li.id
+     WHERE li.rental_order_id = $1
+     ORDER BY li.id ASC
+    `,
+    [oid]
+  );
+
+  const lineItems = (lineRes.rows || []).map((r) => ({
+    id: r.id === null || r.id === undefined ? null : Number(r.id),
+    typeId: r.type_id === null || r.type_id === undefined ? null : Number(r.type_id),
+    startAt: r.start_at || null,
+    endAt: r.end_at || null,
+    fulfilledAt: r.fulfilled_at || null,
+    returnedAt: r.returned_at || null,
+    rateBasis: r.rate_basis || null,
+    rateAmount: r.rate_amount ?? null,
+    billableUnits: r.billable_units ?? null,
+    lineAmount: r.line_amount ?? null,
+    bundleId: r.bundle_id === null || r.bundle_id === undefined ? null : Number(r.bundle_id),
+    inventoryIds: [],
+    inventoryDetails: [],
+    beforeNotes: r.before_notes ?? null,
+    afterNotes: r.after_notes ?? null,
+    unitDescription: r.unit_description ?? null,
+    beforeImages: Array.isArray(r.before_images) ? r.before_images : r.before_images ?? [],
+    afterImages: Array.isArray(r.after_images) ? r.after_images : r.after_images ?? [],
+    pausePeriods: Array.isArray(r.pause_periods) ? r.pause_periods : r.pause_periods ?? [],
+    aiDamageReport: r.ai_report_markdown ?? null,
+    aiDamageReportGeneratedAt: r.ai_report_generated_at || null,
+  }));
+
+  if (lineItems.length) {
+    const invRes = await runner.query(
+      `
+      SELECT liv.line_item_id,
+             liv.equipment_id,
+             e.serial_number,
+             e.model_name
+        FROM rental_order_line_inventory liv
+        JOIN rental_order_line_items li ON li.id = liv.line_item_id
+        JOIN equipment e ON e.id = liv.equipment_id
+       WHERE li.rental_order_id = $1
+       ORDER BY liv.line_item_id ASC, liv.equipment_id ASC
+      `,
+      [oid]
+    );
+    const byLine = new Map();
+    lineItems.forEach((li) => {
+      if (li?.id === null || li?.id === undefined) return;
+      byLine.set(String(li.id), li);
+    });
+    (invRes.rows || []).forEach((r) => {
+      const li = byLine.get(String(r.line_item_id));
+      if (!li) return;
+      const eqId = Number(r.equipment_id);
+      if (!Number.isFinite(eqId)) return;
+      li.inventoryIds.push(eqId);
+      li.inventoryDetails.push({
+        id: eqId,
+        serialNumber: r.serial_number || null,
+        modelName: r.model_name || null,
+      });
+    });
+  }
+
+  const feesRes = await runner.query(
+    `
+    SELECT f.id,
+           f.name,
+           f.amount,
+           f.fee_date AS "feeDate"
+      FROM rental_order_fees f
+     WHERE f.rental_order_id = $1
+     ORDER BY f.id ASC
+    `,
+    [oid]
+  );
+
+  const fees = (feesRes.rows || []).map((r) => ({
+    id: r.id === null || r.id === undefined ? null : Number(r.id),
+    name: r.name || null,
+    amount: r.amount ?? null,
+    feeDate: r.feeDate || null,
+  }));
+
+  const notesRes = await runner.query(
+    `
+    SELECT id, user_name, note, created_at
+      FROM rental_order_notes
+     WHERE rental_order_id = $1
+     ORDER BY created_at ASC, id ASC
+    `,
+    [oid]
+  );
+
+  const attachmentsRes = await runner.query(
+    `
+    SELECT id, file_name, mime, size_bytes, url, category, created_at
+      FROM rental_order_attachments
+     WHERE rental_order_id = $1
+     ORDER BY created_at ASC, id ASC
+    `,
+    [oid]
+  );
+
+  return {
+    ...header,
+    lineItems,
+    fees,
+    notes: notesRes.rows || [],
+    attachments: attachmentsRes.rows || [],
+  };
 }
 
 async function listRentalOrderAudits({ companyId, orderId }) {
@@ -19367,7 +19106,6 @@ module.exports = {
   cleanupNonBaseLocationIfUnused,
   listEquipmentCurrentLocationHistory,
   listEquipment,
-  listEquipmentTrackingTableColumns,
   setEquipmentCurrentLocationForIds,
   setEquipmentCurrentLocationToBaseForIds,
   setEquipmentDirectionsForIds,
@@ -19375,14 +19113,6 @@ module.exports = {
   updateEquipment,
   deleteEquipment,
   purgeEquipmentForCompany,
-  listEquipmentTypeTrackingFields,
-  createEquipmentTypeTrackingField,
-  updateEquipmentTypeTrackingField,
-  archiveEquipmentTypeTrackingField,
-  getEquipmentTrackingSummary,
-  upsertEquipmentTrackingValues,
-  createEquipmentTrackingEvent,
-  createEquipmentMeterReading,
   listEquipmentBundles,
   getEquipmentBundle,
   createEquipmentBundle,

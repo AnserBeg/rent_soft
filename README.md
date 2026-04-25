@@ -11,7 +11,7 @@ cp .env.example .env
 ```
 npm install
 ```
-3) Ensure PostgreSQL is running and accessible from `DATABASE_URL`.
+3) Ensure PostgreSQL is running and accessible from `DATABASE_URL` (hosted providers often require TLS/SSL; set `DATABASE_SSL=true` or add `?sslmode=require`).
 4) (Optional) Set `GEMINI_API_KEY` to enable AI damage reports in Rental Orders -> Before/After docs.
 
 ## Database

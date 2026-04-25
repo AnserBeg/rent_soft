@@ -10,8 +10,11 @@ test("updateRentalOrderStatus handles reservation without throwing", async () =>
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
         return { rows: [] };
       }
-      if (sql.includes("SELECT quote_number, ro_number, status")) {
+      if (sql.includes("SELECT *") && sql.includes("FROM rental_orders") && sql.includes("FOR UPDATE")) {
         return { rows: [{ quote_number: "QO-24-0001", ro_number: "RO-24-0001", status: "quote" }] };
+      }
+      if (sql.includes("SELECT * FROM rental_orders") && sql.includes("LIMIT 1")) {
+        return { rows: [{ quote_number: "QO-24-0001", ro_number: "RO-24-0001", status: "reservation" }] };
       }
       if (sql.includes("FROM rental_order_line_items li")) {
         return { rows: [] };
@@ -21,6 +24,18 @@ test("updateRentalOrderStatus handles reservation without throwing", async () =>
       }
       if (sql.includes("UPDATE rental_orders")) {
         return { rows: [{ id: 1, quote_number: "QO-24-0001", ro_number: "RO-24-0001", status: "reservation" }] };
+      }
+      if (sql.includes("FROM rental_order_line_items") && sql.includes("LEFT JOIN rental_order_line_conditions")) {
+        return { rows: [] };
+      }
+      if (sql.includes("FROM rental_order_fees")) {
+        return { rows: [] };
+      }
+      if (sql.includes("FROM rental_order_notes")) {
+        return { rows: [] };
+      }
+      if (sql.includes("FROM rental_order_attachments")) {
+        return { rows: [] };
       }
       if (sql.includes("INSERT INTO rental_order_audits")) {
         return { rows: [{ id: 1, created_at: new Date().toISOString() }] };

@@ -116,7 +116,6 @@ let assetDirectionsLoaded = false;
 let assetDirectionsDirty = false;
 let orderContactsEnabledLoaded = false;
 let orderContactsEnabledDirty = false;
-let assetsTableTrackingColumnsCache = [];
 let assetsTableColumnsAvailable = [];
 let assetsTableColumnsCompanyDefault = null; // null => show all by default
 let assetsTableColumnsSelectedKeys = [];
@@ -250,11 +249,6 @@ function normalizeAssetsTableColumns(value) {
     out.push(key);
   });
   return out.length ? out : null;
-}
-
-function normalizeTrackingColumnKey(value) {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? `tracking:${Math.round(n)}` : null;
 }
 
 function normalizeContactCategoryKey(value) {
@@ -1054,33 +1048,8 @@ async function saveCompanyProfile() {
   return data.profile;
 }
 
-async function loadAssetsTableTrackingColumns() {
-  if (!activeCompanyId) return [];
-  const res = await fetch(
-    `/api/equipment/tracking-table-columns?companyId=${encodeURIComponent(String(activeCompanyId))}`
-  );
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Unable to load tracking table columns");
-  const cols = Array.isArray(data.trackingTableColumns) ? data.trackingTableColumns : [];
-  assetsTableTrackingColumnsCache = cols;
-  return cols;
-}
-
 function buildAssetsTableColumnsAvailable() {
-  const tracking = Array.isArray(assetsTableTrackingColumnsCache) ? assetsTableTrackingColumnsCache : [];
-  const out = ASSETS_TABLE_BASE_COLUMNS.map((col) => ({ ...col, group: "Base" }));
-  const seen = new Set(out.map((col) => col.key));
-
-  tracking.forEach((col) => {
-    const key = normalizeTrackingColumnKey(col?.id);
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    const labelRaw = col?.tableColumnLabel || col?.label || col?.fieldKey || `Field ${col?.id || ""}`;
-    const label = String(labelRaw || "").trim() || `Field ${col?.id || ""}`;
-    out.push({ key, label, locked: false, group: "Tracking fields" });
-  });
-
-  return out;
+  return ASSETS_TABLE_BASE_COLUMNS.map((col) => ({ ...col, group: "Base" }));
 }
 
 function ensureLockedAssetsTableColumnsSelected(keys) {
@@ -1133,12 +1102,6 @@ function renderAssetsTableColumnsList() {
 
   addGroupHeader("Base columns");
   renderRows("Base");
-
-  const trackingExists = options.some((opt) => opt.group === "Tracking fields");
-  if (trackingExists) {
-    addGroupHeader("Tracking fields");
-    renderRows("Tracking fields");
-  }
 
   const total = options.length;
   const checked = selected.size;
@@ -1312,16 +1275,6 @@ async function loadSettings() {
   if (saveWorkOrderSettingsBtn) saveWorkOrderSettingsBtn.disabled = false;
 
   if (assetsTableColumnsList) {
-    try {
-      await loadAssetsTableTrackingColumns();
-    } catch (err) {
-      // Non-fatal: we can still show base columns.
-      assetsTableTrackingColumnsCache = [];
-      if (assetsTableColumnsHint) {
-        assetsTableColumnsHint.textContent = err?.message ? String(err.message) : "Unable to load tracking columns.";
-      }
-    }
-
     assetsTableColumnsAvailable = buildAssetsTableColumnsAvailable();
     assetsTableColumnsLoaded = true;
     setAssetsTableColumnsFromCompanySettings(data.settings?.assets_table_columns ?? null);

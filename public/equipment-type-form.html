@@ -161,20 +161,6 @@
                   </div>
                 </div>
 
-                <div class="card inset">
-                  <div class="card-header compact">
-                    <div>
-                      <h4 style="margin:0;">Tracking fields</h4>
-                      <p class="hint" style="margin:6px 0 0;">Custom fields for assets of this equipment type (maintenance, fueling, inspections, etc.).</p>
-                    </div>
-                    <div class="inline-actions">
-                      <button type="button" class="ghost small" id="add-tracking-field">Add field</button>
-                    </div>
-                  </div>
-                  <p class="hint" id="type-tracking-fields-status" style="margin:0 0 10px;"></p>
-                  <div class="table" id="type-tracking-fields-table"></div>
-                </div>
-
                 <div class="inline-actions">
                   <button type="submit" class="primary">Save type</button>
                 </div>
@@ -230,107 +216,6 @@
       <form id="category-modal-form" class="stack">
         <label>Category name <input name="name" required /></label>
         <button type="submit" class="primary">Save category</button>
-      </form>
-    </div>
-  </div>
-
-  <div class="modal" id="tracking-field-modal">
-    <div class="modal-content wide">
-      <div class="modal-header">
-        <h3 id="tracking-field-modal-title">Tracking field</h3>
-        <button class="ghost small" id="close-tracking-field-modal" type="button">Close</button>
-      </div>
-      <form id="tracking-field-form" class="stack">
-        <div class="two-col">
-          <label>Label
-            <input name="label" required placeholder="Last fueled" />
-          </label>
-          <label>Key
-            <input name="fieldKey" placeholder="last_fueled" />
-          </label>
-        </div>
-        <div class="two-col">
-          <label>Type
-            <select name="dataType" required>
-              <option value="date">Date</option>
-              <option value="datetime">Datetime</option>
-              <option value="number">Number</option>
-              <option value="text">Text</option>
-              <option value="boolean">Boolean</option>
-              <option value="select">Select</option>
-            </select>
-          </label>
-          <label>Unit (optional)
-            <input name="unit" placeholder="hours" />
-          </label>
-        </div>
-        <div class="two-col">
-          <label>Sort order
-            <input name="sortOrder" type="number" step="1" value="0" />
-          </label>
-          <label style="display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--border); border-radius:12px; background:#fff;">
-            <input type="checkbox" name="required" />
-            <span>Required</span>
-          </label>
-        </div>
-        <details>
-          <summary class="hint">Select options (for Select fields)</summary>
-          <p class="hint" style="margin:8px 0 0;">Enter one option per line: <code>value</code> or <code>value|Label</code>.</p>
-          <textarea name="optionsText" rows="5" placeholder="diesel|Diesel&#10;gas|Gas"></textarea>
-        </details>
-
-         <details open>
-           <summary class="hint">Assets table column</summary>
-           <div class="two-col" style="margin-top:10px;">
-            <label>Column label
-              <input name="tableColumnLabel" placeholder="Last fueled" />
-            </label>
-           </div>
-             <label>Column value
-               <select name="tableColumnMode">
-                <option value="none" selected>None</option>
-                <option value="value">Current value</option>
-                <option value="value_and_previous">Current value + Previous</option>
-                <option value="value_and_next_due">Current value + Next due</option>
-                <option value="next_due">Next due (from rule)</option>
-               </select>
-             </label>
-         </details>
-
-         <details>
-           <summary class="hint">Due rule</summary>
-           <div class="two-col" style="margin-top:10px;">
-            <label>Rule type
-              <select name="ruleType">
-                <option value="none" selected>None</option>
-                <option value="time_interval">Time interval (from this date)</option>
-                <option value="meter_interval">Meter interval (from this number)</option>
-                <option value="manual_due_date">Current value becomes due date</option>
-                <option value="manual_due_date_separate">Manual due date (separate due date)</option>
-              </select>
-            </label>
-          </div>
-          <div class="four-col" style="margin-top:10px;">
-            <label>Interval (days)
-              <input name="intervalDays" type="number" min="0" step="1" />
-            </label>
-            <label>Warn (days)
-              <input name="warnDays" type="number" min="0" step="1" />
-            </label>
-            <label>Interval (hours)
-              <input name="intervalHours" type="number" min="0" step="0.1" />
-            </label>
-            <label>Warn (hours)
-              <input name="warnHours" type="number" min="0" step="0.1" />
-            </label>
-          </div>
-        </details>
-
-        <p class="hint" id="tracking-field-form-status" style="margin:0;"></p>
-        <div class="inline-actions">
-          <button type="button" class="ghost danger" id="delete-tracking-field" style="display:none;">Archive</button>
-          <button type="submit" class="primary">Save field</button>
-        </div>
       </form>
     </div>
   </div>

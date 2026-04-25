@@ -83,22 +83,14 @@ const equipmentExtrasTabButtons = Array.from(equipmentExtrasDrawer?.querySelecto
 const equipmentExtrasPanels = Array.from(equipmentExtrasDrawer?.querySelectorAll?.("[data-panel]") || []);
 const openEquipmentLocationHistoryBtn = document.getElementById("open-equipment-location-history");
 const openEquipmentWorkOrdersBtn = document.getElementById("open-equipment-work-orders");
-const openEquipmentTrackingBtn = document.getElementById("open-equipment-tracking");
 const equipmentWorkOrdersTable = document.getElementById("equipment-work-orders-table");
 const equipmentWorkOrdersMeta = document.getElementById("equipment-work-orders-meta");
-const equipmentTrackingStatusPill = document.getElementById("equipment-tracking-status");
-const equipmentTrackingNeedsSummary = document.getElementById("equipment-tracking-needs-summary");
-const equipmentTrackingNeedsList = document.getElementById("equipment-tracking-needs");
-const equipmentTrackingFieldsWrap = document.getElementById("equipment-tracking-fields");
-const equipmentTrackingEventsTable = document.getElementById("equipment-tracking-events-table");
-const equipmentMeterMeta = document.getElementById("equipment-meter-meta");
-const equipmentMeterReadingInput = document.getElementById("equipment-meter-reading");
-const equipmentMeterReadAtInput = document.getElementById("equipment-meter-read-at");
-const equipmentMeterNoteInput = document.getElementById("equipment-meter-note");
-const equipmentMeterAddBtn = document.getElementById("equipment-meter-add");
-const equipmentMeterReadingsTable = document.getElementById("equipment-meter-readings-table");
-const equipmentMeterHistoryActions = document.getElementById("equipment-meter-history-actions");
-const equipmentTrackingHistoryCard = document.getElementById("equipment-tracking-history-card");
+const equipmentTrackingStatusPill = null;
+const equipmentTrackingNeedsSummary = null;
+const equipmentTrackingNeedsList = null;
+const equipmentTrackingFieldsWrap = null;
+const equipmentTrackingEventsTable = null;
+const equipmentTrackingHistoryCard = null;
 const equipmentBundleLabel = document.getElementById("equipment-bundle-label");
 const openBundleModalBtn = document.getElementById("open-bundle-modal");
 const bundleModal = document.getElementById("bundle-modal");
@@ -165,8 +157,7 @@ let equipmentImagePreviewObjectUrl = null;
 let equipmentImageViewerObjectUrl = null;
 
 // Keep per-unit expand/collapse state in-memory (resets on full page reload).
-const expandedTrackingFieldHistoryKeys = new Set(); // key: `${equipmentId}:${fieldId}`
-const expandedMeterHistoryKeys = new Set(); // key: `${equipmentId}`
+const expandedTrackingFieldHistoryKeys = new Set();
 let fallbackEquipmentImageUrls = [];
 let equipmentHistoryLoadedForId = null;
 let equipmentWorkOrdersLoadedForId = null;
@@ -393,45 +384,12 @@ function clearUserEquipmentTableColumnWidths(companyId) {
   localStorage.removeItem(key);
 }
 
-function normalizeTrackingColumnKey(id) {
-  const raw = String(id ?? "").trim();
-  if (!raw) return null;
-  const n = Number(raw);
-  if (Number.isFinite(n) && n > 0) return `tracking:${Math.round(n)}`; // legacy (field id)
-  const key = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return key ? `tracking:${key}` : null; // preferred (field_key)
-}
-
 function mapLegacyTrackingColumnKey(key) {
-  const raw = String(key ?? "").trim();
-  const match = raw.match(/^tracking:(\d+)$/);
-  if (!match) return null;
-  const id = Number(match[1]);
-  if (!Number.isFinite(id) || id <= 0) return null;
-  const cols = Array.isArray(trackingTableColumnsCache) ? trackingTableColumnsCache : [];
-  const col = cols.find((c) => Number(c?.id) === id) || null;
-  const fieldKey = String(col?.fieldKey || "").trim();
-  if (!fieldKey) return null;
-  return normalizeTrackingColumnKey(fieldKey);
+  return null;
 }
 
 function getEquipmentTableAvailableColumns() {
-  const trackingColumns = Array.isArray(trackingTableColumnsCache) ? trackingTableColumnsCache : [];
-  const dedupedTrackingColumns = [];
-  const seenTrackingColumnKeys = new Set();
-  trackingColumns.forEach((col) => {
-    const fieldKey = String(col?.fieldKey || "").trim();
-    if (!fieldKey) return;
-    const key = normalizeTrackingColumnKey(fieldKey);
-    if (!key || seenTrackingColumnKeys.has(key)) return;
-    seenTrackingColumnKeys.add(key);
-    const label = col?.tableColumnLabel || col?.label || fieldKey;
-    dedupedTrackingColumns.push({ key, label: String(label || "").trim() || fieldKey, grid: "minmax(160px, 1fr)" });
-  });
-  return [...EQUIPMENT_TABLE_BASE_COLUMNS, ...dedupedTrackingColumns];
+  return EQUIPMENT_TABLE_BASE_COLUMNS.slice();
 }
 
 function ensureRequiredEquipmentTableColumns(keys) {
@@ -837,12 +795,6 @@ function renderEquipmentTable(rows) {
   if (!equipmentTable) return;
   const outOfServiceMap = getOutOfServiceMap();
   const returnInspectionMap = getReturnInspectionMap();
-  const normalizeTrackingFieldKey = (value) =>
-    String(value ?? "")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9_]+/g, "_")
-      .replace(/^_+|_+$/g, "");
 
   const cid = normalizeCompanyId();
   const availableColumns = getEquipmentTableAvailableColumns();
@@ -854,19 +806,6 @@ function renderEquipmentTable(rows) {
   const widthOverrides = cid ? loadUserEquipmentTableColumnWidths(cid, allowedWidthKeys) : null;
   lastEquipmentTableColumnsToRender = columnsToRender;
   lastEquipmentTableCompanyId = cid || null;
-
-  const fieldIdByTypeAndKey = new Map();
-  const trackingColumns = Array.isArray(trackingTableColumnsCache) ? trackingTableColumnsCache : [];
-  trackingColumns.forEach((col) => {
-    const typeId = Number(col?.equipmentTypeId ?? col?.equipment_type_id);
-    const fieldId = Number(col?.id);
-    const fieldKey = normalizeTrackingFieldKey(col?.fieldKey ?? col?.field_key);
-    if (!Number.isFinite(typeId) || typeId <= 0) return;
-    if (!Number.isFinite(fieldId) || fieldId <= 0) return;
-    if (!fieldKey) return;
-    const mapKey = `${typeId}|${fieldKey}`;
-    if (!fieldIdByTypeAndKey.has(mapKey)) fieldIdByTypeAndKey.set(mapKey, fieldId);
-  });
 
   equipmentTable.style.setProperty(
     "--equipment-table-grid",
@@ -931,20 +870,6 @@ function renderEquipmentTable(rows) {
       statusInfo.label
     )}</span>`;
 
-    const trackingValuesById = row.tracking_table_values && typeof row.tracking_table_values === "object" ? row.tracking_table_values : {};
-    const trackingValuesByKey =
-      row.tracking_table_values_by_key && typeof row.tracking_table_values_by_key === "object"
-        ? row.tracking_table_values_by_key
-        : {};
-    const trackingStatusesById =
-      row.tracking_table_status_by_field_id && typeof row.tracking_table_status_by_field_id === "object"
-        ? row.tracking_table_status_by_field_id
-        : {};
-    const trackingStatusesByKey =
-      row.tracking_table_status_by_field_key && typeof row.tracking_table_status_by_field_key === "object"
-        ? row.tracking_table_status_by_field_key
-        : {};
-
     const modelBadges = [
       isReturnInspection ? `<span class="badge return-inspection" style="margin-left:6px;">Return inspection</span>` : "",
       !isReturnInspection && isOutOfService ? `<span class="badge out-of-service" style="margin-left:6px;">Out of service</span>` : "",
@@ -962,42 +887,6 @@ function renderEquipmentTable(rows) {
 
     const cellForKey = (key) => {
       if (baseCells[key]) return baseCells[key];
-      if (key.startsWith("tracking:")) {
-        const colId = String(key.split(":")[1] || "").trim();
-        const normalizedKey = normalizeTrackingFieldKey(colId);
-        const typeId = Number(row?.type_id);
-        const fieldId =
-          Number.isFinite(typeId) && typeId > 0 && normalizedKey
-            ? fieldIdByTypeAndKey.get(`${typeId}|${normalizedKey}`) || null
-            : null;
-        let v =
-          trackingValuesByKey[colId] !== undefined
-            ? trackingValuesByKey[colId]
-            : fieldId
-              ? trackingValuesById[String(fieldId)]
-              : trackingValuesById[colId];
-
-        if ((v === null || v === undefined || v === "") && normalizedKey === "hours_operated") {
-          const meter = row?.meter_hours ?? row?.meterHours ?? null;
-          const n = meter === null || meter === undefined ? null : Number(meter);
-          if (Number.isFinite(n)) v = String(n);
-        }
-        const label = v === null || v === undefined || v === "" ? "--" : preventMidTokenWrap(String(v));
-        const statusKey = String(
-          trackingStatusesByKey[colId] ||
-            (fieldId ? trackingStatusesById[String(fieldId)] : trackingStatusesById[colId]) ||
-            ""
-        ).trim();
-        const statusClass =
-          statusKey === "ok"
-            ? "tracking-ok"
-            : statusKey === "dueSoon"
-              ? "tracking-due-soon"
-              : statusKey === "overdue" || statusKey === "missing"
-                ? "tracking-overdue"
-                : "";
-        return `<span class="tracking-cell ${statusClass}">${escapeHtml(label)}</span>`;
-      }
       return `<span class="hint">--</span>`;
     };
 
@@ -1178,7 +1067,6 @@ async function loadEquipment() {
     if (!res.ok) throw new Error("Unable to fetch equipment");
     const data = await res.json();
     equipmentCache = data.equipment || [];
-    trackingTableColumnsCache = Array.isArray(data.trackingTableColumns) ? data.trackingTableColumns : [];
     renderEquipment(applyFilters());
 
     if (pendingOpenEquipmentId) {
@@ -1262,8 +1150,6 @@ function applyFilters() {
         r.rental_status,
         r.bundle_name,
         r.notes,
-        r.tracking_status,
-        r.tracking_needs_summary,
         r.rental_order_number,
         r.rental_customer_name,
         r.rental_site_address,
@@ -1289,19 +1175,6 @@ function applyFilters() {
             row.rental_status;
           return String(raw || "").toLowerCase();
         }
-        case "tracking_status": {
-          const key = String(row.tracking_status_key || "").trim();
-          const rank = {
-            overdue: 0,
-            dueSoon: 1,
-            missing: 2,
-            ok: 3,
-            none: 4,
-          };
-          return rank[key] ?? 9;
-        }
-        case "tracking_needs_summary":
-          return String(row.tracking_needs_summary || "").toLowerCase();
         case "current_location": {
           const baseFallback = row.location || "";
           return getCurrentLocationLabel(row, baseFallback).toLowerCase();
@@ -1684,60 +1557,6 @@ function getHistoryTimeMs(obj, keys) {
   return NaN;
 }
 
-function renderEquipmentMeterReadings(readings) {
-  if (!equipmentMeterReadingsTable) return;
-  const rows = Array.isArray(readings) ? readings.slice() : [];
-  const equipmentIdKey = String(equipmentTrackingLoadedForId || editingEquipmentId || "");
-  const isExpanded = equipmentIdKey ? expandedMeterHistoryKeys.has(equipmentIdKey) : false;
-  if (equipmentMeterHistoryActions) equipmentMeterHistoryActions.replaceChildren();
-  if (!rows.length) {
-    equipmentMeterReadingsTable.innerHTML = "";
-    return;
-  }
-  rows.sort((a, b) => {
-    const aTime = getHistoryTimeMs(a, ["readAt", "read_at", "createdAt", "created_at"]);
-    const bTime = getHistoryTimeMs(b, ["readAt", "read_at", "createdAt", "created_at"]);
-    if (Number.isFinite(aTime) && Number.isFinite(bTime)) return bTime - aTime;
-    if (Number.isFinite(aTime)) return -1;
-    if (Number.isFinite(bTime)) return 1;
-    return 0;
-  });
-  equipmentMeterReadingsTable.innerHTML = `
-    <div class="table-row table-header">
-      <span>When</span>
-      <span>Reading</span>
-      <span>Note</span>
-    </div>
-  `;
-  rows.forEach((r, idx) => {
-    const div = document.createElement("div");
-    div.className = "table-row";
-    const when = r?.readAt || r?.read_at || r?.createdAt || r?.created_at || "";
-    const reading = r?.reading ?? "";
-    const note = r?.note || "";
-    if (equipmentIdKey && idx >= 2) div.dataset.historyExtra = "1";
-    if (!isExpanded && equipmentIdKey && idx >= 2) {
-      div.hidden = true;
-    }
-    div.innerHTML = `
-      <span>${escapeHtml(formatHistoryTimestamp(when))}</span>
-      <span>${escapeHtml(String(reading ?? "--"))}</span>
-      <span>${escapeHtml(String(note || "--"))}</span>
-    `;
-    equipmentMeterReadingsTable.appendChild(div);
-  });
-
-  if (equipmentMeterHistoryActions && equipmentIdKey && rows.length > 2) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "ghost small";
-    btn.dataset.action = "meter-toggle-history";
-    btn.dataset.equipmentId = equipmentIdKey;
-    btn.textContent = isExpanded ? "Show less" : `Show all (${rows.length})`;
-    equipmentMeterHistoryActions.appendChild(btn);
-  }
-}
-
 function renderEquipmentTrackingEvents(events, fieldsById) {
   if (!equipmentTrackingEventsTable) return;
   const rows = Array.isArray(events) ? events : [];
@@ -2093,18 +1912,10 @@ async function loadEquipmentTracking(equipmentId) {
   const needsSummary = Array.isArray(tracking?.summary?.needs) ? tracking.summary.needs.join("; ") : "";
   setEquipmentTrackingMessage(needsSummary);
 
-  if (equipmentMeterMeta) {
-    const meter = tracking?.latestMeterHours;
-    equipmentMeterMeta.textContent = Number.isFinite(Number(meter))
-      ? `Latest reading: ${Number(meter)} hours.`
-      : "No readings yet. Add a reading to track hours of operation.";
-  }
-
   renderEquipmentTrackingNeeds(tracking);
   renderEquipmentTrackingFields(tracking);
   // Field history is now rendered inline per field; keep the legacy "History" card hidden.
   if (equipmentTrackingHistoryCard) equipmentTrackingHistoryCard.style.display = "none";
-  renderEquipmentMeterReadings(tracking?.meterReadings || []);
 }
 
 function getTrackingFieldFromCache(fieldId) {
@@ -2175,7 +1986,7 @@ function openWorkOrderFromTracking({ equipmentId, fieldId }) {
 }
 
 function setEquipmentExtrasTab(tab) {
-  const next = ["location-history", "work-orders", "tracking"].includes(String(tab)) ? String(tab) : "location-history";
+  const next = ["location-history", "work-orders"].includes(String(tab)) ? String(tab) : "location-history";
   equipmentExtrasActiveTab = next;
   equipmentExtrasTabButtons.forEach((btn) => {
     btn.classList.toggle("active", btn.getAttribute("data-tab") === next);
@@ -2211,15 +2022,6 @@ function setEquipmentExtrasTab(tab) {
     return;
   }
 
-  if (!editingEquipmentId || !activeCompanyId) {
-    setEquipmentTrackingMessage("Save the unit first.");
-    return;
-  }
-  if (!equipmentTrackingLoadedForId || equipmentTrackingLoadedForId !== String(editingEquipmentId)) {
-    loadEquipmentTracking(editingEquipmentId).catch((err) => {
-      setEquipmentTrackingMessage(err?.message || "Unable to load tracking.", { isError: true });
-    });
-  }
 }
 
 function openEquipmentExtrasDrawer(tab) {
@@ -2251,8 +2053,6 @@ function resetEquipmentExtrasPanels() {
   if (equipmentTrackingNeedsSummary) equipmentTrackingNeedsSummary.textContent = "";
   if (equipmentTrackingNeedsList) equipmentTrackingNeedsList.innerHTML = "";
   if (equipmentTrackingEventsTable) equipmentTrackingEventsTable.innerHTML = "";
-  if (equipmentMeterReadingsTable) equipmentMeterReadingsTable.innerHTML = "";
-  if (equipmentMeterMeta) equipmentMeterMeta.textContent = "";
   setEquipmentTrackingMessage("");
   if (equipmentExtrasSubtitle) equipmentExtrasSubtitle.textContent = "";
 }
@@ -4040,11 +3840,6 @@ openEquipmentWorkOrdersBtn?.addEventListener("click", (e) => {
   openEquipmentExtrasDrawer("work-orders");
 });
 
-openEquipmentTrackingBtn?.addEventListener("click", (e) => {
-  e.preventDefault();
-  openEquipmentExtrasDrawer("tracking");
-});
-
 closeEquipmentExtrasDrawerBtn?.addEventListener("click", (e) => {
   e.preventDefault();
   closeEquipmentExtrasDrawer();
@@ -4058,140 +3853,6 @@ equipmentExtrasTabButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     setEquipmentExtrasTab(btn.getAttribute("data-tab"));
   });
-});
-
-equipmentTrackingNeedsList?.addEventListener("click", (e) => {
-  const btn = e.target.closest?.("button");
-  if (!btn) return;
-  const action = btn.dataset.action;
-  const fid = btn.dataset.fieldId;
-  if (action !== "tracking-create-wo" || !fid) return;
-  if (!editingEquipmentId) return;
-  openWorkOrderFromTracking({ equipmentId: editingEquipmentId, fieldId: fid });
-});
-
-equipmentTrackingFieldsWrap?.addEventListener("click", async (e) => {
-  const btn = e.target.closest?.("button");
-  if (!btn) return;
-  const action = btn.dataset.action;
-  const fid = String(btn.dataset.fieldId || "");
-  if (!action || !fid) return;
-  if (!editingEquipmentId) return;
-
-  if (action === "tracking-toggle-history") {
-    const equipmentIdKey = String(btn.dataset.equipmentId || editingEquipmentId || "");
-    if (!equipmentIdKey) return;
-    const key = `${equipmentIdKey}:${fid}`;
-    const isExpanded = expandedTrackingFieldHistoryKeys.has(key);
-    if (isExpanded) expandedTrackingFieldHistoryKeys.delete(key);
-    else expandedTrackingFieldHistoryKeys.add(key);
-
-    const row = btn.closest?.(".tracking-field-row");
-    const extras = row ? Array.from(row.querySelectorAll?.('.table-row[data-history-extra="1"]') || []) : [];
-    extras.forEach((el) => {
-      el.hidden = isExpanded; // collapsing hides extras; expanding shows them
-    });
-    btn.textContent = isExpanded ? `Show all (${extras.length + 2})` : "Show less";
-    return;
-  }
-
-  if (!activeCompanyId) return;
-
-  if (action === "tracking-create-wo") {
-    openWorkOrderFromTracking({ equipmentId: editingEquipmentId, fieldId: fid });
-    return;
-  }
-
-  if (action !== "tracking-log-event") return;
-
-  const field = getTrackingFieldFromCache(fid);
-  const inputEl = equipmentTrackingFieldsWrap.querySelector?.(
-    `.tracking-field-input[data-field-id="${CSS.escape(fid)}"]`
-  );
-  const value = getTrackingInputValue(inputEl, field?.dataType);
-  const ruleType = field?.rule?.enabled === true ? String(field?.rule?.ruleType || "none") : "none";
-  const isSeparateManualDue = ruleType === "manual_due_date_separate";
-
-  let due = null;
-  if (isSeparateManualDue) {
-    const dueInputEl = equipmentTrackingFieldsWrap.querySelector?.(
-      `.tracking-field-due-input[data-field-id="${CSS.escape(fid)}"]`
-    );
-    due = getTrackingInputValue(dueInputEl, field?.dataType);
-    if (due === null) {
-      setEquipmentTrackingMessage("Enter a due date before logging.", { isError: true });
-      return;
-    }
-  } else if (value === null) {
-    setEquipmentTrackingMessage("Enter a value before logging.", { isError: true });
-    return;
-  }
-
-  const note = window.prompt("Note (optional):", "") || "";
-
-  try {
-    setEquipmentTrackingMessage("Saving tracking update...");
-    const res = await fetch(`/api/equipment/${encodeURIComponent(String(editingEquipmentId))}/tracking/events`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId: activeCompanyId, fieldId: Number(fid), value, due, note }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Unable to save tracking update.");
-    setEquipmentTrackingMessage("Tracking update saved.");
-    await loadEquipmentTracking(editingEquipmentId);
-    await loadEquipment();
-  } catch (err) {
-    setEquipmentTrackingMessage(err?.message || String(err), { isError: true });
-  }
-});
-
-equipmentMeterHistoryActions?.addEventListener("click", (e) => {
-  const btn = e.target.closest?.("button");
-  if (!btn) return;
-  const action = btn.dataset.action;
-  if (action !== "meter-toggle-history") return;
-  const equipmentIdKey = String(btn.dataset.equipmentId || equipmentTrackingLoadedForId || editingEquipmentId || "");
-  if (!equipmentIdKey) return;
-  const isExpanded = expandedMeterHistoryKeys.has(equipmentIdKey);
-  if (isExpanded) expandedMeterHistoryKeys.delete(equipmentIdKey);
-  else expandedMeterHistoryKeys.add(equipmentIdKey);
-
-  const extras = equipmentMeterReadingsTable
-    ? Array.from(equipmentMeterReadingsTable.querySelectorAll?.('.table-row[data-history-extra="1"]') || [])
-    : [];
-  extras.forEach((el) => {
-    el.hidden = isExpanded;
-  });
-  btn.textContent = isExpanded ? `Show all (${extras.length + 2})` : "Show less";
-});
-
-equipmentMeterAddBtn?.addEventListener("click", async (e) => {
-  e.preventDefault();
-  if (!activeCompanyId || !editingEquipmentId) return;
-  const reading = equipmentMeterReadingInput?.value;
-  const readAtRaw = equipmentMeterReadAtInput?.value;
-  const note = equipmentMeterNoteInput?.value;
-  const readAt = readAtRaw ? new Date(readAtRaw).toISOString() : null;
-
-  try {
-    setEquipmentTrackingMessage("Saving meter reading...");
-    const res = await fetch(`/api/equipment/${encodeURIComponent(String(editingEquipmentId))}/meter-readings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ companyId: activeCompanyId, reading, readAt, note, meterType: "hours" }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Unable to save meter reading.");
-    if (equipmentMeterReadingInput) equipmentMeterReadingInput.value = "";
-    if (equipmentMeterReadAtInput) equipmentMeterReadAtInput.value = "";
-    if (equipmentMeterNoteInput) equipmentMeterNoteInput.value = "";
-    setEquipmentTrackingMessage("Meter reading saved.");
-    await loadEquipmentTracking(editingEquipmentId);
-    await loadEquipment();
-  } catch (err) {
-    setEquipmentTrackingMessage(err?.message || String(err), { isError: true });
-  }
 });
 
 equipmentLocationHistoryDetails?.addEventListener("toggle", () => {

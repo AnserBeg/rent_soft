@@ -99,7 +99,17 @@
         </div>
         <button class="ghost small" id="close-audit-modal" type="button">Close</button>
       </div>
-      <pre id="audit-json" style="margin:0; white-space:pre-wrap;"></pre>
+
+      <div class="inline" style="justify-content:space-between; margin: 10px 0 12px;">
+        <label class="inline" style="gap:8px;">
+          <input type="checkbox" id="audit-show-unchanged" checked />
+          <span class="hint">Show unchanged fields</span>
+        </label>
+        <button class="ghost small" id="toggle-audit-raw" type="button">Raw JSON</button>
+      </div>
+
+      <div class="table" id="audit-diff-table"></div>
+      <pre id="audit-json" class="audit-raw" style="margin:0; white-space:pre-wrap; display:none;"></pre>
     </div>
   </div>
 

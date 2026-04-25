@@ -57,15 +57,6 @@ const {
   updateEquipment,
   deleteEquipment,
   purgeEquipmentForCompany,
-  listEquipmentTrackingTableColumns,
-  listEquipmentTypeTrackingFields,
-  createEquipmentTypeTrackingField,
-  updateEquipmentTypeTrackingField,
-  archiveEquipmentTypeTrackingField,
-  getEquipmentTrackingSummary,
-  upsertEquipmentTrackingValues,
-  createEquipmentTrackingEvent,
-  createEquipmentMeterReading,
   listEquipmentBundles,
   getEquipmentBundle,
   createEquipmentBundle,
@@ -286,10 +277,6 @@ const DISPATCH_ALLOWED_API = [
   { method: "GET", pattern: /^\/api\/rental-orders\/[^/]+$/ },
   { method: "PUT", pattern: /^\/api\/rental-orders\/[^/]+\/site-address$/ },
   { method: "GET", pattern: /^\/api\/equipment$/ },
-  { method: "GET", pattern: /^\/api\/equipment\/[^/]+\/tracking$/ },
-  { method: "PUT", pattern: /^\/api\/equipment\/[^/]+\/tracking\/values$/ },
-  { method: "POST", pattern: /^\/api\/equipment\/[^/]+\/tracking\/events$/ },
-  { method: "POST", pattern: /^\/api\/equipment\/[^/]+\/meter-readings$/ },
   { method: "GET", pattern: /^\/api\/work-orders$/ },
   { method: "GET", pattern: /^\/api\/work-orders\/[^/]+$/ },
   { method: "POST", pattern: /^\/api\/work-orders$/ },
@@ -5782,69 +5769,6 @@ app.delete(
 );
 
 app.get(
-  "/api/equipment-types/:id/tracking-fields",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, includeArchived } = req.query || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const fields = await listEquipmentTypeTrackingFields({
-      companyId: Number(companyId),
-      equipmentTypeId: Number(id),
-      includeArchived: parseBoolean(includeArchived) === true,
-    });
-    res.json({ fields });
-  })
-);
-
-app.post(
-  "/api/equipment-types/:id/tracking-fields",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const field = await createEquipmentTypeTrackingField({
-      ...req.body,
-      companyId: Number(companyId),
-      equipmentTypeId: Number(id),
-    });
-    res.status(201).json({ field });
-  })
-);
-
-app.put(
-  "/api/equipment-types/:id/tracking-fields/:fieldId",
-  asyncHandler(async (req, res) => {
-    const { id, fieldId } = req.params;
-    const { companyId } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const field = await updateEquipmentTypeTrackingField({
-      ...req.body,
-      id: Number(fieldId),
-      companyId: Number(companyId),
-      equipmentTypeId: Number(id),
-    });
-    if (!field) return res.status(404).json({ error: "Tracking field not found." });
-    res.json({ field });
-  })
-);
-
-app.delete(
-  "/api/equipment-types/:id/tracking-fields/:fieldId",
-  asyncHandler(async (req, res) => {
-    const { id, fieldId } = req.params;
-    const { companyId } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const ok = await archiveEquipmentTypeTrackingField({
-      companyId: Number(companyId),
-      equipmentTypeId: Number(id),
-      id: Number(fieldId),
-    });
-    if (!ok) return res.status(404).json({ error: "Tracking field not found." });
-    res.status(204).end();
-  })
-);
-
-app.get(
   "/api/customers",
   asyncHandler(async (req, res) => {
     const { companyId, from, to, dateField } = req.query;
@@ -10412,39 +10336,12 @@ app.post(
 );
 
 app.get(
-  "/api/equipment/tracking-table-columns",
-  asyncHandler(async (req, res) => {
-    const { companyId, equipmentTypeIds } = req.query || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const cid = Number(companyId);
-    const parsedTypeIds = (() => {
-      if (equipmentTypeIds === undefined || equipmentTypeIds === null || equipmentTypeIds === "") return null;
-      const rawList = Array.isArray(equipmentTypeIds) ? equipmentTypeIds : String(equipmentTypeIds).split(",");
-      const ids = rawList.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 0);
-      return ids.length ? Array.from(new Set(ids)) : null;
-    })();
-    const trackingTableColumns = await listEquipmentTrackingTableColumns({
-      companyId: cid,
-      equipmentTypeIds: parsedTypeIds,
-    }).catch(() => []);
-    res.json({ trackingTableColumns });
-  })
-);
-
-app.get(
   "/api/equipment",
   asyncHandler(async (req, res) => {
     const { companyId, from, to, dateField } = req.query;
     if (!companyId) return res.status(400).json({ error: "companyId is required." });
     const equipment = await listEquipment(companyId, { from, to, dateField });
-    const typeIds = Array.from(
-      new Set((equipment || []).map((row) => Number(row?.type_id)).filter((n) => Number.isFinite(n) && n > 0))
-    );
-    const trackingTableColumns = await listEquipmentTrackingTableColumns({
-      companyId: Number(companyId),
-      equipmentTypeIds: typeIds.length ? typeIds : null,
-    }).catch(() => []);
-    res.json({ equipment, trackingTableColumns });
+    res.json({ equipment });
   })
 );
 
@@ -10458,76 +10355,6 @@ app.get(
     const equipment = (all || []).find((e) => String(e.id) === String(id));
     if (!equipment) return res.status(404).json({ error: "Equipment not found" });
     res.json(equipment);
-  })
-);
-
-app.get(
-  "/api/equipment/:id/tracking",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, eventsLimit, readingsLimit } = req.query || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const tracking = await getEquipmentTrackingSummary({
-      companyId: Number(companyId),
-      equipmentId: Number(id),
-      eventsLimit,
-      readingsLimit,
-    });
-    if (!tracking) return res.status(404).json({ error: "Equipment not found." });
-    res.json({ tracking });
-  })
-);
-
-app.put(
-  "/api/equipment/:id/tracking/values",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, values } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const result = await upsertEquipmentTrackingValues({
-      companyId: Number(companyId),
-      equipmentId: Number(id),
-      values,
-    });
-    res.json({ result });
-  })
-);
-
-app.post(
-  "/api/equipment/:id/tracking/events",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, fieldId, value, due, note, occurredAt } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    if (!fieldId) return res.status(400).json({ error: "fieldId is required." });
-    await createEquipmentTrackingEvent({
-      companyId: Number(companyId),
-      equipmentId: Number(id),
-      fieldId: Number(fieldId),
-      value,
-      due,
-      note,
-      occurredAt,
-    });
-    res.status(201).json({ ok: true });
-  })
-);
-
-app.post(
-  "/api/equipment/:id/meter-readings",
-  asyncHandler(async (req, res) => {
-    const { id } = req.params;
-    const { companyId, reading, readAt, note, meterType } = req.body || {};
-    if (!companyId) return res.status(400).json({ error: "companyId is required." });
-    const row = await createEquipmentMeterReading({
-      companyId: Number(companyId),
-      equipmentId: Number(id),
-      reading,
-      readAt,
-      note,
-      meterType,
-    });
-    res.status(201).json({ reading: row });
   })
 );
 

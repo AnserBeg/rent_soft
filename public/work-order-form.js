@@ -43,9 +43,6 @@ const markCompleteBtn = document.getElementById("mark-complete");
 const markClosedBtn = document.getElementById("mark-closed");
 const markOpenBtn = document.getElementById("mark-open");
 const workOrderSourceHint = document.getElementById("work-order-source-hint");
-const trackingUpdateWrap = document.getElementById("tracking-update-wrap");
-const trackingUpdateOnComplete = document.getElementById("tracking-update-on-complete");
-const trackingUpdateHint = document.getElementById("tracking-update-hint");
 
 const params = new URLSearchParams(window.location.search);
 const initialCompanyId = params.get("companyId") || window.RentSoft?.getCompanyId?.();
@@ -99,24 +96,14 @@ function renderSourceMetaHint() {
   if (!workOrderSourceHint) return;
   if (!meta) {
     workOrderSourceHint.textContent = "";
-    if (trackingUpdateWrap) trackingUpdateWrap.style.display = "none";
-    if (trackingUpdateHint) trackingUpdateHint.style.display = "none";
     return;
   }
 
-  const label = meta.trackingFieldLabel || meta.trackingFieldKey || meta.trackingFieldId || "";
   const equipmentId = meta.equipmentId || meta.unitId || null;
   const parts = [];
-  if (label) parts.push(`From tracking: ${label}`);
   if (equipmentId) parts.push(`Unit #${equipmentId}`);
   workOrderSourceHint.textContent = parts.join(" · ");
 
-  const showUpdate = !!(meta.equipmentId && meta.trackingFieldId);
-  if (trackingUpdateWrap) trackingUpdateWrap.style.display = showUpdate ? "flex" : "none";
-  if (trackingUpdateHint) {
-    trackingUpdateHint.style.display = showUpdate ? "block" : "none";
-    trackingUpdateHint.textContent = showUpdate ? "This will log a tracking entry when the work order is completed." : "";
-  }
 }
 
 function escapeHtml(s) {
@@ -1202,64 +1189,11 @@ customerSelect?.addEventListener("change", () => {
   }
 });
 
-async function applyTrackingUpdateFromWorkOrder(record) {
-  if (!record || !activeCompanyId) return;
-  if (!(trackingUpdateOnComplete?.checked === true)) return;
-  const meta = normalizeSourceMeta(record.sourceMeta) || effectiveSourceMeta();
-  if (!meta?.equipmentId || !meta?.trackingFieldId) return;
-
-  const dataType = String(meta.trackingDataType || "").trim();
-  const baseDateOnly =
-    (dueDateInput?.value || "").trim()
-    || (createdDateInput?.value || "").trim()
-    || new Date().toISOString().slice(0, 10);
-  let value = null;
-  if (dataType === "date") {
-    value = baseDateOnly || null;
-  } else if (dataType === "datetime") {
-    const base = baseDateOnly ? `${baseDateOnly}T00:00:00` : "";
-    const ms = base ? Date.parse(base) : NaN;
-    value = Number.isFinite(ms) ? new Date(ms).toISOString() : new Date().toISOString();
-  } else if (dataType === "number") {
-    const res = await fetch(
-      `/api/equipment/${encodeURIComponent(String(meta.equipmentId))}/tracking?companyId=${encodeURIComponent(String(activeCompanyId))}&eventsLimit=1&readingsLimit=1`
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || "Unable to load meter reading.");
-    const latest = data?.tracking?.latestMeterHours;
-    const n = Number(latest);
-    if (!Number.isFinite(n)) throw new Error("No meter reading available to apply.");
-    value = n;
-  } else {
-    value = workDateInput?.value || null;
-  }
-
-  const res = await fetch(`/api/equipment/${encodeURIComponent(String(meta.equipmentId))}/tracking/events`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      companyId: activeCompanyId,
-      fieldId: Number(meta.trackingFieldId),
-      value,
-      note: `From work order ${record.number || record.workOrderNumber || record.id}`,
-    }),
-  });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || "Unable to update tracking.");
-  }
-}
-
 markCompleteBtn?.addEventListener("click", async () => {
   if (orderStatusInput) orderStatusInput.value = "completed";
   updateServiceHint();
   syncStatusActions();
-  const record = await saveWorkOrder();
-  try {
-    await applyTrackingUpdateFromWorkOrder(record);
-  } catch (err) {
-    setSaveStatus(`Work order saved, but tracking update failed: ${err?.message || String(err)}`);
-  }
+  await saveWorkOrder();
 });
 markClosedBtn?.addEventListener("click", () => {
   if (orderStatusInput) orderStatusInput.value = "closed";
