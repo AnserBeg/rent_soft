@@ -167,3 +167,10 @@ test("AI analytics SQL validator rejects base and system schema access", () => {
   assert.throws(() => validateReadOnlyAnalyticsSql("SELECT * FROM information_schema.tables"), /tenant-scoped/i);
   assert.throws(() => validateReadOnlyAnalyticsSql("SELECT current_setting('rentsoft.current_company_id')"), /tenant-scoped/i);
 });
+
+test("AI analytics SQL validator rejects sensitive identifiers", () => {
+  assert.throws(() => validateReadOnlyAnalyticsSql("SELECT password_hash FROM users"), /credentials|sessions|tokens|passwords/i);
+  assert.throws(() => validateReadOnlyAnalyticsSql("SELECT token_hash FROM customer_share_links"), /credentials|sessions|tokens|passwords/i);
+  assert.throws(() => validateReadOnlyAnalyticsSql("SELECT access_token FROM qbo_connections"), /credentials|sessions|tokens|passwords/i);
+  assert.throws(() => validateReadOnlyAnalyticsSql("SELECT * FROM company_settings"), /credentials|settings/i);
+});

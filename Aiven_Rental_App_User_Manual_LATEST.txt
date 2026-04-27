@@ -111,6 +111,8 @@ Work Bench
 G
 Dashboard
 G
+AI Analytics
+G
 Quotes and rental orders
 G
 Customer-facing order links
@@ -141,7 +143,8 @@ This manual explains how to complete the main actions inside the Aiven Rental ap
 the screenshot guide. It is written for a new user who needs to operate the system without being shown each screen in
 person.
 The guide covers pages accessible from the side navigation and the sub-pages, drawers, and popups shown in the
-screenshots. Settings and account pages are intentionally excluded, as requested.
+screenshots. Settings and account pages are mostly excluded, but this version notes the contact-category settings because
+they control which contact sections appear on customer profiles and order contacts.
 This manual describes the fields and workflow implemented in the app. The rental order form includes customer and sales,
 order contacts, pickup/drop-off, rental line items, pricing summary, QuickBooks documents, rental information, extras,
 notes, attachments, terms, customer links, history, monthly charges, and PDF actions. The default rental information fields
@@ -185,7 +188,11 @@ Generate or copy the link and send it to the customer.
 Create a customer
 Customers > New Customer
 Company name is required for standalone customers; branch customers require parent customer and branch name. Add
-contacts, address, sales person, deposit flag, special pricing, and save.
+contacts in the configured customer profile contact categories, address, sales person, deposit flag, special pricing, and save.
+Ask an analytics question
+AI Analytics
+Ask a plain-language question about company data. The AI agent builds a read-only SQL query, returns rows, summarizes
+the result, can suggest a chart, and lets you download the returned data as CSV.
 Create an asset
 Assets > Add Equipment/Asset
 Asset type, model name, and serial number are required; add
@@ -904,6 +911,37 @@ Screenshot: Dashboard - Availability and Utilization View
 Image file: `screenshots/p10_01_dashboard_availability_and_utilization_view.png`
 
 
+
+AI Analytics
+Purpose: Ask plain-language questions about company data without writing SQL manually.
+How to use it
+1
+Open AI Analytics from the Overview section of the side navigation.
+2
+Type a business question in Analytics chat, such as a question about revenue, customers, equipment, utilization, orders,
+work orders, locations, or inventory.
+3
+Set Max rows when you need a smaller or larger result set, then click Send.
+4
+Review the answer summary, returned data table, generated SQL, and chart area.
+5
+Use the chart controls to change chart type, X field, Y aggregation, field, or Top N.
+6
+Click Download CSV when you need the returned data outside the app.
+Mandatory information / rules
+G
+You must be logged in with a company context before the AI Analytics page can query data.
+G
+The AI agent only runs read-only analytics queries. It uses tenant-scoped analytics views, allows one SELECT/WITH query,
+and applies row limits and query timeouts.
+Optional but useful information
+G
+If a question is ambiguous, the agent may ask a clarification before running the SQL.
+G
+The SQL panel shows the generated query for transparency.
+Important notes
+G
+Use AI Analytics for reporting and investigation. It is not used to create, update, delete, or sync operational records.
 
 ---
 
@@ -2935,7 +2973,8 @@ Image file: `screenshots/p45_01_customer_quickbooks_online_sync.png`
 
 
 Customer Detail View
-Purpose: Create or update a customer profile used for quotes, rental orders, billing, contacts, and customer-facing links.
+Purpose: Create or update a customer profile used for quotes, rental orders, billing, customer profile contacts, and
+customer-facing links.
 How to use it
 1
 Open Customers and click New Customer, or open an existing customer.
@@ -2951,26 +2990,34 @@ Enter QBO Customer ID when you need to store the QuickBooks customer id manually
 Aiven Rental App User Manual
 Page 46
 4
-Add contact categories, street address, city, province/state, country, postal code, follow up date, sales person, and general
-notes.
+Add customer profile contacts in the contact-category sections shown on the form. By default the app shows Contacts and
+Accounting contacts, but these category names and sections can be changed in Settings.
 5
-Add one or more contacts with name, role/title, email, and phone.
+For each contact, enter contact name, title, email, and phone number where available.
 6
-Set Charge Deposit when deposits are allowed for the customer.
+Add street address, city, province/state, country, postal code, follow up date, sales person, and general notes.
 7
-Add special pricing by selecting Equipment type and entering daily, weekly, and monthly rates.
+Set Charge Deposit when deposits are allowed for the customer.
 8
+Add special pricing by selecting Equipment type and entering daily, weekly, and monthly rates.
+9
 Save the customer.
 Mandatory information / rules
 G
 Standalone customers require Company name. Branch customers require Parent customer and Branch name.
 Optional but useful information
 G
-Contact categories, street address, city, province/state, country, postal code, follow up date, sales person, general notes,
-special pricing, Charge Deposit, and QBO Customer ID are optional.
+Customer profile contact categories, individual contact rows, street address, city, province/state, country, postal code,
+follow up date, sales person, general notes, special pricing, Charge Deposit, and QBO Customer ID are optional.
 Important notes
 G
 A saved customer record is required before the customer can be selected on a new rental order or quote.
+G
+Customer profile contacts are the reusable contacts stored on the customer record. They are separate from Order contacts
+on a quote or rental order.
+G
+Order contacts apply only to that quote or rental order. They can start from customer profile contacts, but the order can
+use its own custom list without changing the saved customer profile.
 Screenshot: Customer Detail View (1)
 
 Image file: `screenshots/p46_01_customer_detail_view_1.png`
@@ -3013,6 +3060,42 @@ Important notes
 G
 Keep sensitive documents organized and avoid storing unrelated files on the customer profile.
 
+Customer Profile and Order Contact Categories
+Purpose: Understand the difference between reusable customer profile contacts and order-specific contacts.
+How to use it
+1
+Use customer profile contacts on the Customer Detail page for people who belong to the customer account.
+2
+Add contacts under the configured customer profile contact sections. The default sections are Contacts and Accounting
+contacts.
+3
+Use Settings > Customer update settings > Customer profile contact categories to choose which contact sections appear on
+customer profiles and customer update links.
+4
+Use Settings > Customer update settings > Rental order contact categories to choose which sections appear in Order
+contacts on rental orders, quotes, and customer links.
+5
+On a rental order or quote, use Order contacts for the contacts that apply only to that order. The section can use customer
+contacts as a starting point, or it can be customized for the order.
+6
+Use Settings > Order contacts to show or hide the entire Order contacts section on rental orders, quotes, and customer
+links.
+Mandatory information / rules
+G
+Customer profile contacts and order contacts are stored separately.
+G
+Each contact row can store contact name, title, email, and phone number.
+Optional but useful information
+G
+Use categories such as Accounting contacts, Site contacts, Project contacts, or any company-specific category that helps
+users choose the right person quickly.
+Important notes
+G
+Changing order contacts does not automatically change the customer profile contacts saved on the customer record.
+G
+Changing customer profile contact categories in Settings changes the sections users see when editing customer profiles
+and customer update links.
+
 ---
 
 ## Page 48
@@ -3034,7 +3117,8 @@ Choose Standalone and enter Company name, or choose Branch and enter Parent cust
 4
 Add street address, city, province/state, country, and postal code.
 5
-Add contacts. For each contact, include name, role/title, email, and phone where possible.
+Add customer profile contacts in the configured contact-category sections. For each contact, include name, title, email,
+and phone where possible.
 6
 Set Charge Deposit, special pricing, follow up date, sales person, and general notes as needed.
 7
@@ -3135,7 +3219,8 @@ Aiven Rental App User Manual
 Page 51
 12. Operational Best Practices
 G
-Create customers before building rental orders so customer addresses, contacts, terms, and pricing can flow into the order.
+Create customers before building rental orders so customer addresses, customer profile contacts, terms, and pricing can
+flow into the order.
 G
 Use booked dates for scheduling, quoting, and availability. Use actual dates only when the field event has happened.
 G

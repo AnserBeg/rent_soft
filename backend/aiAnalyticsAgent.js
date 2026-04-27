@@ -27,6 +27,8 @@ const FORBIDDEN_SQL =
   /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|call|do|execute|vacuum|analyze|refresh|merge|listen|notify|set|reset|show)\b/i;
 const FORBIDDEN_SCHEMA_OR_FUNCTION =
   /("?(public|pg_catalog|information_schema)"?\s*\.)|\bpg_[a-z0-9_]*\b|\b(current_setting|set_config|dblink|postgres_fdw|file_fdw|lo_import|lo_export)\s*\(/i;
+const FORBIDDEN_SENSITIVE_IDENTIFIER =
+  /\b[a-z0-9_]*(password|token|secret|credential|session|api_key|access_key|refresh_key)[a-z0-9_]*\b|\b(qbo_connections|company_settings|storefront_customers|customer_accounts)\b/i;
 
 let openAiClient = null;
 
@@ -57,6 +59,9 @@ function validateReadOnlyAnalyticsSql(sql) {
   }
   if (FORBIDDEN_SCHEMA_OR_FUNCTION.test(normalized)) {
     throw new Error("Queries may only use the tenant-scoped ai_analytics views.");
+  }
+  if (FORBIDDEN_SENSITIVE_IDENTIFIER.test(normalized)) {
+    throw new Error("Queries may not access credentials, sessions, tokens, passwords, or sensitive settings.");
   }
   return normalized;
 }

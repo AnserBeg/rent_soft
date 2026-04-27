@@ -695,12 +695,12 @@ async function ensureAiAnalyticsLayer(client) {
     "rental_order_dispatch_notes",
     "rental_order_audits",
     "customer_pricing",
-    "qbo_documents",
-    "qbo_error_logs",
   ];
   const scopedCompanyExpr = `NULLIF(current_setting('rentsoft.current_company_id', true), '')::integer`;
 
   await client.query(`CREATE SCHEMA IF NOT EXISTS ai_analytics;`);
+  await client.query(`DROP VIEW IF EXISTS ai_analytics.qbo_error_logs;`);
+  await client.query(`DROP VIEW IF EXISTS ai_analytics.qbo_documents;`);
   await client.query(`
     CREATE TABLE IF NOT EXISTS ai_analytics_queries (
       id BIGSERIAL PRIMARY KEY,
