@@ -904,14 +904,14 @@ function positionTimePicker(instance) {
   const viewportW = window.innerWidth;
   const padding = 8;
   const maxAllowed = Math.max(0, viewportW - padding * 2);
-  const fullMinWidth = 408;
+  const fullMinWidth = 430;
   const useCompact =
     instance.type === "datetime-local" && maxAllowed > 0 && maxAllowed < fullMinWidth;
   if (instance.type === "datetime-local") {
     popover.classList.toggle("is-compact", useCompact);
   }
-  const minWidth = instance.type === "time" ? 200 : useCompact ? 280 : 420;
-  const maxWidth = instance.type === "time" ? 240 : useCompact ? 360 : 460;
+  const minWidth = instance.type === "time" ? 180 : useCompact ? 280 : 420;
+  const maxWidth = instance.type === "time" ? 220 : useCompact ? 360 : 470;
   const targetWidth = Math.min(Math.max(rect.width, minWidth), maxWidth, maxAllowed || maxWidth);
   popover.style.width = `${targetWidth}px`;
   const width = popover.offsetWidth || targetWidth;
@@ -2935,15 +2935,7 @@ function normalizeContactCategories(value) {
     pushEntry(entry.key || entry.id || "", entry.label || entry.name || entry.title || "");
   });
 
-  const byKey = new Map(normalized.map((entry) => [entry.key, entry]));
-  const baseContacts = byKey.get("contacts")?.label || DEFAULT_CONTACT_CATEGORIES[0].label;
-  const baseAccounting = byKey.get("accountingContacts")?.label || DEFAULT_CONTACT_CATEGORIES[1].label;
-  const extras = normalized.filter((entry) => entry.key !== "contacts" && entry.key !== "accountingContacts");
-  return [
-    { key: "contacts", label: baseContacts },
-    { key: "accountingContacts", label: baseAccounting },
-    ...extras,
-  ];
+  return normalized;
 }
 
 function normalizeContactGroups(value) {
@@ -3373,7 +3365,9 @@ async function loadCompanySettings() {
   if (res.ok) {
     if (orderContactsEnabled) {
       orderContactCategoryConfig = normalizeContactCategories(
-        data.settings?.customer_contact_categories || DEFAULT_CONTACT_CATEGORIES
+        data.settings?.order_contact_categories ||
+          data.settings?.customer_contact_categories ||
+          DEFAULT_CONTACT_CATEGORIES
       );
       renderOrderContactCategories();
     } else if (orderContactCategoriesContainer) {
@@ -3796,11 +3790,7 @@ function lineItemHasUnit(li) {
 }
 
 function applyOrderedPickup(li) {
-  if (editingOrderId) return;
-  if (normalizeOrderStatus(draft.status || "") !== "ordered") return;
-  if (li.pickedUpAt) return;
-  const startAt = fromLocalInputValue(li.startLocal);
-  if (startAt) li.pickedUpAt = startAt;
+  return li;
 }
 
 function uuid() {
@@ -8019,10 +8009,6 @@ async function saveOrderDraft({ onError, skipPickupInvoice = false } = {}) {
     return { ok: false, error: "Select a customer before ordering." };
   }
   const validLines = (draft.lineItems || []).filter((li) => li.typeId && li.startLocal && li.endLocal);
-  if (validLines.length === 0) {
-    reportError("Add at least one line item with type and dates.");
-    return { ok: false, error: "Add at least one line item with type and dates." };
-  }
   const lockUnits = isUnitSelectionLocked(draft.status);
   const requireUnits = isUnitSelectionRequired(draft.status);
   const allowTbdUnits = normalizeOrderStatus(draft.status) === "ordered";

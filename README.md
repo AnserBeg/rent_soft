@@ -44,9 +44,16 @@ The UI is not a separate app: it’s the same HTML pages with responsive CSS (me
 - `POST /api/companies` -> `{ companyName, contactEmail, ownerName, ownerEmail, password }`
 - `POST /api/users` -> `{ companyId, name, email, role?, password }`
 - `GET /api/locations?companyId=1`
-- `POST /api/locations` -> `{ companyId, name }`
+- `POST /api/locations` -> `{ companyId, name, streetAddress?, city?, region?, country?, latitude?, longitude?, isBaseLocation? }`
 - `GET /api/equipment?companyId=1`
-- `POST /api/equipment` -> `{ companyId, type, modelName, serialNumber, condition, manufacturer?, locationId?, purchasePrice? }`
+- `POST /api/equipment` -> `{ companyId, typeId|typeName, modelName, serialNumber, condition?, manufacturer?, locationId?, currentLocationId?, purchasePrice?, notes? }`
+
+## Asset locations
+- `locationId` is the asset's base/home yard or branch.
+- `currentLocationId` is the asset's physical current location. If it is blank, the UI treats the unit as "Same as base location"; the database does not have to duplicate the base id into `currentLocationId`.
+- Map-picked current locations, rental order site locations, drop-off locations, and customer-link unit pins are created as non-base locations (`isBaseLocation=false`) so they do not clutter base-yard selectors.
+- Location map markers require saved latitude/longitude. Unit maps use current-location coordinates first and fall back to base-location coordinates when current coordinates are missing.
+- Current-location changes are recorded in `equipment_current_location_history`.
 
 ## Password policy
 - Minimum length: 8 characters for company users and customer accounts.

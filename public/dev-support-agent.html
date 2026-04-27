@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - Support Agent Manuals</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="no-top-headers">
+  <div class="app-shell">
+    <div class="layout">
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <div class="topbar-brand" aria-label="Aiven Rental developer portal">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Support <span class="topbar-title-accent">Agent</span></span>
+            </div>
+            <div class="topbar-actions">
+              <a class="ghost" href="dev-dashboard.html">Developer dashboard</a>
+              <button class="ghost" id="manuals-refresh" type="button">Refresh</button>
+              <button class="ghost danger" id="manuals-logout" type="button">Log out</button>
+            </div>
+          </div>
+        </header>
+
+        <header class="hero">
+          <div>
+            <h1>Support agent manuals</h1>
+            <p class="lede">Upload the latest documentation ZIP and choose which version the in-app chat should use.</p>
+          </div>
+        </header>
+
+        <main class="grid">
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Upload manual ZIP</h2>
+                <p class="hint" style="margin:6px 0 0;">This replaces the standalone guide UI. New uploads can be activated immediately for all company users.</p>
+              </div>
+            </div>
+            <form id="manual-upload-form" class="inline-actions" enctype="multipart/form-data">
+              <input id="manual-zip-file" type="file" accept=".zip" required />
+              <button class="primary" id="manual-upload-button" type="submit">Upload and index</button>
+            </form>
+            <p class="hint" id="manual-upload-status" style="margin:12px 0 0;">No upload in progress.</p>
+          </section>
+
+          <section class="card wide">
+            <div class="card-header">
+              <div>
+                <h2>Manual versions</h2>
+                <p class="hint" id="manuals-meta" style="margin:6px 0 0;">Loading manuals...</p>
+              </div>
+            </div>
+            <div class="table-shell">
+              <div class="table-head">
+                <p id="manuals-count">Manuals</p>
+              </div>
+              <div class="table" id="manuals-table"></div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="dev-session.js"></script>
+  <script src="dev-support-agent.js"></script>
+</body>
+</html>

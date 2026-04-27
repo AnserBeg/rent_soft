@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiven Rental - AI Analytics</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="vendor/chart.umd.js"></script>
+</head>
+<body class="no-top-headers ai-analytics-body">
+  <div class="app-shell">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="nav-links">
+          <div class="nav-group">
+            <div class="nav-group-title">Overview</div>
+            <a class="nav-link" href="dashboard.html">Dashboard</a>
+            <a class="nav-link" href="work-bench.html">Work Bench</a>
+            <a class="nav-link" href="reports.html">Reports</a>
+            <a class="nav-link active" href="ai-analytics.html">AI Analytics</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Operations</div>
+            <a class="nav-link" href="rental-quotes.html">Quotes</a>
+            <a class="nav-link" href="rental-orders.html">Rental Orders</a>
+            <a class="nav-link" href="invoices.html">Finance</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Repairs</div>
+            <a class="nav-link" href="work-orders.html">Work Orders</a>
+            <a class="nav-link" href="parts.html">Parts</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Inventory</div>
+            <a class="nav-link" href="equipment.html">Assets</a>
+            <a class="nav-link" href="types.html">Equipments</a>
+            <a class="nav-link" href="locations.html">Locations</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">People</div>
+            <a class="nav-link" href="customers.html">Customers</a>
+            <a class="nav-link" href="sales-people.html">Sales People</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Custom</div>
+            <a class="nav-link" href="dispatch.html">Dispatch</a>
+          </div>
+          <div class="nav-group">
+            <div class="nav-group-title">Admin</div>
+            <a class="nav-link" href="settings.html">Settings</a>
+            <a class="nav-link" href="accounts.html">Accounts</a>
+          </div>
+        </div>
+      </aside>
+
+      <div>
+        <header class="topbar">
+          <div class="topbar-inner">
+            <a class="topbar-brand" href="dashboard.html" aria-label="Aiven Rental dashboard">
+              <span class="topbar-mark">AR</span>
+              <span class="topbar-title">Aiven <span class="topbar-title-accent">Rental</span></span>
+            </a>
+            <div class="topbar-actions">
+              <a class="ghost" href="/#/marketplace">Marketplace</a>
+              <a class="primary" href="/#/home">Home</a>
+            </div>
+          </div>
+        </header>
+
+        <main class="ai-analytics-page">
+          <section class="ai-analytics-shell" id="ai-analytics-workspace">
+            <div class="ai-analytics-left-pane">
+              <section class="ai-analytics-panel ai-analytics-chart-panel">
+                <div class="ai-analytics-panel-head">
+                  <div>
+                    <h1>AI Analytics</h1>
+                    <p id="ai-analytics-company-meta">Loading...</p>
+                  </div>
+                  <div class="chart-actions">
+                    <label>Type
+                      <select id="ai-analytics-chart-type">
+                        <option value="bar" selected>Bar</option>
+                        <option value="line">Line</option>
+                        <option value="pie">Pie</option>
+                        <option value="doughnut">Doughnut</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+                <div class="ai-analytics-chart-controls">
+                  <label>X
+                    <select id="ai-analytics-x"></select>
+                  </label>
+                  <label>Y
+                    <select id="ai-analytics-y-agg">
+                      <option value="count" selected>Count rows</option>
+                      <option value="sum">Sum field</option>
+                      <option value="avg">Average field</option>
+                    </select>
+                  </label>
+                  <label>Field
+                    <select id="ai-analytics-y-field"></select>
+                  </label>
+                  <label>Top N
+                    <input id="ai-analytics-topn" type="number" min="1" max="50" value="12" />
+                  </label>
+                </div>
+                <div class="chart-canvas">
+                  <canvas id="ai-analytics-chart"></canvas>
+                </div>
+              </section>
+
+              <div class="ai-analytics-resizer ai-analytics-resizer-horizontal" id="ai-analytics-row-resizer" role="separator" aria-orientation="horizontal" tabindex="0"></div>
+
+              <section class="ai-analytics-panel ai-analytics-data-panel">
+                <div class="ai-analytics-panel-head">
+                  <div>
+                    <h2>Returned data</h2>
+                  </div>
+                  <div class="inline-actions">
+                    <span class="pill" id="ai-analytics-count">0 rows</span>
+                    <button class="ghost" id="ai-analytics-download" type="button" disabled>Download CSV</button>
+                  </div>
+                </div>
+                <div class="table reports-table" id="ai-analytics-table"></div>
+              </section>
+            </div>
+
+            <div class="ai-analytics-resizer ai-analytics-resizer-vertical" id="ai-analytics-column-resizer" role="separator" aria-orientation="vertical" tabindex="0"></div>
+
+            <aside class="ai-analytics-panel ai-analytics-chat-panel">
+              <div class="ai-analytics-panel-head">
+                <div>
+                  <h2>Analytics chat</h2>
+                  <p class="ai-analytics-status" id="ai-analytics-status">Ready.</p>
+                </div>
+                <button class="ghost" id="ai-analytics-new-chat" type="button">New chat</button>
+              </div>
+              <div id="ai-analytics-answer" class="ai-analytics-answer-body hint">Start a chat to query company analytics.</div>
+              <details class="ai-analytics-sql">
+                <summary>SQL</summary>
+                <pre id="ai-analytics-sql"></pre>
+              </details>
+              <div class="ai-analytics-composer">
+                <label>Message
+                  <textarea id="ai-analytics-question" rows="4" placeholder="Ask a question or follow up on the latest answer."></textarea>
+                </label>
+                <div class="ai-analytics-composer-actions">
+                  <label>Max rows
+                    <input id="ai-analytics-max-rows" type="number" min="1" max="1000" value="250" />
+                  </label>
+                  <button class="primary" id="ai-analytics-run" type="button">Send</button>
+                </div>
+              </div>
+            </aside>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="session.js"></script>
+  <script src="ai-analytics.js"></script>
+</body>
+</html>

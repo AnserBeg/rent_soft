@@ -27,7 +27,12 @@ const saveOrderContactsEnabledBtn = document.getElementById("save-order-contacts
 const orderContactsEnabledHint = document.getElementById("order-contacts-enabled-hint");
 const customerDocCategoriesInput = document.getElementById("customer-doc-categories");
 const customerContactCategoriesContainer = document.getElementById("customer-contact-categories");
-const addContactCategoryBtn = document.getElementById("add-contact-category");
+const orderContactCategoriesSettingsContainer = document.getElementById("order-contact-categories-settings");
+const hiddenCustomerContactCategoriesContainer = document.getElementById("hidden-customer-contact-categories");
+const hiddenOrderContactCategoriesContainer = document.getElementById("hidden-order-contact-categories");
+const addCustomerContactCategoryBtn =
+  document.getElementById("add-customer-contact-category") || document.getElementById("add-contact-category");
+const addOrderContactCategoryBtn = document.getElementById("add-order-contact-category");
 const customerTermsTemplateInput = document.getElementById("customer-terms-template");
 const customerEsignRequiredToggle = document.getElementById("customer-esign-required");
 const serviceAgreementFileInput = document.getElementById("service-agreement-file");
@@ -307,22 +312,11 @@ function normalizeContactCategories(value) {
     pushEntry(entry.key || entry.id || "", entry.label || entry.name || entry.title || "");
   });
 
-  const byKey = new Map(normalized.map((entry) => [entry.key, entry]));
-  const baseContacts = byKey.get("contacts")?.label || DEFAULT_CONTACT_CATEGORIES[0].label;
-  const baseAccounting = byKey.get("accountingContacts")?.label || DEFAULT_CONTACT_CATEGORIES[1].label;
-  const extras = normalized.filter(
-    (entry) => entry.key !== "contacts" && entry.key !== "accountingContacts"
-  );
-
-  return [
-    { key: "contacts", label: baseContacts, locked: true },
-    { key: "accountingContacts", label: baseAccounting, locked: true },
-    ...extras,
-  ];
+  return normalized;
 }
 
-function appendContactCategoryRow(category) {
-  if (!customerContactCategoriesContainer) return;
+function appendContactCategoryRow(container, category) {
+  if (!container) return;
   const row = document.createElement("div");
   row.className = "inline-actions";
   row.style.justifyContent = "space-between";
@@ -342,50 +336,58 @@ function appendContactCategoryRow(category) {
   removeBtn.className = "ghost small danger";
   removeBtn.textContent = "Remove";
   removeBtn.dataset.removeContactCategory = "true";
-  removeBtn.disabled = category.locked === true;
 
   row.appendChild(label);
   row.appendChild(removeBtn);
-  customerContactCategoriesContainer.appendChild(row);
+  container.appendChild(row);
 }
 
-function renderContactCategories(categories) {
-  if (!customerContactCategoriesContainer) return;
-  customerContactCategoriesContainer.innerHTML = "";
+function renderContactCategories(container, categories) {
+  if (!container) return;
+  container.innerHTML = "";
   const normalized = normalizeContactCategories(categories);
-  normalized.forEach((category) => appendContactCategoryRow(category));
+  normalized.forEach((category) => appendContactCategoryRow(container, category));
 }
 
-function readContactCategories() {
-  if (!customerContactCategoriesContainer) return DEFAULT_CONTACT_CATEGORIES.map(({ key, label }) => ({ key, label }));
-  const rows = Array.from(customerContactCategoriesContainer.querySelectorAll("[data-contact-category-key]"));
+function contactCategoryExists(container, key) {
+  if (!container || !key) return false;
+  return Array.from(container.querySelectorAll("[data-contact-category-key]")).some(
+    (row) => String(row.dataset.contactCategoryKey || "").trim() === String(key).trim()
+  );
+}
+
+function readContactCategories(container) {
+  if (!container) return [];
+  const rows = Array.from(container.querySelectorAll("[data-contact-category-key]"));
   const categories = rows
     .map((row) => {
       const key = String(row.dataset.contactCategoryKey || "").trim();
       const label = String(row.querySelector("input")?.value || "").trim();
       if (!key) return null;
-      if (!label) {
-        if (key === "contacts") return { key, label: DEFAULT_CONTACT_CATEGORIES[0].label };
-        if (key === "accountingContacts") return { key, label: DEFAULT_CONTACT_CATEGORIES[1].label };
-        return null;
-      }
+      if (!label) return null;
       return { key, label };
     })
     .filter(Boolean);
-  if (!categories.find((entry) => entry.key === "contacts")) {
-    categories.unshift({ key: "contacts", label: DEFAULT_CONTACT_CATEGORIES[0].label });
-  }
-  if (!categories.find((entry) => entry.key === "accountingContacts")) {
-    categories.splice(1, 0, { key: "accountingContacts", label: DEFAULT_CONTACT_CATEGORIES[1].label });
-  }
   return categories;
 }
 
-function nextContactCategoryKey(seed = "category") {
+function contactCategoryRowSelector(key) {
+  const raw = String(key || "");
+  if (window.CSS?.escape) return `[data-contact-category-key="${CSS.escape(raw)}"]`;
+  return `[data-contact-category-key="${raw.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
+}
+
+function newContactCategorySeed() {
+  const timePart = Date.now().toString(36);
+  const randomPart = Math.random().toString(36).slice(2, 7);
+  return `category_${timePart}_${randomPart}`;
+}
+
+function nextContactCategoryKey(container, seed = "category") {
   const base = normalizeContactCategoryKey(seed) || "category";
-  if (!customerContactCategoriesContainer) return base;
+  if (!container) return base;
   const existing = new Set(
-    Array.from(customerContactCategoriesContainer.querySelectorAll("[data-contact-category-key]")).map(
+    Array.from(container.querySelectorAll("[data-contact-category-key]")).map(
       (row) => String(row.dataset.contactCategoryKey || "").trim()
     )
   );
@@ -1236,6 +1238,121 @@ async function saveOrderContactsEnabledSetting() {
   setOrderContactsEnabledHint("Saved.");
 }
 
+function hasContactCategoryValue(value) {
+  return value !== undefined && value !== null;
+}
+
+async function checkContactCategoryUsage({ scope, key }) {
+  if (!activeCompanyId || !key) return null;
+  const params = new URLSearchParams({
+    companyId: String(activeCompanyId),
+    scope,
+    key,
+  });
+  const res = await fetch(`/api/company-settings/contact-category-usage?${params.toString()}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to check contact category usage.");
+  return data.usage || null;
+}
+
+function formatContactCategoryUsage(entry) {
+  const parts = [];
+  const customerProfiles = Number(entry?.customerProfiles || 0);
+  const rentalOrders = Number(entry?.rentalOrders || 0);
+  if (customerProfiles > 0) {
+    parts.push(`${customerProfiles} customer profile${customerProfiles === 1 ? "" : "s"}`);
+  }
+  if (rentalOrders > 0) {
+    parts.push(`${rentalOrders} rental order${rentalOrders === 1 ? "" : "s"}`);
+  }
+  return parts.join(" and ");
+}
+
+async function loadHiddenContactCategories(scope) {
+  if (!activeCompanyId) return [];
+  const params = new URLSearchParams({ companyId: String(activeCompanyId), scope });
+  const res = await fetch(`/api/company-settings/hidden-contact-categories?${params.toString()}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "Unable to load hidden contact fields.");
+  return Array.isArray(data.categories) ? data.categories : [];
+}
+
+function renderHiddenContactCategories(container, categories, scope) {
+  if (!container) return;
+  container.innerHTML = "";
+  const list = Array.isArray(categories) ? categories : [];
+  if (!list.length) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.style.margin = "0";
+    empty.textContent = "No hidden fields with saved contact data.";
+    container.appendChild(empty);
+    return;
+  }
+
+  const title = document.createElement("div");
+  title.style.fontWeight = "700";
+  title.textContent = "Hidden fields with saved data";
+  container.appendChild(title);
+
+  list.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "inline-actions";
+    row.style.justifyContent = "space-between";
+    row.style.alignItems = "center";
+    row.dataset.hiddenContactCategoryKey = entry.key;
+
+    const text = document.createElement("div");
+    text.className = "hint";
+    text.style.margin = "0";
+    const usage = formatContactCategoryUsage(entry);
+    text.textContent = `${entry.label || entry.key}${usage ? ` (${usage})` : ""}`;
+
+    const restoreBtn = document.createElement("button");
+    restoreBtn.type = "button";
+    restoreBtn.className = "ghost small";
+    restoreBtn.textContent = "Restore";
+    restoreBtn.dataset.restoreContactCategory = "true";
+    restoreBtn.dataset.scope = scope;
+    restoreBtn.dataset.key = entry.key;
+    restoreBtn.dataset.label = entry.label || entry.key;
+
+    row.appendChild(text);
+    row.appendChild(restoreBtn);
+    container.appendChild(row);
+  });
+}
+
+async function refreshHiddenContactCategories() {
+  try {
+    const [customerCategories, orderCategories] = await Promise.all([
+      hiddenCustomerContactCategoriesContainer ? loadHiddenContactCategories("customer") : Promise.resolve([]),
+      hiddenOrderContactCategoriesContainer ? loadHiddenContactCategories("order") : Promise.resolve([]),
+    ]);
+    renderHiddenContactCategories(hiddenCustomerContactCategoriesContainer, customerCategories, "customer");
+    renderHiddenContactCategories(hiddenOrderContactCategoriesContainer, orderCategories, "order");
+  } catch (err) {
+    setCustomerLinkSettingsHint(err?.message ? String(err.message) : "Unable to load hidden contact fields.");
+  }
+}
+
+async function confirmContactCategoryRemoval({ scope, key, label }) {
+  const usage = await checkContactCategoryUsage({ scope, key });
+  const customerProfiles = Number(usage?.customerProfiles || 0);
+  const rentalOrders = Number(usage?.rentalOrders || 0);
+  if (customerProfiles <= 0 && rentalOrders <= 0) return true;
+  const parts = [];
+  if (customerProfiles > 0) {
+    parts.push(`${customerProfiles} customer profile${customerProfiles === 1 ? "" : "s"}`);
+  }
+  if (rentalOrders > 0) {
+    parts.push(`${rentalOrders} rental order${rentalOrders === 1 ? "" : "s"}`);
+  }
+  return window.confirm(
+    `"${label || key}" has contact data on ${parts.join(" and ")}. Removing this category will hide that field from the contact forms. Continue?`
+  );
+}
+
 async function loadSettings() {
   if (!activeCompanyId) return;
   const res = await fetch(`/api/company-settings?companyId=${activeCompanyId}`);
@@ -1253,8 +1370,23 @@ async function loadSettings() {
     customerDocCategoriesInput.value = categories.join("\n");
   }
   if (customerContactCategoriesContainer) {
-    renderContactCategories(data.settings?.customer_contact_categories || []);
+    const categories = hasContactCategoryValue(data.settings?.customer_contact_categories)
+      ? data.settings.customer_contact_categories
+      : DEFAULT_CONTACT_CATEGORIES;
+    renderContactCategories(customerContactCategoriesContainer, categories);
   }
+  if (orderContactCategoriesSettingsContainer) {
+    const categories = hasContactCategoryValue(data.settings?.order_contact_categories)
+      ? data.settings.order_contact_categories
+      : hasContactCategoryValue(data.settings?.customer_contact_categories)
+        ? data.settings.customer_contact_categories
+        : DEFAULT_CONTACT_CATEGORIES;
+    renderContactCategories(
+      orderContactCategoriesSettingsContainer,
+      categories
+    );
+  }
+  await refreshHiddenContactCategories();
   if (customerTermsTemplateInput) customerTermsTemplateInput.value = data.settings?.customer_terms_template || "";
   if (customerEsignRequiredToggle) customerEsignRequiredToggle.checked = data.settings?.customer_esign_required === true;
   renderServiceAgreement({
@@ -1620,14 +1752,16 @@ saveCustomerLinkSettingsBtn?.addEventListener("click", async (e) => {
       .split(/\r?\n/)
       .map((v) => v.trim())
       .filter(Boolean);
-    const contactCategories = readContactCategories();
+    const customerContactCategories = readContactCategories(customerContactCategoriesContainer);
+    const orderContactCategories = readContactCategories(orderContactCategoriesSettingsContainer);
     const res = await fetch("/api/company-settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         companyId: activeCompanyId,
         customerDocumentCategories: categories,
-        customerContactCategories: contactCategories,
+        customerContactCategories,
+        orderContactCategories,
         customerTermsTemplate: customerTermsTemplateInput?.value || "",
         customerEsignRequired: customerEsignRequiredToggle?.checked === true,
       }),
@@ -1645,9 +1779,14 @@ saveCustomerLinkSettingsBtn?.addEventListener("click", async (e) => {
       customerEsignRequiredToggle.checked = data.settings?.customer_esign_required === true;
     }
     if (customerContactCategoriesContainer) {
-      const nextCategories = data.settings?.customer_contact_categories || contactCategories;
-      renderContactCategories(nextCategories);
+      const nextCategories = data.settings?.customer_contact_categories || customerContactCategories;
+      renderContactCategories(customerContactCategoriesContainer, nextCategories);
     }
+    if (orderContactCategoriesSettingsContainer) {
+      const nextCategories = data.settings?.order_contact_categories || orderContactCategories;
+      renderContactCategories(orderContactCategoriesSettingsContainer, nextCategories);
+    }
+    await refreshHiddenContactCategories();
     setCustomerLinkSettingsHint("Customer update settings saved.");
   } catch (err) {
     setCustomerLinkSettingsHint(err?.message ? String(err.message) : "Unable to save customer update settings.");
@@ -1656,12 +1795,12 @@ saveCustomerLinkSettingsBtn?.addEventListener("click", async (e) => {
   }
 });
 
-addContactCategoryBtn?.addEventListener("click", (e) => {
+addCustomerContactCategoryBtn?.addEventListener("click", (e) => {
   e.preventDefault();
-  const key = nextContactCategoryKey("category");
-  appendContactCategoryRow({ key, label: "New category", locked: false });
+  const key = nextContactCategoryKey(customerContactCategoriesContainer, newContactCategorySeed());
+  appendContactCategoryRow(customerContactCategoriesContainer, { key, label: "New category", locked: false });
   const input = customerContactCategoriesContainer?.querySelector(
-    `[data-contact-category-key="${key}"] input`
+    `${contactCategoryRowSelector(key)} input`
   );
   if (input) {
     input.focus();
@@ -1669,12 +1808,63 @@ addContactCategoryBtn?.addEventListener("click", (e) => {
   }
 });
 
-customerContactCategoriesContainer?.addEventListener("click", (e) => {
+addOrderContactCategoryBtn?.addEventListener("click", (e) => {
+  e.preventDefault();
+  const key = nextContactCategoryKey(orderContactCategoriesSettingsContainer, newContactCategorySeed());
+  appendContactCategoryRow(orderContactCategoriesSettingsContainer, { key, label: "New category", locked: false });
+  const input = orderContactCategoriesSettingsContainer?.querySelector(
+    `${contactCategoryRowSelector(key)} input`
+  );
+  if (input) {
+    input.focus();
+    input.select();
+  }
+});
+
+async function handleContactCategoryRemove(e) {
   const btn = e.target.closest?.("[data-remove-contact-category]");
   if (!btn || btn.disabled) return;
   const row = btn.closest?.("[data-contact-category-key]");
-  if (row) row.remove();
-});
+  if (!row) return;
+  const container = row.closest?.("#customer-contact-categories, #order-contact-categories-settings");
+  const scope = container?.id === "order-contact-categories-settings" ? "order" : "customer";
+  const key = String(row.dataset.contactCategoryKey || "").trim();
+  const label = String(row.querySelector("input")?.value || "").trim();
+  btn.disabled = true;
+  try {
+    const ok = await confirmContactCategoryRemoval({ scope, key, label });
+    if (ok) {
+      row.remove();
+      await refreshHiddenContactCategories();
+    }
+  } catch (err) {
+    setCustomerLinkSettingsHint(err?.message ? String(err.message) : "Unable to check category usage.");
+  } finally {
+    if (row.isConnected) btn.disabled = false;
+  }
+}
+
+customerContactCategoriesContainer?.addEventListener("click", handleContactCategoryRemove);
+orderContactCategoriesSettingsContainer?.addEventListener("click", handleContactCategoryRemove);
+
+function restoreHiddenContactCategory(e) {
+  const btn = e.target.closest?.("[data-restore-contact-category]");
+  if (!btn) return;
+  const scope = String(btn.dataset.scope || "").trim();
+  const key = String(btn.dataset.key || "").trim();
+  const label = String(btn.dataset.label || key).trim();
+  const target =
+    scope === "order" ? orderContactCategoriesSettingsContainer : customerContactCategoriesContainer;
+  if (!target || !key) return;
+  if (!contactCategoryExists(target, key)) {
+    appendContactCategoryRow(target, { key, label, locked: false });
+    setCustomerLinkSettingsHint("Field restored. Save customer update settings to keep this change.");
+  }
+  btn.closest?.("[data-hidden-contact-category-key]")?.remove();
+}
+
+hiddenCustomerContactCategoriesContainer?.addEventListener("click", restoreHiddenContactCategory);
+hiddenOrderContactCategoriesContainer?.addEventListener("click", restoreHiddenContactCategory);
 
 logoFileInput?.addEventListener("change", async (e) => {
   const file = e.target.files?.[0] || null;

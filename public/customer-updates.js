@@ -40,6 +40,7 @@ const DEFAULT_CONTACT_CATEGORIES = [
   { key: "accountingContacts", label: "Accounting contacts" },
 ];
 let contactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
+let orderContactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
 let contactCategoriesPromise = null;
 
 function resetSelectionState() {
@@ -486,7 +487,7 @@ function normalizeOrderContactMode(value) {
   return "inherit";
 }
 
-function normalizeOrderContactSettings(value, categories = contactCategoryConfig) {
+function normalizeOrderContactSettings(value, categories = orderContactCategoryConfig) {
   let raw = value;
   if (typeof raw === "string") {
     try {
@@ -514,14 +515,14 @@ function normalizeOrderContactSettings(value, categories = contactCategoryConfig
   return normalized;
 }
 
-function formatOrderContactSettingsHtml(value, categories = contactCategoryConfig) {
+function formatOrderContactSettingsHtml(value, categories = orderContactCategoryConfig) {
   const settings = normalizeOrderContactSettings(value, categories);
   const modeLabel = (mode) => {
     if (mode === "subset") return "Subset of customer contacts";
     if (mode === "override") return "Custom order contacts";
     return "Use customer contacts";
   };
-  return categories
+  const rendered = categories
     .map((category) => {
       const entry = settings?.[category.key] || { mode: "inherit", contacts: [] };
       const header = `<strong>${escapeHtml(category.label)}</strong>: ${escapeHtml(modeLabel(entry.mode))}`;
@@ -530,6 +531,7 @@ function formatOrderContactSettingsHtml(value, categories = contactCategoryConfi
       return `${header}<br />${contactsHtml || "--"}`;
     })
     .join("<br /><br />");
+  return rendered || "<em>No order contacts submitted.</em>";
 }
 
 function contactCategoryKeyFromLabel(label) {
@@ -1377,8 +1379,12 @@ async function loadContactCategories() {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || "Unable to load contact categories.");
     contactCategoryConfig = normalizeContactCategories(data.settings?.customer_contact_categories || []);
+    orderContactCategoryConfig = normalizeContactCategories(
+      data.settings?.order_contact_categories || data.settings?.customer_contact_categories || []
+    );
   } catch {
     contactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
+    orderContactCategoryConfig = DEFAULT_CONTACT_CATEGORIES;
   }
 }
 

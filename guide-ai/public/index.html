@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aiven Support Agent MVP</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Aiven Rental App</p>
+        <h1>Documentation Support Agent</h1>
+        <p class="sub">Upload the ZIP of manual text + screenshots, then ask how the app works. The agent answers from the manual. Users can choose whether to include annotated screenshots.</p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>1. Upload manual ZIP</h2>
+      <form id="uploadForm" class="row">
+        <input type="file" id="manualZip" accept=".zip" required />
+        <button type="submit">Upload & Index</button>
+      </form>
+      <p id="uploadStatus" class="status"></p>
+    </section>
+
+    <section class="card">
+      <h2>2. Ask a question</h2>
+      <label for="manualSelect">Manual</label>
+      <select id="manualSelect"></select>
+      <div class="toggle-row">
+        <label class="toggle-label">
+          <input type="checkbox" id="includeScreenshots" checked />
+          Include annotated screenshots
+        </label>
+        <span class="hint">Turn this off for faster, lower-cost text-only answers.</span>
+      </div>
+      <div id="chat" class="chat"></div>
+      <form id="chatForm" class="ask">
+        <input id="question" placeholder="Example: How do I create a rental order?" autocomplete="off" required />
+        <button type="submit">Ask</button>
+      </form>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

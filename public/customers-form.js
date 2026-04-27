@@ -155,18 +155,7 @@ function normalizeContactCategories(value) {
     pushEntry(entry.key || entry.id || "", entry.label || entry.name || entry.title || "");
   });
 
-  const byKey = new Map(normalized.map((entry) => [entry.key, entry]));
-  const baseContacts = byKey.get("contacts")?.label || DEFAULT_CONTACT_CATEGORIES[0].label;
-  const baseAccounting =
-    byKey.get("accountingContacts")?.label || DEFAULT_CONTACT_CATEGORIES[1].label;
-  const extras = normalized.filter(
-    (entry) => entry.key !== "contacts" && entry.key !== "accountingContacts"
-  );
-  return [
-    { key: "contacts", label: baseContacts },
-    { key: "accountingContacts", label: baseAccounting },
-    ...extras,
-  ];
+  return normalized;
 }
 
 function renderContactCategories(categories) {

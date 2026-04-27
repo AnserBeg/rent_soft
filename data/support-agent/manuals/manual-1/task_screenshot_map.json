@@ -1,0 +1,158 @@
+[
+  {
+    "task": "use work bench timeline",
+    "preferred_screenshot": "screenshots/p06_01_work_bench_timeline_view.png",
+    "alternate_screenshots": "screenshots/p07_01_work_bench_stages_view.png | screenshots/p08_01_work_bench_pick_return_view.png",
+    "target_hint": "Explain Timeline controls, grouping, status filters, Ending <72h, KPI cards, colors, overdue/ending soon, and timeline bar actions."
+  },
+  {
+    "task": "why is an item missing from the work bench timeline",
+    "preferred_screenshot": "screenshots/p06_01_work_bench_timeline_view.png",
+    "alternate_screenshots": "screenshots/p08_01_work_bench_pick_return_view.png",
+    "target_hint": "Check status filters, date range, customer on the order, line start/end dates, actual pickup/return dates, returned line filtering, and range overlap."
+  },
+  {
+    "task": "use work bench stages",
+    "preferred_screenshot": "screenshots/p07_01_work_bench_stages_view.png",
+    "alternate_screenshots": "screenshots/p06_01_work_bench_timeline_view.png",
+    "target_hint": "Explain Request, Quote, Reservation, Order, Received, Closed columns and that status changes happen inside the rental order."
+  },
+  {
+    "task": "use work bench pick return",
+    "preferred_screenshot": "screenshots/p08_01_work_bench_pick_return_view.png",
+    "alternate_screenshots": "screenshots/p20_01_rental_order_actual_dates_popup_1.png",
+    "target_hint": "Explain Pick/Return as a movement checklist showing Equipment out and Equipment back by day; actual dates are recorded on rental order line items."
+  },
+  {
+    "task": "use dashboard availability",
+    "preferred_screenshot": "screenshots/p10_01_dashboard_availability_and_utilization_view.png",
+    "alternate_screenshots": "screenshots/p09_01_dashboard_map_view.png",
+    "target_hint": "Explain availability/demand controls, donut counts/colors, trend lines, upcoming demand, incidents, and status/date/assignment dependencies."
+  },
+  {
+    "task": "why is availability negative",
+    "preferred_screenshot": "screenshots/p10_01_dashboard_availability_and_utilization_view.png",
+    "alternate_screenshots": "screenshots/p14_01_rental_order_quote_detail_page_2.png",
+    "target_hint": "Explain committed/potential availability, demand from statuses, shortfalls below zero, quote/request demand, and incoming purchase orders."
+  },
+  {
+    "task": "use dashboard map",
+    "preferred_screenshot": "screenshots/p09_01_dashboard_map_view.png",
+    "alternate_screenshots": "screenshots/p33_01_asset_detail_view.png | screenshots/p34_01_asset_detail_current_location_map_popup.png",
+    "target_hint": "Explain Units vs Locations, street/satellite, marker colors, current/base coordinate fallback, and missing-coordinate behavior."
+  },
+  {
+    "task": "add line item on rental order",
+    "preferred_screenshot": "screenshots/p14_01_rental_order_quote_detail_page_2.png",
+    "alternate_screenshots": "screenshots/p19_01_rental_order_quote_booked_dates_popup.png | screenshots/p20_01_rental_order_actual_dates_popup_1.png",
+    "target_hint": "Add line item, choose equipment type, open Booked Dates, enter Start/End, choose Period/Rate, select Unit when required, and use Actual Dates only when equipment goes out or returns."
+  },
+  {
+    "task": "why can't I select a unit",
+    "preferred_screenshot": "screenshots/p14_01_rental_order_quote_detail_page_2.png",
+    "alternate_screenshots": "screenshots/p19_01_rental_order_quote_booked_dates_popup.png",
+    "target_hint": "Explain unit locking and availability by status: quote/quote_rejected/requested lock units, reservation optional, ordered allows TBD but actual pickup requires unit/bundle, received/closed require unit/bundle."
+  },
+  {
+    "task": "why can't I record actual pickup",
+    "preferred_screenshot": "screenshots/p20_01_rental_order_actual_dates_popup_1.png",
+    "alternate_screenshots": "screenshots/p14_01_rental_order_quote_detail_page_2.png",
+    "target_hint": "Explain actual pickup requires a selected unit or valid bundle, cannot be in the future, and uses actual field event dates."
+  },
+  {
+    "task": "why is my asset not showing on the map",
+    "preferred_screenshot": "screenshots/p09_01_dashboard_map_view.png",
+    "alternate_screenshots": "screenshots/p33_01_asset_detail_view.png | screenshots/p34_01_asset_detail_current_location_map_popup.png",
+    "target_hint": "Explain map markers require coordinates on current location or base location; text-only locations can appear in tables but cannot plot."
+  },
+  {
+    "task": "explain asset current location versus base location",
+    "preferred_screenshot": "screenshots/p33_01_asset_detail_view.png",
+    "alternate_screenshots": "screenshots/p34_01_asset_detail_current_location_map_popup.png | screenshots/p09_01_dashboard_map_view.png",
+    "target_hint": "Explain base location is normal yard/branch/home; current location is present tracked physical location; blank current location means same as base location in UI."
+  },
+  {
+    "task": "create rental order",
+    "preferred_screenshot": "screenshots/p12_01_rental_order_table.png",
+    "alternate_screenshots": "screenshots/p13_01_rental_order_quote_detail_page_1.png | screenshots/p14_01_rental_order_quote_detail_page_2.png",
+    "target_hint": "Use Rental Order Table for New RO, then detail page screenshots."
+  },
+  {
+    "task": "create quote",
+    "preferred_screenshot": "screenshots/p11_01_quotes_table.png",
+    "alternate_screenshots": "screenshots/p13_01_rental_order_quote_detail_page_1.png | screenshots/p14_01_rental_order_quote_detail_page_2.png",
+    "target_hint": "Use Quotes Table for New Quote, then detail page screenshots."
+  },
+  {
+    "task": "add booked dates",
+    "preferred_screenshot": "screenshots/p19_01_rental_order_quote_booked_dates_popup.png",
+    "alternate_screenshots": "screenshots/p14_01_rental_order_quote_detail_page_2.png",
+    "target_hint": "Use Booked Dates popup for planned Start and End."
+  },
+  {
+    "task": "record actual dates",
+    "preferred_screenshot": "screenshots/p20_01_rental_order_actual_dates_popup_1.png",
+    "alternate_screenshots": "screenshots/p20_02_rental_order_actual_dates_popup_2.png",
+    "target_hint": "Use Actual Dates popup for actual pickup/delivery and returned dates."
+  },
+  {
+    "task": "add pause period",
+    "preferred_screenshot": "screenshots/p21_01_rental_order_add_pause_period.png",
+    "alternate_screenshots": "screenshots/p20_01_rental_order_actual_dates_popup_1.png",
+    "target_hint": "Use Add Pause Period screenshot."
+  },
+  {
+    "task": "add additional fee",
+    "preferred_screenshot": "screenshots/p17_01_rental_order_quote_additional_fee_popup.png",
+    "alternate_screenshots": "screenshots/p14_01_rental_order_quote_detail_page_2.png",
+    "target_hint": "Use Additional Fee popup. Fee rows save when fee name is filled."
+  },
+  {
+    "task": "generate customer link",
+    "preferred_screenshot": "screenshots/p25_01_rental_order_quote_customer_update_page.png",
+    "alternate_screenshots": "screenshots/p26_01_customer_link_page_for_rental_order_quote_1.png | screenshots/p26_02_customer_link_page_for_rental_order_quote_2.png",
+    "target_hint": "Use Customer Update page for Generate customer link and Share link."
+  },
+  {
+    "task": "create customer",
+    "preferred_screenshot": "screenshots/p44_01_customer_table_view.png",
+    "alternate_screenshots": "screenshots/p46_01_customer_detail_view_1.png | screenshots/p47_01_customer_detail_view_2.png",
+    "target_hint": "Use Customer Table for New Customer, then Customer Detail screenshots."
+  },
+  {
+    "task": "create asset",
+    "preferred_screenshot": "screenshots/p32_01_assets_table_view.png",
+    "alternate_screenshots": "screenshots/p33_01_asset_detail_view.png",
+    "target_hint": "Use Assets Table for Add Equipment/Asset, then Asset Detail."
+  },
+  {
+    "task": "set asset current location",
+    "preferred_screenshot": "screenshots/p34_01_asset_detail_current_location_map_popup.png",
+    "alternate_screenshots": "screenshots/p33_01_asset_detail_view.png",
+    "target_hint": "Use Current Location Map Popup. Current location is optional; blank means same as base location in UI."
+  },
+  {
+    "task": "create work order",
+    "preferred_screenshot": "screenshots/p28_01_work_orders_table_view.png",
+    "alternate_screenshots": "screenshots/p29_01_work_order_detail_view_1.png | screenshots/p29_02_work_order_detail_view_2.png | screenshots/p30_01_work_order_detail_view_3.png",
+    "target_hint": "Use Work Orders Table, then Work Order Detail screenshots."
+  },
+  {
+    "task": "create equipment type",
+    "preferred_screenshot": "screenshots/p36_01_equipment_page_table_view.png",
+    "alternate_screenshots": "screenshots/p37_01_equipment_detail_page.png",
+    "target_hint": "Use Equipment Table, then Equipment Detail."
+  },
+  {
+    "task": "create location",
+    "preferred_screenshot": "screenshots/p38_01_location_table_view.png",
+    "alternate_screenshots": "screenshots/p38_02_location_detail_view_1.png | screenshots/p39_01_location_detail_view_2.png",
+    "target_hint": "Use Locations Table, then Location Detail."
+  },
+  {
+    "task": "create part",
+    "preferred_screenshot": "screenshots/p31_01_parts.png",
+    "alternate_screenshots": "",
+    "target_hint": "Use Parts page for New part."
+  }
+]

@@ -220,12 +220,22 @@
                 <textarea id="customer-doc-categories" class="notes-area" rows="4"></textarea>
               </label>
               <div class="stack" style="gap: 10px;">
-                <div style="font-weight: 700;">Contact categories</div>
-                <p class="hint" style="margin:0;">Contacts and Accounting contacts are always included.</p>
+                <div style="font-weight: 700;">Customer profile contact categories</div>
+                <p class="hint" style="margin:0;">Choose which contact sections appear on customer profiles.</p>
                 <div class="stack" id="customer-contact-categories"></div>
                 <div class="inline-actions" style="justify-content:flex-start;">
-                  <button class="ghost small" id="add-contact-category" type="button">+ Add category</button>
+                  <button class="ghost small" id="add-customer-contact-category" type="button">+ Add category</button>
                 </div>
+                <div class="stack" id="hidden-customer-contact-categories"></div>
+              </div>
+              <div class="stack" style="gap: 10px;">
+                <div style="font-weight: 700;">Rental order contact categories</div>
+                <p class="hint" style="margin:0;">Choose which contact sections appear in Order contacts on rental orders, quotes, and customer links.</p>
+                <div class="stack" id="order-contact-categories-settings"></div>
+                <div class="inline-actions" style="justify-content:flex-start;">
+                  <button class="ghost small" id="add-order-contact-category" type="button">+ Add category</button>
+                </div>
+                <div class="stack" id="hidden-order-contact-categories"></div>
               </div>
               <label>Terms shown to customers
                 <textarea id="customer-terms-template" class="notes-area" rows="6"></textarea>

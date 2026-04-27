@@ -1,0 +1,147 @@
+openapi: 3.1.0
+info:
+  title: SQL Data Analyst API
+  description: >
+    Read-only API for a Custom GPT / AI agent to inspect PostgreSQL schema comments
+    and run safe SELECT queries. The schema endpoint returns table and column comments
+    so the agent can translate user-friendly business wording into correct SQL.
+  version: 1.0.0
+servers:
+  - url: https://YOUR-MIDDLEWARE-DOMAIN.com
+    description: Production middleware server
+paths:
+  /v1/schema:
+    get:
+      operationId: getDatabaseSchema
+      summary: Get database schema with table and column comments
+      description: >
+        Returns allowed PostgreSQL schemas, tables, columns, data types, primary keys,
+        foreign keys, and table/column comments. Call this before writing SQL unless
+        the current conversation already has the needed schema.
+      responses:
+        '200':
+          description: Database schema and comments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dialect:
+                    type: string
+                  allowed_schemas:
+                    type: array
+                    items:
+                      type: string
+                  instructions_for_model:
+                    type: array
+                    items:
+                      type: string
+                  tables:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        schema:
+                          type: string
+                        name:
+                          type: string
+                        type:
+                          type: string
+                        description:
+                          type: string
+                        columns:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              name:
+                                type: string
+                              type:
+                                type: string
+                              description:
+                                type: string
+                              not_null:
+                                type: boolean
+                              primary_key:
+                                type: boolean
+                              foreign_key:
+                                type:
+                                  - object
+                                  - 'null'
+      security:
+        - ApiKey: []
+  /v1/query:
+    post:
+      operationId: databaseQuery
+      summary: Run a read-only PostgreSQL SELECT query
+      description: >
+        Executes one read-only PostgreSQL SELECT or WITH query against the database.
+        The middleware enforces read-only transactions, statement timeouts, a maximum
+        row limit, and blocks destructive SQL commands. Use after getDatabaseSchema.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - q
+              properties:
+                q:
+                  type: string
+                  description: PostgreSQL SELECT or WITH query only. Do not include semicolons. Prefer explicit columns and safe LIMITs.
+                  example: SELECT customer_id, COUNT(*) AS rental_order_count FROM rental_orders GROUP BY customer_id ORDER BY rental_order_count DESC LIMIT 20
+                maxRows:
+                  type: integer
+                  description: Maximum rows to return. Hard-capped at 1000 by the middleware. Use a smaller number unless the user asks for detailed export.
+                  default: 1000
+                  maximum: 1000
+                purpose:
+                  type: string
+                  description: Brief explanation of what the query is trying to answer.
+      responses:
+        '200':
+          description: Query result preview plus CSV file for analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sql_executed:
+                    type: string
+                  row_count:
+                    type: integer
+                  max_rows_applied:
+                    type: integer
+                  columns:
+                    type: array
+                    items:
+                      type: string
+                  preview_rows:
+                    type: array
+                    items:
+                      type: object
+                  openaiFileResponse:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        mime_type:
+                          type: string
+                        content:
+                          type: string
+                          format: byte
+        '400':
+          description: Bad request or unsafe SQL
+        '401':
+          description: Unauthorized. Invalid or missing API key.
+      security:
+        - ApiKey: []
+components:
+  securitySchemes:
+    ApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key

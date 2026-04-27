@@ -17,6 +17,8 @@ dotenv.config();
 const { mimeFromExtension, readImageAsInlinePart, generateDamageReportMarkdown } = require("./aiDamageReport");
 const { editImageBufferWithGemini, writeCompanyUpload } = require("./aiImageEdit");
 const { ensureDemoCompany } = require("./demoSeed");
+const { processSupportManualUpload, answerSupportQuestion, resolveSupportAgentFile } = require("./supportAgent");
+const { runAiAnalyticsQuery } = require("./aiAnalyticsAgent");
 
 const {
   pool,
@@ -37,6 +39,12 @@ const {
   deleteCompaniesForDev,
   getCompanyOwnerUserId,
   createOwnerForCompanyForDev,
+  createSupportManual,
+  getSupportManualById,
+  getActiveSupportManual,
+  listSupportManuals,
+  updateSupportManual,
+  activateSupportManual,
   listLocations,
   getLocation,
   createLocation,
@@ -231,6 +239,10 @@ const { verifyWebhookSignature, computeExpiryTimestamp, initQboDiscovery } = req
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+const supportManualUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 1024 * 1024 * 200 },
+});
 
 const publicRoot = path.join(__dirname, "..", "public");
 const spaRoot = path.join(publicRoot, "spa");
@@ -1396,6 +1408,8 @@ app.get(
       rentalInfoFields: settings?.rental_info_fields || null,
       orderContactsEnabled: settings?.order_contacts_enabled !== false,
       contactCategories: settings?.customer_contact_categories || null,
+      customerContactCategories: settings?.customer_contact_categories || null,
+      orderContactCategories: settings?.order_contact_categories || settings?.customer_contact_categories || null,
       proofAvailable: !!(latestProof?.proof_pdf_path),
     });
   })
@@ -1521,18 +1535,36 @@ app.post(
       return res.status(409).json({ error: "This share link has already been used." });
     }
 
-    const allowedCustomerFields = filterAllowedFields(link.allowed_fields, ALLOWED_CUSTOMER_FIELDS, Array.from(ALLOWED_CUSTOMER_FIELDS));
-    const allowedOrderFields = filterAllowedFields(link.allowed_fields, ALLOWED_ORDER_FIELDS, Array.from(ALLOWED_ORDER_FIELDS));
+    const payload = parseJsonObject(req.body?.payload);
+    const allowedCustomerFields = filterAllowedFields(
+      link.allowed_fields,
+      ALLOWED_CUSTOMER_FIELDS,
+      Array.from(ALLOWED_CUSTOMER_FIELDS)
+    );
+    const allowedOrderFields = filterAllowedFields(
+      link.allowed_fields,
+      ALLOWED_ORDER_FIELDS,
+      Array.from(ALLOWED_ORDER_FIELDS)
+    );
     const allowedLineItemFields = filterAllowedFields(
       link.allowed_line_item_fields,
       ALLOWED_LINE_ITEM_FIELDS,
       Array.from(ALLOWED_LINE_ITEM_FIELDS)
     );
-
-    const payload = parseJsonObject(req.body?.payload);
     const customerPayload = sanitizeCustomerPayload(payload.customer || {}, allowedCustomerFields);
     const allowOrderData = link.scope === "new_quote" || link.scope === "order_update" || !!link.rental_order_id;
-    const orderPayload = allowOrderData ? sanitizeOrderPayload(payload.order || {}, allowedOrderFields) : {};
+    const orderPayloadInput = payload.order || {};
+    const effectiveAllowedOrderFields = [...allowedOrderFields];
+    if (
+      allowOrderData &&
+      !effectiveAllowedOrderFields.includes("orderContactSettings") &&
+      orderPayloadInput &&
+      typeof orderPayloadInput === "object" &&
+      Object.prototype.hasOwnProperty.call(orderPayloadInput, "orderContactSettings")
+    ) {
+      effectiveAllowedOrderFields.push("orderContactSettings");
+    }
+    const orderPayload = allowOrderData ? sanitizeOrderPayload(orderPayloadInput, effectiveAllowedOrderFields) : {};
     const lineItemsPayload = allowOrderData ? sanitizeLineItems(payload.lineItems || [], allowedLineItemFields) : [];
     if (allowOrderData && orderPayload?.generalNotesImages) {
       orderPayload.generalNotesImages = normalizeGeneralNotesImages({
@@ -2862,10 +2894,12 @@ async function updateEquipmentCurrentLocationFromSiteAddress({
   companyId,
   orderId,
   lineItems,
+  equipmentIds,
   siteAddress,
   siteAddressLat,
   siteAddressLng,
   siteAddressQuery,
+  force = false,
 }) {
   const cid = Number(companyId);
   if (!Number.isFinite(cid)) return { ok: true, updated: 0 };
@@ -2890,8 +2924,11 @@ async function updateEquipmentCurrentLocationFromSiteAddress({
     if (!items.length && Array.isArray(detail?.lineItems)) items = detail.lineItems;
   }
 
-  const equipmentIds = collectEquipmentIdsFromLineItems(items);
-  if (!equipmentIds.length) return { ok: true, updated: 0 };
+  const explicitEquipmentIds = Array.isArray(equipmentIds)
+    ? equipmentIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
+    : [];
+  const targetEquipmentIds = explicitEquipmentIds.length ? explicitEquipmentIds : collectEquipmentIdsFromLineItems(items);
+  if (!targetEquipmentIds.length) return { ok: true, updated: 0 };
 
   const loc = await ensureSiteAddressLocation({
     companyId: cid,
@@ -2903,9 +2940,12 @@ async function updateEquipmentCurrentLocationFromSiteAddress({
   });
   if (!loc?.id) return { ok: true, updated: 0 };
 
-  const beforeRows = await listEquipmentLocationIdsForIds({ companyId: cid, equipmentIds });
+  const beforeRows = await listEquipmentLocationIdsForIds({ companyId: cid, equipmentIds: targetEquipmentIds });
   const targetIds = beforeRows
-    .filter((row) => row.current_location_id === null || String(row.current_location_id || "") === String(row.location_id || ""))
+    .filter((row) => {
+      if (force) return true;
+      return row.current_location_id === null || String(row.current_location_id || "") === String(row.location_id || "");
+    })
     .map((row) => Number(row.id));
   if (!targetIds.length) return { ok: true, updated: 0, locationId: Number(loc.id) };
 
@@ -2938,6 +2978,32 @@ async function updateEquipmentCurrentLocationFromSiteAddress({
   }
 
   return { ok: true, updated, locationId: Number(loc.id) };
+}
+
+async function movePickedUpLineItemEquipmentToOrderSite({ companyId, orderId, lineItemId }) {
+  const cid = Number(companyId);
+  const oid = Number(orderId);
+  const liid = Number(lineItemId);
+  if (!Number.isFinite(cid) || !Number.isFinite(oid) || !Number.isFinite(liid)) {
+    return { ok: true, updated: 0 };
+  }
+
+  const equipmentRes = await pool.query(
+    `SELECT equipment_id
+       FROM rental_order_line_inventory
+      WHERE line_item_id = $1
+      ORDER BY equipment_id`,
+    [liid]
+  );
+  const equipmentIds = equipmentRes.rows.map((row) => Number(row.equipment_id)).filter((id) => Number.isFinite(id));
+  if (!equipmentIds.length) return { ok: true, updated: 0 };
+
+  return updateEquipmentCurrentLocationFromSiteAddress({
+    companyId: cid,
+    orderId: oid,
+    equipmentIds,
+    force: true,
+  });
 }
 
 function parseDelimitedRows(text, delimiter) {
@@ -3961,6 +4027,80 @@ app.get(
   })
 );
 
+app.get(
+  "/api/support-agent/active-manual",
+  asyncHandler(async (_req, res) => {
+    const manual = await getActiveSupportManual();
+    if (!manual || manual.status !== "ready") {
+      return res.status(404).json({ error: "Support manual not available." });
+    }
+    res.json({
+      manual: {
+        id: manual.id,
+        name: manual.name,
+        originalFilename: manual.originalFilename,
+        screenshotCount: manual.screenshotCount,
+        activatedAt: manual.activatedAt,
+      },
+    });
+  })
+);
+
+app.post(
+  "/api/support-agent/chat",
+  asyncHandler(async (req, res) => {
+    const question = String(req.body?.question || "").trim();
+    const includeScreenshots = req.body?.includeScreenshots !== false;
+    if (!question) return res.status(400).json({ error: "question is required." });
+
+    const manual = await getActiveSupportManual();
+    if (!manual || manual.status !== "ready") {
+      return res.status(404).json({ error: "Support manual not available." });
+    }
+
+    const response = await answerSupportQuestion({
+      manual,
+      question,
+      includeScreenshots,
+    });
+    res.json({
+      manual: {
+        id: manual.id,
+        name: manual.name,
+      },
+      ...response,
+    });
+  })
+);
+
+app.post(
+  "/api/ai-analytics/query",
+  asyncHandler(async (req, res) => {
+    const question = String(req.body?.question || "").trim();
+    const maxRows = req.body?.maxRows ? Number(req.body.maxRows) : undefined;
+    if (!question) return res.status(400).json({ error: "question is required." });
+
+    const output = await runAiAnalyticsQuery({
+      auth: req.auth,
+      question,
+      maxRows,
+      clarification: req.body?.clarification || null,
+    });
+    res.json(output);
+  })
+);
+
+app.get(
+  "/api/support-agent/file",
+  asyncHandler(async (req, res) => {
+    const requestedPath = String(req.query?.path || "").trim();
+    if (!requestedPath) return res.status(400).json({ error: "path is required." });
+    const filePath = await resolveSupportAgentFile(requestedPath);
+    if (!filePath) return res.status(404).json({ error: "File not found." });
+    return res.sendFile(filePath);
+  })
+);
+
 app.post(
   "/api/dev/login",
   loginLimiter,
@@ -4002,6 +4142,111 @@ app.get(
   asyncHandler(async (req, res) => {
     const companies = await listAllCompaniesForDev();
     res.json({ companies });
+  })
+);
+
+app.get(
+  "/api/dev/support-manuals",
+  requireDevAuth,
+  asyncHandler(async (_req, res) => {
+    const manuals = await listSupportManuals();
+    res.json({
+      manuals: manuals.map((manual) => ({
+        id: manual.id,
+        name: manual.name,
+        originalFilename: manual.originalFilename,
+        status: manual.status,
+        isActive: manual.isActive,
+        screenshotCount: manual.screenshotCount,
+        errorMessage: manual.errorMessage,
+        createdAt: manual.createdAt,
+        activatedAt: manual.activatedAt,
+      })),
+    });
+  })
+);
+
+app.post(
+  "/api/dev/support-manuals/upload",
+  requireDevAuth,
+  supportManualUpload.single("manualZip"),
+  asyncHandler(async (req, res) => {
+    if (!req.file?.buffer) return res.status(400).json({ error: "Upload a ZIP file in the manualZip field." });
+
+    const originalFilename = String(req.file.originalname || "support-manual.zip").trim() || "support-manual.zip";
+    const draft = await createSupportManual({
+      name: path.parse(originalFilename).name || "Support Manual",
+      originalFilename,
+      status: "processing",
+    });
+
+    try {
+      const processed = await processSupportManualUpload({
+        manualId: draft.id,
+        uploadedName: originalFilename,
+        zipBuffer: req.file.buffer,
+      });
+
+      const updated = await updateSupportManual(draft.id, {
+        name: processed.name,
+        status: "ready",
+        vectorStoreId: processed.vectorStoreId,
+        screenshotCount: processed.screenshotCount,
+        manifest: processed.manifest,
+        errorMessage: null,
+      });
+      const active = await activateSupportManual(draft.id);
+      res.json({
+        manual: {
+          id: active.id,
+          name: active.name,
+          originalFilename: active.originalFilename,
+          status: active.status,
+          isActive: active.isActive,
+          screenshotCount: active.screenshotCount,
+          createdAt: active.createdAt,
+          activatedAt: active.activatedAt,
+        },
+        processed: {
+          screenshotCount: updated?.screenshotCount || processed.screenshotCount,
+        },
+      });
+    } catch (error) {
+      await updateSupportManual(draft.id, {
+        status: "failed",
+        errorMessage: error?.message ? String(error.message) : "Unable to process support manual.",
+      }).catch(() => {});
+      throw error;
+    }
+  })
+);
+
+app.post(
+  "/api/dev/support-manuals/:id/activate",
+  requireDevAuth,
+  asyncHandler(async (req, res) => {
+    const manualId = Number(req.params?.id);
+    if (!Number.isFinite(manualId) || manualId <= 0) {
+      return res.status(400).json({ error: "Valid support manual id is required." });
+    }
+    const manual = await getSupportManualById(manualId);
+    if (!manual) return res.status(404).json({ error: "Support manual not found." });
+    if (manual.status !== "ready") {
+      return res.status(400).json({ error: "Only ready manuals can be activated." });
+    }
+    const active = await activateSupportManual(manualId);
+    res.json({
+      manual: {
+        id: active.id,
+        name: active.name,
+        originalFilename: active.originalFilename,
+        status: active.status,
+        isActive: active.isActive,
+        screenshotCount: active.screenshotCount,
+        createdAt: active.createdAt,
+        activatedAt: active.activatedAt,
+      },
+    });
   })
 );
 
@@ -6680,18 +6925,6 @@ function resolveOverallChangeRequestStatus({
         actorName,
         actorEmail,
       });
-      try {
-        await updateEquipmentCurrentLocationFromSiteAddress({
-          companyId,
-          orderId,
-          siteAddress: mergedOrder.siteAddress,
-          siteAddressLat: mergedOrder.siteAddressLat,
-          siteAddressLng: mergedOrder.siteAddressLng,
-          siteAddressQuery: mergedOrder.siteAddressQuery,
-        });
-      } catch (err) {
-        console.warn("Site-address current-location update failed:", err?.message || err);
-      }
       if (normalizedGeneralNotesImages.length) {
         for (const img of normalizedGeneralNotesImages) {
           await addRentalOrderAttachment({
@@ -6744,18 +6977,23 @@ function resolveOverallChangeRequestStatus({
         actorEmail,
       });
       orderId = createdOrder?.id || null;
-      if (orderId) {
-          try {
-            await updateEquipmentCurrentLocationFromSiteAddress({
-              companyId,
-              orderId,
-              siteAddress: filteredOrderUpdate.siteAddress,
-              siteAddressLat: filteredOrderUpdate.siteAddressLat,
-              siteAddressLng: filteredOrderUpdate.siteAddressLng,
-              siteAddressQuery: filteredOrderUpdate.siteAddressQuery,
-            });
-          } catch (err) {
-            console.warn("Site-address current-location update failed:", err?.message || err);
+        if (orderId) {
+          const pickedUpLineItems = filteredLineItems.filter((li) => li && li.fulfilledAt);
+          if (pickedUpLineItems.length) {
+            try {
+              await updateEquipmentCurrentLocationFromSiteAddress({
+                companyId,
+                orderId,
+                lineItems: pickedUpLineItems,
+                siteAddress: filteredOrderUpdate.siteAddress,
+                siteAddressLat: filteredOrderUpdate.siteAddressLat,
+                siteAddressLng: filteredOrderUpdate.siteAddressLng,
+                siteAddressQuery: filteredOrderUpdate.siteAddressQuery,
+                force: true,
+              });
+            } catch (err) {
+              console.warn("Pickup current-location update failed:", err?.message || err);
+            }
           }
         }
       if (orderId && normalizedGeneralNotesImages.length) {
@@ -7348,6 +7586,206 @@ app.get(
   })
 );
 
+app.get(
+  "/api/company-settings/contact-category-usage",
+  asyncHandler(async (req, res) => {
+    const companyId = Number(req.query?.companyId);
+    const key = String(req.query?.key || "").trim();
+    const scope = String(req.query?.scope || "").trim().toLowerCase();
+    if (!Number.isFinite(companyId) || companyId <= 0) {
+      return res.status(400).json({ error: "companyId is required." });
+    }
+    if (!key) return res.status(400).json({ error: "key is required." });
+    if (scope !== "customer" && scope !== "order") {
+      return res.status(400).json({ error: "scope must be customer or order." });
+    }
+
+    let customerProfiles = 0;
+    let rentalOrders = 0;
+
+    if (scope === "customer") {
+      if (key === "contacts") {
+        const result = await pool.query(
+          `
+            SELECT COUNT(*)::int AS count
+              FROM customers
+             WHERE company_id = $1
+               AND (
+                 CASE WHEN jsonb_typeof(contacts) = 'array' THEN jsonb_array_length(contacts) ELSE 0 END > 0
+                 OR COALESCE(NULLIF(TRIM(contact_name), ''), NULLIF(TRIM(email), ''), NULLIF(TRIM(phone), '')) IS NOT NULL
+               )
+          `,
+          [companyId]
+        );
+        customerProfiles = Number(result.rows?.[0]?.count || 0);
+      } else if (key === "accountingContacts") {
+        const result = await pool.query(
+          `
+            SELECT COUNT(*)::int AS count
+              FROM customers
+             WHERE company_id = $1
+               AND CASE WHEN jsonb_typeof(accounting_contacts) = 'array'
+                        THEN jsonb_array_length(accounting_contacts)
+                        ELSE 0
+                   END > 0
+          `,
+          [companyId]
+        );
+        customerProfiles = Number(result.rows?.[0]?.count || 0);
+      } else {
+        const result = await pool.query(
+          `
+            SELECT COUNT(*)::int AS count
+              FROM customers
+             WHERE company_id = $1
+               AND CASE WHEN jsonb_typeof(contact_groups -> $2) = 'array'
+                        THEN jsonb_array_length(contact_groups -> $2)
+                        ELSE 0
+                   END > 0
+          `,
+          [companyId, key]
+        );
+        customerProfiles = Number(result.rows?.[0]?.count || 0);
+      }
+    }
+
+    if (scope === "order") {
+      const result = await pool.query(
+        `
+          SELECT COUNT(*)::int AS count
+            FROM rental_orders
+           WHERE company_id = $1
+             AND CASE WHEN jsonb_typeof(order_contact_settings -> $2 -> 'contacts') = 'array'
+                      THEN jsonb_array_length(order_contact_settings -> $2 -> 'contacts')
+                      ELSE 0
+                 END > 0
+        `,
+        [companyId, key]
+      );
+      rentalOrders = Number(result.rows?.[0]?.count || 0);
+    }
+
+    res.json({
+      usage: {
+        scope,
+        key,
+        customerProfiles,
+        rentalOrders,
+      },
+    });
+  })
+);
+
+function contactCategoryLabelFromKey(key) {
+  const raw = String(key || "").trim();
+  if (raw === "contacts") return "Contacts";
+  if (raw === "accountingContacts") return "Accounting contacts";
+  const spaced = raw
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!spaced) return raw;
+  return spaced.slice(0, 1).toUpperCase() + spaced.slice(1);
+}
+
+app.get(
+  "/api/company-settings/hidden-contact-categories",
+  asyncHandler(async (req, res) => {
+    const companyId = Number(req.query?.companyId);
+    const scope = String(req.query?.scope || "").trim().toLowerCase();
+    if (!Number.isFinite(companyId) || companyId <= 0) {
+      return res.status(400).json({ error: "companyId is required." });
+    }
+    if (scope !== "customer" && scope !== "order") {
+      return res.status(400).json({ error: "scope must be customer or order." });
+    }
+
+    const settings = await getCompanySettings(companyId);
+    const activeCategories =
+      scope === "order" ? settings?.order_contact_categories : settings?.customer_contact_categories;
+    const activeKeys = new Set(
+      (Array.isArray(activeCategories) ? activeCategories : [])
+        .map((entry) => String(entry?.key || "").trim())
+        .filter(Boolean)
+    );
+
+    let rows = [];
+    if (scope === "customer") {
+      const result = await pool.query(
+        `
+          WITH usage AS (
+            SELECT 'contacts' AS key, COUNT(*)::int AS customer_profiles
+              FROM customers
+             WHERE company_id = $1
+               AND (
+                 CASE WHEN jsonb_typeof(contacts) = 'array' THEN jsonb_array_length(contacts) ELSE 0 END > 0
+                 OR COALESCE(NULLIF(TRIM(contact_name), ''), NULLIF(TRIM(email), ''), NULLIF(TRIM(phone), '')) IS NOT NULL
+               )
+            UNION ALL
+            SELECT 'accountingContacts' AS key, COUNT(*)::int AS customer_profiles
+              FROM customers
+             WHERE company_id = $1
+               AND CASE WHEN jsonb_typeof(accounting_contacts) = 'array'
+                        THEN jsonb_array_length(accounting_contacts)
+                        ELSE 0
+                   END > 0
+            UNION ALL
+            SELECT entries.key, COUNT(*)::int AS customer_profiles
+              FROM customers c
+              CROSS JOIN LATERAL jsonb_each(c.contact_groups) AS entries(key, value)
+             WHERE c.company_id = $1
+               AND jsonb_typeof(entries.value) = 'array'
+               AND jsonb_array_length(entries.value) > 0
+             GROUP BY entries.key
+          )
+          SELECT key, SUM(customer_profiles)::int AS customer_profiles
+            FROM usage
+           GROUP BY key
+          HAVING SUM(customer_profiles) > 0
+          ORDER BY key ASC
+        `,
+        [companyId]
+      );
+      rows = (result.rows || []).map((row) => ({
+        key: String(row.key || ""),
+        customerProfiles: Number(row.customer_profiles || 0),
+        rentalOrders: 0,
+      }));
+    } else {
+      const result = await pool.query(
+        `
+          SELECT entries.key, COUNT(*)::int AS rental_orders
+            FROM rental_orders ro
+            CROSS JOIN LATERAL jsonb_each(ro.order_contact_settings) AS entries(key, value)
+           WHERE ro.company_id = $1
+             AND jsonb_typeof(entries.value -> 'contacts') = 'array'
+             AND jsonb_array_length(entries.value -> 'contacts') > 0
+           GROUP BY entries.key
+           ORDER BY entries.key ASC
+        `,
+        [companyId]
+      );
+      rows = (result.rows || []).map((row) => ({
+        key: String(row.key || ""),
+        customerProfiles: 0,
+        rentalOrders: Number(row.rental_orders || 0),
+      }));
+    }
+
+    const categories = rows
+      .filter((row) => row.key && !activeKeys.has(row.key))
+      .map((row) => ({
+        key: row.key,
+        label: contactCategoryLabelFromKey(row.key),
+        customerProfiles: row.customerProfiles,
+        rentalOrders: row.rentalOrders,
+      }));
+
+    res.json({ categories });
+  })
+);
+
 app.put(
     "/api/company-settings",
     asyncHandler(async (req, res) => {
@@ -7370,6 +7808,7 @@ app.put(
         assetsTableColumns,
         rentalInfoFields,
         customerContactCategories,
+        orderContactCategories,
         customerDocumentCategories,
         customerTermsTemplate,
         customerEsignRequired,
@@ -7406,6 +7845,7 @@ app.put(
             assetsTableColumns,
             rentalInfoFields,
             customerContactCategories,
+            orderContactCategories,
             customerDocumentCategories,
             customerTermsTemplate,
             customerEsignRequired,
@@ -8609,6 +9049,17 @@ app.put(
       actorEmail: actorEmail || null,
     });
     if (!result.ok) return res.status(409).json(result);
+    if (pickedUp) {
+      try {
+        await movePickedUpLineItemEquipmentToOrderSite({
+          companyId: Number(companyId),
+          orderId: result.orderId,
+          lineItemId: Number(id),
+        });
+      } catch (err) {
+        console.warn("Pickup current-location update failed:", err?.message || err);
+      }
+    }
     let qbo = null;
     if (pickedUp && !skipPickupInvoice) {
       const settings = await getCompanySettings(companyId).catch(() => null);
@@ -9040,19 +9491,23 @@ app.post(
       }
       throw err;
     }
+    const pickedUpLineItems = Array.isArray(lineItems) ? lineItems.filter((li) => li && li.fulfilledAt) : [];
+    if (pickedUpLineItems.length) {
       try {
         await updateEquipmentCurrentLocationFromSiteAddress({
           companyId: Number(companyId),
           orderId: created?.id,
-          lineItems,
+          lineItems: pickedUpLineItems,
           siteAddress,
           siteAddressLat,
           siteAddressLng,
           siteAddressQuery,
+          force: true,
         });
       } catch (err) {
-        console.warn("Site-address current-location update failed:", err?.message || err);
+        console.warn("Pickup current-location update failed:", err?.message || err);
       }
+    }
     let qbo = null;
     const suppressPickupInvoice = parseBoolean(skipPickupInvoice) === true;
     if (suppressPickupInvoice) {
@@ -9204,22 +9659,6 @@ app.put(
 
     (async () => {
       try {
-        await updateEquipmentCurrentLocationFromSiteAddress({
-          companyId: Number(companyId),
-          orderId: Number(id),
-          lineItems,
-          siteAddress,
-          siteAddressLat,
-          siteAddressLng,
-          siteAddressQuery,
-        });
-      } catch (err) {
-        console.warn("Site-address current-location update failed:", err?.message || err);
-      }
-    })();
-
-    (async () => {
-      try {
         const cid = Number(companyId);
         if (updated.statusChanged !== true) return;
         const nextStatus = String(updated.status || "").toLowerCase();
@@ -9275,18 +9714,6 @@ app.put(
       siteAddressQuery,
     });
     if (!updated) return res.status(404).json({ error: "Rental order not found" });
-    try {
-      await updateEquipmentCurrentLocationFromSiteAddress({
-        companyId: Number(companyId),
-        orderId: Number(id),
-        siteAddress,
-        siteAddressLat,
-        siteAddressLng,
-        siteAddressQuery,
-      });
-    } catch (err) {
-      console.warn("Site-address current-location update failed:", err?.message || err);
-    }
     res.json({ order: updated });
   })
 );
@@ -9315,28 +9742,6 @@ app.put(
     });
     if (!updated) return res.status(404).json({ error: "Rental order not found" });
     res.json({ order: updated });
-
-    (async () => {
-      try {
-        const nextStatus = String(updated.status || "").trim().toLowerCase();
-        if (nextStatus !== "ordered") return;
-        const detail = await getRentalOrder({ companyId: Number(companyId), id: Number(id) }).catch(() => null);
-        const order = detail?.order || null;
-        const lineItems = Array.isArray(detail?.lineItems) ? detail.lineItems : [];
-        if (!order) return;
-        await updateEquipmentCurrentLocationFromSiteAddress({
-          companyId: Number(companyId),
-          orderId: Number(id),
-          lineItems,
-          siteAddress: order.site_address || order.siteAddress || null,
-          siteAddressLat: order.site_address_lat ?? order.siteAddressLat ?? null,
-          siteAddressLng: order.site_address_lng ?? order.siteAddressLng ?? null,
-          siteAddressQuery: order.site_address_query ?? order.siteAddressQuery ?? null,
-        });
-      } catch (err) {
-        console.warn("Site-address current-location update failed:", err?.message || err);
-      }
-    })();
 
     (async () => {
       try {

@@ -1,0 +1,23 @@
+{
+  "name": "aiven-support-agent-mvp",
+  "version": "1.0.0",
+  "description": "MVP support agent for Aiven Rental App manual with file search and annotated screenshots.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "multer": "^2.0.2",
+    "openai": "^6.7.0",
+    "sharp": "^0.34.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

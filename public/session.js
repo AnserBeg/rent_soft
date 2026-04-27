@@ -4,6 +4,7 @@
   const CUSTOMER_TOKEN_KEY = "rentSoft.customerAccountToken";
   const CUSTOMER_KEY = "rentSoft.customerAccount";
   const MAP_PROVIDER_KEY = "rentSoft.mapProvider";
+  const AI_AGENT_SCRIPT_ID = "rentsoft-ai-agent-script";
 
   function normalizeCompanyId(value) {
     const n = Number(value);
@@ -142,6 +143,22 @@
     btn.addEventListener("click", () => logout({ redirectTo }));
   }
 
+  function isCompanyShellPage() {
+    return Boolean(document.querySelector(".app-shell") && document.querySelector(".sidebar"));
+  }
+
+  function maybeLoadAiAgent() {
+    if (!isCompanyShellPage()) return;
+    const session = getSession();
+    if (!session?.company?.id) return;
+    if (document.getElementById(AI_AGENT_SCRIPT_ID) || window.RentSoftAiAgent?.mounted) return;
+    const script = document.createElement("script");
+    script.id = AI_AGENT_SCRIPT_ID;
+    script.src = "ai-agent.js";
+    script.defer = true;
+    document.body.appendChild(script);
+  }
+
   let saveBannerTimer = null;
   let errorBannerTimer = null;
   function showSaveBanner(message = "Saved successfully.") {
@@ -242,12 +259,17 @@
     mountLogoutButton,
     showSaveBanner,
     showErrorBanner,
+    maybeLoadAiAgent,
   };
 })();
 
 document.addEventListener("DOMContentLoaded", () => {
   window.RentSoft?.requireAuth?.();
-  window.RentSoft?.refreshSession?.();
+  const refreshPromise = window.RentSoft?.refreshSession?.();
+  window.RentSoft?.maybeLoadAiAgent?.();
+  Promise.resolve(refreshPromise).finally(() => {
+    window.RentSoft?.maybeLoadAiAgent?.();
+  });
 
   function getCurrentPage() {
     const rawPath = window.location.pathname || "";
@@ -416,6 +438,43 @@ document.addEventListener("DOMContentLoaded", () => {
     opsLinks.appendChild(link);
   }
 
+  function ensureAiAnalyticsLink() {
+    const navLinks = sidebar.querySelector(".nav-links");
+    if (!navLinks) return;
+
+    const targetHref = "ai-analytics.html";
+    if (navLinks.querySelector(`a.nav-link[href="${targetHref}"]`)) return;
+
+    const groups = Array.from(navLinks.querySelectorAll(".nav-group"));
+    const overviewGroup = groups.find((group) => {
+      const titleEl = group.querySelector(".nav-group-title, .nav-group-toggle");
+      return String(titleEl?.textContent || "").trim().toLowerCase() === "overview";
+    });
+
+    const link = document.createElement("a");
+    link.className = "nav-link";
+    link.href = targetHref;
+    link.textContent = "AI Analytics";
+
+    if (!overviewGroup) {
+      const group = document.createElement("div");
+      group.className = "nav-group";
+      group.innerHTML = `<div class="nav-group-title">Overview</div>`;
+      group.appendChild(link);
+      navLinks.insertBefore(group, navLinks.firstChild);
+      return;
+    }
+
+    const reportsLink = overviewGroup.querySelector('a.nav-link[href="reports.html"]');
+    if (reportsLink?.parentElement) {
+      reportsLink.insertAdjacentElement("afterend", link);
+      return;
+    }
+
+    const overviewLinks = overviewGroup.querySelector(".nav-group-links") || overviewGroup;
+    overviewLinks.appendChild(link);
+  }
+
   function setActiveLink() {
     const current = getCurrentPage();
     const links = Array.from(sidebar.querySelectorAll("a.nav-link[href]"));
@@ -468,6 +527,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (href.includes("dashboard")) return "layout";
     if (href.includes("work-bench")) return "wrench";
     if (href.includes("dispatch")) return "truck";
+    if (href.includes("ai-analytics")) return "bar-chart";
     if (href.includes("reports")) return "bar-chart";
     if (href.includes("purchase-order") || href.includes("purchase-orders")) return "clipboard";
     if (href.includes("sales-order") || href.includes("sales-orders")) return "clipboard";
@@ -700,6 +760,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   if (role !== "dispatch") ensurePurchaseNavGroup();
+  if (role !== "dispatch") ensureAiAnalyticsLink();
   if (role !== "dispatch") ensureMonthlyChargesLink();
   setActiveLink();
   if (role !== "dispatch") mountNavGroupToggles();

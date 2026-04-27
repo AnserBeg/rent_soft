@@ -366,6 +366,540 @@ async function nextDocumentNumber(client, companyId, prefix, effectiveDate = new
   return formatDocNumber(String(prefix).trim().toUpperCase(), year, seq, options);
 }
 
+function quoteIdent(ident) {
+  return `"${String(ident).replace(/"/g, `""`)}"`;
+}
+
+function escapeSqlString(value) {
+  return String(value).replace(/'/g, "''");
+}
+
+function normalizeComment(value) {
+  const s = String(value || "").replace(/\s+/g, " ").trim();
+  if (!s) return "";
+  return s.endsWith(".") ? s : `${s}.`;
+}
+
+function humanizeName(value) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function guessTableComment(tableName) {
+  const overrides = {
+    companies: "Tenant/company record (top-level organization for multi-tenant data)",
+    users: "Back-office users who log into the admin app for a company",
+    company_user_sessions: "Login sessions for back-office users (hashed tokens, expiry, revocation)",
+    locations: "Company locations (yards/branches/sites) used for inventory and fulfillment",
+    equipment_categories: "Company-specific categories used to group equipment types",
+    equipment_types: "Equipment type catalog (name, description, default rates, images, terms)",
+    equipment: "Individual equipment units/assets that can be assigned to rentals and tracked by location",
+    equipment_out_of_service: "Equipment unavailability blocks (maintenance/repair/hold windows and reason)",
+    equipment_current_location_history: "Audit log of equipment current-location changes over time",
+    equipment_bundles: "Bundles/kits grouping multiple equipment types into a single sell/rentable bundle",
+    equipment_bundle_items: "Bundle composition (which equipment types and quantities are included)",
+    sales_people: "Salespeople / reps associated with a company",
+    customers: "Customer accounts for a company (billing/contact info and related settings)",
+    vendors: "Vendors/suppliers for a company",
+    customer_documents: "Documents attached to a customer record (file metadata + URL)",
+    customer_pricing: "Customer-specific pricing overrides for equipment types",
+    storefront_customers: "Customer-facing portal accounts scoped to a company (login + optional linked internal customer)",
+    storefront_customer_sessions: "Login sessions for storefront customers (hashed tokens, expiry, revocation)",
+    customer_accounts: "Legacy/global customer portal accounts (login + profile, not scoped by company)",
+    customer_account_sessions: "Login sessions for legacy/global customer accounts (hashed tokens, expiry, revocation)",
+    purchase_orders: "Purchase orders for acquiring equipment from vendors",
+    sales_orders: "Sales orders for selling equipment/assets to customers",
+    work_orders: "Work orders for servicing equipment and/or handling rental-related tasks",
+    rental_orders: "Rental orders/quotes (header-level details, fulfillment method, site info, contacts, notes)",
+    rental_order_line_items: "Rental order line items (booked rental period, pricing basis, fulfillment/return timestamps)",
+    rental_order_line_inventory: "Join table assigning specific equipment units to a rental order line item",
+    rental_order_line_conditions: "Per-line-item condition notes/images before/after and AI damage report artifacts",
+    rental_order_fees: "Additional fees applied to a rental order (name/date/amount)",
+    rental_order_notes: "Internal notes attached to a rental order (author + timestamp)",
+    rental_order_dispatch_notes: "Dispatch/driver notes for a rental order (optionally tied to equipment/line item)",
+    rental_order_attachments: "Files attached to a rental order (file metadata + URL)",
+    rental_order_audits: "Audit trail entries for rental order changes/actions (summary + JSON changes)",
+    customer_share_links: "Share links that grant scoped customer access to view/sign/request changes",
+    customer_change_requests: "Customer-submitted change requests (payload, documents, signature, review workflow)",
+    company_settings: "Per-company settings (billing, taxes, email, templates, feature flags, integrations)",
+    qbo_connections: "QuickBooks Online connection info per company (realm, tokens, status)",
+    qbo_documents: "QuickBooks sync metadata for documents/entities created/linked in QBO",
+    qbo_sync_state: "Per-company incremental sync checkpoints (CDC timestamps) per entity type",
+    qbo_error_logs: "QuickBooks API error logs (endpoint/method/status/payload/context)",
+    doc_sequences: "Per-company document number sequences by prefix/year",
+  };
+  return overrides[tableName] || `Application table for ${humanizeName(tableName)}`;
+}
+
+function guessColumnComment({ tableName, columnName, dataType, fkTarget }) {
+  const perTable = {
+    rental_order_line_items: {
+      start_at: "Booked/scheduled rental start datetime for this line item (planned pickup/delivery)",
+      end_at: "Booked/scheduled rental end datetime for this line item (planned return/off-rent)",
+      fulfilled_at: "Actual fulfillment datetime when the line item was picked up/delivered",
+      returned_at: "Actual return/check-in datetime when the line item was returned",
+      rate_basis: "Rate basis used for pricing this line item (e.g., daily/weekly/monthly/custom)",
+      rate_amount: "Rate amount for the selected rate basis (before multiplying by billable_units)",
+      billable_units: "Computed billable units used to calculate charges for this line item",
+      line_amount: "Extended amount for this line item (rate_amount × billable_units, before taxes/fees)",
+    },
+    rental_orders: {
+      quote_number: "Quote document number for this rental order (if in quote stage)",
+      ro_number: "Rental order document number (once converted from a quote)",
+      external_contract_number: "External/third-party contract number (if synced or provided by customer)",
+      legacy_data: "Imported legacy fields preserved as JSON for reference/migrations",
+      fulfillment_method: "How the order is fulfilled (e.g., pickup vs delivery)",
+      status: "Lifecycle status for the order/quote (values defined by the application)",
+      pickup_location_id: "Location where the customer is scheduled to pick up equipment (for pickup fulfillment)",
+      dropoff_address: "Delivery/drop-off address (for delivery fulfillment or special logistics)",
+      site_name: "Job/site name for where the equipment will be used",
+      site_address: "Human-entered job/site address",
+      site_access_info: "Site access information (gate codes, parking, instructions)",
+      site_address_lat: "Geocoded latitude for site_address (if available)",
+      site_address_lng: "Geocoded longitude for site_address (if available)",
+      site_address_query: "Geocoding query string used to derive site_address_lat/lng",
+      logistics_instructions: "Logistics notes for delivery/pickup coordination",
+      special_instructions: "Special handling instructions for this order",
+      critical_areas: "Critical areas/notes to pay attention to on site",
+      directions: "Directions/route notes for reaching the site",
+      monitoring_personnel: "On-site monitoring personnel/contact notes (if required)",
+      notification_circumstances: "JSON array describing circumstances that require notifications",
+      coverage_hours: "JSON object describing coverage hours windows/schedule",
+      coverage_timezone: "IANA time zone name used to interpret coverage_hours for this order",
+      coverage_stat_holidays_required: "Whether coverage is required on statutory holidays",
+      emergency_contact_instructions: "Instructions for emergency contact procedures",
+      emergency_contacts: "JSON array of emergency contact objects for this order",
+      site_contacts: "JSON array of site contact objects for this order",
+      order_contact_settings: "JSON object controlling which contacts are displayed/required and related settings",
+      monthly_recurring_subtotal: "Monthly recurring subtotal for this order (if recurring billing applies)",
+      monthly_recurring_total: "Monthly recurring total for this order (after taxes/fees, if applicable)",
+      show_monthly_recurring: "Whether to display monthly recurring amounts on documents/UI",
+      terms: "Order/quote terms text applied to this rental order",
+      general_notes: "General order notes (free-form)",
+    },
+    rental_order_line_inventory: {
+      line_item_id: "Rental order line item this equipment unit is assigned to",
+      equipment_id: "Specific equipment unit assigned to the line item",
+    },
+    rental_order_line_conditions: {
+      before_notes: "Condition notes recorded before fulfillment (pre-rental)",
+      after_notes: "Condition notes recorded after return (post-rental)",
+      unit_description: "Description of the specific unit as presented on the condition report",
+      before_images: "JSON array of image URLs captured before fulfillment (pre-rental condition)",
+      after_images: "JSON array of image URLs captured after return (post-rental condition)",
+      pause_periods: "JSON array of paused/off-rent periods for this line item (used to adjust billing)",
+      ai_report_markdown: "AI-generated damage/condition report in markdown format",
+      ai_report_generated_at: "Timestamp when the AI report was generated",
+    },
+    rental_order_dispatch_notes: {
+      images: "JSON array of image URLs attached to the dispatch note",
+    },
+    rental_order_audits: {
+      changes: "JSON object describing field-level changes related to the action",
+    },
+    customer_share_links: {
+      scope: "Share-link scope (what the recipient is allowed to view/act on)",
+      token_hash: "Hash of the share token (raw token is not stored)",
+      allowed_fields: "JSON array of allowed rental_order fields for this link",
+      allowed_line_item_fields: "JSON array of allowed rental_order_line_items fields for this link",
+      allowed_document_categories: "JSON array of allowed attachment/document categories for this link",
+      terms_text: "Terms text presented to the recipient when using this link",
+      require_esignature: "Whether an e-signature is required for submissions via this link",
+      single_use: "Whether the link can only be used once",
+      used_at: "Timestamp when the link was first used (if tracked)",
+      last_used_ip: "Last recorded IP address for link usage",
+      last_used_user_agent: "Last recorded user agent string for link usage",
+    },
+    customer_change_requests: {
+      status: "Workflow status for the change request (e.g., pending/approved/rejected; values defined by the app)",
+      payload: "JSON payload describing requested changes",
+      documents: "JSON array of documents submitted with the request",
+      signature: "JSON object representing captured e-signature metadata",
+      proof_pdf_path: "Server-side path to the generated proof PDF (if stored on disk)",
+      submitted_at: "Timestamp when the request was submitted",
+      reviewed_at: "Timestamp when the request was reviewed",
+      review_notes: "Internal review notes",
+      customer_review_status: "Customer-info review status (values defined by the app)",
+      order_review_status: "Order-info review status (values defined by the app)",
+      source_ip: "IP address recorded when the request was submitted",
+      user_agent: "User agent recorded when the request was submitted",
+    },
+    company_settings: {
+      billing_timezone: "IANA time zone name used for billing/date calculations",
+      default_tax_rate: "Default tax rate as a decimal fraction (e.g., 0.05 for 5%)",
+      tax_registration_number: "Company tax registration/VAT number (if applicable)",
+      tax_inclusive_pricing: "Whether prices are stored/displayed as tax-inclusive",
+      rental_info_fields: "JSON object controlling enabled/required rental info fields for storefront/UI",
+      customer_contact_categories: "JSON array describing available contact categories for customers",
+      order_contact_categories: "JSON array describing available contact categories for rental orders",
+      customer_document_categories: "JSON array describing available document categories for customers",
+      customer_terms_template: "Template text for customer terms shown on documents/links",
+      customer_esign_required: "Whether customer e-signature is required by default",
+      email_smtp_pass: "SMTP password/credential for outbound email (store securely)",
+      required_storefront_customer_fields: "JSON array describing required fields for storefront customer signup",
+    },
+  };
+
+  const override = perTable?.[tableName]?.[columnName];
+  if (override) return override;
+
+  if (columnName === "id") return "Primary key";
+  if (columnName === "company_id") return "Tenant company that owns this record";
+  if (columnName === "created_at") return "Timestamp when this record was created";
+  if (columnName === "updated_at") return "Timestamp when this record was last updated";
+  if (columnName === "closed_at") return "Timestamp when this record was closed/finalized";
+  if (columnName === "last_used_at") return "Timestamp when this session/token was last used";
+  if (columnName === "expires_at") return "Timestamp when this session/token expires";
+  if (columnName === "revoked_at") return "Timestamp when this session/token was revoked (if revoked)";
+  if (columnName === "password_hash") return "Password hash (never store plaintext passwords)";
+  if (columnName === "token_hash") return "Hash of a bearer/session token (raw token is not stored)";
+
+  if (fkTarget) return `Foreign key to ${fkTarget.table}.${fkTarget.column}`;
+
+  if (dataType === "jsonb") {
+    if (/_images$/.test(columnName)) return "JSON array of image URLs";
+    if (/^image_urls$/.test(columnName)) return "JSON array of image URLs";
+    if (/^documents$/.test(columnName)) return "JSON document map/payload (schema defined by the application)";
+    if (/contacts$/.test(columnName)) return "JSON array of contact objects (schema defined by the application)";
+    return "JSON payload (schema defined by the application)";
+  }
+
+  if (/(^is_)|(_enabled$)|(^can_)/.test(columnName)) return `Boolean flag: ${humanizeName(columnName)}`;
+  if (columnName === "status") return "Lifecycle status string (values defined by the application)";
+  if (columnName === "role") return "Role string (values defined by the application)";
+
+  if (/_email$/.test(columnName) || columnName === "email") return "Email address";
+  if (/_phone$/.test(columnName) || columnName === "phone") return "Phone number";
+
+  if (/_url$/.test(columnName) || columnName === "url") return "URL (typically to a stored file or external resource)";
+  if (columnName === "file_name") return "Original file name";
+  if (columnName === "mime") return "MIME type for the stored file";
+  if (columnName === "size_bytes") return "File size in bytes";
+
+  if (/_lat$/.test(columnName)) return "Latitude (decimal degrees)";
+  if (/_lng$/.test(columnName) || /_lon$/.test(columnName) || /_longitude$/.test(columnName))
+    return "Longitude (decimal degrees)";
+
+  if (/_date$/.test(columnName)) return `Calendar date: ${humanizeName(columnName)}`;
+  if (/_at$/.test(columnName)) return `Timestamp: ${humanizeName(columnName)}`;
+
+  if (/(^notes$)|(_notes$)/.test(columnName)) return "Free-form notes";
+  if (/_instructions$/.test(columnName)) return "Free-form instructions text";
+
+  if (/(^amount$)|(_amount$)|(^total$)|(_total$)|(^subtotal$)|(_subtotal$)|(_price$)|(_rate$)/.test(columnName))
+    return "Monetary amount (currency units as configured by the business)";
+
+  if (/^name$/.test(columnName)) return "Display name";
+  if (/^description$/.test(columnName)) return "Description text";
+
+  return `Field: ${humanizeName(columnName)}`;
+}
+
+async function ensureDbComments(client) {
+  const fkRows = await client.query(
+    `
+      SELECT
+        tc.table_name,
+        kcu.column_name,
+        ccu.table_name AS foreign_table_name,
+        ccu.column_name AS foreign_column_name
+      FROM information_schema.table_constraints tc
+      JOIN information_schema.key_column_usage kcu
+        ON tc.constraint_name = kcu.constraint_name
+       AND tc.table_schema = kcu.table_schema
+      JOIN information_schema.constraint_column_usage ccu
+        ON ccu.constraint_name = tc.constraint_name
+       AND ccu.table_schema = tc.table_schema
+      WHERE tc.table_schema = 'public'
+        AND tc.constraint_type = 'FOREIGN KEY'
+    `
+  );
+  const fkMap = new Map();
+  for (const row of fkRows.rows || []) {
+    fkMap.set(`${row.table_name}.${row.column_name}`, {
+      table: row.foreign_table_name,
+      column: row.foreign_column_name,
+    });
+  }
+
+  const tablesRes = await client.query(
+    `
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_type = 'BASE TABLE'
+      ORDER BY table_name ASC
+    `
+  );
+
+  const colsRes = await client.query(
+    `
+      SELECT table_name, column_name, data_type
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+      ORDER BY table_name ASC, ordinal_position ASC
+    `
+  );
+
+  const statements = [];
+
+  for (const t of tablesRes.rows || []) {
+    const tableName = String(t.table_name);
+    const tableComment = normalizeComment(guessTableComment(tableName));
+    if (tableComment) {
+      statements.push(
+        `COMMENT ON TABLE public.${quoteIdent(tableName)} IS '${escapeSqlString(tableComment)}';`
+      );
+    }
+  }
+
+  for (const c of colsRes.rows || []) {
+    const tableName = String(c.table_name);
+    const columnName = String(c.column_name);
+    const dataType = String(c.data_type);
+    const fkTarget = fkMap.get(`${tableName}.${columnName}`) || null;
+
+    const colComment = normalizeComment(
+      guessColumnComment({ tableName, columnName, dataType, fkTarget })
+    );
+    if (!colComment) continue;
+
+    statements.push(
+      `COMMENT ON COLUMN public.${quoteIdent(tableName)}.${quoteIdent(columnName)} IS '${escapeSqlString(colComment)}';`
+    );
+  }
+
+  if (statements.length) {
+    await client.query(statements.join("\n"));
+  }
+}
+
+async function ensureAiAnalyticsLayer(client) {
+  const scopedTables = [
+    "locations",
+    "equipment_categories",
+    "equipment_types",
+    "sales_people",
+    "customers",
+    "vendors",
+    "equipment",
+    "equipment_out_of_service",
+    "work_orders",
+    "equipment_current_location_history",
+    "equipment_bundles",
+    "purchase_orders",
+    "sales_orders",
+    "rental_orders",
+    "rental_order_dispatch_notes",
+    "rental_order_audits",
+    "customer_pricing",
+    "qbo_documents",
+    "qbo_error_logs",
+  ];
+  const scopedCompanyExpr = `NULLIF(current_setting('rentsoft.current_company_id', true), '')::integer`;
+
+  await client.query(`CREATE SCHEMA IF NOT EXISTS ai_analytics;`);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ai_analytics_queries (
+      id BIGSERIAL PRIMARY KEY,
+      company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      question TEXT NOT NULL,
+      generated_sql TEXT,
+      row_count INTEGER,
+      status TEXT NOT NULL,
+      error TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await client.query(
+    `CREATE INDEX IF NOT EXISTS ai_analytics_queries_company_created_idx ON ai_analytics_queries (company_id, created_at DESC);`
+  );
+
+  await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.companies AS
+    SELECT id, name, contact_email, website, phone, street_address, city, region, country, postal_code, created_at, updated_at
+    FROM public.companies
+    WHERE id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.users AS
+    SELECT id, company_id, name, email, role, can_act_as_customer, created_at
+    FROM public.users
+    WHERE company_id = ${scopedCompanyExpr};
+  `);
+
+  for (const tableName of scopedTables) {
+    await client.query(`
+      CREATE OR REPLACE VIEW ai_analytics.${quoteIdent(tableName)} AS
+      SELECT *
+      FROM public.${quoteIdent(tableName)}
+      WHERE company_id = ${scopedCompanyExpr};
+    `);
+  }
+
+  await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.rental_order_line_items AS
+    SELECT
+      li.*,
+      GREATEST(EXTRACT(EPOCH FROM (li.end_at - li.start_at)) / 86400.0, 0.0)::numeric AS booked_duration_days,
+      CASE
+        WHEN li.fulfilled_at IS NOT NULL AND li.returned_at IS NOT NULL
+          THEN GREATEST(EXTRACT(EPOCH FROM (li.returned_at - li.fulfilled_at)) / 86400.0, 0.0)::numeric
+        ELSE NULL
+      END AS actual_completed_duration_days,
+      CASE
+        WHEN li.fulfilled_at IS NOT NULL
+          THEN GREATEST(EXTRACT(EPOCH FROM (COALESCE(li.returned_at, NOW()) - li.fulfilled_at)) / 86400.0, 0.0)::numeric
+        ELSE NULL
+      END AS actual_live_duration_days,
+      CASE
+        WHEN LOWER(COALESCE(li.rate_basis, '')) IN ('day', 'daily', 'per_day') THEN li.billable_units
+        ELSE NULL
+      END AS billable_duration_days,
+      (li.fulfilled_at IS NOT NULL) AS has_actual_start,
+      (li.returned_at IS NOT NULL) AS has_actual_return,
+      ARRAY_REMOVE(ARRAY[
+        'booked_days',
+        CASE WHEN li.fulfilled_at IS NOT NULL AND li.returned_at IS NOT NULL THEN 'actual_completed_days' END,
+        CASE WHEN li.fulfilled_at IS NOT NULL THEN 'actual_live_days' END,
+        CASE
+          WHEN LOWER(COALESCE(li.rate_basis, '')) IN ('day', 'daily', 'per_day') AND li.billable_units IS NOT NULL
+            THEN 'billable_days'
+        END
+      ], NULL)::text[] AS duration_basis_available,
+      assigned_equipment.equipment_id,
+      assigned_equipment.equipment_ids,
+      assigned_equipment.assigned_equipment_count
+    FROM public.rental_order_line_items li
+    JOIN public.rental_orders ro ON ro.id = li.rental_order_id
+    LEFT JOIN LATERAL (
+      SELECT
+        MIN(liv.equipment_id) AS equipment_id,
+        ARRAY_AGG(DISTINCT liv.equipment_id ORDER BY liv.equipment_id) AS equipment_ids,
+        COUNT(DISTINCT liv.equipment_id)::integer AS assigned_equipment_count
+      FROM public.rental_order_line_inventory liv
+      WHERE liv.line_item_id = li.id
+    ) assigned_equipment ON TRUE
+    WHERE ro.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.rental_order_line_inventory AS
+    SELECT liv.*
+    FROM public.rental_order_line_inventory liv
+    JOIN public.rental_order_line_items li ON li.id = liv.line_item_id
+    JOIN public.rental_orders ro ON ro.id = li.rental_order_id
+    WHERE ro.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.rental_order_line_item_assets AS
+    SELECT
+      li.id AS line_item_id,
+      liv.equipment_id,
+      li.rental_order_id,
+      li.type_id,
+      li.bundle_id,
+      li.start_at,
+      li.end_at,
+      li.fulfilled_at,
+      li.returned_at,
+      li.rate_basis,
+      li.rate_amount,
+      li.billable_units,
+      li.line_amount,
+      GREATEST(EXTRACT(EPOCH FROM (li.end_at - li.start_at)) / 86400.0, 0.0)::numeric AS booked_duration_days,
+      CASE
+        WHEN li.fulfilled_at IS NOT NULL AND li.returned_at IS NOT NULL
+          THEN GREATEST(EXTRACT(EPOCH FROM (li.returned_at - li.fulfilled_at)) / 86400.0, 0.0)::numeric
+        ELSE NULL
+      END AS actual_completed_duration_days,
+      CASE
+        WHEN li.fulfilled_at IS NOT NULL
+          THEN GREATEST(EXTRACT(EPOCH FROM (COALESCE(li.returned_at, NOW()) - li.fulfilled_at)) / 86400.0, 0.0)::numeric
+        ELSE NULL
+      END AS actual_live_duration_days,
+      CASE
+        WHEN LOWER(COALESCE(li.rate_basis, '')) IN ('day', 'daily', 'per_day') THEN li.billable_units
+        ELSE NULL
+      END AS billable_duration_days,
+      (li.fulfilled_at IS NOT NULL) AS has_actual_start,
+      (li.returned_at IS NOT NULL) AS has_actual_return,
+      e.serial_number,
+      e.model_name,
+      e.type AS equipment_type,
+      et.name AS equipment_type_name,
+      ro.status AS rental_order_status,
+      ro.quote_number,
+      ro.ro_number,
+      ro.customer_id
+    FROM public.rental_order_line_inventory liv
+    JOIN public.rental_order_line_items li ON li.id = liv.line_item_id
+    JOIN public.rental_orders ro ON ro.id = li.rental_order_id
+    JOIN public.equipment e ON e.id = liv.equipment_id
+    LEFT JOIN public.equipment_types et ON et.id = li.type_id
+    WHERE ro.company_id = ${scopedCompanyExpr}
+      AND e.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.rental_order_line_conditions AS
+    SELECT lic.*
+    FROM public.rental_order_line_conditions lic
+    JOIN public.rental_order_line_items li ON li.id = lic.line_item_id
+    JOIN public.rental_orders ro ON ro.id = li.rental_order_id
+    WHERE ro.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.rental_order_fees AS
+    SELECT f.*
+    FROM public.rental_order_fees f
+    JOIN public.rental_orders ro ON ro.id = f.rental_order_id
+    WHERE ro.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.rental_order_notes AS
+    SELECT n.*
+    FROM public.rental_order_notes n
+    JOIN public.rental_orders ro ON ro.id = n.rental_order_id
+    WHERE ro.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.rental_order_attachments AS
+    SELECT a.*
+    FROM public.rental_order_attachments a
+    JOIN public.rental_orders ro ON ro.id = a.rental_order_id
+    WHERE ro.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.customer_documents AS
+    SELECT d.*
+    FROM public.customer_documents d
+    JOIN public.customers c ON c.id = d.customer_id
+    WHERE c.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.equipment_bundle_items AS
+    SELECT bi.*
+    FROM public.equipment_bundle_items bi
+    JOIN public.equipment_bundles b ON b.id = bi.bundle_id
+    WHERE b.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`
+    COMMENT ON SCHEMA ai_analytics IS 'Tenant-scoped read-only analytics views for the AI Analytics feature.';
+  `);
+}
+
 async function ensureTables() {
   const client = await pool.connect();
   try {
@@ -425,6 +959,28 @@ async function ensureTables() {
     );
     await client.query(`CREATE INDEX IF NOT EXISTS company_user_sessions_user_id_idx ON company_user_sessions (user_id);`);
     await client.query(`CREATE INDEX IF NOT EXISTS company_user_sessions_company_id_idx ON company_user_sessions (company_id);`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS support_manuals (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        original_filename TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'processing',
+        is_active BOOLEAN NOT NULL DEFAULT FALSE,
+        vector_store_id TEXT,
+        screenshot_count INTEGER NOT NULL DEFAULT 0,
+        manifest_json JSONB,
+        error_message TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        activated_at TIMESTAMPTZ
+      );
+    `);
+    await client.query(`ALTER TABLE support_manuals ADD COLUMN IF NOT EXISTS vector_store_id TEXT;`);
+    await client.query(`ALTER TABLE support_manuals ADD COLUMN IF NOT EXISTS screenshot_count INTEGER NOT NULL DEFAULT 0;`);
+    await client.query(`ALTER TABLE support_manuals ADD COLUMN IF NOT EXISTS manifest_json JSONB;`);
+    await client.query(`ALTER TABLE support_manuals ADD COLUMN IF NOT EXISTS error_message TEXT;`);
+    await client.query(`ALTER TABLE support_manuals ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ;`);
+    await client.query(`CREATE INDEX IF NOT EXISTS support_manuals_status_idx ON support_manuals (status);`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS support_manuals_single_active_idx ON support_manuals ((is_active)) WHERE is_active = TRUE;`);
 
     // Deduplicate before adding a unique index on (company_id, lower(email)).
     await client.query(`
@@ -1363,6 +1919,7 @@ async function ensureTables() {
           assets_table_columns JSONB,
         order_contacts_enabled BOOLEAN NOT NULL DEFAULT TRUE,
         customer_contact_categories JSONB NOT NULL DEFAULT '[{"key":"contacts","label":"Contacts"},{"key":"accountingContacts","label":"Accounting contacts"}]'::jsonb,
+        order_contact_categories JSONB NOT NULL DEFAULT '[{"key":"contacts","label":"Contacts"},{"key":"accountingContacts","label":"Accounting contacts"}]'::jsonb,
         customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
         customer_terms_template TEXT,
         customer_esign_required BOOLEAN NOT NULL DEFAULT TRUE,
@@ -1415,6 +1972,16 @@ async function ensureTables() {
     await client.query(
       `ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_contact_categories JSONB NOT NULL DEFAULT '[{"key":"contacts","label":"Contacts"},{"key":"accountingContacts","label":"Accounting contacts"}]'::jsonb;`
     );
+    await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS order_contact_categories JSONB;`);
+    await client.query(`
+      UPDATE company_settings
+         SET order_contact_categories = customer_contact_categories
+       WHERE order_contact_categories IS NULL;
+    `);
+    await client.query(
+      `ALTER TABLE company_settings ALTER COLUMN order_contact_categories SET DEFAULT '[{"key":"contacts","label":"Contacts"},{"key":"accountingContacts","label":"Accounting contacts"}]'::jsonb;`
+    );
+    await client.query(`ALTER TABLE company_settings ALTER COLUMN order_contact_categories SET NOT NULL;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_document_categories JSONB NOT NULL DEFAULT '[]'::jsonb;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_terms_template TEXT;`);
     await client.query(`ALTER TABLE company_settings ADD COLUMN IF NOT EXISTS customer_esign_required BOOLEAN NOT NULL DEFAULT TRUE;`);
@@ -1555,6 +2122,27 @@ async function ensureTables() {
     await client.query(
       `CREATE UNIQUE INDEX IF NOT EXISTS rental_orders_external_contract_uniq ON rental_orders (company_id, external_contract_number) WHERE external_contract_number IS NOT NULL;`
     );
+
+    await client.query("SAVEPOINT ensure_db_comments");
+    try {
+      await ensureDbComments(client);
+      await client.query("RELEASE SAVEPOINT ensure_db_comments");
+    } catch (err) {
+      await client.query("ROLLBACK TO SAVEPOINT ensure_db_comments");
+      await client.query("RELEASE SAVEPOINT ensure_db_comments");
+      console.warn("DB comments were not applied:", err?.message || err);
+    }
+
+    await client.query("SAVEPOINT ensure_ai_analytics_layer");
+    try {
+      await ensureAiAnalyticsLayer(client);
+      await client.query("RELEASE SAVEPOINT ensure_ai_analytics_layer");
+    } catch (err) {
+      await client.query("ROLLBACK TO SAVEPOINT ensure_ai_analytics_layer");
+      await client.query("RELEASE SAVEPOINT ensure_ai_analytics_layer");
+      console.warn("AI analytics layer was not applied:", err?.message || err);
+    }
+
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK");
@@ -2337,6 +2925,142 @@ async function createOwnerForCompanyForDev({ companyId, ownerName = "Developer O
     [cid, ownerName, email, hashPassword(password)]
   );
   return result.rows[0] || null;
+}
+
+function mapSupportManualRow(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    name: row.name,
+    originalFilename: row.original_filename,
+    status: row.status,
+    isActive: Boolean(row.is_active),
+    vectorStoreId: row.vector_store_id || null,
+    screenshotCount: Number(row.screenshot_count || 0),
+    manifest: row.manifest_json || null,
+    errorMessage: row.error_message || null,
+    createdAt: row.created_at || null,
+    activatedAt: row.activated_at || null,
+  };
+}
+
+async function createSupportManual({ name, originalFilename, status = "processing" } = {}) {
+  const cleanName = String(name || "").trim();
+  const cleanFilename = String(originalFilename || "").trim();
+  if (!cleanName) throw new Error("name is required.");
+  if (!cleanFilename) throw new Error("originalFilename is required.");
+  const result = await pool.query(
+    `INSERT INTO support_manuals (name, original_filename, status)
+     VALUES ($1, $2, $3)
+     RETURNING *`,
+    [cleanName, cleanFilename, String(status || "processing").trim() || "processing"]
+  );
+  return mapSupportManualRow(result.rows[0] || null);
+}
+
+async function getSupportManualById(id) {
+  const manualId = Number(id);
+  if (!Number.isFinite(manualId) || manualId <= 0) return null;
+  const result = await pool.query(`SELECT * FROM support_manuals WHERE id = $1 LIMIT 1`, [manualId]);
+  return mapSupportManualRow(result.rows[0] || null);
+}
+
+async function getActiveSupportManual() {
+  const result = await pool.query(
+    `SELECT *
+       FROM support_manuals
+      WHERE is_active = TRUE
+      ORDER BY activated_at DESC NULLS LAST, created_at DESC
+      LIMIT 1`
+  );
+  return mapSupportManualRow(result.rows[0] || null);
+}
+
+async function listSupportManuals() {
+  const result = await pool.query(
+    `SELECT *
+       FROM support_manuals
+      ORDER BY is_active DESC, created_at DESC, id DESC`
+  );
+  return result.rows.map((row) => mapSupportManualRow(row));
+}
+
+async function updateSupportManual(id, updates = {}) {
+  const manualId = Number(id);
+  if (!Number.isFinite(manualId) || manualId <= 0) throw new Error("id is required.");
+  const fields = [];
+  const values = [];
+
+  const assign = (column, value) => {
+    values.push(value);
+    fields.push(`${column} = $${values.length}`);
+  };
+
+  if (Object.prototype.hasOwnProperty.call(updates, "name")) {
+    assign("name", String(updates.name || "").trim() || "Support Manual");
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "originalFilename")) {
+    assign("original_filename", String(updates.originalFilename || "").trim());
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "status")) {
+    assign("status", String(updates.status || "").trim() || "processing");
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "isActive")) {
+    assign("is_active", Boolean(updates.isActive));
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "vectorStoreId")) {
+    assign("vector_store_id", updates.vectorStoreId ? String(updates.vectorStoreId) : null);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "screenshotCount")) {
+    const count = Number(updates.screenshotCount);
+    assign("screenshot_count", Number.isFinite(count) && count >= 0 ? Math.floor(count) : 0);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "manifest")) {
+    assign("manifest_json", updates.manifest ? JSON.stringify(updates.manifest) : null);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "errorMessage")) {
+    assign("error_message", updates.errorMessage ? String(updates.errorMessage) : null);
+  }
+  if (Object.prototype.hasOwnProperty.call(updates, "activatedAt")) {
+    assign("activated_at", updates.activatedAt || null);
+  }
+
+  if (!fields.length) return getSupportManualById(manualId);
+
+  values.push(manualId);
+  const result = await pool.query(
+    `UPDATE support_manuals
+        SET ${fields.join(", ")}
+      WHERE id = $${values.length}
+      RETURNING *`,
+    values
+  );
+  return mapSupportManualRow(result.rows[0] || null);
+}
+
+async function activateSupportManual(id) {
+  const manualId = Number(id);
+  if (!Number.isFinite(manualId) || manualId <= 0) throw new Error("id is required.");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`UPDATE support_manuals SET is_active = FALSE WHERE is_active = TRUE`);
+    const result = await client.query(
+      `UPDATE support_manuals
+          SET is_active = TRUE,
+              activated_at = NOW()
+        WHERE id = $1
+        RETURNING *`,
+      [manualId]
+    );
+    await client.query("COMMIT");
+    return mapSupportManualRow(result.rows[0] || null);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function listLocations(companyId, { scope, from = null, to = null, dateField = "created_at" } = {}) {
@@ -7893,6 +8617,7 @@ async function getCompanySettings(companyId) {
             rental_info_fields,
             order_contacts_enabled,
             customer_contact_categories,
+            order_contact_categories,
             customer_document_categories,
             customer_terms_template,
             customer_esign_required,
@@ -7933,6 +8658,9 @@ async function getCompanySettings(companyId) {
           rental_info_fields: normalizeRentalInfoFields(res.rows[0].rental_info_fields),
           order_contacts_enabled: res.rows[0].order_contacts_enabled !== false,
           customer_contact_categories: normalizeCustomerContactCategories(res.rows[0].customer_contact_categories),
+          order_contact_categories: normalizeCustomerContactCategories(
+            res.rows[0].order_contact_categories || res.rows[0].customer_contact_categories
+          ),
           customer_document_categories: normalizeCustomerDocumentCategories(res.rows[0].customer_document_categories),
           customer_terms_template: res.rows[0].customer_terms_template || null,
           customer_esign_required: res.rows[0].customer_esign_required === true,
@@ -7972,7 +8700,8 @@ async function getCompanySettings(companyId) {
         required_storefront_customer_fields: [],
         assets_table_columns: null,
         rental_info_fields: normalizeRentalInfoFields(null),
-        customer_contact_categories: normalizeCustomerContactCategories(null),
+        customer_contact_categories: DEFAULT_CUSTOMER_CONTACT_CATEGORIES.map((entry) => ({ ...entry })),
+        order_contact_categories: DEFAULT_CUSTOMER_CONTACT_CATEGORIES.map((entry) => ({ ...entry })),
         customer_document_categories: [],
         customer_terms_template: null,
         customer_esign_required: true,
@@ -8153,6 +8882,7 @@ async function upsertCompanyEmailSettings({
     rentalInfoFields = undefined,
     orderContactsEnabled = undefined,
     customerContactCategories = undefined,
+    orderContactCategories = undefined,
     customerDocumentCategories = undefined,
     customerTermsTemplate = undefined,
     customerEsignRequired = undefined,
@@ -8239,6 +8969,11 @@ async function upsertCompanyEmailSettings({
     const nextCustomerContactCategories = normalizeCustomerContactCategories(
       customerContactCategories === undefined ? current.customer_contact_categories : customerContactCategories
     );
+    const nextOrderContactCategories = normalizeCustomerContactCategories(
+      orderContactCategories === undefined
+        ? current.order_contact_categories || current.customer_contact_categories
+        : orderContactCategories
+    );
     const nextCustomerTermsTemplate =
       customerTermsTemplate === undefined
         ? current.customer_terms_template || null
@@ -8321,8 +9056,8 @@ async function upsertCompanyEmailSettings({
   const res = await pool.query(
     `
         INSERT INTO company_settings
-          (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, asset_directions_enabled, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, hide_qbo_sections_when_disconnected, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, assets_table_columns, rental_info_fields, order_contacts_enabled, customer_contact_categories, customer_document_categories, customer_terms_template, customer_esign_required, customer_service_agreement_url, customer_service_agreement_file_name, customer_service_agreement_mime, customer_service_agreement_size_bytes, dashboard_incidents_count, dashboard_incident_metrics)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb, $21::jsonb, $22::jsonb, $23, $24::jsonb, $25::jsonb, $26, $27, $28, $29, $30, $31, $32, $33::jsonb)
+          (company_id, billing_rounding_mode, billing_rounding_granularity, monthly_proration_method, billing_timezone, logo_url, asset_directions_enabled, qbo_enabled, qbo_billing_day, qbo_adjustment_policy, qbo_income_account_ids, qbo_default_tax_code, hide_qbo_sections_when_disconnected, tax_enabled, default_tax_rate, tax_registration_number, tax_inclusive_pricing, auto_apply_customer_credit, auto_work_order_on_return, required_storefront_customer_fields, assets_table_columns, rental_info_fields, order_contacts_enabled, customer_contact_categories, order_contact_categories, customer_document_categories, customer_terms_template, customer_esign_required, customer_service_agreement_url, customer_service_agreement_file_name, customer_service_agreement_mime, customer_service_agreement_size_bytes, dashboard_incidents_count, dashboard_incident_metrics)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb, $21::jsonb, $22::jsonb, $23, $24::jsonb, $25::jsonb, $26::jsonb, $27, $28, $29, $30, $31, $32, $33, $34::jsonb)
       ON CONFLICT (company_id)
       DO UPDATE SET billing_rounding_mode = EXCLUDED.billing_rounding_mode,
                     billing_rounding_granularity = EXCLUDED.billing_rounding_granularity,
@@ -8347,6 +9082,7 @@ async function upsertCompanyEmailSettings({
                     rental_info_fields = EXCLUDED.rental_info_fields,
                     order_contacts_enabled = EXCLUDED.order_contacts_enabled,
                     customer_contact_categories = EXCLUDED.customer_contact_categories,
+                    order_contact_categories = EXCLUDED.order_contact_categories,
                     customer_document_categories = EXCLUDED.customer_document_categories,
                     customer_terms_template = EXCLUDED.customer_terms_template,
                     customer_esign_required = EXCLUDED.customer_esign_required,
@@ -8381,6 +9117,7 @@ async function upsertCompanyEmailSettings({
                 rental_info_fields,
                 order_contacts_enabled,
                 customer_contact_categories,
+                order_contact_categories,
                 customer_document_categories,
                 customer_terms_template,
                 customer_esign_required,
@@ -8416,6 +9153,7 @@ async function upsertCompanyEmailSettings({
         JSON.stringify(nextRentalInfoFields),
         nextOrderContactsEnabled,
         JSON.stringify(nextCustomerContactCategories),
+        JSON.stringify(nextOrderContactCategories),
         JSON.stringify(nextCustomerDocumentCategories),
         nextCustomerTermsTemplate,
         nextCustomerEsignRequired,
@@ -8653,18 +9391,7 @@ function normalizeStorefrontCustomerRequirements(value) {
       pushEntry(key, label);
     });
 
-    const byKey = new Map(normalized.map((entry) => [entry.key, entry]));
-    const baseContacts = byKey.get("contacts")?.label || DEFAULT_CUSTOMER_CONTACT_CATEGORIES[0].label;
-    const baseAccounting =
-      byKey.get("accountingContacts")?.label || DEFAULT_CUSTOMER_CONTACT_CATEGORIES[1].label;
-    const extras = normalized.filter(
-      (entry) => entry.key !== "contacts" && entry.key !== "accountingContacts"
-    );
-    return [
-      { key: "contacts", label: baseContacts },
-      { key: "accountingContacts", label: baseAccounting },
-      ...extras,
-    ];
+    return normalized;
   }
 
 const DEFAULT_RENTAL_INFO_FIELDS = {
@@ -18435,6 +19162,12 @@ module.exports = {
   deleteCompaniesForDev,
   getCompanyOwnerUserId,
   createOwnerForCompanyForDev,
+  createSupportManual,
+  getSupportManualById,
+  getActiveSupportManual,
+  listSupportManuals,
+  updateSupportManual,
+  activateSupportManual,
   listLocations,
   getLocation,
   createLocation,
