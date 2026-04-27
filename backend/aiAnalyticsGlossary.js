@@ -50,7 +50,27 @@ const AI_ANALYTICS_GLOSSARY = [
   {
     term: "utilization",
     definition:
-      "Can mean booked utilization, actual utilization, live utilization, or revenue utilization; clarify if duration basis is not explicit.",
+      "Can mean booked utilization, actual utilization, live utilization, or revenue utilization. If the user asks for a general utilization ranking without a date range, default to current live utilization.",
+  },
+  {
+    term: "branch",
+    definition:
+      "Default branch means rental_orders.pickup_location_id joined to locations. Use job site, current location, or base location only when the user says so.",
+  },
+  {
+    term: "recent rentals",
+    definition:
+      "If the user says recent without a time window, default to the last 90 days and mention that default in the answer.",
+  },
+  {
+    term: "asset purchase date",
+    definition:
+      "Equipment records have purchase_price and created_at, but no purchase_date. For oldest assets by purchase date, prefer purchase_orders.expected_possession_date or closed_at when tied to equipment_id; otherwise use equipment.created_at as the asset created/acquired date and label it clearly.",
+  },
+  {
+    term: "business snapshot",
+    definition:
+      "For broad snapshot questions, return one compact row with core counts and totals such as customer count, asset count, active rental orders, currently rented assets, open work orders, and rental line revenue.",
   },
   {
     term: "revenue",
@@ -59,11 +79,59 @@ const AI_ANALYTICS_GLOSSARY = [
   },
 ];
 
+const BLOCKED_ANALYTICS_RESPONSE = {
+  answer:
+    "I can only answer read-only, tenant-scoped analytics questions. I cannot perform data changes, inspect secrets, or query base/system schemas.",
+};
+
 function formatAnalyticsGlossaryForPrompt() {
   return AI_ANALYTICS_GLOSSARY.map((item) => {
     const column = item.preferredColumn ? ` Preferred column: ${item.preferredColumn}.` : "";
     return `- ${item.term}: ${item.definition}${column}`;
   }).join("\n");
+}
+
+function getAnalyticsQuestionGuidance(question) {
+  const text = String(question || "").trim().toLowerCase();
+  const guidance = [];
+
+  if (/\brevenue\b/.test(text) && /\b(branch|location)\b/.test(text) && !/\bsite|current location|base location\b/.test(text)) {
+    guidance.push(
+      "For revenue by branch, do not ask for clarification. Use rental_orders.pickup_location_id joined to locations as branch, and group missing locations as Unassigned branch."
+    );
+  }
+
+  if (/\butili[sz]ation\b/.test(text) && !/\brevenue\b/.test(text) && !/\bdays?\b/.test(text)) {
+    guidance.push(
+      "For unspecified equipment utilization, do not ask for clarification. Default to current live utilization: active rented assets divided by total equipment units for each matching equipment type."
+    );
+  }
+
+  if (/\boldest\b/.test(text) && /\bassets?\b/.test(text) && /\bpurchase date\b/.test(text)) {
+    guidance.push(
+      "For oldest assets by purchase date, do not ask for clarification. Equipment has no purchase_date column; use the best available acquisition date from purchase_orders tied to equipment_id, falling back to equipment.created_at as asset_created_at."
+    );
+  }
+
+  if (/\bno recent rentals?\b/.test(text) || (/\bcustomers?\b/.test(text) && /\brecent rentals?\b/.test(text))) {
+    guidance.push(
+      "For customers with no recent rentals, do not ask for clarification. Default recent to the last 90 days and include each customer's last_rental_at when available."
+    );
+  }
+
+  if (/\bbroad snapshot\b|\bsnapshot of the rental business\b|\bbusiness snapshot\b/.test(text)) {
+    guidance.push(
+      "For broad rental business snapshots, do not ask for clarification. Return one compact summary row with customer_count, asset_count, active_rental_order_count, currently_rented_asset_count, open_work_order_count, and total_line_revenue."
+    );
+  }
+
+  if (/\blist every rental order line item\b/.test(text)) {
+    guidance.push(
+      "For rental order line item listings, use rental_order_line_items joined to rental_orders, customers, equipment_types, rental_order_line_inventory, and equipment. Use rental_order_line_items.rental_order_status for order status."
+    );
+  }
+
+  return guidance;
 }
 
 function normalizeClarification(clarification) {
@@ -95,6 +163,32 @@ function labelForClarificationValue(value) {
 }
 
 function classifyAnalyticsQuestion({ question, clarification } = {}) {
+  const text = String(question || "").trim().toLowerCase();
+  if (!text) return { status: "ready_to_query", clarification: null, clarifiedIntent: "" };
+
+  const asksForWrite =
+    /\b(delete|remove|wipe|erase|drop|truncate|alter|update|insert|create|grant|revoke)\b[\s\S]*\b(customers?|users?|orders?|equipment|assets?|tables?|database|schema|rows?|records?)\b/.test(
+      text
+    ) ||
+    /\b(delete|remove|wipe|erase)\s+all\b/.test(text) ||
+    /\bmake\s+(a\s+)?(change|update)\b/.test(text);
+  const asksForSecrets =
+    /\b(password\s*hash(?:es)?|passwords?|tokens?|sessions?|api\s*keys?|secrets?|credentials?)\b/.test(text);
+  const asksForBaseSchema =
+    /\b(public|pg_catalog|information_schema)\s*\.\s*[a-z_][a-z0-9_]*\b/.test(text) ||
+    /\bquery\s+(the\s+)?(base|raw|system)\s+(tables?|schema|database)\b/.test(text);
+  const asksForMultipleStatements =
+    /\b(two|multiple|several)\s+sql\s+statements?\b/.test(text) ||
+    /\brun\s+.*;\s*(select|with|update|delete|drop|insert|alter|truncate)\b/.test(text);
+
+  if (asksForWrite || asksForSecrets || asksForBaseSchema || asksForMultipleStatements) {
+    return {
+      status: "blocked",
+      reason: BLOCKED_ANALYTICS_RESPONSE.answer,
+      clarification: null,
+    };
+  }
+
   const normalizedClarification = normalizeClarification(clarification);
   if (normalizedClarification) {
     return {
@@ -110,9 +204,6 @@ function classifyAnalyticsQuestion({ question, clarification } = {}) {
         .join(" "),
     };
   }
-
-  const text = String(question || "").trim().toLowerCase();
-  if (!text) return { status: "ready_to_query", clarification: null, clarifiedIntent: "" };
 
   const hasDurationIntent =
     /\b(days?|duration|how long|length of time|time rented|rental time)\b/.test(text) ||
@@ -147,9 +238,11 @@ function classifyAnalyticsQuestion({ question, clarification } = {}) {
 
 module.exports = {
   AI_ANALYTICS_GLOSSARY,
+  BLOCKED_ANALYTICS_RESPONSE,
   DURATION_CLARIFICATION,
   classifyAnalyticsQuestion,
   formatAnalyticsGlossaryForPrompt,
+  getAnalyticsQuestionGuidance,
   labelForClarificationValue,
   normalizeClarification,
 };

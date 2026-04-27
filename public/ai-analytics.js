@@ -469,6 +469,19 @@ async function runQuery({ clarification = null, questionOverride = "", appendUse
       return;
     }
 
+    if (data.status === "blocked") {
+      pendingClarification = null;
+      pendingQuestion = "";
+      renderSql("");
+      resetResultData();
+      updateMessage(thinkingId, {
+        content: data.answer || "That request is outside the read-only analytics scope.",
+        pending: false,
+      });
+      setStatus("Request blocked.");
+      return;
+    }
+
     pendingClarification = null;
     pendingQuestion = "";
     rows = Array.isArray(data.rows) ? data.rows : [];

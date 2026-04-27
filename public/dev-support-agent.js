@@ -12,6 +12,7 @@
   let manuals = [];
   let uploading = false;
   let activatingManualId = 0;
+  let refreshTimer = 0;
 
   function formatDate(value) {
     if (!value) return "--";
@@ -24,6 +25,20 @@
     if (!uploadStatus) return;
     uploadStatus.textContent = message;
     uploadStatus.style.color = isError ? "var(--danger)" : "";
+  }
+
+  function stopRefreshTimer() {
+    if (!refreshTimer) return;
+    window.clearTimeout(refreshTimer);
+    refreshTimer = 0;
+  }
+
+  function scheduleRefresh() {
+    stopRefreshTimer();
+    if (!manuals.some((manual) => manual.status === "processing")) return;
+    refreshTimer = window.setTimeout(() => {
+      loadManuals();
+    }, 5000);
   }
 
   function renderManuals() {
@@ -94,7 +109,9 @@
           ? `Active manual: ${active.name} (${active.originalFilename})`
           : "No active manual yet.";
       }
+      scheduleRefresh();
     } catch (error) {
+      stopRefreshTimer();
       if (manualsMeta) manualsMeta.textContent = error?.message ? String(error.message) : "Unable to load manuals.";
     }
   }
@@ -110,7 +127,7 @@
 
     uploading = true;
     if (uploadButton) uploadButton.disabled = true;
-    setUploadState("Uploading ZIP and indexing documentation...");
+    setUploadState("Uploading ZIP. Indexing will continue in the background after the file is accepted.");
 
     try {
       const formData = new FormData();
@@ -121,7 +138,7 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Upload failed.");
-      setUploadState(`Indexed ${data.processed?.screenshotCount ?? 0} screenshots. Active manual: ${data.manual?.name || "Support Manual"}.`);
+      setUploadState(data.message || "Manual uploaded. Indexing is running in the background.");
       if (uploadInput) uploadInput.value = "";
       await loadManuals();
     } catch (error) {
@@ -162,6 +179,7 @@
     activateManual(manualId);
   });
   logoutButton?.addEventListener("click", async () => {
+    stopRefreshTimer();
     if (!window.RentSoftDev) return;
     try {
       await window.RentSoftDev.devFetch("/api/dev/logout", { method: "POST" });

@@ -4027,6 +4027,46 @@ app.get(
   })
 );
 
+function serializeSupportManual(manual) {
+  return {
+    id: manual.id,
+    name: manual.name,
+    originalFilename: manual.originalFilename,
+    status: manual.status,
+    isActive: manual.isActive,
+    screenshotCount: manual.screenshotCount,
+    errorMessage: manual.errorMessage,
+    createdAt: manual.createdAt,
+    activatedAt: manual.activatedAt,
+  };
+}
+
+async function finalizeSupportManualUpload({ draftId, originalFilename, zipBuffer }) {
+  try {
+    const processed = await processSupportManualUpload({
+      manualId: draftId,
+      uploadedName: originalFilename,
+      zipBuffer,
+    });
+
+    await updateSupportManual(draftId, {
+      name: processed.name,
+      status: "ready",
+      vectorStoreId: processed.vectorStoreId,
+      screenshotCount: processed.screenshotCount,
+      manifest: processed.manifest,
+      errorMessage: null,
+    });
+    await activateSupportManual(draftId);
+  } catch (error) {
+    await updateSupportManual(draftId, {
+      status: "failed",
+      errorMessage: error?.message ? String(error.message) : "Unable to process support manual.",
+    }).catch(() => {});
+    console.error("Support manual processing failed:", error);
+  }
+}
+
 app.get(
   "/api/support-agent/active-manual",
   asyncHandler(async (_req, res) => {
@@ -4151,17 +4191,7 @@ app.get(
   asyncHandler(async (_req, res) => {
     const manuals = await listSupportManuals();
     res.json({
-      manuals: manuals.map((manual) => ({
-        id: manual.id,
-        name: manual.name,
-        originalFilename: manual.originalFilename,
-        status: manual.status,
-        isActive: manual.isActive,
-        screenshotCount: manual.screenshotCount,
-        errorMessage: manual.errorMessage,
-        createdAt: manual.createdAt,
-        activatedAt: manual.activatedAt,
-      })),
+      manuals: manuals.map(serializeSupportManual),
     });
   })
 );
@@ -4180,44 +4210,20 @@ app.post(
       status: "processing",
     });
 
-    try {
-      const processed = await processSupportManualUpload({
-        manualId: draft.id,
-        uploadedName: originalFilename,
-        zipBuffer: req.file.buffer,
+    const zipBuffer = Buffer.from(req.file.buffer);
+    setImmediate(() => {
+      void finalizeSupportManualUpload({
+        draftId: draft.id,
+        originalFilename,
+        zipBuffer,
       });
+    });
 
-      const updated = await updateSupportManual(draft.id, {
-        name: processed.name,
-        status: "ready",
-        vectorStoreId: processed.vectorStoreId,
-        screenshotCount: processed.screenshotCount,
-        manifest: processed.manifest,
-        errorMessage: null,
-      });
-      const active = await activateSupportManual(draft.id);
-      res.json({
-        manual: {
-          id: active.id,
-          name: active.name,
-          originalFilename: active.originalFilename,
-          status: active.status,
-          isActive: active.isActive,
-          screenshotCount: active.screenshotCount,
-          createdAt: active.createdAt,
-          activatedAt: active.activatedAt,
-        },
-        processed: {
-          screenshotCount: updated?.screenshotCount || processed.screenshotCount,
-        },
-      });
-    } catch (error) {
-      await updateSupportManual(draft.id, {
-        status: "failed",
-        errorMessage: error?.message ? String(error.message) : "Unable to process support manual.",
-      }).catch(() => {});
-      throw error;
-    }
+    res.status(202).json({
+      manual: serializeSupportManual(draft),
+      queued: true,
+      message: "Manual uploaded. Indexing continues in the background.",
+    });
   })
 );
 
@@ -4236,16 +4242,7 @@ app.post(
     }
     const active = await activateSupportManual(manualId);
     res.json({
-      manual: {
-        id: active.id,
-        name: active.name,
-        originalFilename: active.originalFilename,
-        status: active.status,
-        isActive: active.isActive,
-        screenshotCount: active.screenshotCount,
-        createdAt: active.createdAt,
-        activatedAt: active.activatedAt,
-      },
+      manual: serializeSupportManual(active),
     });
   })
 );

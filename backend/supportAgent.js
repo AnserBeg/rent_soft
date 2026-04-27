@@ -11,6 +11,10 @@ const SUPPORT_AGENT_MANUALS_ROOT = path.join(SUPPORT_AGENT_DATA_ROOT, "manuals")
 const SUPPORT_AGENT_ANNOTATED_ROOT = path.join(SUPPORT_AGENT_DATA_ROOT, "annotated");
 const ANSWER_MODEL = String(process.env.SUPPORT_AGENT_ANSWER_MODEL || process.env.ANSWER_MODEL || "gpt-5.4-mini");
 const VISION_MODEL = String(process.env.SUPPORT_AGENT_VISION_MODEL || process.env.VISION_MODEL || "gpt-5.4-mini");
+const VECTOR_STORE_TIMEOUT_MS = Math.max(
+  30_000,
+  Number(process.env.SUPPORT_AGENT_VECTOR_TIMEOUT_MS || 300_000) || 300_000
+);
 
 let openAiClient = null;
 
@@ -346,9 +350,8 @@ async function uploadToOpenAiAndCreateVectorStore(manualName, searchableFiles) {
 
 async function waitForVectorStore(vectorStoreId) {
   const client = getOpenAiClient();
-  const timeoutMs = 120000;
   const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
+  while (Date.now() - startedAt < VECTOR_STORE_TIMEOUT_MS) {
     const files = await client.vectorStores.files.list(vectorStoreId, { limit: 100 });
     const statuses = files.data.map((entry) => entry.status);
     if (statuses.length && statuses.every((status) => status === "completed")) return;
@@ -357,7 +360,9 @@ async function waitForVectorStore(vectorStoreId) {
     }
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
-  throw new Error("Vector store indexing timed out. Try again in a minute.");
+  throw new Error(
+    `Vector store indexing timed out after ${Math.round(VECTOR_STORE_TIMEOUT_MS / 1000)} seconds.`
+  );
 }
 
 async function generateGroundedAnswer({ question, vectorStoreId, candidates, includeScreenshots = true }) {

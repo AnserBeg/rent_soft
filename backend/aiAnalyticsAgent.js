@@ -1,15 +1,27 @@
+const crypto = require("crypto");
 const OpenAI = require("openai");
 const { pool } = require("./db");
 const {
+  BLOCKED_ANALYTICS_RESPONSE,
   DURATION_CLARIFICATION,
   classifyAnalyticsQuestion,
   formatAnalyticsGlossaryForPrompt,
+  getAnalyticsQuestionGuidance,
   normalizeClarification,
 } = require("./aiAnalyticsGlossary");
 
 const HARD_ROW_LIMIT = 1000;
 const DEFAULT_ROW_LIMIT = 250;
 const MODEL = String(process.env.AI_ANALYTICS_MODEL || process.env.ANSWER_MODEL || "gpt-5.4-mini");
+const CONTEXT_MODEL = String(process.env.AI_ANALYTICS_CONTEXT_MODEL || MODEL);
+const CONTEXT_TTL_MS = Math.max(
+  60_000,
+  Number(process.env.AI_ANALYTICS_CONTEXT_TTL_MS || 7 * 24 * 60 * 60 * 1000) || 7 * 24 * 60 * 60 * 1000
+);
+const MAX_CONTEXT_MARKDOWN_CHARS = Math.max(
+  1000,
+  Math.min(12000, Number(process.env.AI_ANALYTICS_CONTEXT_MAX_CHARS || 6000) || 6000)
+);
 
 const FORBIDDEN_SQL =
   /\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|call|do|execute|vacuum|analyze|refresh|merge|listen|notify|set|reset|show)\b/i;
@@ -112,6 +124,370 @@ async function fetchAnalyticsSchema() {
   return Array.from(tables.values());
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function computeCompanyAnalyticsContextSourceHash(snapshot) {
+  return crypto.createHash("sha256").update(stableJson(snapshot)).digest("hex");
+}
+
+function clampText(value, maxLength = MAX_CONTEXT_MARKDOWN_CHARS) {
+  const text = String(value || "").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 80)).trim()}\n...context truncated to ${maxLength} chars`;
+}
+
+function addCount(map, key, amount = 1) {
+  const normalized = String(key || "").trim();
+  if (!normalized) return;
+  map.set(normalized, (map.get(normalized) || 0) + amount);
+}
+
+function topEntries(map, limit) {
+  return Array.from(map.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([value, count]) => ({ value, count }));
+}
+
+function inferSerialPattern(serialNumber) {
+  const serial = String(serialNumber || "").trim().toUpperCase();
+  if (!serial) return "";
+  const parts = serial.split(/[-_\s]+/).filter(Boolean);
+  if (parts.length > 1) {
+    const prefix = [];
+    for (const part of parts) {
+      if (/^\d+$/.test(part)) break;
+      prefix.push(part.replace(/\d+$/g, ""));
+      if (prefix.length >= 2) break;
+    }
+    const cleaned = prefix.filter(Boolean).join("-");
+    if (cleaned) return `${cleaned}-*`;
+  }
+  const leading = serial.match(/^[A-Z]+/);
+  if (leading?.[0]) return `${leading[0]}*`;
+  return "";
+}
+
+function compactCsv(values, limit = 24) {
+  const list = (values || []).filter(Boolean).slice(0, limit);
+  const suffix = (values || []).length > limit ? `, +${values.length - limit} more` : "";
+  return `${list.join(", ")}${suffix}`;
+}
+
+function buildCompanyAnalyticsSnapshot({ categories, types, equipment, rentalStatuses, workOrderStatuses, locations }) {
+  const typeMap = new Map();
+  for (const type of types || []) {
+    const typeName = String(type.name || "").trim();
+    if (!typeName) continue;
+    typeMap.set(typeName, {
+      name: typeName,
+      category: String(type.category_name || "Uncategorized").trim() || "Uncategorized",
+      equipmentCount: 0,
+      models: new Map(),
+      serialPatterns: new Map(),
+    });
+  }
+
+  for (const row of equipment || []) {
+    const typeName = String(row.equipment_type_name || row.type || "Unspecified").trim() || "Unspecified";
+    if (!typeMap.has(typeName)) {
+      typeMap.set(typeName, {
+        name: typeName,
+        category: String(row.category_name || "Uncategorized").trim() || "Uncategorized",
+        equipmentCount: 0,
+        models: new Map(),
+        serialPatterns: new Map(),
+      });
+    }
+    const item = typeMap.get(typeName);
+    item.equipmentCount += 1;
+    addCount(item.models, row.model_name);
+    addCount(item.serialPatterns, inferSerialPattern(row.serial_number));
+  }
+
+  const equipmentTypes = Array.from(typeMap.values())
+    .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name))
+    .slice(0, 160)
+    .map((item) => ({
+      name: item.name,
+      category: item.category,
+      equipmentCount: item.equipmentCount,
+      commonModels: topEntries(item.models, 8),
+      serialPatterns: topEntries(item.serialPatterns, 8),
+    }));
+
+  return {
+    categories: (categories || [])
+      .map((row) => String(row.name || "").trim())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, 80),
+    equipmentTypes,
+    locations: (locations || [])
+      .map((row) => String(row.name || "").trim())
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, 80),
+    rentalOrderStatuses: topEntries(
+      new Map((rentalStatuses || []).map((row) => [String(row.status || "Unspecified"), Number(row.count) || 0])),
+      30
+    ),
+    workOrderStatuses: topEntries(
+      new Map((workOrderStatuses || []).map((row) => [String(row.status || "Unspecified"), Number(row.count) || 0])),
+      30
+    ),
+  };
+}
+
+async function fetchCompanyAnalyticsContextSnapshot(companyId) {
+  const [
+    categoriesRes,
+    typesRes,
+    equipmentRes,
+    rentalStatusesRes,
+    workOrderStatusesRes,
+    locationsRes,
+  ] = await Promise.all([
+    pool.query(
+      `SELECT name FROM equipment_categories WHERE company_id = $1 ORDER BY name LIMIT 120`,
+      [companyId]
+    ),
+    pool.query(
+      `
+      SELECT et.name, ec.name AS category_name
+      FROM equipment_types et
+      LEFT JOIN equipment_categories ec ON ec.id = et.category_id
+      WHERE et.company_id = $1
+      ORDER BY ec.name NULLS LAST, et.name
+      LIMIT 220
+      `,
+      [companyId]
+    ),
+    pool.query(
+      `
+      SELECT
+        COALESCE(et.name, e.type) AS equipment_type_name,
+        ec.name AS category_name,
+        e.model_name,
+        e.serial_number
+      FROM equipment e
+      LEFT JOIN equipment_types et ON et.id = e.type_id
+      LEFT JOIN equipment_categories ec ON ec.id = et.category_id
+      WHERE e.company_id = $1
+      ORDER BY e.created_at DESC NULLS LAST, e.id DESC
+      LIMIT 1000
+      `,
+      [companyId]
+    ),
+    pool.query(
+      `
+      SELECT COALESCE(NULLIF(status, ''), 'Unspecified') AS status, COUNT(*)::integer AS count
+      FROM rental_orders
+      WHERE company_id = $1
+      GROUP BY COALESCE(NULLIF(status, ''), 'Unspecified')
+      ORDER BY count DESC, status
+      LIMIT 40
+      `,
+      [companyId]
+    ),
+    pool.query(
+      `
+      SELECT COALESCE(NULLIF(order_status, ''), 'Unspecified') AS status, COUNT(*)::integer AS count
+      FROM work_orders
+      WHERE company_id = $1
+      GROUP BY COALESCE(NULLIF(order_status, ''), 'Unspecified')
+      ORDER BY count DESC, status
+      LIMIT 40
+      `,
+      [companyId]
+    ),
+    pool.query(
+      `SELECT name FROM locations WHERE company_id = $1 ORDER BY name LIMIT 100`,
+      [companyId]
+    ),
+  ]);
+
+  return buildCompanyAnalyticsSnapshot({
+    categories: categoriesRes.rows,
+    types: typesRes.rows,
+    equipment: equipmentRes.rows,
+    rentalStatuses: rentalStatusesRes.rows,
+    workOrderStatuses: workOrderStatusesRes.rows,
+    locations: locationsRes.rows,
+  });
+}
+
+function buildFallbackCompanyAnalyticsContext(snapshot) {
+  const lines = [
+    "Company-specific analytics context generated from this tenant's own data.",
+    "Use this context only for terminology, aliases, and matching hints. Do not invent rows or facts not present in query results.",
+  ];
+
+  if (snapshot.categories?.length) {
+    lines.push(`Equipment categories: ${compactCsv(snapshot.categories, 40)}.`);
+  }
+
+  if (snapshot.equipmentTypes?.length) {
+    lines.push("Equipment types and common company wording:");
+    for (const type of snapshot.equipmentTypes.slice(0, 80)) {
+      const models = type.commonModels?.length
+        ? ` Models: ${type.commonModels.map((entry) => `${entry.value} (${entry.count})`).join(", ")}.`
+        : "";
+      const serials = type.serialPatterns?.length
+        ? ` Serial patterns: ${type.serialPatterns.map((entry) => `${entry.value} (${entry.count})`).join(", ")}.`
+        : "";
+      lines.push(`- ${type.name} [category: ${type.category}; units: ${type.equipmentCount}].${models}${serials}`);
+    }
+  }
+
+  if (snapshot.locations?.length) {
+    lines.push(`Known locations/branches: ${compactCsv(snapshot.locations, 40)}.`);
+  }
+  if (snapshot.rentalOrderStatuses?.length) {
+    lines.push(
+      `Rental order status values in use: ${snapshot.rentalOrderStatuses
+        .map((entry) => `${entry.value} (${entry.count})`)
+        .join(", ")}.`
+    );
+  }
+  if (snapshot.workOrderStatuses?.length) {
+    lines.push(
+      `Work order status values in use: ${snapshot.workOrderStatuses
+        .map((entry) => `${entry.value} (${entry.count})`)
+        .join(", ")}.`
+    );
+  }
+
+  lines.push(
+    "Matching guidance: when users mention equipment in natural language, match against equipment type names, category names, model names, and serial patterns. Treat singular/plural wording as equivalent. Prefer exact equipment type matches over category matches."
+  );
+
+  return clampText(lines.join("\n"));
+}
+
+async function generateCompanyAnalyticsContextWithAi(snapshot, fallbackMarkdown) {
+  if (String(process.env.AI_ANALYTICS_CONTEXT_GENERATOR_ENABLED || "true").toLowerCase() === "false") {
+    return { markdown: fallbackMarkdown, json: { generatedBy: "fallback_disabled" } };
+  }
+
+  try {
+    const client = getOpenAiClient();
+    const response = await client.responses.create({
+      model: CONTEXT_MODEL,
+      input: [
+        {
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: `
+Create compact company-specific context for Aiven Rental AI Analytics.
+Return only valid JSON:
+{
+  "context_markdown": "short markdown context under ${MAX_CONTEXT_MARKDOWN_CHARS} characters",
+  "aliases": [
+    { "phrase": "user wording", "maps_to": "equipment type/category/model/status" }
+  ],
+  "query_notes": ["short matching/query guidance"]
+}
+
+Rules:
+- Use only the supplied snapshot.
+- Do not invent equipment types, categories, serials, customers, revenue, or counts.
+- Focus on terminology: equipment type names, category names, model naming, serial patterns, status values, and likely aliases.
+- Keep it concise; this context is injected into every analytics query.
+`,
+            },
+          ],
+        },
+        { role: "user", content: [{ type: "input_text", text: JSON.stringify(snapshot, null, 2) }] },
+      ],
+    });
+    const parsed = safeJsonFromText(response.output_text || "");
+    const markdown = clampText(parsed?.context_markdown || "");
+    if (!markdown) throw new Error("AI context response did not include context_markdown.");
+    return {
+      markdown,
+      json: {
+        generatedBy: "ai",
+        aliases: Array.isArray(parsed.aliases) ? parsed.aliases.slice(0, 80) : [],
+        query_notes: Array.isArray(parsed.query_notes) ? parsed.query_notes.slice(0, 80) : [],
+      },
+    };
+  } catch (err) {
+    console.warn("AI analytics company context generation failed:", err?.message || err);
+    return { markdown: fallbackMarkdown, json: { generatedBy: "fallback_error", error: err?.message || String(err) } };
+  }
+}
+
+async function getOrCreateCompanyAnalyticsContext(companyId) {
+  const snapshot = await fetchCompanyAnalyticsContextSnapshot(companyId);
+  const sourceHash = computeCompanyAnalyticsContextSourceHash(snapshot);
+  const fallbackMarkdown = buildFallbackCompanyAnalyticsContext(snapshot);
+
+  try {
+    const existing = await pool.query(
+      `
+      SELECT source_hash, context_markdown, context_json, expires_at
+      FROM ai_analytics_company_contexts
+      WHERE company_id = $1
+      LIMIT 1
+      `,
+      [companyId]
+    );
+    const row = existing.rows[0];
+    const expiresAt = row?.expires_at ? new Date(row.expires_at).getTime() : 0;
+    if (row && row.source_hash === sourceHash && (!expiresAt || expiresAt > Date.now())) {
+      return {
+        sourceHash,
+        contextMarkdown: clampText(row.context_markdown),
+        contextJson: row.context_json || {},
+        generated: false,
+      };
+    }
+
+    const generated = await generateCompanyAnalyticsContextWithAi(snapshot, fallbackMarkdown);
+    const nextExpiresAt = new Date(Date.now() + CONTEXT_TTL_MS).toISOString();
+    await pool.query(
+      `
+      INSERT INTO ai_analytics_company_contexts
+        (company_id, source_hash, context_markdown, context_json, generated_at, expires_at)
+      VALUES ($1, $2, $3, $4::jsonb, NOW(), $5::timestamptz)
+      ON CONFLICT (company_id) DO UPDATE
+        SET source_hash = EXCLUDED.source_hash,
+            context_markdown = EXCLUDED.context_markdown,
+            context_json = EXCLUDED.context_json,
+            generated_at = NOW(),
+            expires_at = EXCLUDED.expires_at
+      `,
+      [companyId, sourceHash, generated.markdown, JSON.stringify(generated.json || {}), nextExpiresAt]
+    );
+    return {
+      sourceHash,
+      contextMarkdown: generated.markdown,
+      contextJson: generated.json || {},
+      generated: true,
+    };
+  } catch (err) {
+    console.warn("AI analytics company context cache failed:", err?.message || err);
+    return {
+      sourceHash,
+      contextMarkdown: fallbackMarkdown,
+      contextJson: { generatedBy: "fallback_cache_error", error: err?.message || String(err) },
+      generated: false,
+    };
+  }
+}
+
 function sanitizeClarificationResponse(clarification) {
   const rawQuestion = String(clarification?.question || DURATION_CLARIFICATION.question).trim();
   const rawOptions = Array.isArray(clarification?.options) ? clarification.options : DURATION_CLARIFICATION.options;
@@ -128,19 +504,29 @@ function sanitizeClarificationResponse(clarification) {
   };
 }
 
-async function preflightClarification({ question, schema, clarification }) {
-  const deterministic = classifyAnalyticsQuestion({ question, clarification });
-  if (deterministic.status === "clarification_required") {
+async function preflightClarification({ question, schema, clarification, companyContext }) {
+  const preflightDecision = classifyAnalyticsQuestion({ question, clarification });
+  if (preflightDecision.status === "blocked") {
     return {
-      status: "clarification_required",
-      clarification: sanitizeClarificationResponse(deterministic.clarification),
-      reason: deterministic.reason || "Clarification required.",
+      status: "blocked",
+      reason: preflightDecision.reason || BLOCKED_ANALYTICS_RESPONSE.answer,
     };
   }
-  if (deterministic.clarification) return deterministic;
+  if (preflightDecision.status === "clarification_required") {
+    return {
+      status: "clarification_required",
+      clarification: sanitizeClarificationResponse(preflightDecision.clarification),
+      reason: preflightDecision.reason || "Clarification required.",
+    };
+  }
+  if (preflightDecision.clarification) return preflightDecision;
+  const questionGuidance = getAnalyticsQuestionGuidance(question);
+  if (questionGuidance.length) {
+    return preflightDecision;
+  }
 
-  if (String(process.env.AI_ANALYTICS_CLARIFIER_ENABLED || "true").toLowerCase() === "false") {
-    return deterministic;
+  if (String(process.env.AI_ANALYTICS_CLARIFIER_ENABLED || "false").toLowerCase() !== "true") {
+    return preflightDecision;
   }
 
   const client = getOpenAiClient();
@@ -168,6 +554,9 @@ Rules:
 Analytics glossary:
 ${formatAnalyticsGlossaryForPrompt()}
 
+Company-specific context:
+${companyContext?.contextMarkdown || "No company-specific context is available."}
+
 Relevant schema:
 ${JSON.stringify(schema, null, 2)}
 `;
@@ -191,12 +580,23 @@ ${JSON.stringify(schema, null, 2)}
   } catch (err) {
     console.warn("AI analytics clarification preflight failed:", err?.message || err);
   }
-  return deterministic;
+  return preflightDecision;
 }
 
 function buildQuestionContext({ question, clarification }) {
   const normalizedClarification = normalizeClarification(clarification);
-  if (!normalizedClarification) return String(question || "").trim();
+  const guidance = getAnalyticsQuestionGuidance(question);
+  if (!normalizedClarification && !guidance.length) return String(question || "").trim();
+  if (!normalizedClarification) {
+    return JSON.stringify(
+      {
+        question: String(question || "").trim(),
+        guidance,
+      },
+      null,
+      2
+    );
+  }
   return JSON.stringify(
     {
       question: String(question || "").trim(),
@@ -205,13 +605,93 @@ function buildQuestionContext({ question, clarification }) {
         answer: normalizedClarification.answer,
         value: normalizedClarification.value,
       },
+      guidance,
     },
     null,
     2
   );
 }
 
-async function generateSqlForQuestion({ question, schema, clarification }) {
+function extractLatestUserMessage(question) {
+  const raw = String(question || "").trim();
+  const marker = "\n\nLatest user message:";
+  const index = raw.lastIndexOf(marker);
+  if (index < 0) return raw;
+  return raw.slice(index + marker.length).trim();
+}
+
+function extractLastAssistantMessage(question) {
+  const raw = String(question || "");
+  const latestIndex = raw.lastIndexOf("\n\nLatest user message:");
+  const conversation = latestIndex >= 0 ? raw.slice(0, latestIndex) : raw;
+  const matches = [...conversation.matchAll(/(?:^|\n)AI:\s*([\s\S]*?)(?=\n(?:User|AI):|\n\nLatest user message:|$)/g)];
+  const last = matches.length ? matches[matches.length - 1][1] : "";
+  return String(last || "").trim();
+}
+
+function buildExplanationFollowUpResponse(question) {
+  const latest = extractLatestUserMessage(question).toLowerCase();
+  const asksForExplanation =
+    /\b(explain|what do you mean|what did you mean|clarify|above answer|previous answer)\b/.test(latest) &&
+    /\b(above|previous|that|this|answer|mean)\b/.test(latest);
+  if (!asksForExplanation) return null;
+
+  const previousAnswer = extractLastAssistantMessage(question);
+  if (!previousAnswer) return null;
+
+  if (/\butili[sz]ation\b/i.test(previousAnswer)) {
+    if (/\butili[sz]ed days\b|\bbooked days\b|\brental days\b/i.test(previousAnswer)) {
+      return {
+        status: "success",
+        answer:
+          "In the previous answer, utilization meant time-based utilization: utilized rental days divided by booked rental days. That is different from live fleet utilization, which means assets currently out on rent divided by total assets. I should not switch between those definitions in a follow-up unless you ask for a different basis.",
+        sql: "",
+        purpose: "Explain the previous utilization answer without running a new query.",
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        maxRowsApplied: 0,
+        csv: Buffer.from("", "utf8").toString("base64"),
+        csvEncoding: "base64",
+        chart: null,
+      };
+    }
+
+    if (/\bactive rented assets\b|\btotal equipment units\b|\bcurrently (out|rented)|\bout on rent\b/i.test(previousAnswer)) {
+      return {
+        status: "success",
+        answer:
+          "In the previous answer, utilization meant live fleet utilization: active rented assets divided by total equipment units. For example, 22 active rented assets out of 43 total units equals 51.16%. It does not mean historical rented days or revenue utilization.",
+        sql: "",
+        purpose: "Explain the previous utilization answer without running a new query.",
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        maxRowsApplied: 0,
+        csv: Buffer.from("", "utf8").toString("base64"),
+        csvEncoding: "base64",
+        chart: null,
+      };
+    }
+  }
+
+  return {
+    status: "success",
+    answer:
+      "The previous answer was based only on the rows returned by the last query. It should be read as an explanation of those returned rows, not as a new calculation with a different metric.",
+    sql: "",
+    purpose: "Explain the previous answer without running a new query.",
+    columns: [],
+    rows: [],
+    rowCount: 0,
+    maxRowsApplied: 0,
+    csv: Buffer.from("", "utf8").toString("base64"),
+    csvEncoding: "base64",
+    chart: null,
+  };
+}
+
+async function generateSqlForQuestion({ question, schema, clarification, companyContext }) {
   const client = getOpenAiClient();
   const prompt = `
 You are the SQL planner for Aiven Rental AI Analytics.
@@ -234,6 +714,8 @@ Rules:
 - Prefer explicit column names.
 - For totals, use clear aliases like total_revenue, order_count, active_count, customer_name, bucket.
 - Use the analytics glossary below to resolve app terms.
+- Use the company-specific context below for tenant terminology, aliases, status values, model names, serial patterns, equipment types, categories, and location names.
+- Treat company-specific context as matching guidance only. Do not answer from it directly or invent facts from it.
 - Asset-level rental questions should prefer rental_order_line_item_assets because it has one row per assigned equipment unit and includes equipment_id, serial_number, and rental duration fields.
 - rental_order_line_items can have many assigned equipment units. If you use it directly, equipment_id is only a compatibility field for simple joins; use rental_order_line_inventory or rental_order_line_item_assets for precise asset-level counts.
 - For rental duration questions, prefer derived duration columns on rental_order_line_items over raw timestamp math.
@@ -242,10 +724,16 @@ Rules:
 - If the clarified intent is actual_live_days, use actual_live_duration_days.
 - If the clarified intent is booked_days, use booked_duration_days.
 - If the clarified intent is billable_days, use billable_duration_days or billable_units with a daily rate_basis filter.
+- For month-based utilization questions, do not treat date words like "month", "February", or "Feb" as equipment names. Use them only to define the requested period.
+- For equipment utilization over a period, calculate utilized asset-days divided by total fleet capacity asset-days for matching equipment types unless the user asks for a different basis.
+- Follow any question-specific guidance supplied in the user message. It encodes product defaults that should avoid unnecessary clarification.
 - Return at most 1000 rows.
 
 Analytics glossary:
 ${formatAnalyticsGlossaryForPrompt()}
+
+Company-specific context:
+${companyContext?.contextMarkdown || "No company-specific context is available."}
 
 Available views:
 ${JSON.stringify(schema, null, 2)}
@@ -270,7 +758,7 @@ ${JSON.stringify(schema, null, 2)}
   };
 }
 
-async function summarizeQueryResult({ question, clarification, sql, columns, rows, rowCount, chart }) {
+async function summarizeQueryResult({ question, clarification, sql, columns, rows, rowCount, chart, companyContext }) {
   const client = getOpenAiClient();
   const prompt = `
 You are Aiven Rental's AI Analytics analyst.
@@ -286,6 +774,7 @@ Return only valid JSON:
 }
 
 Do not invent data. Mention when the result appears limited by row count.
+Use company-specific context only to explain wording or aliases, never as a source for numeric facts.
 `;
 
   const response = await client.responses.create({
@@ -306,6 +795,7 @@ Do not invent data. Mention when the result appears limited by row count.
                 rowCount,
                 previewRows: rows.slice(0, 60),
                 initialChartSuggestion: chart || null,
+                companyContext: companyContext?.contextMarkdown || "",
               },
               null,
               2
@@ -395,9 +885,43 @@ async function runAiAnalyticsQuery({ auth, question, maxRows, clarification }) {
 
   let sql = "";
   try {
+    const explanation = buildExplanationFollowUpResponse(cleanQuestion);
+    if (explanation) {
+      await insertAudit({
+        companyId,
+        userId: Number.isFinite(userId) ? userId : null,
+        question: cleanQuestion,
+        status: "success",
+      });
+      return explanation;
+    }
+
     const schema = await fetchAnalyticsSchema();
     if (!schema.length) throw new Error("AI Analytics schema is not available. Restart the server to run migrations.");
-    const preflight = await preflightClarification({ question: cleanQuestion, schema, clarification });
+    const companyContext = await getOrCreateCompanyAnalyticsContext(companyId);
+    const preflight = await preflightClarification({
+      question: cleanQuestion,
+      schema,
+      clarification,
+      companyContext,
+    });
+    if (preflight.status === "blocked") {
+      await insertAudit({
+        companyId,
+        userId: Number.isFinite(userId) ? userId : null,
+        question: cleanQuestion,
+        status: "blocked",
+        error: preflight.reason || null,
+      });
+      return {
+        status: "blocked",
+        answer: preflight.reason || BLOCKED_ANALYTICS_RESPONSE.answer,
+        columns: [],
+        rows: [],
+        rowCount: 0,
+        chart: null,
+      };
+    }
     if (preflight.status === "clarification_required") {
       await insertAudit({
         companyId,
@@ -413,7 +937,12 @@ async function runAiAnalyticsQuery({ auth, question, maxRows, clarification }) {
     }
 
     const clarified = preflight.clarification || normalizeClarification(clarification);
-    const generated = await generateSqlForQuestion({ question: cleanQuestion, schema, clarification: clarified });
+    const generated = await generateSqlForQuestion({
+      question: cleanQuestion,
+      schema,
+      clarification: clarified,
+      companyContext,
+    });
     sql = generated.sql;
     const result = await executeAnalyticsSql({ companyId, sql, maxRows });
     const summary = await summarizeQueryResult({
@@ -424,6 +953,7 @@ async function runAiAnalyticsQuery({ auth, question, maxRows, clarification }) {
       rows: result.rows,
       rowCount: result.rowCount,
       chart: generated.chart,
+      companyContext,
     });
     await insertAudit({
       companyId,
@@ -464,5 +994,10 @@ module.exports = {
   validateReadOnlyAnalyticsSql,
   normalizeSql,
   classifyAnalyticsQuestion,
+  getAnalyticsQuestionGuidance,
   normalizeClarification,
+  buildCompanyAnalyticsSnapshot,
+  buildFallbackCompanyAnalyticsContext,
+  computeCompanyAnalyticsContextSourceHash,
+  inferSerialPattern,
 };

@@ -1,0 +1,76 @@
+{
+  "startedAt": "2026-04-27T21:17:21.070Z",
+  "finishedAt": "2026-04-27T21:17:24.273Z",
+  "baseUrl": "http://localhost:4014",
+  "summary": {
+    "total": 1,
+    "success": 0,
+    "clarification_required": 1,
+    "blocked": 0,
+    "failure": 0
+  },
+  "results": [
+    {
+      "id": "ambiguous-rented-days",
+      "category": "duration",
+      "question": "How many days was asset DEMO-EXCAVATOR-01 rented out for?",
+      "expected": "clarification_required",
+      "outcome": "clarification_required",
+      "problems": [],
+      "latencyMs": 35,
+      "httpStatus": 200,
+      "status": "clarification_required",
+      "sql": "",
+      "columns": [],
+      "rowCount": null,
+      "answer": "",
+      "chart": null,
+      "clarification": {
+        "question": "When you say rented out days, what duration basis should AI Analytics use?",
+        "options": [
+          {
+            "value": "booked_days",
+            "label": "Booked days"
+          },
+          {
+            "value": "actual_completed_days",
+            "label": "Actual completed days"
+          },
+          {
+            "value": "actual_live_days",
+            "label": "Actual days so far"
+          },
+          {
+            "value": "billable_days",
+            "label": "Billable days"
+          }
+        ]
+      },
+      "followUp": {
+        "clarification": {
+          "question": "When you say rented out days, what duration basis should AI Analytics use?",
+          "value": "actual_completed_days",
+          "answer": "Actual completed days"
+        },
+        "outcome": "success",
+        "problems": [],
+        "latencyMs": 3087,
+        "httpStatus": 200,
+        "status": "success",
+        "sql": "WITH asset_days AS (\n  SELECT\n    equipment_id,\n    serial_number,\n    SUM(actual_completed_duration_days) AS actual_completed_days\n  FROM rental_order_line_item_assets\n  WHERE serial_number = 'DEMO-EXCAVATOR-01'\n    AND actual_completed_duration_days IS NOT NULL\n    AND fulfilled_at IS NOT NULL\n    AND returned_at IS NOT NULL\n  GROUP BY equipment_id, serial_number\n)\nSELECT\n  serial_number,\n  actual_completed_days\nFROM asset_days\nORDER BY actual_completed_days DESC\nLIMIT 1",
+        "columns": [
+          "serial_number",
+          "actual_completed_days"
+        ],
+        "rowCount": 0,
+        "answer": "No rows were returned for asset DEMO-EXCAVATOR-01, so the actual completed rented-out days could not be determined from the query result. This appears limited by the returned row count (0).",
+        "chart": {
+          "type": "bar",
+          "x": "serial_number",
+          "y": "actual_completed_days",
+          "aggregation": "sum"
+        }
+      }
+    }
+  ]
+}

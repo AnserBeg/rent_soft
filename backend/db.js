@@ -717,6 +717,20 @@ async function ensureAiAnalyticsLayer(client) {
   await client.query(
     `CREATE INDEX IF NOT EXISTS ai_analytics_queries_company_created_idx ON ai_analytics_queries (company_id, created_at DESC);`
   );
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS ai_analytics_company_contexts (
+      company_id INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+      source_hash TEXT NOT NULL,
+      context_markdown TEXT NOT NULL,
+      context_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ
+    );
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS ai_analytics_company_contexts_expires_idx
+      ON ai_analytics_company_contexts (expires_at);
+  `);
 
   await client.query(`
     CREATE OR REPLACE VIEW ai_analytics.companies AS
@@ -732,7 +746,9 @@ async function ensureAiAnalyticsLayer(client) {
     WHERE company_id = ${scopedCompanyExpr};
   `);
 
+  const customScopedViews = new Set(["equipment", "work_orders"]);
   for (const tableName of scopedTables) {
+    if (customScopedViews.has(tableName)) continue;
     await client.query(`
       CREATE OR REPLACE VIEW ai_analytics.${quoteIdent(tableName)} AS
       SELECT *
@@ -741,8 +757,41 @@ async function ensureAiAnalyticsLayer(client) {
     `);
   }
 
+  await client.query(`DROP VIEW IF EXISTS ai_analytics.equipment;`);
   await client.query(`
-    CREATE OR REPLACE VIEW ai_analytics.rental_order_line_items AS
+    CREATE VIEW ai_analytics.equipment AS
+    SELECT
+      e.*,
+      e.id AS equipment_id,
+      e.type AS equipment_type,
+      et.name AS equipment_type_name,
+      l.name AS base_location_name,
+      cl.name AS current_location_name
+    FROM public.equipment e
+    LEFT JOIN public.equipment_types et ON et.id = e.type_id
+    LEFT JOIN public.locations l ON l.id = e.location_id
+    LEFT JOIN public.locations cl ON cl.id = e.current_location_id
+    WHERE e.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`DROP VIEW IF EXISTS ai_analytics.work_orders;`);
+  await client.query(`
+    CREATE VIEW ai_analytics.work_orders AS
+    SELECT
+      wo.*,
+      wo.unit_id AS equipment_id,
+      COALESCE(et.name, e.type, wo.category) AS equipment_type,
+      e.serial_number AS equipment_serial_number,
+      e.model_name AS equipment_model_name
+    FROM public.work_orders wo
+    LEFT JOIN public.equipment e ON e.id = wo.unit_id AND e.company_id = wo.company_id
+    LEFT JOIN public.equipment_types et ON et.id = e.type_id
+    WHERE wo.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`DROP VIEW IF EXISTS ai_analytics.rental_order_line_items;`);
+  await client.query(`
+    CREATE VIEW ai_analytics.rental_order_line_items AS
     SELECT
       li.*,
       GREATEST(EXTRACT(EPOCH FROM (li.end_at - li.start_at)) / 86400.0, 0.0)::numeric AS booked_duration_days,
@@ -771,17 +820,35 @@ async function ensureAiAnalyticsLayer(client) {
             THEN 'billable_days'
         END
       ], NULL)::text[] AS duration_basis_available,
+      ro.customer_id,
+      ro.status AS rental_order_status,
+      ro.quote_number,
+      ro.ro_number,
+      ro.created_at AS created_at,
+      ro.updated_at AS updated_at,
+      ro.created_at AS rental_order_created_at,
+      ro.updated_at AS rental_order_updated_at,
+      ro.pickup_location_id,
+      ro.site_name,
+      ro.site_address,
       assigned_equipment.equipment_id,
+      assigned_equipment.serial_number,
+      assigned_equipment.model_name,
       assigned_equipment.equipment_ids,
+      assigned_equipment.serial_numbers,
       assigned_equipment.assigned_equipment_count
     FROM public.rental_order_line_items li
     JOIN public.rental_orders ro ON ro.id = li.rental_order_id
     LEFT JOIN LATERAL (
       SELECT
         MIN(liv.equipment_id) AS equipment_id,
+        MIN(e.serial_number) AS serial_number,
+        MIN(e.model_name) AS model_name,
         ARRAY_AGG(DISTINCT liv.equipment_id ORDER BY liv.equipment_id) AS equipment_ids,
+        ARRAY_AGG(DISTINCT e.serial_number ORDER BY e.serial_number) FILTER (WHERE e.serial_number IS NOT NULL) AS serial_numbers,
         COUNT(DISTINCT liv.equipment_id)::integer AS assigned_equipment_count
       FROM public.rental_order_line_inventory liv
+      LEFT JOIN public.equipment e ON e.id = liv.equipment_id
       WHERE liv.line_item_id = li.id
     ) assigned_equipment ON TRUE
     WHERE ro.company_id = ${scopedCompanyExpr};
@@ -836,7 +903,14 @@ async function ensureAiAnalyticsLayer(client) {
       ro.status AS rental_order_status,
       ro.quote_number,
       ro.ro_number,
-      ro.customer_id
+      ro.customer_id,
+      ro.pickup_location_id,
+      ro.site_name,
+      ro.site_address,
+      ro.created_at AS created_at,
+      ro.updated_at AS updated_at,
+      ro.created_at AS rental_order_created_at,
+      ro.updated_at AS rental_order_updated_at
     FROM public.rental_order_line_inventory liv
     JOIN public.rental_order_line_items li ON li.id = liv.line_item_id
     JOIN public.rental_orders ro ON ro.id = li.rental_order_id

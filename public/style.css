@@ -2904,11 +2904,12 @@ a.ghost {
 
 .ai-analytics-page {
   margin: -18px -24px -64px 0;
-  padding: 0;
+  padding: 24px;
   height: calc(100vh - 55px);
   min-height: 0;
   overflow: hidden;
-  background: #fff;
+  box-sizing: border-box;
+  background: #f8fafc;
 }
 
 .ai-analytics-body .ai-chat-root {
@@ -3015,6 +3016,13 @@ a.ghost {
 
 .ai-analytics-data-panel .reports-table {
   overflow: auto;
+}
+
+.ai-analytics-data-panel .table-header {
+  top: 0;
+  z-index: 12;
+  background: #f1f4fa;
+  box-shadow: 0 1px 0 var(--border);
 }
 
 .ai-analytics-chart-panel .chart-canvas {
