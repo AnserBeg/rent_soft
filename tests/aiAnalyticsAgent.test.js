@@ -94,6 +94,10 @@ test("AI analytics supplies defaults for common ambiguous business questions", (
     /rental_order_monthly_charges/i
   );
   assert.match(
+    getAnalyticsQuestionGuidance("Based on actual dates out on rental orders tell me how much money each solar surveillance tower unit has made over the last 6 months.").join("\n"),
+    /rental_order_asset_monthly_charges/i
+  );
+  assert.match(
     getAnalyticsQuestionGuidance("Give me a broad snapshot of the rental business.").join("\n"),
     /customer_count/i
   );
@@ -141,6 +145,7 @@ test("AI analytics exposes compact global business logic for prompting", () => {
   const promptBlock = formatAnalyticsBusinessLogicForPrompt();
   assert.match(promptBlock, /created_at means when a record was created/i);
   assert.match(promptBlock, /rental_order_monthly_charges\.total_charge/i);
+  assert.match(promptBlock, /rental_order_asset_monthly_charges\.asset_total_charge/i);
   assert.match(promptBlock, /live fleet utilization/i);
   assert.match(promptBlock, /QBO\/QuickBooks credential/i);
   assert.ok(promptBlock.length < 5000);

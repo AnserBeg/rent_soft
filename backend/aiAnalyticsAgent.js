@@ -771,7 +771,17 @@ ${JSON.stringify(schema, null, 2)}
   };
 }
 
-async function summarizeQueryResult({ question, clarification, sql, columns, rows, rowCount, chart, companyContext }) {
+async function summarizeQueryResult({
+  question,
+  clarification,
+  sql,
+  columns,
+  rows,
+  rowCount,
+  maxRowsApplied,
+  chart,
+  companyContext,
+}) {
   const client = getOpenAiClient();
   const prompt = `
 You are Aiven Rental's AI Analytics analyst.
@@ -786,7 +796,8 @@ Return only valid JSON:
   }
 }
 
-Do not invent data. Mention when the result appears limited by row count.
+Do not invent data. Mention row-limit truncation only when rowCount is greater than or equal to maxRowsApplied.
+Do not end with follow-up offers or suggestions.
 Use company-specific context only to explain wording or aliases, never as a source for numeric facts.
 Use the business logic only to explain metric definitions; numeric facts must come from rows.
 
@@ -810,6 +821,8 @@ ${formatAnalyticsBusinessLogicForPrompt({ maxChars: 2500 })}
                 sql,
                 columns,
                 rowCount,
+                maxRowsApplied,
+                rowLimitReached: Number(rowCount) >= Number(maxRowsApplied),
                 previewRows: rows.slice(0, 60),
                 initialChartSuggestion: chart || null,
                 companyContext: formatCompanyContextForPrompt(companyContext),
@@ -969,6 +982,7 @@ async function runAiAnalyticsQuery({ auth, question, maxRows, clarification }) {
       columns: result.columns,
       rows: result.rows,
       rowCount: result.rowCount,
+      maxRowsApplied: result.maxRowsApplied,
       chart: generated.chart,
       companyContext,
     });

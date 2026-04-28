@@ -13,6 +13,7 @@ const ANALYTICS_BUSINESS_LOGIC_SECTIONS = [
       "created_at means when a record was created, not when rental activity happened or money was earned.",
       "line_amount is the full rental line amount. It is not a monthly charge and should not be grouped by rental_order_created_at for monthly charge questions.",
       "Monthly customer/rental-order charges mean prorated charges allocated to the month the rental was active, minus pause periods, plus fees dated in that month. Use rental_order_monthly_charges.total_charge.",
+      "Per-unit rental money over a period based on actual dates out should use rental_order_asset_monthly_charges.asset_total_charge, grouped by equipment_id/model/serial. This includes active rentals with returned_at still null because they are making money through the period.",
       "For earned rental revenue, avoid quote-only statuses unless the user asks for quotes or pipeline.",
       "Fees are separate from line items. Include them only when the user asks for order totals, charges, or fees.",
     ],

@@ -83,6 +83,12 @@ const AI_ANALYTICS_GLOSSARY = [
       "Monthly customer/rental-order charges mean prorated charges allocated to the month the rental was active, minus line-item pause periods, plus fees dated in that month. Do not use rental_order_created_at or raw line_amount for this concept.",
     preferredColumn: "rental_order_monthly_charges.total_charge",
   },
+  {
+    term: "money made by each unit over a period",
+    definition:
+      "Per-asset rental money based on actual out dates means monthly prorated line charges allocated to each assigned equipment unit. Include active rentals whose returned_at is still null when they overlap the requested period.",
+    preferredColumn: "rental_order_asset_monthly_charges.asset_total_charge",
+  },
 ];
 
 const BLOCKED_ANALYTICS_RESPONSE = {
@@ -143,6 +149,16 @@ function getAnalyticsQuestionGuidance(question) {
   ) {
     guidance.push(
       "For monthly charges from rental orders, use rental_order_monthly_charges. Sum total_charge by month. Filter rental_order_status to the requested statuses, or default to requested, reservation, and ordered when the user is referring to the Monthly customer totals page. Do not group by rental_order_created_at and do not sum rental_order_line_items.line_amount for this concept."
+    );
+  }
+
+  if (
+    /\b(each|per)\b[\s\S]*\b(unit|asset|equipment)\b/.test(text) &&
+    /\b(made|make|revenue|money|earned|charges?)\b/.test(text) &&
+    /\b(last|past|over|month|months|period|actual dates?|dates? out)\b/.test(text)
+  ) {
+    guidance.push(
+      "For money made by each equipment unit over a period based on actual dates out, use rental_order_asset_monthly_charges. Sum asset_total_charge by equipment_id, model_name, and serial_number for months in the requested period. Include ordered/received/closed rentals unless the user requests different statuses; do not require returned_at IS NOT NULL."
     );
   }
 

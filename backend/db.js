@@ -1165,6 +1165,48 @@ async function ensureAiAnalyticsLayer(client) {
   `);
 
   await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.rental_order_asset_monthly_charges AS
+    WITH inventory_counts AS (
+      SELECT
+        li.id AS line_item_id,
+        GREATEST(COUNT(DISTINCT liv.equipment_id), 1)::numeric AS assigned_unit_count
+      FROM public.rental_order_line_items li
+      JOIN public.rental_orders ro ON ro.id = li.rental_order_id
+      LEFT JOIN public.rental_order_line_inventory liv ON liv.line_item_id = li.id
+      WHERE ro.company_id = ${scopedCompanyExpr}
+      GROUP BY li.id
+    )
+    SELECT
+      mc.month,
+      mc.rental_order_id,
+      mc.customer_id,
+      mc.rental_order_status,
+      mc.quote_number,
+      mc.ro_number,
+      mc.pickup_location_id,
+      mc.line_item_id,
+      mc.equipment_type_id,
+      mc.equipment_type_name,
+      mc.rate_basis,
+      mc.rate_amount,
+      mc.active_days,
+      mc.billable_units_in_month,
+      liv.equipment_id,
+      e.serial_number,
+      e.model_name,
+      e.type AS equipment_type,
+      ROUND((mc.line_item_charge / ic.assigned_unit_count)::numeric, 2) AS asset_line_item_charge,
+      ROUND((mc.total_charge / ic.assigned_unit_count)::numeric, 2) AS asset_total_charge,
+      ic.assigned_unit_count
+    FROM ai_analytics.rental_order_monthly_charges mc
+    JOIN public.rental_order_line_inventory liv ON liv.line_item_id = mc.line_item_id
+    JOIN public.equipment e ON e.id = liv.equipment_id
+    JOIN inventory_counts ic ON ic.line_item_id = mc.line_item_id
+    WHERE mc.source_kind = 'line_item'
+      AND e.company_id = ${scopedCompanyExpr};
+  `);
+
+  await client.query(`
     CREATE OR REPLACE VIEW ai_analytics.rental_order_notes AS
     SELECT n.*
     FROM public.rental_order_notes n
