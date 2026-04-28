@@ -10,6 +10,8 @@ const {
   buildCompanyAnalyticsSnapshot,
   buildFallbackCompanyAnalyticsContext,
   computeCompanyAnalyticsContextSourceHash,
+  formatAnalyticsBusinessLogicForPrompt,
+  formatCompanyContextForPrompt,
   inferSerialPattern,
 } = require("../backend/aiAnalyticsAgent");
 
@@ -88,6 +90,10 @@ test("AI analytics supplies defaults for common ambiguous business questions", (
   );
   assert.match(getAnalyticsQuestionGuidance("List customers with no recent rentals.").join("\n"), /90 days/i);
   assert.match(
+    getAnalyticsQuestionGuidance("Based on monthly charges from rental orders, how much money did we make over the last 6 months?").join("\n"),
+    /rental_order_monthly_charges/i
+  );
+  assert.match(
     getAnalyticsQuestionGuidance("Give me a broad snapshot of the rental business.").join("\n"),
     /customer_count/i
   );
@@ -129,6 +135,25 @@ test("AI analytics builds stable tenant vocabulary context", () => {
     computeCompanyAnalyticsContextSourceHash(snapshot),
     computeCompanyAnalyticsContextSourceHash(snapshot)
   );
+});
+
+test("AI analytics exposes compact global business logic for prompting", () => {
+  const promptBlock = formatAnalyticsBusinessLogicForPrompt();
+  assert.match(promptBlock, /created_at means when a record was created/i);
+  assert.match(promptBlock, /rental_order_monthly_charges\.total_charge/i);
+  assert.match(promptBlock, /live fleet utilization/i);
+  assert.match(promptBlock, /QBO\/QuickBooks credential/i);
+  assert.ok(promptBlock.length < 5000);
+});
+
+test("AI analytics company context prompt is terminology-only and bounded", () => {
+  const context = formatCompanyContextForPrompt({
+    contextMarkdown: "Equipment types and common company wording:\n- Electric Surveillance Tower [category: Towers; units: 12].",
+  });
+  assert.match(context, /terminology and matching/i);
+  assert.match(context, /Do not use it as a numeric source of truth/i);
+  assert.match(context, /Electric Surveillance Tower/);
+  assert.ok(context.length < 1000);
 });
 
 test("AI analytics SQL validator allows scoped read-only queries", () => {

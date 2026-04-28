@@ -938,6 +938,233 @@ async function ensureAiAnalyticsLayer(client) {
   `);
 
   await client.query(`
+    CREATE OR REPLACE VIEW ai_analytics.rental_order_monthly_charges AS
+    WITH line_quantities AS (
+      SELECT
+        li.id AS line_item_id,
+        CASE
+          WHEN li.bundle_id IS NOT NULL THEN 1::numeric
+          ELSE GREATEST(COUNT(DISTINCT liv.equipment_id), 1)::numeric
+        END AS quantity
+      FROM public.rental_order_line_items li
+      LEFT JOIN public.rental_order_line_inventory liv ON liv.line_item_id = li.id
+      GROUP BY li.id, li.bundle_id
+    ),
+    order_periods AS (
+      SELECT
+        li.rental_order_id,
+        MIN(li.start_at) AS order_start_at,
+        MAX(li.end_at) AS order_end_at
+      FROM public.rental_order_line_items li
+      GROUP BY li.rental_order_id
+    ),
+    line_windows AS (
+      SELECT
+        ro.company_id,
+        ro.id AS rental_order_id,
+        ro.customer_id,
+        ro.status AS rental_order_status,
+        ro.quote_number,
+        ro.ro_number,
+        ro.pickup_location_id,
+        li.id AS line_item_id,
+        li.type_id AS equipment_type_id,
+        et.name AS equipment_type_name,
+        li.bundle_id,
+        LOWER(COALESCE(li.rate_basis, '')) AS rate_basis,
+        COALESCE(
+          li.rate_amount,
+          CASE
+            WHEN LOWER(COALESCE(li.rate_basis, '')) IN ('day', 'daily', 'per_day') THEN et.daily_rate
+            WHEN LOWER(COALESCE(li.rate_basis, '')) IN ('week', 'weekly', 'per_week') THEN et.weekly_rate
+            ELSE et.monthly_rate
+          END
+        )::numeric AS rate_amount,
+        q.quantity,
+        op.order_start_at,
+        op.order_end_at,
+        COALESCE(li.fulfilled_at, li.start_at) AS charge_start,
+        CASE
+          WHEN li.returned_at IS NOT NULL THEN li.returned_at
+          WHEN li.end_at < NOW() THEN NOW()
+          ELSE li.end_at
+        END AS charge_end,
+        cond.pause_periods
+      FROM public.rental_orders ro
+      JOIN public.rental_order_line_items li ON li.rental_order_id = ro.id
+      LEFT JOIN public.equipment_types et ON et.id = li.type_id
+      LEFT JOIN line_quantities q ON q.line_item_id = li.id
+      LEFT JOIN order_periods op ON op.rental_order_id = ro.id
+      LEFT JOIN public.rental_order_line_conditions cond ON cond.line_item_id = li.id
+      WHERE ro.company_id = ${scopedCompanyExpr}
+        AND COALESCE(li.fulfilled_at, li.start_at) IS NOT NULL
+        AND li.end_at IS NOT NULL
+    ),
+    line_months AS (
+      SELECT
+        lw.*,
+        gs.month_start,
+        (gs.month_start + INTERVAL '1 month') AS month_end,
+        GREATEST(lw.charge_start, gs.month_start) AS segment_start,
+        LEAST(lw.charge_end, gs.month_start + INTERVAL '1 month') AS segment_end
+      FROM line_windows lw
+      CROSS JOIN LATERAL generate_series(
+        date_trunc('month', lw.charge_start),
+        date_trunc('month', lw.charge_end - INTERVAL '1 second'),
+        INTERVAL '1 month'
+      ) AS gs(month_start)
+      WHERE lw.charge_end > lw.charge_start
+        AND lw.rate_amount IS NOT NULL
+        AND lw.rate_amount > 0
+        AND lw.order_start_at < (gs.month_start + INTERVAL '1 month')
+        AND lw.order_end_at > gs.month_start
+    ),
+    line_pause_days AS (
+      SELECT
+        lm.line_item_id,
+        lm.month_start,
+        SUM(
+          GREATEST(
+            EXTRACT(EPOCH FROM (
+              LEAST(NULLIF(p.value->>'endAt', '')::timestamptz, lm.segment_end)
+              - GREATEST(NULLIF(p.value->>'startAt', '')::timestamptz, lm.segment_start)
+            )) / 86400.0,
+            0
+          )
+        )::numeric AS pause_days
+      FROM line_months lm
+      CROSS JOIN LATERAL jsonb_array_elements(COALESCE(lm.pause_periods, '[]'::jsonb)) AS p(value)
+      WHERE NULLIF(p.value->>'startAt', '') IS NOT NULL
+        AND NULLIF(p.value->>'endAt', '') IS NOT NULL
+        AND NULLIF(p.value->>'endAt', '')::timestamptz > lm.segment_start
+        AND NULLIF(p.value->>'startAt', '')::timestamptz < lm.segment_end
+      GROUP BY lm.line_item_id, lm.month_start
+    ),
+    line_charges AS (
+      SELECT
+        lm.company_id,
+        lm.month_start::date AS month,
+        lm.rental_order_id,
+        lm.customer_id,
+        lm.rental_order_status,
+        lm.quote_number,
+        lm.ro_number,
+        lm.pickup_location_id,
+        'line_item'::text AS source_kind,
+        lm.line_item_id,
+        NULL::integer AS fee_id,
+        lm.equipment_type_id,
+        lm.equipment_type_name,
+        lm.rate_basis,
+        lm.rate_amount,
+        lm.quantity,
+        GREATEST(
+          EXTRACT(EPOCH FROM (lm.segment_end - lm.segment_start)) / 86400.0 - COALESCE(lpd.pause_days, 0),
+          0
+        )::numeric AS active_days,
+        CASE
+          WHEN lm.rate_basis IN ('month', 'monthly', 'per_month') THEN
+            GREATEST(
+              EXTRACT(EPOCH FROM (lm.segment_end - lm.segment_start)) / 86400.0 - COALESCE(lpd.pause_days, 0),
+              0
+            )::numeric
+            / EXTRACT(DAY FROM (date_trunc('month', lm.month_start) + INTERVAL '1 month' - date_trunc('month', lm.month_start)))::numeric
+          WHEN lm.rate_basis IN ('week', 'weekly', 'per_week') THEN
+            GREATEST(
+              EXTRACT(EPOCH FROM (lm.segment_end - lm.segment_start)) / 86400.0 - COALESCE(lpd.pause_days, 0),
+              0
+            )::numeric / 7.0
+          ELSE
+            GREATEST(
+              EXTRACT(EPOCH FROM (lm.segment_end - lm.segment_start)) / 86400.0 - COALESCE(lpd.pause_days, 0),
+              0
+            )::numeric
+        END AS billable_units_in_month,
+        ROUND((
+          CASE
+            WHEN lm.rate_basis IN ('month', 'monthly', 'per_month') THEN
+              GREATEST(
+                EXTRACT(EPOCH FROM (lm.segment_end - lm.segment_start)) / 86400.0 - COALESCE(lpd.pause_days, 0),
+                0
+              )::numeric
+              / EXTRACT(DAY FROM (date_trunc('month', lm.month_start) + INTERVAL '1 month' - date_trunc('month', lm.month_start)))::numeric
+            WHEN lm.rate_basis IN ('week', 'weekly', 'per_week') THEN
+              GREATEST(
+                EXTRACT(EPOCH FROM (lm.segment_end - lm.segment_start)) / 86400.0 - COALESCE(lpd.pause_days, 0),
+                0
+              )::numeric / 7.0
+            ELSE
+              GREATEST(
+                EXTRACT(EPOCH FROM (lm.segment_end - lm.segment_start)) / 86400.0 - COALESCE(lpd.pause_days, 0),
+                0
+              )::numeric
+          END
+        ) * lm.rate_amount * lm.quantity, 2) AS line_item_charge,
+        0::numeric AS fee_amount,
+        ROUND((
+          CASE
+            WHEN lm.rate_basis IN ('month', 'monthly', 'per_month') THEN
+              GREATEST(
+                EXTRACT(EPOCH FROM (lm.segment_end - lm.segment_start)) / 86400.0 - COALESCE(lpd.pause_days, 0),
+                0
+              )::numeric
+              / EXTRACT(DAY FROM (date_trunc('month', lm.month_start) + INTERVAL '1 month' - date_trunc('month', lm.month_start)))::numeric
+            WHEN lm.rate_basis IN ('week', 'weekly', 'per_week') THEN
+              GREATEST(
+                EXTRACT(EPOCH FROM (lm.segment_end - lm.segment_start)) / 86400.0 - COALESCE(lpd.pause_days, 0),
+                0
+              )::numeric / 7.0
+            ELSE
+              GREATEST(
+                EXTRACT(EPOCH FROM (lm.segment_end - lm.segment_start)) / 86400.0 - COALESCE(lpd.pause_days, 0),
+                0
+              )::numeric
+          END
+        ) * lm.rate_amount * lm.quantity, 2) AS total_charge
+      FROM line_months lm
+      LEFT JOIN line_pause_days lpd
+        ON lpd.line_item_id = lm.line_item_id
+       AND lpd.month_start = lm.month_start
+      WHERE lm.segment_end > lm.segment_start
+    ),
+    fee_charges AS (
+      SELECT
+        ro.company_id,
+        date_trunc('month', f.fee_date)::date AS month,
+        ro.id AS rental_order_id,
+        ro.customer_id,
+        ro.status AS rental_order_status,
+        ro.quote_number,
+        ro.ro_number,
+        ro.pickup_location_id,
+        'fee'::text AS source_kind,
+        NULL::integer AS line_item_id,
+        f.id AS fee_id,
+        NULL::integer AS equipment_type_id,
+        NULL::text AS equipment_type_name,
+        NULL::text AS rate_basis,
+        NULL::numeric AS rate_amount,
+        NULL::numeric AS quantity,
+        NULL::numeric AS active_days,
+        NULL::numeric AS billable_units_in_month,
+        0::numeric AS line_item_charge,
+        COALESCE(f.amount, 0)::numeric AS fee_amount,
+        COALESCE(f.amount, 0)::numeric AS total_charge
+      FROM public.rental_order_fees f
+      JOIN public.rental_orders ro ON ro.id = f.rental_order_id
+      WHERE ro.company_id = ${scopedCompanyExpr}
+        AND f.fee_date IS NOT NULL
+    )
+    SELECT *
+    FROM line_charges
+    WHERE total_charge > 0
+    UNION ALL
+    SELECT *
+    FROM fee_charges
+    WHERE total_charge <> 0;
+  `);
+
+  await client.query(`
     CREATE OR REPLACE VIEW ai_analytics.rental_order_notes AS
     SELECT n.*
     FROM public.rental_order_notes n

@@ -77,6 +77,12 @@ const AI_ANALYTICS_GLOSSARY = [
     definition:
       "Usually rental line amount or order totals depending on the question. Prefer explicit amount columns and avoid counting quotes as earned revenue unless asked.",
   },
+  {
+    term: "monthly charges",
+    definition:
+      "Monthly customer/rental-order charges mean prorated charges allocated to the month the rental was active, minus line-item pause periods, plus fees dated in that month. Do not use rental_order_created_at or raw line_amount for this concept.",
+    preferredColumn: "rental_order_monthly_charges.total_charge",
+  },
 ];
 
 const BLOCKED_ANALYTICS_RESPONSE = {
@@ -128,6 +134,15 @@ function getAnalyticsQuestionGuidance(question) {
   if (/\blist every rental order line item\b/.test(text)) {
     guidance.push(
       "For rental order line item listings, use rental_order_line_items joined to rental_orders, customers, equipment_types, rental_order_line_inventory, and equipment. Use rental_order_line_items.rental_order_status for order status."
+    );
+  }
+
+  if (
+    /\bmonthly charges?\b/.test(text) ||
+    (/\bcharges?\b/.test(text) && /\b(month|months|monthly)\b/.test(text) && /\brental orders?\b/.test(text))
+  ) {
+    guidance.push(
+      "For monthly charges from rental orders, use rental_order_monthly_charges. Sum total_charge by month. Filter rental_order_status to the requested statuses, or default to requested, reservation, and ordered when the user is referring to the Monthly customer totals page. Do not group by rental_order_created_at and do not sum rental_order_line_items.line_amount for this concept."
     );
   }
 

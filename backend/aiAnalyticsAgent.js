@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const OpenAI = require("openai");
 const { pool } = require("./db");
+const { formatAnalyticsBusinessLogicForPrompt } = require("./aiAnalyticsBusinessLogic");
 const {
   BLOCKED_ANALYTICS_RESPONSE,
   DURATION_CLARIFICATION,
@@ -20,7 +21,7 @@ const CONTEXT_TTL_MS = Math.max(
 );
 const MAX_CONTEXT_MARKDOWN_CHARS = Math.max(
   1000,
-  Math.min(12000, Number(process.env.AI_ANALYTICS_CONTEXT_MAX_CHARS || 6000) || 6000)
+  Math.min(12000, Number(process.env.AI_ANALYTICS_CONTEXT_MAX_CHARS || 4500) || 4500)
 );
 
 const FORBIDDEN_SQL =
@@ -379,6 +380,15 @@ function buildFallbackCompanyAnalyticsContext(snapshot) {
   return clampText(lines.join("\n"));
 }
 
+function formatCompanyContextForPrompt(companyContext) {
+  const markdown = clampText(companyContext?.contextMarkdown || "");
+  if (!markdown) return "No company-specific context is available.";
+  return [
+    "Use this tenant context only for terminology and matching. Do not use it as a numeric source of truth.",
+    markdown,
+  ].join("\n");
+}
+
 async function generateCompanyAnalyticsContextWithAi(snapshot, fallbackMarkdown) {
   if (String(process.env.AI_ANALYTICS_CONTEXT_GENERATOR_ENABLED || "true").toLowerCase() === "false") {
     return { markdown: fallbackMarkdown, json: { generatedBy: "fallback_disabled" } };
@@ -559,8 +569,11 @@ Rules:
 Analytics glossary:
 ${formatAnalyticsGlossaryForPrompt()}
 
+Core business logic:
+${formatAnalyticsBusinessLogicForPrompt({ maxChars: 4500 })}
+
 Company-specific context:
-${companyContext?.contextMarkdown || "No company-specific context is available."}
+${formatCompanyContextForPrompt(companyContext)}
 
 Relevant schema:
 ${JSON.stringify(schema, null, 2)}
@@ -719,26 +732,21 @@ Rules:
 - Prefer explicit column names.
 - For totals, use clear aliases like total_revenue, order_count, active_count, customer_name, bucket.
 - Use the analytics glossary below to resolve app terms.
+- Use the core business logic below for app-wide definitions and default interpretations.
 - Use the company-specific context below for tenant terminology, aliases, status values, model names, serial patterns, equipment types, categories, and location names.
 - Treat company-specific context as matching guidance only. Do not answer from it directly or invent facts from it.
-- Asset-level rental questions should prefer rental_order_line_item_assets because it has one row per assigned equipment unit and includes equipment_id, serial_number, and rental duration fields.
-- rental_order_line_items can have many assigned equipment units. If you use it directly, equipment_id is only a compatibility field for simple joins; use rental_order_line_inventory or rental_order_line_item_assets for precise asset-level counts.
-- For rental duration questions, prefer derived duration columns on rental_order_line_items over raw timestamp math.
-- If the clarified intent is actual_completed_days, use actual_completed_duration_days and do not fall back to booked_duration_days when actual timestamps are missing.
 - If actual duration timestamps are missing, surface missing actual timestamp counts or incomplete rows rather than silently substituting booked dates.
-- If the clarified intent is actual_live_days, use actual_live_duration_days.
-- If the clarified intent is booked_days, use booked_duration_days.
-- If the clarified intent is billable_days, use billable_duration_days or billable_units with a daily rate_basis filter.
-- For month-based utilization questions, do not treat date words like "month", "February", or "Feb" as equipment names. Use them only to define the requested period.
-- For equipment utilization over a period, calculate utilized asset-days divided by total fleet capacity asset-days for matching equipment types unless the user asks for a different basis.
 - Follow any question-specific guidance supplied in the user message. It encodes product defaults that should avoid unnecessary clarification.
 - Return at most 1000 rows.
 
 Analytics glossary:
 ${formatAnalyticsGlossaryForPrompt()}
 
+Core business logic:
+${formatAnalyticsBusinessLogicForPrompt({ maxChars: 4500 })}
+
 Company-specific context:
-${companyContext?.contextMarkdown || "No company-specific context is available."}
+${formatCompanyContextForPrompt(companyContext)}
 
 Available views:
 ${JSON.stringify(schema, null, 2)}
@@ -780,6 +788,10 @@ Return only valid JSON:
 
 Do not invent data. Mention when the result appears limited by row count.
 Use company-specific context only to explain wording or aliases, never as a source for numeric facts.
+Use the business logic only to explain metric definitions; numeric facts must come from rows.
+
+Core business logic:
+${formatAnalyticsBusinessLogicForPrompt({ maxChars: 2500 })}
 `;
 
   const response = await client.responses.create({
@@ -800,7 +812,7 @@ Use company-specific context only to explain wording or aliases, never as a sour
                 rowCount,
                 previewRows: rows.slice(0, 60),
                 initialChartSuggestion: chart || null,
-                companyContext: companyContext?.contextMarkdown || "",
+                companyContext: formatCompanyContextForPrompt(companyContext),
               },
               null,
               2
@@ -1004,5 +1016,7 @@ module.exports = {
   buildCompanyAnalyticsSnapshot,
   buildFallbackCompanyAnalyticsContext,
   computeCompanyAnalyticsContextSourceHash,
+  formatAnalyticsBusinessLogicForPrompt,
+  formatCompanyContextForPrompt,
   inferSerialPattern,
 };

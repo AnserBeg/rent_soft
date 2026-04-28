@@ -586,7 +586,7 @@ async function processSupportManualUpload({ manualId, uploadedName, zipBuffer })
   };
 }
 
-async function answerSupportQuestion({ manual, question, includeScreenshots = true }) {
+async function answerSupportQuestion({ manual, question, includeScreenshots = false }) {
   if (!manual?.manifest?.vectorStoreId && !manual?.vectorStoreId) {
     throw new Error("Support manual is missing its vector store.");
   }

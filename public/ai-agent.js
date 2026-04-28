@@ -23,7 +23,7 @@
   }
 
   function getStoredIncludeScreenshots() {
-    return localStorage.getItem(STORAGE_SCREENSHOT_KEY) !== "false";
+    return localStorage.getItem(STORAGE_SCREENSHOT_KEY) === "true";
   }
 
   function setOpenState(isOpen) {

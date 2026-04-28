@@ -4090,7 +4090,7 @@ app.post(
   "/api/support-agent/chat",
   asyncHandler(async (req, res) => {
     const question = String(req.body?.question || "").trim();
-    const includeScreenshots = req.body?.includeScreenshots !== false;
+    const includeScreenshots = req.body?.includeScreenshots === true;
     if (!question) return res.status(400).json({ error: "question is required." });
 
     const manual = await getActiveSupportManual();
